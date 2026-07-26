@@ -1,0 +1,80 @@
+# ncnn-mlir 项目 C++ 代码风格
+# 基础：Google C++ Style Guide。clang-format-21 内置 `google` 预设，在其上做少数务实微调。
+# 文档：https://google.github.io/styleguide/cppguide.html
+#
+# 用法：clang-format-21 -i <file>   或   git clang-format
+
+---
+# 以 Google 飄格为基线
+BasedOnStyle: Google
+
+# ── 列宽 ───────────────────────────────────────────────────────
+# Google 官方 80。本仓库保持 80 以贴合规范；遇长 std::format 字面量可手动断行。
+ColumnLimit: 80
+
+# ── 缩进 ───────────────────────────────────────────────────────
+# Google 用 2 空格。
+IndentWidth: 2
+ContinuationIndentWidth: 2
+AccessModifierOffset: -1
+ConstructorInitializerIndentWidth: 2
+
+# ── 大括号 ─────────────────────────────────────────────────────
+# Google：函数/控制流都行尾开括号（K&R / Attach）。
+BreakBeforeBraces: Attach
+
+# ── 指针/引用对齐 ─────────────────────────────────────────────
+# Google：贴近类型名（Left）。如 `const int* p` / `int& x`。
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+# ── include 排序（Google 要求）──────────────────────────────
+# 顺序：对应头文件 → 空行 → 系统/外部 → 空行 → 项目内。
+# clang-format 会自动分组与排序；本项目按此约定，不要手写乱序 include。
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # 对应头文件（与当前 .cpp 同名的 .hpp）放最前
+  - Regex: '^"[a-zA-Z0-9_]+\.hpp"'
+    Priority: 1
+  # 项目内头（含子目录），如 "ncnn_graph/xxx.hpp"
+  - Regex: '^"ncnn_graph/.*\.hpp"'
+    Priority: 2
+  # C 系统头（尖括号，C 标准库）
+  - Regex: '^<[^/]+\.h>$'
+    Priority: 3
+  # C++ 标准库
+  - Regex: '^<[^/]+>$'
+    Priority: 4
+  # 其余（第三方/外部）
+  - Regex: '.*'
+    Priority: 5
+
+# ── 空行 ─────────────────────────────────────────────────────
+MaxEmptyLinesToKeep: 2
+
+# ── 其它贴合 Google 的项 ────────────────────────────────────
+AllowShortFunctionsOnASingleLine: Inline   # 允许短的内联函数单行（如 accessor）
+AllowShortLambdasOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Empty
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+SpacesBeforeTrailingComments: 2
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignTrailingComments: true
+AlwaysBreakTemplateDeclarations: Yes
+AlwaysBreakAfterReturnType: None
+BinPackArguments: false
+BinPackParameters: false
+CompactNamespaces: false
+FixNamespaceComments: true
+ReflowComments: true
+SortUsingDeclarations: true
+Standard: c++20            # clang-format 最高稳定支持；语法上兼容 C++23
+Cpp11BracedListStyle: true

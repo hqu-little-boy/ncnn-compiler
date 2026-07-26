@@ -1,0 +1,73 @@
+# ncnn-mlir 项目 clang-tidy 配置
+# 基础：Google C++ Style Guide 对应的 clang-tidy `google-*` checks。
+# 补充：现代 C++ (modernize-*) 与可读性 (readability-*) 中贴合 Google 风格的子集。
+# 本项目目标 C++23，使用 clang-tidy-21 运行。
+#
+# 运行：
+#   clang-tidy-21 --extra-arg=-std=c++23 --extra-arg=-Iinclude -p=build src/graph.cpp
+#   或用 run-clang-tidy 并行扫描。
+#
+# 列出某 check 启用情况：clang-tidy-21 --checks='-*' --list-checks
+
+---
+# ── 启用的 Checks ────────────────────────────────────────────
+# 取 google-* 全集，再加 modernize/readability 中务实的子集，关掉会误伤 C++23 代码的项。
+Checks: >
+  -*,
+  google-*,
+  modernize-*,
+  readability-*,
+  -modernize-use-trailing-return-type,
+  -modernize-use-nodiscard,
+  -modernize-avoid-c-arrays,
+  -readability-named-parameter,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-function-cognitive-complexity,
+  -readability-implicit-bool-conversion,
+  -readability-braces-around-statements,
+  -readability-uppercase-literal-suffix,
+  -readability-function-size,
+  -readability-avoid-nested-conditional-operator,
+  -readability-isolate-declaration,
+  -readability-use-anyofallof,
+  -google-readability-braces-around-statements,
+  -google-runtime-int,
+  -google-default-arguments,
+  -readability-simplify-boolean-expr
+
+# 关掉项的理由：
+#   modernize-use-trailing-return-type  —— 强制 `auto f()->T`，Google 不强制
+#   modernize-use-nodiscard            —— 过度建议 [[nodiscard]]，噪音大
+#   modernize-avoid-c-arrays           —— 与 C 接口/原始缓冲交互时 C 数组合理
+#   readability-magic-numbers          —— 编译器/格式化代码天然充满魔数（flag 0x01306B47 等）
+#   readability-identifier-length       —— 短名（i, j, k）在循环里合理
+#   readability-function-size          —— 第一阶段 importer/parser 函数天然较长，重构后再开
+#   readability-uppercase-literal-suffix —— `0.0f` vs `0.0F`，Google 不强制大写后缀
+#   readability-function-cognitive-complexity —— 同上，初期不卡
+#   *_braces-around-statements         —— 单行短体不强加花括号（与 .clang-format 单行风格一致）
+#   readability-avoid-nested-conditional-operator —— dump 函数里的 ?: 嵌套可读性可接受
+#   readability-isolate-declaration      —— `int a, b;` 风格判定较吵
+#   readability-use-anyofallof          —— 改写循环为 ranges::any_of 时机成熟后再开
+#   google-runtime-int                 —— 用 int 而非 int32_t 在与 ncnn C 接口对齐时合理
+#   readability-simplify-boolean-expr   —— 初期不强加布尔化简
+
+# ── 警告即错误 ──────────────────────────────────────────────
+# CI/本地均把 tidy 警告当错误。开发时可临时去掉。
+WarningsAsErrors: ''
+
+# ── 头文件过滤 ─────────────────────────────────────────────
+# 不检查第三方/系统头；只检查本项目源码。
+HeaderFilterRegex: '^(src|include|test)/.*\.(hpp|cpp)$'
+
+# ── 现代 C++ 设定 ───────────────────────────────────────────
+# 注意：clang-tidy 不从本文件读 `-std`（`ExtraArguments` 非其合法键）。
+# 语言标准来自 compile_commands.json（见 CMakeLists.txt 的 CMAKE_EXPORT_COMPILE_COMMANDS）
+# 或命令行 `clang-tidy --extra-arg=-std=c++23`。
+# 本项目推荐：用 CMake 生成的 compile_commands.json，clang-tidy -p=build 自动取参数。
+
+# ── 注释/版权（Google 不强制版权头，本项目也不强制）──────
+# 如需可加 misc-* 系列，此处保持最小集。
+
+# ── 不检查的目录 ─────────────────────────────────────────
+ExcludeHeaderFilterRegex: 'build/.*'
