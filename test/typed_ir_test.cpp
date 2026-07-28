@@ -1,3 +1,5 @@
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -23,31 +25,8 @@ ncnn_frontend::TensorType make_type(std::vector<std::int64_t> shape,
 
 }  // namespace
 
-int main() {
-  using ncnn_frontend::ConcatOp;
-  using ncnn_frontend::ConstOp;
-  using ncnn_frontend::ElementType;
-  using ncnn_frontend::Graph;
-  using ncnn_frontend::GraphInputDef;
-  using ncnn_frontend::Operation;
-  using ncnn_frontend::OpId;
-  using ncnn_frontend::OpResultDef;
-  using ncnn_frontend::ReluOp;
-  using ncnn_frontend::SplitOp;
-  using ncnn_frontend::TensorLayout;
-  using ncnn_frontend::TensorLiteral;
-  using ncnn_frontend::TensorType;
-  using ncnn_frontend::Use;
-  using ncnn_frontend::Value;
-  using ncnn_frontend::ValueId;
-  using ncnn_frontend::verify_graph;
-  int status = 0;
-  auto check = [&](bool condition, std::string_view message) {
-    std::cout << std::format("[{}] {}\n", condition ? "PASS" : "FAIL", message);
-    if (!condition) {
-      status = 1;
-    }
-  };
+TEST(TypedIrTest, ValidGraphVerifies) {
+  using namespace ncnn_frontend;
 
   TensorType type = make_type({2}, TensorLayout::NcnnW);
   std::vector<Value> values;
@@ -76,8 +55,13 @@ int main() {
               std::move(values),
               std::vector<ValueId>{ValueId(0)},
               std::vector<ValueId>{ValueId(3)});
-  check(verify_graph(valid).has_value(),
-        "valid graph argument, multi-result, and uses verify");
+  EXPECT_TRUE(verify_graph(valid).has_value())
+    << "valid graph argument, multi-result, and uses verify";
+}
+
+TEST(TypedIrTest, RepeatedUseVerifies) {
+  using namespace ncnn_frontend;
+  TensorType type = make_type({2}, TensorLayout::NcnnW);
 
   std::vector<Value> repeated_values;
   repeated_values.emplace_back(
@@ -95,8 +79,13 @@ int main() {
     std::move(repeated_values),
     {ValueId(0)},
     {ValueId(1)});
-  check(verify_graph(repeated).has_value(),
-        "same value used twice by one operation verifies");
+  EXPECT_TRUE(verify_graph(repeated).has_value())
+    << "same value used twice by one operation verifies";
+}
+
+TEST(TypedIrTest, MissingRepeatedUseRejected) {
+  using namespace ncnn_frontend;
+  TensorType type = make_type({2}, TensorLayout::NcnnW);
 
   std::vector<Value> missing_use_values;
   missing_use_values.emplace_back(
@@ -111,7 +100,13 @@ int main() {
     std::move(missing_use_values),
     {ValueId(0)},
     {ValueId(1)});
-  check(!verify_graph(missing_use), "missing repeated use is rejected");
+  EXPECT_FALSE(verify_graph(missing_use))
+    << "missing repeated use is rejected";
+}
+
+TEST(TypedIrTest, OutOfRangeResultRejected) {
+  using namespace ncnn_frontend;
+  TensorType type = make_type({2}, TensorLayout::NcnnW);
 
   std::vector<Value> bad_result_values;
   bad_result_values.emplace_back(
@@ -123,8 +118,13 @@ int main() {
                    std::move(bad_result_values),
                    {ValueId(0)},
                    {ValueId(1)});
-  check(!verify_graph(bad_result),
-        "out-of-range result definition is rejected");
+  EXPECT_FALSE(verify_graph(bad_result))
+    << "out-of-range result definition is rejected";
+}
+
+TEST(TypedIrTest, CycleRejected) {
+  using namespace ncnn_frontend;
+  TensorType type = make_type({2}, TensorLayout::NcnnW);
 
   std::vector<Value> backward_values;
   backward_values.emplace_back(
@@ -138,14 +138,23 @@ int main() {
     std::move(backward_values),
     {},
     {ValueId(0)});
-  check(!verify_graph(cycle), "backward dependency and cycle are rejected");
+  EXPECT_FALSE(verify_graph(cycle))
+    << "backward dependency and cycle are rejected";
+}
 
-  check(!TensorType::create(
-          {1}, static_cast<ElementType>(255), TensorLayout::NcnnW),
-        "invalid element type enum is rejected");
-  check(!TensorType::create(
-          {1}, ElementType::Float32, static_cast<TensorLayout>(255)),
-        "invalid tensor layout enum is rejected");
+TEST(TypedIrTest, InvalidEnumsRejected) {
+  using namespace ncnn_frontend;
+  EXPECT_FALSE(TensorType::create(
+    {1}, static_cast<ElementType>(255), TensorLayout::NcnnW))
+    << "invalid element type enum is rejected";
+  EXPECT_FALSE(TensorType::create(
+    {1}, ElementType::Float32, static_cast<TensorLayout>(255)))
+    << "invalid tensor layout enum is rejected";
+}
+
+TEST(TypedIrTest, NegativeReluSlopeAccepted) {
+  using namespace ncnn_frontend;
+  TensorType type = make_type({2}, TensorLayout::NcnnW);
 
   std::vector<Value> negative_relu_values;
   negative_relu_values.emplace_back(
@@ -157,16 +166,17 @@ int main() {
     std::move(negative_relu_values),
     {ValueId(0)},
     {ValueId(1)});
-  check(verify_graph(negative_relu).has_value(),
-        "finite negative ReLU slope is accepted");
+  EXPECT_TRUE(verify_graph(negative_relu).has_value())
+    << "finite negative ReLU slope is accepted";
+}
+
+TEST(TypedIrTest, MovedFromConstantRejected) {
+  using namespace ncnn_frontend;
 
   TensorType scalar_type = make_type({}, TensorLayout::Scalar);
   auto literal =
     TensorLiteral::create(scalar_type, std::vector<std::byte>(sizeof(float)));
-  if (!literal) {
-    std::cerr << literal.error() << '\n';
-    return 1;
-  }
+  ASSERT_TRUE(literal.has_value()) << (literal ? "" : literal.error());
   ConstOp moved_from(std::move(*literal));
   ConstOp owner(std::move(moved_from));
   static_cast<void>(owner);
@@ -176,8 +186,13 @@ int main() {
       "constant", scalar_type, OpResultDef(OpId(0), 0), std::vector<Use>())},
     {},
     {ValueId(0)});
-  check(!verify_graph(bad_constant),
-        "moved-from constant payload is rejected by verifier");
+  EXPECT_FALSE(verify_graph(bad_constant))
+    << "moved-from constant payload is rejected by verifier";
+}
+
+TEST(TypedIrTest, LongChainVerifies) {
+  using namespace ncnn_frontend;
+  TensorType type = make_type({2}, TensorLayout::NcnnW);
 
   constexpr std::size_t kLongChainLength = 4096;
   std::vector<Operation> long_operations;
@@ -206,8 +221,6 @@ int main() {
                    std::move(long_values),
                    {ValueId(0)},
                    {ValueId(kLongChainLength)});
-  check(verify_graph(long_chain).has_value(),
-        "long operation chain verifies without recursive traversal");
-
-  return status;
+  EXPECT_TRUE(verify_graph(long_chain).has_value())
+    << "long operation chain verifies without recursive traversal";
 }

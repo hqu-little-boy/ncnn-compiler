@@ -1,6 +1,7 @@
+#include <gtest/gtest.h>
+
 #include <cstddef>
 #include <cstdint>
-#include <format>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -41,35 +42,8 @@ ncnn_frontend::TensorLiteral make_hello_literal() {
 
 }  // namespace
 
-int main() {
-  using ncnn_frontend::ConcatOp;
-  using ncnn_frontend::ConstOp;
-  using ncnn_frontend::Conv2DOp;
-  using ncnn_frontend::DropoutOp;
-  using ncnn_frontend::ElementType;
-  using ncnn_frontend::Graph;
-  using ncnn_frontend::GraphInputDef;
-  using ncnn_frontend::Operation;
-  using ncnn_frontend::OpId;
-  using ncnn_frontend::OpResultDef;
-  using ncnn_frontend::Pool2DOp;
-  using ncnn_frontend::PoolKind;
-  using ncnn_frontend::PoolMode;
-  using ncnn_frontend::ReluOp;
-  using ncnn_frontend::SoftmaxOp;
-  using ncnn_frontend::SplitOp;
-  using ncnn_frontend::TensorLayout;
-  using ncnn_frontend::Use;
-  using ncnn_frontend::Value;
-  using ncnn_frontend::ValueId;
-
-  int status = 0;
-  auto check = [&](bool condition, std::string_view message) {
-    std::cout << std::format("[{}] {}\n", condition ? "PASS" : "FAIL", message);
-    if (!condition) {
-      status = 1;
-    }
-  };
+TEST(TypedIrDumpTest, CanonicalDumpMatchesGolden) {
+  using namespace ncnn_frontend;
 
   auto byte_type = make_type({5}, ElementType::Int8, TensorLayout::NcnnW);
   std::vector<Value> values;
@@ -113,10 +87,17 @@ int main() {
     "inputs []\n"
     "outputs [v1]\n";
   const std::string dumped = graph.dump();
-  check(dumped == kExpected, "canonical dump matches the version 1 golden");
-  check(graph.dump() == dumped, "repeated dump is byte-for-byte stable");
-  check(dumped.find("hello") == std::string::npos,
-        "constant payload is summarized rather than expanded");
+  EXPECT_EQ(dumped, kExpected)
+    << "canonical dump matches the version 1 golden";
+  EXPECT_EQ(graph.dump(), dumped)
+    << "repeated dump is byte-for-byte stable";
+  EXPECT_EQ(dumped.find("hello"), std::string::npos)
+    << "constant payload is summarized rather than expanded";
+}
+
+TEST(TypedIrDumpTest, MalformedReferencesMarkedSafely) {
+  using namespace ncnn_frontend;
+  auto byte_type = make_type({5}, ElementType::Int8, TensorLayout::NcnnW);
 
   Graph malformed(
     {Operation("bad", ReluOp(-0.0f), {ValueId(99)}, {ValueId(98)}, 0)},
@@ -125,15 +106,19 @@ int main() {
     {ValueId(66)},
     {ValueId(55)});
   const std::string malformed_dump = malformed.dump();
-  check(malformed_dump.find("v99!out_of_range") != std::string::npos &&
-          malformed_dump.find("v98!out_of_range") != std::string::npos &&
-          malformed_dump.find("op88!out_of_range") != std::string::npos &&
-          malformed_dump.find("op77!out_of_range") != std::string::npos &&
-          malformed_dump.find("v66!out_of_range") != std::string::npos &&
-          malformed_dump.find("v55!out_of_range") != std::string::npos,
-        "unverified graph references are preserved and marked safely");
-  check(malformed_dump.find("negative_slope=-0") != std::string::npos,
-        "negative zero has a stable spelling");
+  EXPECT_TRUE(malformed_dump.find("v99!out_of_range") != std::string::npos &&
+              malformed_dump.find("v98!out_of_range") != std::string::npos &&
+              malformed_dump.find("op88!out_of_range") != std::string::npos &&
+              malformed_dump.find("op77!out_of_range") != std::string::npos &&
+              malformed_dump.find("v66!out_of_range") != std::string::npos &&
+              malformed_dump.find("v55!out_of_range") != std::string::npos)
+    << "unverified graph references are preserved and marked safely";
+  EXPECT_NE(malformed_dump.find("negative_slope=-0"), std::string::npos)
+    << "negative zero has a stable spelling";
+}
+
+TEST(TypedIrDumpTest, AttributeVariantsHaveStableForms) {
+  using namespace ncnn_frontend;
 
   std::vector<Operation> attribute_operations;
   attribute_operations.emplace_back("const",
@@ -178,25 +163,25 @@ int main() {
     "softmax", SoftmaxOp(2), std::vector<ValueId>(), std::vector<ValueId>(), 7);
   Graph attributes(std::move(attribute_operations), {}, {}, {});
   const std::string attributes_dump = attributes.dump();
-  check(
+  EXPECT_TRUE(
     attributes_dump.find("kind=conv2d") != std::string::npos &&
-      attributes_dump.find("quantization=requantize") != std::string::npos &&
-      attributes_dump.find("kind=split,attrs={}") != std::string::npos &&
-      attributes_dump.find("kind=concat,attrs={axis=-1}") !=
-        std::string::npos &&
-      attributes_dump.find("kind=dropout,attrs={scale=0.5}") !=
-        std::string::npos &&
-      attributes_dump.find("kind=softmax,attrs={axis=2}") != std::string::npos,
-    "all operation attribute variants have stable dump forms");
-  check(attributes_dump.find("kind=invalid(9)") != std::string::npos &&
-          attributes_dump.find("mode=invalid(8)") != std::string::npos,
-        "invalid enum values are printed without undefined behavior");
+    attributes_dump.find("quantization=requantize") != std::string::npos &&
+    attributes_dump.find("kind=split,attrs={}") != std::string::npos &&
+    attributes_dump.find("kind=concat,attrs={axis=-1}") != std::string::npos &&
+    attributes_dump.find("kind=dropout,attrs={scale=0.5}") !=
+      std::string::npos &&
+    attributes_dump.find("kind=softmax,attrs={axis=2}") != std::string::npos)
+    << "all operation attribute variants have stable dump forms";
+  EXPECT_TRUE(attributes_dump.find("kind=invalid(9)") != std::string::npos &&
+              attributes_dump.find("mode=invalid(8)") != std::string::npos)
+    << "invalid enum values are printed without undefined behavior";
+}
 
+TEST(TypedIrDumpTest, EmptyGraphDump) {
+  using namespace ncnn_frontend;
   Graph empty({}, {}, {}, {});
-  check(empty.dump() ==
-          "ncnn_frontend.typed_dag_dump version=1\noperations 0\nvalues 0\n"
-          "inputs []\noutputs []\n",
-        "empty graph has a complete canonical dump");
-
-  return status;
+  EXPECT_EQ(empty.dump(),
+            "ncnn_frontend.typed_dag_dump version=1\noperations 0\nvalues 0\n"
+            "inputs []\noutputs []\n")
+    << "empty graph has a complete canonical dump";
 }

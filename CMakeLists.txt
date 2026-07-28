@@ -36,45 +36,27 @@ add_library(ncnn_frontend STATIC
 target_include_directories(ncnn_frontend PUBLIC include)
 target_link_libraries(ncnn_frontend PUBLIC ncnn_graph)
 
-# 验收程序：读 squeezenet，dump + 自检
-add_executable(load_squeezenet test/load_squeezenet.cpp)
-target_link_libraries(load_squeezenet PRIVATE ncnn_graph)
-target_compile_definitions(load_squeezenet PRIVATE
-    NCNN_GRAPH_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+# 单元测试：所有测试源文件合并到唯一可执行文件，链接 gtest_main（无需 main 函数）
+find_package(GTest REQUIRED)
+include(GoogleTest)
 
-add_executable(parser_test test/parser_test.cpp)
-target_link_libraries(parser_test PRIVATE ncnn_graph)
-
-add_executable(malformed_graph_test test/malformed_graph_test.cpp)
-target_link_libraries(malformed_graph_test PRIVATE ncnn_graph)
-target_compile_definitions(malformed_graph_test PRIVATE
+add_executable(unit_tests
+    test/load_squeezenet.cpp
+    test/parser_test.cpp
+    test/malformed_graph_test.cpp
+    test/typed_ir_test.cpp
+    test/typed_ir_dump_test.cpp
+    test/ncnn_importer_test.cpp
+    test/load_squeezenet_typed.cpp
+)
+# ncnn_frontend 已 PUBLIC 链接 ncnn_graph，覆盖仅依赖 ncnn_graph 的测试
+target_link_libraries(unit_tests PRIVATE ncnn_frontend GTest::gtest_main)
+target_compile_definitions(unit_tests PRIVATE
+    NCNN_GRAPH_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/.."
     NCNN_GRAPH_TEST_TEMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-fixtures")
 
-add_executable(typed_ir_test test/typed_ir_test.cpp)
-target_link_libraries(typed_ir_test PRIVATE ncnn_frontend)
-
-add_executable(typed_ir_dump_test test/typed_ir_dump_test.cpp)
-target_link_libraries(typed_ir_dump_test PRIVATE ncnn_frontend)
-
-add_executable(ncnn_importer_test test/ncnn_importer_test.cpp)
-target_link_libraries(ncnn_importer_test PRIVATE ncnn_frontend)
-
-add_executable(load_squeezenet_typed test/load_squeezenet_typed.cpp)
-target_link_libraries(load_squeezenet_typed PRIVATE ncnn_frontend)
-target_compile_definitions(load_squeezenet_typed PRIVATE
-    NCNN_GRAPH_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
-
 enable_testing()
-add_test(NAME load_squeezenet_default
-    COMMAND load_squeezenet
-            ${CMAKE_CURRENT_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.param
-            ${CMAKE_CURRENT_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.bin)
-add_test(NAME parser_test COMMAND parser_test)
-add_test(NAME malformed_graph_test COMMAND malformed_graph_test)
-add_test(NAME typed_ir_test COMMAND typed_ir_test)
-add_test(NAME typed_ir_dump_test COMMAND typed_ir_dump_test)
-add_test(NAME ncnn_importer_test COMMAND ncnn_importer_test)
-add_test(NAME load_squeezenet_typed COMMAND load_squeezenet_typed)
+gtest_discover_tests(unit_tests)
 
 # ── 辅助目标：clang-format / clang-tidy ───────────────────
 # 收集所有源/头文件（排除 build 目录）

@@ -1,12 +1,13 @@
 #include "ncnn_graph/graph.hpp"
 
+#include <gtest/gtest.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <format>
 #include <iostream>
+#include <span>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "ncnn_frontend/importer.hpp"
@@ -190,59 +191,59 @@ bool shape_equals(const ncnn_frontend::TensorType& type,
 
 }  // namespace
 
-int main() {
+TEST(NcnnImporterTest, ImportsSupportedGraph) {
   using ncnn_frontend::import_graph;
   using ncnn_frontend::Operation;
   using ncnn_frontend::OperationKind;
   using ncnn_frontend::verify_graph;
-  int status = 0;
-  auto check = [&](bool condition, std::string_view message) {
-    std::cout << std::format("[{}] {}\n", condition ? "PASS" : "FAIL", message);
-    if (!condition) {
-      status = 1;
-    }
-  };
 
   auto imported = import_graph(make_supported_graph());
-  check(imported.has_value(), "all eight supported source layer types import");
-  if (imported) {
-    constexpr std::array<std::int64_t, 3> kPoolShape = {4, 3, 3};
-    constexpr std::array<std::int64_t, 1> kOutputShape = {4};
-    check(imported->get_operations().size() == 10,
-          "input is graph argument and two convolution constants are ops");
-    check(imported->operation_count_of(OperationKind::Constant) == 2,
-          "f16 weight and f32 bias become constants");
-    const auto pool = std::ranges::find(
-      imported->get_operations(), "pool", &Operation::get_name);
-    check(pool != imported->get_operations().end() &&
-            shape_equals(imported->get_value(pool->get_results()[0]).get_type(),
-                         kPoolShape),
-          "pad_mode 0 uses ceil/full-padding output shape");
-    check(
-      shape_equals(imported->get_value(imported->get_outputs()[0]).get_type(),
-                   kOutputShape),
-      "global pool and softmax produce rank-one output");
-    check(verify_graph(*imported).has_value(), "imported graph verifies");
-  }
+  ASSERT_TRUE(imported.has_value())
+    << "all eight supported source layer types import";
+
+  constexpr std::array<std::int64_t, 3> kPoolShape = {4, 3, 3};
+  constexpr std::array<std::int64_t, 1> kOutputShape = {4};
+  EXPECT_EQ(imported->get_operations().size(), 10u)
+    << "input is graph argument and two convolution constants are ops";
+  EXPECT_EQ(imported->operation_count_of(OperationKind::Constant), 2u)
+    << "f16 weight and f32 bias become constants";
+  const auto pool =
+    std::ranges::find(imported->get_operations(), "pool", &Operation::get_name);
+  EXPECT_TRUE(pool != imported->get_operations().end() &&
+              shape_equals(
+                imported->get_value(pool->get_results()[0]).get_type(),
+                kPoolShape))
+    << "pad_mode 0 uses ceil/full-padding output shape";
+  EXPECT_TRUE(shape_equals(
+    imported->get_value(imported->get_outputs()[0]).get_type(), kOutputShape))
+    << "global pool and softmax produce rank-one output";
+  EXPECT_TRUE(verify_graph(*imported).has_value())
+    << "imported graph verifies";
+}
+
+TEST(NcnnImporterTest, ImportsInt8Quantization) {
+  using ncnn_frontend::import_graph;
+  using ncnn_frontend::Operation;
+  using ncnn_frontend::OperationKind;
 
   auto int8 = import_graph(make_int8_graph());
-  check(int8 && int8->operation_count_of(OperationKind::Constant) == 4,
-        "int8 kernel and three quantization scales become constants");
+  EXPECT_TRUE(int8 && int8->operation_count_of(OperationKind::Constant) == 4)
+    << "int8 kernel and three quantization scales become constants";
 
   auto int8_chain = import_graph(make_int8_chain_graph());
-  check(int8_chain &&
-          int8_chain->get_value(int8_chain->get_outputs()[0])
-              .get_type()
-              .get_element_type() == ncnn_frontend::ElementType::Float32,
-        "102 i8 output feeds term 2 input and dequantizes to f32");
+  EXPECT_TRUE(int8_chain &&
+              int8_chain->get_value(int8_chain->get_outputs()[0])
+                  .get_type()
+                  .get_element_type() == ncnn_frontend::ElementType::Float32)
+    << "102 i8 output feeds term 2 input and dequantizes to f32";
   if (int8_chain) {
     const auto requant = std::ranges::find(
       int8_chain->get_operations(), "requant", &Operation::get_name);
-    check(requant != int8_chain->get_operations().end() &&
-            int8_chain->get_value(requant->get_results()[0])
-                .get_type()
-                .get_element_type() == ncnn_frontend::ElementType::Int8,
-          "scale term above 100 produces i8 result");
+    EXPECT_TRUE(requant != int8_chain->get_operations().end() &&
+                int8_chain->get_value(requant->get_results()[0])
+                    .get_type()
+                    .get_element_type() == ncnn_frontend::ElementType::Int8)
+      << "scale term above 100 produces i8 result";
   }
 
   auto unquantized_i8 = make_int8_graph();
@@ -256,8 +257,12 @@ int main() {
   unquantized_layers[1].set_weights(
     {make_tensor({1, 1, 1, 1}, ncnn_graph::DataType::Int8)});
   unquantized_i8.set_layers(std::move(unquantized_layers));
-  check(!import_graph(unquantized_i8),
-        "unquantized convolution rejects i8 kernel");
+  EXPECT_FALSE(import_graph(unquantized_i8))
+    << "unquantized convolution rejects i8 kernel";
+}
+
+TEST(NcnnImporterTest, ShapeHints) {
+  using ncnn_frontend::import_graph;
 
   auto hinted = make_supported_graph();
   std::vector<ncnn_graph::Layer> hinted_layers(hinted.get_layers().begin(),
@@ -268,8 +273,8 @@ int main() {
   hinted_relu_params.set_value(31, ncnn_graph::ParamValue::make_int(1));
   hinted_layers[2].set_params(std::move(hinted_relu_params));
   hinted.set_layers(std::move(hinted_layers));
-  check(import_graph(hinted).has_value(),
-        "valid param 30 shape hint and param 31 feature mask are accepted");
+  EXPECT_TRUE(import_graph(hinted).has_value())
+    << "valid param 30 shape hint and param 31 feature mask are accepted";
 
   auto bad_hint = make_supported_graph();
   hinted_layers.assign(bad_hint.get_layers().begin(),
@@ -279,17 +284,22 @@ int main() {
     30, ncnn_graph::ParamValue::make_int_array({3, 4, 5, 2}));
   hinted_layers[2].set_params(std::move(bad_hint_params));
   bad_hint.set_layers(std::move(hinted_layers));
-  check(!import_graph(bad_hint),
-        "inconsistent param 30 shape hint is rejected");
+  EXPECT_FALSE(import_graph(bad_hint))
+    << "inconsistent param 30 shape hint is rejected";
+}
+
+TEST(NcnnImporterTest, PoolingShapes) {
+  using ncnn_frontend::import_graph;
 
   auto large_kernel_pool = import_graph(make_pool_graph(2, 3, 2));
   constexpr std::array<std::int64_t, 3> kLargeKernelShape = {1, 2, 2};
-  check(large_kernel_pool &&
-          shape_equals(
-            large_kernel_pool->get_value(large_kernel_pool->get_outputs()[0])
-              .get_type(),
-            kLargeKernelShape),
-        "pad_mode 0 follows ncnn tail padding when kernel exceeds input");
+  EXPECT_TRUE(
+    large_kernel_pool &&
+    shape_equals(
+      large_kernel_pool->get_value(large_kernel_pool->get_outputs()[0])
+        .get_type(),
+      kLargeKernelShape))
+    << "pad_mode 0 follows ncnn tail padding when kernel exceeds input";
 
   auto adaptive_graph = make_pool_graph(5, 1, 1);
   auto adaptive_layers = std::vector<ncnn_graph::Layer>(
@@ -302,12 +312,13 @@ int main() {
   adaptive_graph.set_layers(std::move(adaptive_layers));
   auto adaptive_imported = import_graph(adaptive_graph);
   constexpr std::array<std::int64_t, 3> kAdaptiveShape = {1, 2, 5};
-  check(adaptive_imported &&
-          shape_equals(
-            adaptive_imported->get_value(adaptive_imported->get_outputs()[0])
-              .get_type(),
-            kAdaptiveShape),
-        "adaptive -233 preserves the corresponding input dimension");
+  EXPECT_TRUE(
+    adaptive_imported &&
+    shape_equals(
+      adaptive_imported->get_value(adaptive_imported->get_outputs()[0])
+        .get_type(),
+      kAdaptiveShape))
+    << "adaptive -233 preserves the corresponding input dimension";
 
   auto global_adaptive = make_pool_graph(5, 0, 1);
   adaptive_layers.assign(global_adaptive.get_layers().begin(),
@@ -319,12 +330,13 @@ int main() {
   global_adaptive.set_layers(std::move(adaptive_layers));
   auto global_adaptive_imported = import_graph(global_adaptive);
   constexpr std::array<std::int64_t, 1> kGlobalShape = {1};
-  check(global_adaptive_imported &&
-          shape_equals(global_adaptive_imported
-                         ->get_value(global_adaptive_imported->get_outputs()[0])
-                         .get_type(),
-                       kGlobalShape),
-        "global pooling takes priority over adaptive pooling");
+  EXPECT_TRUE(global_adaptive_imported &&
+              shape_equals(
+                global_adaptive_imported
+                  ->get_value(global_adaptive_imported->get_outputs()[0])
+                  .get_type(),
+                kGlobalShape))
+    << "global pooling takes priority over adaptive pooling";
 
   auto zero_adaptive_width = make_pool_graph(5, 1, 1);
   adaptive_layers.assign(zero_adaptive_width.get_layers().begin(),
@@ -335,8 +347,8 @@ int main() {
   zero_width_params.set_value(18, ncnn_graph::ParamValue::make_int(2));
   adaptive_layers[1].set_params(std::move(zero_width_params));
   zero_adaptive_width.set_layers(std::move(adaptive_layers));
-  check(!import_graph(zero_adaptive_width),
-        "adaptive pooling rejects zero output width");
+  EXPECT_FALSE(import_graph(zero_adaptive_width))
+    << "adaptive pooling rejects zero output width";
 
   auto zero_adaptive_height = make_pool_graph(5, 1, 1);
   adaptive_layers.assign(zero_adaptive_height.get_layers().begin(),
@@ -347,13 +359,17 @@ int main() {
   zero_height_params.set_value(18, ncnn_graph::ParamValue::make_int(0));
   adaptive_layers[1].set_params(std::move(zero_height_params));
   zero_adaptive_height.set_layers(std::move(adaptive_layers));
-  check(!import_graph(zero_adaptive_height),
-        "adaptive pooling rejects zero output height");
+  EXPECT_FALSE(import_graph(zero_adaptive_height))
+    << "adaptive pooling rejects zero output height";
+}
+
+TEST(NcnnImporterTest, RejectsInvalidGraphs) {
+  using ncnn_frontend::import_graph;
 
   ncnn_graph::Graph unknown_graph;
   unknown_graph.add_layer(make_layer("Mystery", "bad", {}, {"out"}));
   unknown_graph.set_output_blob_names({"out"});
-  check(!import_graph(unknown_graph), "unknown layer type is rejected");
+  EXPECT_FALSE(import_graph(unknown_graph)) << "unknown layer type is rejected";
 
   auto bad_kind = make_supported_graph();
   std::vector<ncnn_graph::Layer> layers(bad_kind.get_layers().begin(),
@@ -364,15 +380,15 @@ int main() {
   bad_params.set_value(2, ncnn_graph::ParamValue::make_float(1.0f));
   layers[0].set_params(std::move(bad_params));
   bad_kind.set_layers(std::move(layers));
-  check(!import_graph(bad_kind), "wrong parameter kind is rejected");
+  EXPECT_FALSE(import_graph(bad_kind)) << "wrong parameter kind is rejected";
 
   auto missing_weight = make_supported_graph();
   layers.assign(missing_weight.get_layers().begin(),
                 missing_weight.get_layers().end());
   layers[1].set_weights({});
   missing_weight.set_layers(std::move(layers));
-  check(!import_graph(missing_weight),
-        "missing convolution weights are rejected");
+  EXPECT_FALSE(import_graph(missing_weight))
+    << "missing convolution weights are rejected";
 
   auto bad_channels = make_supported_graph();
   layers.assign(bad_channels.get_layers().begin(),
@@ -388,8 +404,6 @@ int main() {
   channel_params.set_value(6, ncnn_graph::ParamValue::make_int(36));
   layers[1].set_params(std::move(channel_params));
   bad_channels.set_layers(std::move(layers));
-  check(!import_graph(bad_channels),
-        "input and weight channel mismatch is rejected");
-
-  return status;
+  EXPECT_FALSE(import_graph(bad_channels))
+    << "input and weight channel mismatch is rejected";
 }
