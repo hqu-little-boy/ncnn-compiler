@@ -36,6 +36,24 @@ add_library(ncnn_frontend STATIC
 target_include_directories(ncnn_frontend PUBLIC include)
 target_link_libraries(ncnn_frontend PUBLIC ncnn_graph)
 
+# ── 编译器驱动：ncnn-mlir-driver ─────────────────────────────
+# 参数解析用 LLVM 自带的 llvm::cl（mlir-opt 同款 CommandLine 库）。
+# LLVM/MLIR 21：CMake config 目录见 memory（/usr/lib/llvm-21/lib/cmake/{llvm,mlir}）。
+# 目前只用到 LLVM Support 组件（CommandLine + raw_ostream）；后续接入 MLIR
+# pass 管线时在此追加 MLIR target。
+if(NOT LLVM_DIR)
+    set(LLVM_DIR "/usr/lib/llvm-21/lib/cmake/llvm")
+endif()
+find_package(LLVM REQUIRED CONFIG)
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} (cmake dir: ${LLVM_DIR})")
+
+add_executable(ncnn-mlir-driver tools/ncnn-mlir-driver.cpp)
+target_include_directories(ncnn-mlir-driver SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(ncnn-mlir-driver PRIVATE ${LLVM_DEFINITIONS})
+# 只链 Support（含 CommandLine）。llvm_map_components_to_libnames 把组件名解析成库。
+llvm_map_components_to_libnames(NCNN_DRIVER_LLVM_LIBS support)
+target_link_libraries(ncnn-mlir-driver PRIVATE ncnn_frontend ${NCNN_DRIVER_LLVM_LIBS})
+
 # 单元测试：所有测试源文件合并到唯一可执行文件，链接 gtest_main（无需 main 函数）
 find_package(GTest REQUIRED)
 include(GoogleTest)
