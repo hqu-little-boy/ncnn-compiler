@@ -21,7 +21,9 @@ ConstructorInitializerIndentWidth: 2
 
 # ── 大括号 ─────────────────────────────────────────────────────
 # Google：函数/控制流都行尾开括号（K&R / Attach）。
+# 所有控制流 block 必须显式使用大括号，包括只有一条语句的 block。
 BreakBeforeBraces: Attach
+InsertBraces: true
 
 # ── 指针/引用对齐 ─────────────────────────────────────────────
 # Google：贴近类型名（Left）。如 `const int* p` / `int& x`。

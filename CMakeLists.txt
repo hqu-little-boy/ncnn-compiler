@@ -29,12 +29,24 @@ target_include_directories(ncnn_graph PUBLIC include)
 # 验收程序：读 squeezenet，dump + 自检
 add_executable(load_squeezenet test/load_squeezenet.cpp)
 target_link_libraries(load_squeezenet PRIVATE ncnn_graph)
+target_compile_definitions(load_squeezenet PRIVATE
+    NCNN_GRAPH_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+add_executable(parser_test test/parser_test.cpp)
+target_link_libraries(parser_test PRIVATE ncnn_graph)
+
+add_executable(malformed_graph_test test/malformed_graph_test.cpp)
+target_link_libraries(malformed_graph_test PRIVATE ncnn_graph)
+target_compile_definitions(malformed_graph_test PRIVATE
+    NCNN_GRAPH_TEST_TEMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-fixtures")
 
 enable_testing()
 add_test(NAME load_squeezenet_default
     COMMAND load_squeezenet
-            /mnt/ncnn-compiler/ncnn/examples/squeezenet_v1.1.param
-            /mnt/ncnn-compiler/ncnn/examples/squeezenet_v1.1.bin)
+            ${CMAKE_CURRENT_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.param
+            ${CMAKE_CURRENT_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.bin)
+add_test(NAME parser_test COMMAND parser_test)
+add_test(NAME malformed_graph_test COMMAND malformed_graph_test)
 
 # ── 辅助目标：clang-format / clang-tidy ───────────────────
 # 收集所有源/头文件（排除 build 目录）

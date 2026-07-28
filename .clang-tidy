@@ -19,38 +19,39 @@ Checks: >
   readability-*,
   -modernize-use-trailing-return-type,
   -modernize-use-nodiscard,
+  -modernize-use-default-member-init,
   -modernize-avoid-c-arrays,
   -readability-named-parameter,
   -readability-identifier-length,
   -readability-magic-numbers,
   -readability-function-cognitive-complexity,
   -readability-implicit-bool-conversion,
-  -readability-braces-around-statements,
   -readability-uppercase-literal-suffix,
   -readability-function-size,
   -readability-avoid-nested-conditional-operator,
   -readability-isolate-declaration,
   -readability-use-anyofallof,
-  -google-readability-braces-around-statements,
   -google-runtime-int,
   -google-default-arguments,
-  -readability-simplify-boolean-expr
+  -readability-simplify-boolean-expr,
+  -readability-redundant-member-init
 
 # 关掉项的理由：
 #   modernize-use-trailing-return-type  —— 强制 `auto f()->T`，Google 不强制
 #   modernize-use-nodiscard            —— 过度建议 [[nodiscard]]，噪音大
+#   modernize-use-default-member-init  —— 项目约定所有成员状态由构造函数初始化
 #   modernize-avoid-c-arrays           —— 与 C 接口/原始缓冲交互时 C 数组合理
 #   readability-magic-numbers          —— 编译器/格式化代码天然充满魔数（flag 0x01306B47 等）
 #   readability-identifier-length       —— 短名（i, j, k）在循环里合理
 #   readability-function-size          —— 第一阶段 importer/parser 函数天然较长，重构后再开
 #   readability-uppercase-literal-suffix —— `0.0f` vs `0.0F`，Google 不强制大写后缀
 #   readability-function-cognitive-complexity —— 同上，初期不卡
-#   *_braces-around-statements         —— 单行短体不强加花括号（与 .clang-format 单行风格一致）
 #   readability-avoid-nested-conditional-operator —— dump 函数里的 ?: 嵌套可读性可接受
 #   readability-isolate-declaration      —— `int a, b;` 风格判定较吵
 #   readability-use-anyofallof          —— 改写循环为 ranges::any_of 时机成熟后再开
 #   google-runtime-int                 —— 用 int 而非 int32_t 在与 ncnn C 接口对齐时合理
 #   readability-simplify-boolean-expr   —— 初期不强加布尔化简
+#   readability-redundant-member-init   —— 项目约定构造函数显式初始化所有成员
 
 # ── 警告即错误 ──────────────────────────────────────────────
 # CI/本地均把 tidy 警告当错误。开发时可临时去掉。

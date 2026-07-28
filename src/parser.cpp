@@ -1,193 +1,238 @@
 #include "ncnn_graph/parser.hpp"
 
-#include "ncnn_graph/graph.hpp"
-
+#include <algorithm>
 #include <cctype>
 #include <charconv>
-#include <cstdlib>
+#include <cmath>
+#include <expected>
+#include <format>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 namespace ncnn_graph {
+namespace {
 
-// 判断 token 是否含小数点/e（ncnn vstr_is_float 的同款逻辑）
-static bool token_is_float(std::string_view s) {
-  for (char c : s) {
-    if (c == '.' || c == 'e' || c == 'E')
-      return true;
+constexpr std::int64_t kArrayIdBase = 23300;
+constexpr int kMaximumParamId = 31;
+
+bool token_is_nonfinite_float(std::string_view token) {
+  if (!token.empty() && (token.front() == '-' || token.front() == '+')) {
+    token.remove_prefix(1);
   }
-  return false;
+  std::string lowercase(token);
+  std::ranges::transform(lowercase, lowercase.begin(), [](char character) {
+    return static_cast<char>(
+      std::tolower(static_cast<unsigned char>(character)));
+  });
+  return lowercase == "nan" || lowercase == "inf" || lowercase == "infinity";
 }
 
-static bool token_is_string(std::string_view s) {
-  return !s.empty() &&
-         (std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '"');
+bool token_is_float(std::string_view token) {
+  return token_is_nonfinite_float(token) ||
+         std::ranges::any_of(token, [](char character) {
+           return character == '.' || character == 'e' || character == 'E';
+         });
 }
 
-static std::int64_t parse_int(std::string_view s, bool& ok) {
-  std::int64_t v{};
-  auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
-  ok = (ec == std::errc{});
-  return v;
+bool token_is_string(std::string_view token) {
+  return !token.empty() &&
+         (std::isalpha(static_cast<unsigned char>(token.front())) ||
+          token.front() == '"');
 }
 
-static float parse_float(std::string_view s) {
-  // ncnn 用自写 vstr_to_float；这里用 strtod，够用且标准
-  std::string tmp(s);
-  return static_cast<float>(std::strtod(tmp.c_str(), nullptr));
+template <typename Value>
+std::expected<Value, std::string> parse_number(std::string_view token,
+                                               std::string_view description) {
+  if (token.empty()) {
+    return std::unexpected(std::format("empty {}", description));
+  }
+  Value value{};
+  auto [end, error] =
+    std::from_chars(token.data(), token.data() + token.size(), value);
+  if (error == std::errc::result_out_of_range) {
+    return std::unexpected(
+      std::format("{} out of range: {}", description, token));
+  }
+  if (error != std::errc{} || end != token.data() + token.size()) {
+    return std::unexpected(std::format("bad {}: {}", description, token));
+  }
+  if constexpr (std::is_floating_point_v<Value>) {
+    if (!std::isfinite(value)) {
+      return std::unexpected(
+        std::format("non-finite {}: {}", description, token));
+    }
+  }
+  return value;
 }
 
-// 切分 "k=v,k=v" 或 "v,v,v" 的数组尾
-// 移植自 ncnn ParamDict::load_param：单值后若跟逗号，则整个变成数组
-std::string parse_layer_params(std::string_view tail, ParamDict& out) {
-  // 逐 token 处理：先按空格切 "id=value"
-  std::size_t i = 0;
-  while (i < tail.size()) {
-    // 跳过空白
-    while (i < tail.size() && std::isspace(static_cast<unsigned char>(tail[i])))
-      ++i;
-    if (i >= tail.size())
+std::expected<std::vector<std::string_view>, std::string> split_array(
+  std::string_view text) {
+  std::vector<std::string_view> elements;
+  std::size_t begin = 0;
+  while (true) {
+    std::size_t comma = text.find(',', begin);
+    std::size_t end = comma == std::string_view::npos ? text.size() : comma;
+    std::string_view element = text.substr(begin, end - begin);
+    if (element.empty()) {
+      return std::unexpected("array contains an empty element");
+    }
+    elements.push_back(element);
+    if (comma == std::string_view::npos) {
       break;
-
-    // 读 id（直到 '='）
-    std::size_t eq = tail.find('=', i);
-    if (eq == std::string_view::npos) {
-      // 无 '='：非法
-      return std::string("missing '=' in param token at: ") +
-             std::string(tail.substr(i, 16));
     }
-    std::string_view id_tok = tail.substr(i, eq - i);
-    // trim id_tok
-    while (!id_tok.empty() &&
-           std::isspace(static_cast<unsigned char>(id_tok.front())))
-      id_tok.remove_prefix(1);
-    while (!id_tok.empty() &&
-           std::isspace(static_cast<unsigned char>(id_tok.back())))
-      id_tok.remove_suffix(1);
-
-    bool ok = false;
-    std::int64_t id = parse_int(id_tok, ok);
-    if (!ok)
-      return std::string("bad param id: ") + std::string(id_tok);
-
-    // 负 id 表示数组：ncnn 约定 id <= -23300 → is_array, id = -id - 23300
-    bool is_array_neg = (id <= -23300);
-    int real_id =
-      is_array_neg ? static_cast<int>(-id - 23300) : static_cast<int>(id);
-
-    // 读 value：从 eq+1 开始，到下一个空格或行尾
-    std::size_t vstart = eq + 1;
-    std::size_t vend = vstart;
-    while (vend < tail.size() &&
-           !std::isspace(static_cast<unsigned char>(tail[vend])))
-      ++vend;
-    std::string_view first_val = tail.substr(vstart, vend - vstart);
-    i = vend;
-
-    // 看第一个值后面紧跟的是不是逗号（数组展开）。ncnn 文本里数组有两种写法：
-    //   (a) -23303=5,0.1,0.2  （显式 length 前缀）
-    //   (b) 3=0.1,0.2,0.4     （隐式，逗号续接）
-    // 两者值部分都用逗号分隔，且都在同一 token 内（无空格）。所以直接对
-    // first_val 做逗号切分。 但注意：ncnn 解析 (b) 时是先读一个无逗号值，再
-    // scan 逗号续接——值中无空格， 所以
-    // first_val（到空格为止）已包含整段逗号序列。
-    bool has_comma = first_val.find(',') != std::string_view::npos;
-
-    if (is_array_neg) {
-      // 显式数组：第一个元素是长度
-      // 切分 first_val 按逗号
-      std::vector<std::string_view> parts;
-      std::size_t p = 0;
-      while (p < first_val.size()) {
-        std::size_t c = first_val.find(',', p);
-        if (c == std::string_view::npos) {
-          parts.push_back(first_val.substr(p));
-          break;
-        }
-        parts.push_back(first_val.substr(p, c - p));
-        p = c + 1;
-      }
-      if (parts.empty())
-        return "empty negative-key array";
-      // parts[0] 是长度（ncnn 旧式数组带长度前缀）。但 netron 的处理是：
-      //   若 key 为负且 value 是数组，shift 出长度后余下是数据。
-      // 这里 parts[0]=len, parts[1..] 是数据。
-      std::size_t len = parts.size() > 1
-                          ? static_cast<std::size_t>(parse_int(parts[0], ok))
-                          : 0;
-      // 数据从 parts[1] 开始
-      std::vector<float> farr;
-      std::vector<std::int64_t> iarr;
-      bool as_float = false;
-      for (std::size_t k = 1; k < parts.size(); ++k) {
-        if (token_is_float(parts[k])) {
-          as_float = true;
-          break;
-        }
-      }
-      for (std::size_t k = 1;
-           k < parts.size() && (len == 0 || farr.size() < len);
-           ++k) {
-        if (as_float)
-          farr.push_back(parse_float(parts[k]));
-        else {
-          bool ok2 = false;
-          iarr.push_back(parse_int(parts[k], ok2));
-        }
-      }
-      if (as_float)
-        out.set(real_id, ParamValue::make_float_array(std::move(farr)));
-      else
-        out.set(real_id, ParamValue::make_int_array(std::move(iarr)));
-    } else if (has_comma) {
-      // 隐式数组 (b)
-      std::vector<std::string_view> parts;
-      std::size_t p = 0;
-      while (p < first_val.size()) {
-        std::size_t c = first_val.find(',', p);
-        if (c == std::string_view::npos) {
-          parts.push_back(first_val.substr(p));
-          break;
-        }
-        parts.push_back(first_val.substr(p, c - p));
-        p = c + 1;
-      }
-      bool as_float = false;
-      for (auto pv : parts)
-        if (token_is_float(pv)) {
-          as_float = true;
-          break;
-        }
-      std::vector<float> farr;
-      std::vector<std::int64_t> iarr;
-      for (auto pv : parts) {
-        if (as_float)
-          farr.push_back(parse_float(pv));
-        else {
-          bool ok2 = false;
-          iarr.push_back(parse_int(pv, ok2));
-        }
-      }
-      if (as_float)
-        out.set(real_id, ParamValue::make_float_array(std::move(farr)));
-      else
-        out.set(real_id, ParamValue::make_int_array(std::move(iarr)));
-    } else {
-      // 单值
-      if (token_is_string(first_val)) {
-        out.set(real_id, ParamValue::make_string(std::string(first_val)));
-      } else if (token_is_float(first_val)) {
-        out.set(real_id, ParamValue::make_float(parse_float(first_val)));
-      } else {
-        bool ok2 = false;
-        std::int64_t v = parse_int(first_val, ok2);
-        if (!ok2)
-          return std::string("bad int param value: ") + std::string(first_val);
-        out.set(real_id, ParamValue::make_int(v));
-      }
-    }
+    begin = comma + 1;
   }
-  return {};
+  return elements;
+}
+
+std::expected<int, std::string> decode_param_id(std::string_view token,
+                                                bool& explicit_array) {
+  auto parsed = parse_number<std::int64_t>(token, "param id");
+  if (!parsed) {
+    return std::unexpected(parsed.error());
+  }
+  if (*parsed >= 0 && *parsed <= kMaximumParamId) {
+    explicit_array = false;
+    return static_cast<int>(*parsed);
+  }
+  constexpr std::int64_t kMinimumArrayId = -kArrayIdBase - kMaximumParamId;
+  constexpr std::int64_t kMaximumArrayId = -kArrayIdBase;
+  if (*parsed >= kMinimumArrayId && *parsed <= kMaximumArrayId) {
+    explicit_array = true;
+    return static_cast<int>(-*parsed - kArrayIdBase);
+  }
+  return std::unexpected(std::format("param id out of range: {}", token));
+}
+
+std::expected<ParamValue, std::string> parse_array_value(
+  std::span<const std::string_view> elements) {
+  bool as_float = std::ranges::any_of(elements, token_is_float);
+  if (as_float) {
+    std::vector<float> values;
+    values.reserve(elements.size());
+    for (std::string_view element : elements) {
+      auto value = parse_number<float>(element, "float array element");
+      if (!value) {
+        return std::unexpected(value.error());
+      }
+      values.push_back(*value);
+    }
+    return ParamValue::make_float_array(std::move(values));
+  }
+
+  std::vector<std::int64_t> values;
+  values.reserve(elements.size());
+  for (std::string_view element : elements) {
+    auto value = parse_number<std::int64_t>(element, "integer array element");
+    if (!value) {
+      return std::unexpected(value.error());
+    }
+    values.push_back(*value);
+  }
+  return ParamValue::make_int_array(std::move(values));
+}
+
+std::expected<ParamValue, std::string> parse_value(std::string_view token,
+                                                   bool explicit_array) {
+  if (token.empty()) {
+    return std::unexpected("empty param value");
+  }
+
+  auto elements = split_array(token);
+  if (!elements) {
+    return std::unexpected(elements.error());
+  }
+  if (explicit_array) {
+    auto length = parse_number<std::int64_t>((*elements)[0], "array length");
+    if (!length) {
+      return std::unexpected(length.error());
+    }
+    if (*length < 0) {
+      return std::unexpected("array length must be non-negative");
+    }
+    std::size_t data_count = elements->size() - 1;
+    if (std::cmp_not_equal(*length, data_count)) {
+      return std::unexpected(std::format(
+        "array length mismatch: declared {}, got {}", *length, data_count));
+    }
+    return parse_array_value(
+      std::span<const std::string_view>(*elements).subspan(1));
+  }
+
+  if (elements->size() > 1) {
+    return parse_array_value(*elements);
+  }
+  if (token_is_nonfinite_float(token)) {
+    auto value = parse_number<float>(token, "float param value");
+    if (!value) {
+      return std::unexpected(value.error());
+    }
+    return ParamValue::make_float(*value);
+  }
+  if (token_is_string(token)) {
+    return ParamValue::make_string(std::string(token));
+  }
+  if (token_is_float(token)) {
+    auto value = parse_number<float>(token, "float param value");
+    if (!value) {
+      return std::unexpected(value.error());
+    }
+    return ParamValue::make_float(*value);
+  }
+  auto value = parse_number<std::int64_t>(token, "integer param value");
+  if (!value) {
+    return std::unexpected(value.error());
+  }
+  return ParamValue::make_int(*value);
+}
+
+}  // namespace
+
+std::expected<ParamDict, std::string> parse_layer_params(
+  std::string_view tail) {
+  ParamDict params;
+  std::size_t position = 0;
+  while (position < tail.size()) {
+    while (position < tail.size() &&
+           std::isspace(static_cast<unsigned char>(tail[position]))) {
+      ++position;
+    }
+    if (position >= tail.size()) {
+      break;
+    }
+
+    std::size_t end = position;
+    while (end < tail.size() &&
+           !std::isspace(static_cast<unsigned char>(tail[end]))) {
+      ++end;
+    }
+    std::string_view assignment = tail.substr(position, end - position);
+    std::size_t equals = assignment.find('=');
+    if (equals == std::string_view::npos) {
+      return std::unexpected(
+        std::format("missing '=' in param: {}", assignment));
+    }
+    if (assignment.find('=', equals + 1) != std::string_view::npos) {
+      return std::unexpected(
+        std::format("multiple '=' in param: {}", assignment));
+    }
+
+    bool explicit_array = false;
+    auto id = decode_param_id(assignment.substr(0, equals), explicit_array);
+    if (!id) {
+      return std::unexpected(id.error());
+    }
+    auto value = parse_value(assignment.substr(equals + 1), explicit_array);
+    if (!value) {
+      return std::unexpected(std::format("param {}: {}", *id, value.error()));
+    }
+    params.set_value(*id, std::move(*value));
+    position = end;
+  }
+  return params;
 }
 
 }  // namespace ncnn_graph
