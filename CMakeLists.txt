@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 
-# 用系统 clang-21（MLIR 21 同源工具链，版本一致避免 ABI 抖）。必须在 project() 前设置。
-set(CMAKE_C_COMPILER /usr/bin/clang-21)
-set(CMAKE_CXX_COMPILER /usr/bin/clang++-21)
+## 用系统 clang-21（MLIR 21 同源工具链，版本一致避免 ABI 抖）。必须在 project() 前设置。
+#set(CMAKE_C_COMPILER /usr/bin/clang-21)
+#set(CMAKE_CXX_COMPILER /usr/bin/clang++-21)
 
 project(ncnn_graph LANGUAGES CXX)
 
@@ -26,6 +26,16 @@ add_library(ncnn_graph STATIC
 )
 target_include_directories(ncnn_graph PUBLIC include)
 
+add_library(ncnn_frontend STATIC
+    src/frontend/importer.cpp
+    src/frontend/ir.cpp
+    src/frontend/ir_dump.cpp
+    src/frontend/op_schema.cpp
+    src/frontend/verifier.cpp
+)
+target_include_directories(ncnn_frontend PUBLIC include)
+target_link_libraries(ncnn_frontend PUBLIC ncnn_graph)
+
 # 验收程序：读 squeezenet，dump + 自检
 add_executable(load_squeezenet test/load_squeezenet.cpp)
 target_link_libraries(load_squeezenet PRIVATE ncnn_graph)
@@ -40,6 +50,20 @@ target_link_libraries(malformed_graph_test PRIVATE ncnn_graph)
 target_compile_definitions(malformed_graph_test PRIVATE
     NCNN_GRAPH_TEST_TEMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-fixtures")
 
+add_executable(typed_ir_test test/typed_ir_test.cpp)
+target_link_libraries(typed_ir_test PRIVATE ncnn_frontend)
+
+add_executable(typed_ir_dump_test test/typed_ir_dump_test.cpp)
+target_link_libraries(typed_ir_dump_test PRIVATE ncnn_frontend)
+
+add_executable(ncnn_importer_test test/ncnn_importer_test.cpp)
+target_link_libraries(ncnn_importer_test PRIVATE ncnn_frontend)
+
+add_executable(load_squeezenet_typed test/load_squeezenet_typed.cpp)
+target_link_libraries(load_squeezenet_typed PRIVATE ncnn_frontend)
+target_compile_definitions(load_squeezenet_typed PRIVATE
+    NCNN_GRAPH_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+
 enable_testing()
 add_test(NAME load_squeezenet_default
     COMMAND load_squeezenet
@@ -47,11 +71,16 @@ add_test(NAME load_squeezenet_default
             ${CMAKE_CURRENT_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.bin)
 add_test(NAME parser_test COMMAND parser_test)
 add_test(NAME malformed_graph_test COMMAND malformed_graph_test)
+add_test(NAME typed_ir_test COMMAND typed_ir_test)
+add_test(NAME typed_ir_dump_test COMMAND typed_ir_dump_test)
+add_test(NAME ncnn_importer_test COMMAND ncnn_importer_test)
+add_test(NAME load_squeezenet_typed COMMAND load_squeezenet_typed)
 
 # ── 辅助目标：clang-format / clang-tidy ───────────────────
 # 收集所有源/头文件（排除 build 目录）
 file(GLOB_RECURSE NCNN_ALL_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/src/*.cpp"
+    "${CMAKE_SOURCE_DIR}/src/*.hpp"
     "${CMAKE_SOURCE_DIR}/include/*.hpp"
     "${CMAKE_SOURCE_DIR}/test/*.cpp")
 
