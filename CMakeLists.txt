@@ -30,7 +30,18 @@ add_library(ncnn_frontend STATIC
     src/frontend/importer.cpp
     src/frontend/ir.cpp
     src/frontend/ir_dump.cpp
+    src/frontend/Ops/Concat.cpp
+    src/frontend/Ops/Const.cpp
+    src/frontend/Ops/Conv2D.cpp
+    src/frontend/Ops/Dropout.cpp
+    src/frontend/Ops/FormatSupport.cpp
+    src/frontend/Ops/InferSupport.cpp
+    src/frontend/Ops/Pool2D.cpp
+    src/frontend/Ops/Relu.cpp
+    src/frontend/Ops/Softmax.cpp
+    src/frontend/Ops/Split.cpp
     src/frontend/op_schema.cpp
+    src/frontend/Types.cpp
     src/frontend/verifier.cpp
 )
 target_include_directories(ncnn_frontend PUBLIC include)

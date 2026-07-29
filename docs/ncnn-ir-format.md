@@ -1,6 +1,7 @@
 # ncnn-ir 文本格式说明
 
-> 对应源码：`src/frontend/ir.cpp`、`src/frontend/ir_dump.cpp`、`include/ncnn_frontend/ir.hpp`
+> 对应源码：`include/ncnn_frontend/`（Types.hpp、OperationKind.hpp、Operations.hpp、Ops/*.hpp）；
+> `src/frontend/`（ir.cpp、ir_dump.cpp、Types.cpp、Ops/*.cpp）
 > 生成工具：`ncnn-mlir-driver --emit=ncnn-ir`（默认阶段）
 > 相关文档：[parsed-graph-format.md](parsed-graph-format.md)、[ncnn-mlir-driver-usage.md](ncnn-mlir-driver-usage.md)
 
