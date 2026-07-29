@@ -86,7 +86,7 @@ std::string_view Operation::get_name() const noexcept {
 OperationKind Operation::get_kind() const noexcept {
   return std::visit(
     [](const auto& operation) -> OperationKind {
-      return operation_kind(operation);
+      return operation.operation_kind();
     },
     attributes_);
 }

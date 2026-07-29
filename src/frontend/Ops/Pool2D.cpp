@@ -11,7 +11,6 @@
 #include <string_view>
 #include <vector>
 
-#include "ncnn_frontend/OperationKind.hpp"
 #include "ncnn_frontend/Types.hpp"
 
 namespace ncnn_frontend {
@@ -158,10 +157,10 @@ bool Pool2DOp::get_include_pad() const noexcept {
   return include_pad_;
 }
 
-std::expected<std::vector<TensorType>, std::string> infer_result_types(
-  const Pool2DOp& operation,
+std::expected<std::vector<TensorType>, std::string>
+Pool2DOp::infer_result_types(
   std::span<const TensorType> operands,
-  std::size_t result_count) {
+  std::size_t result_count) const {
   auto arity = expect_arity(operands, 1, result_count, 1, "Pooling");
   if (!arity) {
     return std::unexpected(arity.error());
@@ -174,15 +173,15 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
   if (!data_type) {
     return std::unexpected(data_type.error());
   }
-  if (operation.get_kind() != PoolKind::Maximum &&
-      operation.get_kind() != PoolKind::Average) {
+  if (get_kind() != PoolKind::Maximum &&
+      get_kind() != PoolKind::Average) {
     return std::unexpected("pooling kind is invalid");
   }
   const auto input_shape = operands[0].get_shape();
   if (input_shape[0] <= 0 || input_shape[1] <= 0 || input_shape[2] <= 0) {
     return std::unexpected("pooling input dimensions must be positive");
   }
-  if (operation.get_mode() == PoolMode::Global) {
+  if (get_mode() == PoolMode::Global) {
     auto result = create_type({input_shape[0]},
                               operands[0].get_element_type(),
                               TensorLayout::NcnnW,
@@ -192,13 +191,13 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
     }
     return std::vector<TensorType>{std::move(*result)};
   }
-  if (operation.get_mode() == PoolMode::Adaptive) {
-    const std::int64_t output_height = operation.get_kernel_height() == -233
+  if (get_mode() == PoolMode::Adaptive) {
+    const std::int64_t output_height = get_kernel_height() == -233
                                          ? input_shape[1]
-                                         : operation.get_kernel_height();
-    const std::int64_t output_width = operation.get_kernel_width() == -233
+                                         : get_kernel_height();
+    const std::int64_t output_width = get_kernel_width() == -233
                                         ? input_shape[2]
-                                        : operation.get_kernel_width();
+                                        : get_kernel_width();
     auto height =
       expect_positive(output_height, "adaptive pooling output height");
     if (!height) {
@@ -217,26 +216,26 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
     }
     return std::vector<TensorType>{std::move(*result)};
   }
-  if (operation.get_mode() != PoolMode::Regular ||
-      operation.get_pad_mode() < 0 || operation.get_pad_mode() > 3) {
+  if (get_mode() != PoolMode::Regular ||
+      get_pad_mode() < 0 || get_pad_mode() > 3) {
     return std::unexpected("pooling mode or pad mode is invalid");
   }
   auto output_height = infer_regular_dimension(input_shape[1],
-                                               operation.get_kernel_height(),
-                                               operation.get_stride_height(),
-                                               operation.get_pad_top(),
-                                               operation.get_pad_bottom(),
-                                               operation.get_pad_mode(),
+                                               get_kernel_height(),
+                                               get_stride_height(),
+                                               get_pad_top(),
+                                               get_pad_bottom(),
+                                               get_pad_mode(),
                                                "pooling height");
   if (!output_height) {
     return std::unexpected(output_height.error());
   }
   auto output_width = infer_regular_dimension(input_shape[2],
-                                              operation.get_kernel_width(),
-                                              operation.get_stride_width(),
-                                              operation.get_pad_left(),
-                                              operation.get_pad_right(),
-                                              operation.get_pad_mode(),
+                                              get_kernel_width(),
+                                              get_stride_width(),
+                                              get_pad_left(),
+                                              get_pad_right(),
+                                              get_pad_mode(),
                                               "pooling width");
   if (!output_width) {
     return std::unexpected(output_width.error());
@@ -251,26 +250,23 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
   return std::vector<TensorType>{std::move(*result)};
 }
 
-std::string format_attributes(const Pool2DOp& operation) {
+std::string Pool2DOp::format_attributes() const {
   return std::format(
     "kind=pool2d,attrs={{kind={},mode={},kernel=[{},{}],stride=[{},{}],"
     "pad=[{},{},{},{}],pad_mode={},include_pad={}}}",
-    pool_kind_name(operation.get_kind()),
-    pool_mode_name(operation.get_mode()),
-    operation.get_kernel_height(),
-    operation.get_kernel_width(),
-    operation.get_stride_height(),
-    operation.get_stride_width(),
-    operation.get_pad_top(),
-    operation.get_pad_bottom(),
-    operation.get_pad_left(),
-    operation.get_pad_right(),
-    operation.get_pad_mode(),
-    operation.get_include_pad());
+    pool_kind_name(get_kind()),
+    pool_mode_name(get_mode()),
+    get_kernel_height(),
+    get_kernel_width(),
+    get_stride_height(),
+    get_stride_width(),
+    get_pad_top(),
+    get_pad_bottom(),
+    get_pad_left(),
+    get_pad_right(),
+    get_pad_mode(),
+    get_include_pad());
 }
 
-OperationKind operation_kind(const Pool2DOp&) noexcept {
-  return OperationKind::Pooling;
-}
 
 }  // namespace ncnn_frontend

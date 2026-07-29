@@ -6,15 +6,17 @@
 #include <string>
 #include <vector>
 
-#include "ncnn_frontend/OperationKind.hpp"
+#include "ncnn_frontend/Ops/OpBase.hpp"
 #include "ncnn_frontend/Types.hpp"
 
 namespace ncnn_frontend {
 
 enum class ConvQuantizationMode { None, Dequantize, Requantize };
 
-class Conv2DOp {
+class Conv2DOp : public OpBase<Conv2DOp> {
  public:
+  static constexpr OperationKind kind_v = OperationKind::Convolution;
+
   Conv2DOp(std::int64_t kernel_height,
            std::int64_t kernel_width,
            std::int64_t stride_height,
@@ -42,6 +44,12 @@ class Conv2DOp {
   std::int64_t get_int8_scale_term() const noexcept;
   ConvQuantizationMode get_quantization_mode() const noexcept;
 
+  [[nodiscard]] std::expected<std::vector<TensorType>, std::string>
+  infer_result_types(std::span<const TensorType> operands,
+                     std::size_t result_count) const;
+
+  std::string format_attributes() const;
+
  private:
   std::int64_t kernel_height_;
   std::int64_t kernel_width_;
@@ -56,14 +64,5 @@ class Conv2DOp {
   bool has_bias_;
   std::int64_t int8_scale_term_;
 };
-
-[[nodiscard]] std::expected<std::vector<TensorType>, std::string>
-infer_result_types(const Conv2DOp& operation,
-                   std::span<const TensorType> operands,
-                   std::size_t result_count);
-
-std::string format_attributes(const Conv2DOp& operation);
-
-OperationKind operation_kind(const Conv2DOp&) noexcept;
 
 }  // namespace ncnn_frontend

@@ -11,7 +11,6 @@
 #include <string_view>
 #include <vector>
 
-#include "ncnn_frontend/OperationKind.hpp"
 #include "ncnn_frontend/Types.hpp"
 
 namespace ncnn_frontend {
@@ -104,12 +103,11 @@ ConvQuantizationMode Conv2DOp::get_quantization_mode() const noexcept {
   return ConvQuantizationMode::Dequantize;
 }
 
-std::expected<std::vector<TensorType>, std::string> infer_result_types(
-  const Conv2DOp& operation,
-  std::span<const TensorType> operands,
-  std::size_t result_count) {
-  const std::size_t minimum_operands = operation.get_has_bias() ? 3 : 2;
-  const auto term = operation.get_int8_scale_term();
+std::expected<std::vector<TensorType>, std::string>
+Conv2DOp::infer_result_types(std::span<const TensorType> operands,
+                             std::size_t result_count) const {
+  const std::size_t minimum_operands = has_bias_ ? 3 : 2;
+  const auto term = int8_scale_term_;
   if (term != 0 && term != 1 && term != 2 && term != 101 && term != 102) {
     return std::unexpected("Convolution has unsupported int8_scale_term");
   }
@@ -164,11 +162,11 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
       input_shape[0],
       weight_shape[1]));
   }
-  if (weight_shape[2] != operation.get_kernel_height() ||
-      weight_shape[3] != operation.get_kernel_width()) {
+  if (weight_shape[2] != get_kernel_height() ||
+      weight_shape[3] != get_kernel_width()) {
     return std::unexpected("convolution kernel attributes do not match weight");
   }
-  if (operation.get_has_bias()) {
+  if (get_has_bias()) {
     const auto& bias = operands[2];
     if (bias.get_layout() != TensorLayout::NcnnW ||
         bias.get_shape().size() != 1 ||
@@ -191,23 +189,23 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
     }
   }
   for (const auto [value, name] :
-       {std::pair{operation.get_kernel_height(), "convolution kernel height"},
-        std::pair{operation.get_kernel_width(), "convolution kernel width"},
-        std::pair{operation.get_stride_height(), "convolution stride height"},
-        std::pair{operation.get_stride_width(), "convolution stride width"},
-        std::pair{operation.get_dilation_height(),
+       {std::pair{get_kernel_height(), "convolution kernel height"},
+        std::pair{get_kernel_width(), "convolution kernel width"},
+        std::pair{get_stride_height(), "convolution stride height"},
+        std::pair{get_stride_width(), "convolution stride width"},
+        std::pair{get_dilation_height(),
                   "convolution dilation height"},
-        std::pair{operation.get_dilation_width(),
+        std::pair{get_dilation_width(),
                   "convolution dilation width"}}) {
     auto valid = expect_positive(value, name);
     if (!valid) {
       return std::unexpected(valid.error());
     }
   }
-  const std::int64_t pads[] = {operation.get_pad_top(),
-                               operation.get_pad_bottom(),
-                               operation.get_pad_left(),
-                               operation.get_pad_right()};
+  const std::int64_t pads[] = {get_pad_top(),
+                               get_pad_bottom(),
+                               get_pad_left(),
+                               get_pad_right()};
   bool same_upper = true;
   bool same_lower = true;
   for (const std::int64_t pad : pads) {
@@ -218,12 +216,12 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
     same_lower = same_lower && pad == -234;
   }
   if ((!same_upper && !same_lower) &&
-      (operation.get_pad_top() < 0 || operation.get_pad_bottom() < 0 ||
-       operation.get_pad_left() < 0 || operation.get_pad_right() < 0)) {
+      (get_pad_top() < 0 || get_pad_bottom() < 0 ||
+       get_pad_left() < 0 || get_pad_right() < 0)) {
     return std::unexpected("convolution SAME padding must use one pad mode");
   }
-  auto extent_height = checked_multiply(operation.get_dilation_height(),
-                                        operation.get_kernel_height() - 1,
+  auto extent_height = checked_multiply(get_dilation_height(),
+                                        get_kernel_height() - 1,
                                         "convolution kernel height extent");
   if (!extent_height) {
     return std::unexpected(extent_height.error());
@@ -232,8 +230,8 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
   if (!extent_height) {
     return std::unexpected(extent_height.error());
   }
-  auto extent_width = checked_multiply(operation.get_dilation_width(),
-                                       operation.get_kernel_width() - 1,
+  auto extent_width = checked_multiply(get_dilation_width(),
+                                       get_kernel_width() - 1,
                                        "convolution kernel width extent");
   if (!extent_width) {
     return std::unexpected(extent_width.error());
@@ -245,26 +243,26 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
   std::int64_t output_height = 0;
   std::int64_t output_width = 0;
   if (same_upper || same_lower) {
-    output_height = 1 + ((input_shape[1] - 1) / operation.get_stride_height());
-    output_width = 1 + ((input_shape[2] - 1) / operation.get_stride_width());
+    output_height = 1 + ((input_shape[1] - 1) / get_stride_height());
+    output_width = 1 + ((input_shape[2] - 1) / get_stride_width());
   } else {
     auto height = checked_add(
-      input_shape[1], operation.get_pad_top(), "convolution padded height");
+      input_shape[1], get_pad_top(), "convolution padded height");
     if (!height) {
       return std::unexpected(height.error());
     }
     height = checked_add(
-      *height, operation.get_pad_bottom(), "convolution padded height");
+      *height, get_pad_bottom(), "convolution padded height");
     if (!height) {
       return std::unexpected(height.error());
     }
     auto width = checked_add(
-      input_shape[2], operation.get_pad_left(), "convolution padded width");
+      input_shape[2], get_pad_left(), "convolution padded width");
     if (!width) {
       return std::unexpected(width.error());
     }
     width = checked_add(
-      *width, operation.get_pad_right(), "convolution padded width");
+      *width, get_pad_right(), "convolution padded width");
     if (!width) {
       return std::unexpected(width.error());
     }
@@ -272,9 +270,9 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
       return std::unexpected("convolution kernel exceeds padded input");
     }
     output_height =
-      1 + ((*height - *extent_height) / operation.get_stride_height());
+      1 + ((*height - *extent_height) / get_stride_height());
     output_width =
-      1 + ((*width - *extent_width) / operation.get_stride_width());
+      1 + ((*width - *extent_width) / get_stride_width());
   }
   auto result =
     create_type({weight_shape[0], output_height, output_width},
@@ -287,27 +285,24 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
   return std::vector<TensorType>{std::move(*result)};
 }
 
-std::string format_attributes(const Conv2DOp& operation) {
+std::string Conv2DOp::format_attributes() const {
   return std::format(
     "kind=conv2d,attrs={{kernel=[{},{}],stride=[{},{}],dilation=[{},{}],"
     "pad=[{},{},{},{}],has_bias={},int8_scale_term={},quantization={}}}",
-    operation.get_kernel_height(),
-    operation.get_kernel_width(),
-    operation.get_stride_height(),
-    operation.get_stride_width(),
-    operation.get_dilation_height(),
-    operation.get_dilation_width(),
-    operation.get_pad_top(),
-    operation.get_pad_bottom(),
-    operation.get_pad_left(),
-    operation.get_pad_right(),
-    operation.get_has_bias(),
-    operation.get_int8_scale_term(),
-    quantization_name(operation.get_quantization_mode()));
+    get_kernel_height(),
+    get_kernel_width(),
+    get_stride_height(),
+    get_stride_width(),
+    get_dilation_height(),
+    get_dilation_width(),
+    get_pad_top(),
+    get_pad_bottom(),
+    get_pad_left(),
+    get_pad_right(),
+    get_has_bias(),
+    get_int8_scale_term(),
+    quantization_name(get_quantization_mode()));
 }
 
-OperationKind operation_kind(const Conv2DOp&) noexcept {
-  return OperationKind::Convolution;
-}
 
 }  // namespace ncnn_frontend

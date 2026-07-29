@@ -24,7 +24,7 @@ std::expected<std::vector<TensorType>, std::string> infer_and_verify_operation(
   return std::visit(
     [&](const auto& operation)
       -> std::expected<std::vector<TensorType>, std::string> {
-      return infer_result_types(operation, operands, result_count);
+      return operation.infer_result_types(operands, result_count);
     },
     attributes);
 }

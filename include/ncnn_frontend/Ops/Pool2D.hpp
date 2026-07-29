@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "ncnn_frontend/OperationKind.hpp"
+#include "ncnn_frontend/Ops/OpBase.hpp"
 #include "ncnn_frontend/Types.hpp"
 
 namespace ncnn_frontend {
@@ -14,8 +14,10 @@ namespace ncnn_frontend {
 enum class PoolKind { Maximum, Average };
 enum class PoolMode { Regular, Global, Adaptive };
 
-class Pool2DOp {
+class Pool2DOp : public OpBase<Pool2DOp> {
  public:
+  static constexpr OperationKind kind_v = OperationKind::Pooling;
+
   Pool2DOp(PoolKind kind,
            PoolMode mode,
            std::int64_t kernel_height,
@@ -42,6 +44,12 @@ class Pool2DOp {
   int get_pad_mode() const noexcept;
   bool get_include_pad() const noexcept;
 
+  [[nodiscard]] std::expected<std::vector<TensorType>, std::string>
+  infer_result_types(std::span<const TensorType> operands,
+                     std::size_t result_count) const;
+
+  std::string format_attributes() const;
+
  private:
   PoolKind kind_;
   PoolMode mode_;
@@ -56,14 +64,5 @@ class Pool2DOp {
   int pad_mode_;
   bool include_pad_;
 };
-
-[[nodiscard]] std::expected<std::vector<TensorType>, std::string>
-infer_result_types(const Pool2DOp& operation,
-                   std::span<const TensorType> operands,
-                   std::size_t result_count);
-
-std::string format_attributes(const Pool2DOp& operation);
-
-OperationKind operation_kind(const Pool2DOp&) noexcept;
 
 }  // namespace ncnn_frontend

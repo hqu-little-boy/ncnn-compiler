@@ -83,7 +83,7 @@ std::string format_operation_attributes(const OperationAttributes& attributes) {
   }
   return std::visit(
     [](const auto& operation) -> std::string {
-      return format_attributes(operation);
+      return operation.format_attributes();
     },
     attributes);
 }

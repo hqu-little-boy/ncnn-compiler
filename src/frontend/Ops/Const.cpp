@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "ncnn_frontend/OperationKind.hpp"
 #include "ncnn_frontend/Types.hpp"
 
 namespace ncnn_frontend {
@@ -34,29 +33,23 @@ const TensorLiteral& ConstOp::get_literal() const noexcept {
   return literal_;
 }
 
-std::expected<std::vector<TensorType>, std::string> infer_result_types(
-  const ConstOp& operation,
-  std::span<const TensorType> operands,
-  std::size_t result_count) {
+std::expected<std::vector<TensorType>, std::string>
+ConstOp::infer_result_types(std::span<const TensorType> operands,
+                            std::size_t result_count) const {
   auto arity = expect_arity(operands, 0, result_count, 1, "Const");
   if (!arity) {
     return std::unexpected(arity.error());
   }
-  return std::vector<TensorType>{operation.get_literal().get_type()};
+  return std::vector<TensorType>{literal_.get_type()};
 }
 
-std::string format_attributes(const ConstOp& operation) {
-  const TensorLiteral& literal = operation.get_literal();
+std::string ConstOp::format_attributes() const {
   return std::format(
     "kind=const,attrs={{literal_type={},payload_bytes={},fnv1a64=0x{:"
     "016x}}}",
-    format_type(literal.get_type()),
-    literal.get_data().size(),
-    fnv1a64(literal.get_data()));
-}
-
-OperationKind operation_kind(const ConstOp&) noexcept {
-  return OperationKind::Constant;
+    format_type(literal_.get_type()),
+    literal_.get_data().size(),
+    fnv1a64(literal_.get_data()));
 }
 
 }  // namespace ncnn_frontend

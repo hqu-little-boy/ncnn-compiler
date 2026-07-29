@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "ncnn_frontend/OperationKind.hpp"
 #include "ncnn_frontend/Types.hpp"
 
 namespace ncnn_frontend {
@@ -22,10 +21,10 @@ std::int64_t ConcatOp::get_axis() const noexcept {
   return axis_;
 }
 
-std::expected<std::vector<TensorType>, std::string> infer_result_types(
-  const ConcatOp& operation,
+std::expected<std::vector<TensorType>, std::string>
+ConcatOp::infer_result_types(
   std::span<const TensorType> operands,
-  std::size_t result_count) {
+  std::size_t result_count) const {
   if (operands.size() < 2 || result_count != 1) {
     return std::unexpected(
       "Concat requires at least two operands and one result");
@@ -33,7 +32,7 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
   const auto& first = operands[0];
   const auto first_shape = first.get_shape();
   const auto rank = static_cast<std::int64_t>(first_shape.size());
-  std::int64_t axis = operation.get_axis();
+  std::int64_t axis = get_axis();
   if (axis < 0) {
     axis += rank;
   }
@@ -74,12 +73,9 @@ std::expected<std::vector<TensorType>, std::string> infer_result_types(
   return std::vector<TensorType>{std::move(*result)};
 }
 
-std::string format_attributes(const ConcatOp& operation) {
-  return std::format("kind=concat,attrs={{axis={}}}", operation.get_axis());
+std::string ConcatOp::format_attributes() const {
+  return std::format("kind=concat,attrs={{axis={}}}", get_axis());
 }
 
-OperationKind operation_kind(const ConcatOp&) noexcept {
-  return OperationKind::Concat;
-}
 
 }  // namespace ncnn_frontend
