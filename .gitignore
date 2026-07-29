@@ -1,0 +1,48 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Compiled objects
+*.o
+*.a
+*.so
+*.dylib
+*.lib
+
+# Test binaries
+unit_tests
+parser_test
+malformed_graph_test
+typed_ir_test
+typed_ir_dump_test
+ncnn_importer_test
+load_squeezenet
+load_squeezenet_typed
+
+# Test fixtures
+test-fixtures/
+
+# clangd cache
+.cache/
+.cache/clangd/
+
+# Editor temp files
+*.tmp
+*.bak
