@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout compiler
+        uses: actions/checkout@v4
+        with:
+          path: compiler
+
+      - name: Checkout ncnn (test data)
+        uses: actions/checkout@v4
+        with:
+          repository: Tencent/ncnn
+          path: ncnn
+          sparse-checkout: examples/squeezenet_v1.1.*
+          sparse-checkout-cone-mode: false
+
+      - name: Install LLVM 21
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo add-apt-repository "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main"
+          sudo apt-get update
+          sudo apt-get install -y llvm-21-dev
+
+      - name: Install dependencies
+        run: sudo apt-get install -y cmake libgtest-dev
+
+      - name: Build
+        run: |
+          cmake -S compiler -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm
+          cmake --build build -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -j$(nproc)
