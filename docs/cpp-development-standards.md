@@ -488,3 +488,18 @@ cmake --build compiler/build --target tidy
 
 自动化工具只能执行其中一部分规则。生命周期、值语义、算术安全、事务性、格式兼容
 和 ABI 边界仍必须通过代码评审与针对性测试验证。
+
+## 14. MLIR 工具约定
+
+- `bin/` 下所有 `*-opt` 工具（`mlir-opt` 克隆类）必须基于 `mlir::MlirOptMain` 实现，
+  禁止手写 parse→verify→print 的极简 main。否则标准选项（`-o`、`--mlir-print-op-generic`、
+  `--verify-diagnostics`）与全部 pass 都会缺失，lit 的 `RUN` 行会报
+  `Unknown command line argument`。
+- opt 工具必须用 `registerAllDialects` / `registerAllExtensions` / `registerAllPasses`
+  注册全部上游方言/扩展/pass，再叠加项目方言，保证能运行任意上游 pass。
+- 方言注册集中在 `bin/RegisterNCNNDialects.h`，所有 opt 工具共用，保证方言集合一致。
+- 链接 opt 工具必须引入 `MLIR_DIALECT_LIBS` / `MLIR_CONVERSION_LIBS` /
+  `MLIR_EXTENSION_LIBS` 全局属性列出的库，加 `MLIRMlirOptMain`、`MLIRPass`，
+  并以 `-fno-rtti` 编译（与 MLIR 构建一致）。
+- 标准 main 模板、CMake 链接模板与注意事项见
+  `docs/ncnn-mlir-development-guide.md` §8。

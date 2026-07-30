@@ -19,8 +19,11 @@ cmake --build build --target ncnn-mlir-driver ncnn-mlir-opt -j
 
 产物：
 - `build/tools/ncnn-mlir-driver` —— `.param/.bin → MLIR` 前端驱动（本文主角）。
-- `build/bin/ncnn-mlir-opt` —— 注册了 ncnn 方言的 `mlir-opt` 克隆，做 MLIR 的
-  解析/校验/round-trip（lit 测试用它），**不消费 ncnn 模型**。
+- `build/bin/ncnn-mlir-opt` —— 基于 `MlirOptMain` 的 `mlir-opt` 克隆，注册了 ncnn 方言
+  及**全部上游方言/扩展/pass**，因此支持标准 mlir-opt 选项（`-o`、`--mlir-print-op-generic`、
+  `--verify-diagnostics`、`--allow-unregistered-dialect`）与所有 pass（`--canonicalize`、
+  `--tosa-to-linalg`、`--convert-arith-to-llvm` …）。做 MLIR 的解析/校验/round-trip 与
+  下降调试（lit 测试用它），**不消费 ncnn 模型**。
 
 依赖：LLVM/MLIR 21（Debian 包 `llvm-21-dev` + `libmlir-21-dev`）。CMake 通过
 `find_package(MLIR CONFIG)` 定位（config 目录 `/usr/lib/llvm-21/lib/cmake/mlir`），
