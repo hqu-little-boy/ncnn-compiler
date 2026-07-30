@@ -77,6 +77,7 @@ add_executable(unit_tests
     test/typed_ir_dump_test.cpp
     test/ncnn_importer_test.cpp
     test/load_squeezenet_typed.cpp
+    test/operation_kind_variant_order_test.cpp
 )
 # ncnn_frontend 已 PUBLIC 链接 ncnn_graph，覆盖仅依赖 ncnn_graph 的测试
 target_link_libraries(unit_tests PRIVATE ncnn_frontend GTest::gtest_main)
