@@ -1,0 +1,10 @@
+# 由 CMake 从 lit.site.cfg.py.in 生成（configure_file @ONLY），勿手改。
+# 注入工具路径与源/构建目录，再加载源码树里的 lit.cfg.py。
+
+config.ncnn_mlir_tools_dir = "@CMAKE_BINARY_DIR@/bin"
+config.filecheck = "@FILECHECK@"
+
+config.test_source_root = "@CMAKE_CURRENT_SOURCE_DIR@"
+config.test_exec_root = "@CMAKE_CURRENT_BINARY_DIR@"
+
+lit_config.load_config(config, "@CMAKE_CURRENT_SOURCE_DIR@/lit.cfg.py")

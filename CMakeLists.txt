@@ -1,10 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-## 用系统 clang-21（MLIR 21 同源工具链，版本一致避免 ABI 抖）。必须在 project() 前设置。
-#set(CMAKE_C_COMPILER /usr/bin/clang-21)
-#set(CMAKE_CXX_COMPILER /usr/bin/clang++-21)
-
-project(ncnn_graph LANGUAGES CXX)
+project(ncnn_compiler LANGUAGES CXX)
 
 # C++23, 严格点
 set(CMAKE_CXX_STANDARD 23)
@@ -19,81 +15,44 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 
-# 库：计算图数据模型 + 解析器
-add_library(ncnn_graph STATIC
-    src/graph.cpp
-    src/parser.cpp
-)
-target_include_directories(ncnn_graph PUBLIC include)
-
-add_library(ncnn_frontend STATIC
-    src/frontend/importer.cpp
-    src/frontend/ir.cpp
-    src/frontend/ir_dump.cpp
-    src/frontend/Ops/Concat.cpp
-    src/frontend/Ops/Const.cpp
-    src/frontend/Ops/Conv2D.cpp
-    src/frontend/Ops/Dropout.cpp
-    src/frontend/Ops/FormatSupport.cpp
-    src/frontend/Ops/InferSupport.cpp
-    src/frontend/Ops/Pool2D.cpp
-    src/frontend/Ops/Relu.cpp
-    src/frontend/Ops/Softmax.cpp
-    src/frontend/Ops/Split.cpp
-    src/frontend/op_schema.cpp
-    src/frontend/Types.cpp
-    src/frontend/verifier.cpp
-)
-target_include_directories(ncnn_frontend PUBLIC include)
-target_link_libraries(ncnn_frontend PUBLIC ncnn_graph)
-
-# ── 编译器驱动：ncnn-mlir-driver ─────────────────────────────
-# 参数解析用 LLVM 自带的 llvm::cl（mlir-opt 同款 CommandLine 库）。
-# LLVM/MLIR 21：CMake config 目录见 memory（/usr/lib/llvm-21/lib/cmake/{llvm,mlir}）。
-# 目前只用到 LLVM Support 组件（CommandLine + raw_ostream）；后续接入 MLIR
-# pass 管线时在此追加 MLIR target。
+# ── LLVM / MLIR 21（OOT 方言）────────────────────────────────
 if(NOT LLVM_DIR)
     set(LLVM_DIR "/usr/lib/llvm-21/lib/cmake/llvm")
 endif()
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} (cmake dir: ${LLVM_DIR})")
 
-add_executable(ncnn-mlir-driver tools/ncnn-mlir-driver.cpp)
-target_include_directories(ncnn-mlir-driver SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-target_compile_definitions(ncnn-mlir-driver PRIVATE ${LLVM_DEFINITIONS})
-# 只链 Support（含 CommandLine）。llvm_map_components_to_libnames 把组件名解析成库。
-llvm_map_components_to_libnames(NCNN_DRIVER_LLVM_LIBS support)
-target_link_libraries(ncnn-mlir-driver PRIVATE ncnn_frontend ${NCNN_DRIVER_LLVM_LIBS})
+if(NOT MLIR_DIR)
+    set(MLIR_DIR "/usr/lib/llvm-21/lib/cmake/mlir")
+endif()
+find_package(MLIR REQUIRED CONFIG)
+message(STATUS "Found MLIR ${MLIR_PACKAGE_VERSION} (cmake dir: ${MLIR_DIR})")
 
-# 单元测试：所有测试源文件合并到唯一可执行文件，链接 gtest_main（无需 main 函数）
-find_package(GTest REQUIRED)
-include(GoogleTest)
-
-add_executable(unit_tests
-    test/load_squeezenet.cpp
-    test/parser_test.cpp
-    test/malformed_graph_test.cpp
-    test/typed_ir_test.cpp
-    test/typed_ir_dump_test.cpp
-    test/ncnn_importer_test.cpp
-    test/load_squeezenet_typed.cpp
-    test/operation_kind_variant_order_test.cpp
-)
-# ncnn_frontend 已 PUBLIC 链接 ncnn_graph，覆盖仅依赖 ncnn_graph 的测试
-target_link_libraries(unit_tests PRIVATE ncnn_frontend GTest::gtest_main)
-target_compile_definitions(unit_tests PRIVATE
-    NCNN_GRAPH_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/.."
-    NCNN_GRAPH_TEST_TEMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-fixtures")
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}" "${LLVM_CMAKE_DIR}")
+include(TableGen)
+include(AddLLVM)
+include(AddMLIR)
 
 enable_testing()
-gtest_discover_tests(unit_tests)
+
+# Debian 的 LLVM/MLIR 以 -fno-rtti 构建；链接 MLIR 的 target 统一关闭 RTTI。
+# 在需要的 target 上单独 target_compile_options(<t> PRIVATE -fno-rtti)。
+
+add_subdirectory(include)
+add_subdirectory(lib)
+add_subdirectory(bin)
+add_subdirectory(tools)
+add_subdirectory(test)
 
 # ── 辅助目标：clang-format / clang-tidy ───────────────────
-# 收集所有源/头文件（排除 build 目录）
+# 收集所有源/头文件（排除 build 目录与生成代码）。
 file(GLOB_RECURSE NCNN_ALL_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/src/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/*.hpp"
+    "${CMAKE_SOURCE_DIR}/lib/*.cpp"
+    "${CMAKE_SOURCE_DIR}/include/*.h"
     "${CMAKE_SOURCE_DIR}/include/*.hpp"
+    "${CMAKE_SOURCE_DIR}/bin/*.cpp"
+    "${CMAKE_SOURCE_DIR}/bin/*.h"
+    "${CMAKE_SOURCE_DIR}/tools/*.cpp"
     "${CMAKE_SOURCE_DIR}/test/*.cpp")
 
 # clang-format：检查格式是否合规（不改文件，发现违例即失败）
@@ -110,7 +69,6 @@ add_custom_target(format
 # clang-tidy：静态检查（依赖 compile_commands.json）
 find_program(CLANG_TIDY clang-tidy-21 /usr/bin/clang-tidy-21)
 if(CLANG_TIDY)
-    set(CLANG_TIDY_FIX ${CMAKE_SOURCE_DIR}/.clang-tidy)
     add_custom_target(tidy
         COMMAND ${CLANG_TIDY} -p=${CMAKE_BINARY_DIR}
                 --extra-arg=-std=c++23 ${NCNN_ALL_SOURCES}

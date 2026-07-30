@@ -1,12 +1,18 @@
-# ncnn-ir 文本格式说明
+# ncnn 方言 IR 格式说明
 
-> 对应源码：`include/ncnn_frontend/`（Types.hpp、OperationKind.hpp、Operations.hpp、Ops/*.hpp）；
-> `src/frontend/`（ir.cpp、ir_dump.cpp、Types.cpp、Ops/*.cpp）
-> 生成工具：`ncnn-mlir-driver --emit=ncnn-ir`（默认阶段）
-> 相关文档：[parsed-graph-format.md](parsed-graph-format.md)、[ncnn-mlir-driver-usage.md](ncnn-mlir-driver-usage.md)
+> 对应源码：`include/ncnn-mlir/Dialect/NCNN/IR/`（NCNNDialect.td/.hpp、NCNNOps.td/.hpp）；
+> `lib/Dialect/NCNN/IR/`（NCNNDialect.cpp、NCNNOps.cpp）。
+> 生成工具：`ncnn-mlir-driver --emit=mlir`（默认阶段）。
+> 相关文档：[parsed-graph-format.md](parsed-graph-format.md)、[ncnn-mlir-driver-usage.md](ncnn-mlir-driver-usage.md)。
 
-`ncnn-ir` 是编译器**类型化前端 IR** 的文本转储。它由 `ncnn_frontend::import_graph()` 从原始
-[parsed-graph](parsed-graph-format.md) 提升而来，是下游 lowering（ncnn → tosa → linalg → …）真正消费的输入。
+`ncnn` 方言 IR 是编译器**类型化前端 IR**，是一个标准的 **MLIR 模块**（`builtin.module`
+里一个 `func.func`）。它由 `ncnn_importer::import_graph()` 从原始
+[parsed-graph](parsed-graph-format.md) 提升而来，是下游 lowering（ncnn → tosa → linalg → …）
+真正消费的输入。
+
+> 本方言取代了早期的自定义 C++ 前端 IR（`ncnn_frontend`，已删除）。同样的
+> 「线性层列表 → 类型化 SSA DAG」提升现在直接落到 MLIR：SSA 值、use-def 链、
+> 强类型属性、形状推断都由 MLIR 基础设施承载。
 
 ---
 
@@ -16,21 +22,24 @@
 
 ```
 .param/.bin
-  ──ncnn_graph::Graph::load──▶  parsed-graph      (原始层列表，1:1 镜像 ncnn 文件)
-  ──ncnn_frontend::import_graph──▶  ncnn-ir       ← 本文档
+  ──ncnn_graph::Graph::load──▶  parsed-graph        (原始层列表，1:1 镜像 ncnn 文件)
+  ──ncnn_importer::import_graph──▶  ncnn 方言 MLIR 模块   ← 本文档
   ──（后续）convert-ncnn-to-tosa──▶  tosa …
 ```
 
-与 parsed-graph 的关键区别：**parsed-graph 是层的线性列表，ncnn-ir 是类型化的有向无环图（DAG）**。
+与 parsed-graph 的关键区别：**parsed-graph 是层的线性列表，ncnn 方言模块是类型化的 SSA DAG**。
 `import_graph` 做了这些提升：
 
-- **blob 名 → SSA 值**：每条 ncnn blob 变成一个带类型的 `Value`（`v0`、`v1`…），有唯一定义点和显式使用点（use）列表。
-- **权重 → 常量算子**：conv 的 weight/bias 从"挂在层上的张量"变成独立的 `const` 算子，产出各自的值。
-- **参数字典 → 强类型属性**：ncnn 的 `{0=64 1=3 …}` 数字 key 解析成 `conv2d{kernel=[3,3],stride=[2,2],pad=[…]}` 这样的具名属性。
-- **shape inference**：每个值都带推导出的静态 shape、元素类型、布局。
-- **激活融合展开**：ncnn 把 activation 折进 conv 的写法被拆成显式的 relu 算子（SqueezeNet 里本就是独立 ReLU 层）。
-
-因此 ncnn-ir 比 parsed-graph 多出**类型、SSA 连接、use-def 关系**，是"编译器视角"的表示。
+- **blob 名 → SSA 值**：每条 ncnn blob 变成一个带 `RankedTensorType` 的 MLIR `Value`
+  （`%0`、`%1`…，输入是 block argument `%arg0`）。唯一定义点与 use-def 链由 MLIR 自动维护；
+  blob 名保留在定义它的算子的 `ncnn.name` 属性里（溯源用）。
+- **权重 → 常量算子**：conv 的 weight/bias 从"挂在层上的张量"变成独立的 `arith.constant`
+  算子，产出各自的值，作为 conv 的操作数。
+- **参数字典 → 强类型属性**：ncnn 的 `{0=64 1=3 …}` 数字 key 解析成
+  `ncnn.conv2d {kernel_h=3, kernel_w=3, stride_h=2, …}` 这样的具名强类型属性
+  （`I64Attr` / `BoolAttr` / `F32Attr`）。
+- **shape inference**：每个值都带推断出的静态形状与元素类型（`tensor<64x113x113xf32>`）。
+  conv/pool/concat 实现了 `InferShapedTypeOpInterface`，结果类型在构建时推断、verifier 复核。
 
 ---
 
@@ -39,12 +48,15 @@
 ```bash
 cd /mnt/ncnn-compiler/compiler
 
-# 默认就是 ncnn-ir（--emit 可省略）
-./build-make/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param
+# 默认就是 MLIR（--emit 可省略）
+./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param
 
 # 显式写法 + 输出到文件
-./build-make/ncnn-mlir-driver --emit=ncnn-ir \
-  ../ncnn/examples/squeezenet_v1.1.param -o squeezenet.ncnn-ir
+./build/tools/ncnn-mlir-driver --emit=mlir \
+  ../ncnn/examples/squeezenet_v1.1.param -o squeezenet.mlir
+
+# 用 ncnn-mlir-opt 做 round-trip 校验（parse -> verify -> print）
+./build/bin/ncnn-mlir-opt squeezenet.mlir
 ```
 
 `.bin` 权重路径默认由 `.param` 推导（`.param` → `.bin`），也可用 `--bin=<path>` 显式指定。
@@ -53,192 +65,126 @@ cd /mnt/ncnn-compiler/compiler
 
 ## 3. 整体结构
 
-转储是纯文本，分四段，顺序固定：
+输出是标准 MLIR 文本：一个 `module`，内含一个 `func.func @model`。
 
-```
-ncnn_frontend.typed_dag_dump version=1     ← 头（格式版本）
-operations 126                             ← 算子段：先声明数量，再逐行
-op 0 {...}
-op 1 {...}
-...
-values 130                                 ← 值段：先声明数量，再逐行
-value 0 {...}
-value 1 {...}
-...
-inputs [v0]                                ← 图输入（值 id 列表）
-outputs [v129]                             ← 图输出（值 id 列表）
+```mlir
+module {
+  func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32> {
+    %cst   = arith.constant dense<...> : tensor<64x3x3x3xf32>   // conv 权重 [O,I,H,W]
+    %cst_0 = arith.constant dense<...> : tensor<64xf32>          // conv bias  [O]
+    %0 = ncnn.conv2d %arg0, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
+    %1 = ncnn.relu %0 {...} : (tensor<64x113x113xf32>) -> tensor<64x113x113xf32>
+    ...
+    return %N : tensor<1000xf32>
+  }
+}
 ```
 
-> 头里的 `version=1` 是格式版本号，供解析器做兼容判断。
+- **函数入参**对应 ncnn `Input` 层（block argument），形状 `[C,H,W]`。
+- **函数返回**对应 `graph.output_blob_names`。
+- 计算层是 `ncnn.*` 算子；权重是 `arith.constant`。
 
 ---
 
-## 4. 算子行（`op`）
+## 4. 算子与属性
 
-每个算子一行，格式：
+7 个计算算子（`Input` 是函数入参、权重是 `arith.constant`，都不是 `ncnn.*` 算子）：
 
+| 算子 | 操作数 | 属性 | 结果 |
+|------|--------|------|------|
+| `ncnn.conv2d` | input, weight, [bias, scales…] | `kernel_h/kernel_w`、`stride_h/stride_w`、`dilation_h/dilation_w`、`pad_top/pad_bottom/pad_left/pad_right`、`has_bias`、`int8_scale_term` | 1 个张量 |
+| `ncnn.relu` | input | `negative_slope`（默认 0.0；非 0 = LeakyReLU） | 1 个（同类型） |
+| `ncnn.pool2d` | input | `kind`(0=max,1=average)、`mode`(0=regular,1=global,2=adaptive)、`kernel_h/kernel_w`、`stride_h/stride_w`、`pad_*`、`pad_mode`(0..3)、`include_pad` | 1 个张量 |
+| `ncnn.split` | input | 无 | ≥2 个（都与输入同类型） |
+| `ncnn.concat` | ≥2 个输入 | `axis` | 1 个张量 |
+| `ncnn.dropout` | input | `scale`（默认 1.0；推理期恒等/缩放） | 1 个（同类型） |
+| `ncnn.softmax` | input | `axis` | 1 个（同类型） |
+
+每个算子还带两个 **discardable 属性**用于溯源：`ncnn.name`（ncnn 层名）、
+`ncnn.source_layer`（来自 parsed-graph 的第几层）。
+
+conv2d 真实样例：
+
+```mlir
+%0 = ncnn.conv2d %arg0, %cst, %cst_0 {dilation_h = 1 : i64, dilation_w = 1 : i64,
+     has_bias = true, kernel_h = 3 : i64, kernel_w = 3 : i64, ncnn.name = "conv1",
+     ncnn.source_layer = 1 : i64, pad_bottom = 0 : i64, pad_left = 0 : i64,
+     pad_right = 0 : i64, pad_top = 0 : i64, stride_h = 2 : i64, stride_w = 2 : i64}
+     : (tensor<3x227x227xf32>, tensor<64x3x3x3xf32>, tensor<64xf32>)
+     -> tensor<64x113x113xf32>
 ```
-op <序号> {<属性>,name=<名>,source_layer=<原层号>,operands=<值列表>,results=<值列表>}
-```
 
-真实样例（SqueezeNet 前四个算子）：
-
-```
-op 0 {kind=const,attrs={literal_type={shape=[64,3,3,3],element=f32,layout=oihw,elements=1728,bytes=6912},payload_bytes=6912,fnv1a64=0x3c505b732fd566d8},name="conv1.weight",source_layer=1,operands=[],results=[v1]}
-op 1 {kind=const,attrs={literal_type={shape=[64],element=f32,layout=ncnn_w,elements=64,bytes=256},payload_bytes=256,fnv1a64=0xd30558885e110c61},name="conv1.bias",source_layer=1,operands=[],results=[v2]}
-op 2 {kind=conv2d,attrs={kernel=[3,3],stride=[2,2],dilation=[1,1],pad=[0,0,0,0],has_bias=true,int8_scale_term=0,quantization=none},name="conv1",source_layer=1,operands=[v0,v1,v2],results=[v3]}
-op 3 {kind=relu,attrs={negative_slope=0},name="relu_conv1",source_layer=2,operands=[v3],results=[v4]}
-```
-
-字段含义：
-
-| 字段 | 说明 |
-|------|------|
-| `op <序号>` | 算子在算子段中的下标（从 0） |
-| `kind=…` | 算子种类，见下表 |
-| `attrs={…}` | 该 kind 特有的强类型属性 |
-| `name="…"` | 算子名（转义字符串，来源见下）。const 算子名形如 `conv1.weight` / `conv1.bias`；计算算子沿用 ncnn 层名 |
-| `source_layer=<n>` | 该算子来自 parsed-graph 的第几层，便于回溯定位 |
-| `operands=[…]` | 输入值 id 列表，按顺序 |
-| `results=[…]` | 输出值 id 列表，按顺序 |
-
-> `operands` 里出现的 `v0,v1,v2` 依次是 conv 的**输入特征图、weight 常量、bias 常量**——权重被提升为常量算子后，作为普通操作数接进 conv。这是 ncnn-ir 相对 parsed-graph 最直观的结构变化。
->
-> 值 id 越界时会带 `!out_of_range` 后缀（如 `v999!out_of_range`），正常转储不应出现。
+SAME padding 用 ncnn 哨兵表达：`pad_*` 全为 `-233` = SAME_UPPER，全为 `-234` = SAME_LOWER。
 
 ---
 
-## 5. 算子种类与属性
+## 5. 张量类型与布局约定
 
-`kind` 取值对应 `OperationKind` 枚举，SqueezeNet 用到 8 种：
+值的类型是 MLIR `RankedTensorType`（`tensor<形状 x 元素类型>`），**布局靠维度顺序约定**
+（不是单独的属性字段）：
 
-| kind | 属性（`attrs={...}`） | 来源 ncnn 层 |
-|------|----------------------|-------------|
-| `const` | `literal_type={...},payload_bytes=N,fnv1a64=0x…` | 权重（conv 的 weight/bias） |
-| `conv2d` | `kernel=[h,w],stride=[h,w],dilation=[h,w],pad=[top,bottom,left,right],has_bias=<bool>,int8_scale_term=N,quantization=<mode>` | Convolution |
-| `relu` | `negative_slope=<float>`（0 = 标准 ReLU，非 0 = LeakyReLU） | ReLU |
-| `pool2d` | `kind=<max\|average>,mode=<regular\|global\|adaptive>,kernel=[h,w],stride=[h,w],pad=[t,b,l,r],pad_mode=N,include_pad=<bool>` | Pooling |
-| `split` | `{}`（无属性；把一个值复制成多份） | Split |
-| `concat` | `axis=<int>` | Concat |
-| `dropout` | `scale=<float>`（推理期恒等/缩放） | Dropout |
-| `softmax` | `axis=<int>` | Softmax |
+| 张量 | 维序约定 | 例 |
+|------|---------|----|
+| 特征图 | `[C, H, W]`（ncnn 原生 CHW） | `tensor<64x113x113xf32>` |
+| conv 权重 | `[O, I, H, W]` | `tensor<64x3x3x3xf32>` |
+| conv bias / 1-D 常量 | `[N]` | `tensor<64xf32>` |
 
-### const 的属性细节
+元素类型：`f32`（主路径）、`f16`、`i8`（量化权重/结果）。
 
-```
-kind=const,attrs={literal_type={shape=[64,3,3,3],element=f32,layout=oihw,elements=1728,bytes=6912},payload_bytes=6912,fnv1a64=0x3c505b732fd566d8}
-```
-
-- `literal_type` 是这块常量的张量类型（见 §7 类型格式）。
-- `payload_bytes` 是权重数据字节数。
-- `fnv1a64` 是权重数据的 FNV-1a 64 位哈希——**转储里不展开原始字节**，用哈希代替，既能做交叉验证（同一权重哈希应一致）又不让转储爆炸。
-
-> conv 的 weight 布局是 `oihw`（out/in/h/w），bias 布局是 `ncnn_w`（一维）。
-
-### quantization 取值
-
-`conv2d` 的 `quantization` 字段：`none` / `dequantize` / `requantize`，由 `int8_scale_term` 推导，Phase-1 全 float32 路径下恒为 `none`。
+> **布局是隐式约定，不是显式 layout 字段**。verifier 与形状推断按此约定校验
+> （conv 要求 input rank3、weight rank4）。ncnn→tosa 下降时再按需做 CHW→NHWC 转换
+> （见开发指南的布局决策）。
 
 ---
 
-## 6. 值行（`value`）
+## 6. 形状推断
 
-每个 SSA 值一行，格式：
+- `relu` / `dropout` / `softmax`：`SameOperandsAndResultType`（结果类型 = 输入类型）。
+- `split`：所有结果 = 输入类型（个数 = 输出 blob 数，≥2）。
+- `conv2d` / `pool2d` / `concat`：实现 `InferShapedTypeOpInterface::inferReturnTypeComponents`，
+  在构建时计算结果形状（conv 输出 `[O, H_out, W_out]`、pool 按 regular/global/adaptive、
+  concat 沿 `axis` 求和）。verifier 会重算并与声明的结果类型比对，不一致即报错。
 
-```
-value <序号> {name=<名>,type=<类型>,def=<定义点>,uses=<使用点列表>}
-```
-
-真实样例：
-
-```
-value 0 {name="data",type={shape=[3,227,227],element=f32,layout=ncnn_chw,elements=154587,bytes=618348},def=graph_input(0),uses=[{user=op2,operand=0}]}
-value 3 {name="conv1",type={shape=[64,113,113],element=f32,layout=ncnn_chw,...},def=op_result(op2,0),uses=[{user=op3,operand=0}]}
-```
-
-字段含义：
-
-| 字段 | 说明 |
-|------|------|
-| `value <序号>` | 值下标（从 0），即 `v<序号>` 里的编号 |
-| `name="…"` | 值名（转义字符串），通常沿用 ncnn blob 名 |
-| `type={…}` | 该值的张量类型，见 §7 |
-| `def=…` | 定义点：`graph_input(<i>)` 表示第 i 个图输入；`op_result(op<n>,<r>)` 表示第 n 个算子的第 r 个结果 |
-| `uses=[…]` | 使用点列表，每项 `{user=op<n>,operand=<k>}` 表示"被第 n 个算子当作第 k 个操作数使用" |
-
-`def` 与 `uses` 构成完整的 **use-def 链**：任一算子的 `operands` 里引用的值，都能在对应 `value` 的 `uses`
-里找到反向记录（driver 的单元测试 `load_squeezenet_typed` 就断言了这种双向一致性）。
+conv 输出尺寸公式（显式 pad）：
+`extent = dilation*(kernel-1)+1`；`out = 1 + (in + pad_before + pad_after - extent)/stride`。
+SAME（`-233`/`-234`）：`out = 1 + (in-1)/stride`。
 
 ---
 
-## 7. 张量类型格式
-
-值和 const 字面量的类型都用同一格式：
-
-```
-{shape=[..],element=<e>,layout=<l>,elements=<n>,bytes=<b>}
-```
-
-| 子字段 | 说明 |
-|--------|------|
-| `shape=[..]` | 各维大小，逗号分隔 |
-| `element` | 元素类型：`f32` / `f16` / `i8` |
-| `layout` | 布局：`scalar` / `ncnn_w` / `ncnn_hw` / `ncnn_chw` / `ncnn_cdhw` / `oihw` |
-| `elements` | 元素总数（各维乘积） |
-| `bytes` | 字节大小（`elements × 元素字节`） |
-
-> **布局说明**：当前前端 IR 保留 ncnn 原生布局——特征图是 `ncnn_chw`（C×H×W），conv 权重是 `oihw`，
-> bias 是 `ncnn_w`。计划中的 NHWC 统一发生在后续 ncnn→tosa 边界（见 plan §3 布局策略），本阶段尚未转换。
-
----
-
-## 8. 完整示例（SqueezeNet v1.1）
+## 7. 完整示例（SqueezeNet v1.1 节选）
 
 ```bash
-./build-make/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param | head
+./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null | head
 ```
 
-输出头部：
-
-```
-ncnn_frontend.typed_dag_dump version=1
-operations 126
-op 0 {kind=const,attrs={literal_type={shape=[64,3,3,3],element=f32,layout=oihw,elements=1728,bytes=6912},payload_bytes=6912,fnv1a64=0x3c505b732fd566d8},name="conv1.weight",source_layer=1,operands=[],results=[v1]}
-op 1 {kind=const,attrs={literal_type={shape=[64],element=f32,layout=ncnn_w,elements=64,bytes=256},payload_bytes=256,fnv1a64=0xd30558885e110c61},name="conv1.bias",source_layer=1,operands=[],results=[v2]}
-op 2 {kind=conv2d,attrs={kernel=[3,3],stride=[2,2],dilation=[1,1],pad=[0,0,0,0],has_bias=true,int8_scale_term=0,quantization=none},name="conv1",source_layer=1,operands=[v0,v1,v2],results=[v3]}
-op 3 {kind=relu,attrs={negative_slope=0},name="relu_conv1",source_layer=2,operands=[v3],results=[v4]}
+```mlir
+module {
+  func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32> {
+    %cst = arith.constant dense<...> : tensor<64x3x3x3xf32>
+    %cst_0 = arith.constant dense<...> : tensor<64xf32>
+    %0 = ncnn.conv2d %arg0, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
+    %1 = ncnn.relu %0 {...} : (tensor<64x113x113xf32>) -> tensor<64x113x113xf32>
+    %2 = ncnn.pool2d %1 {kind = 0 : i64, mode = 0 : i64, ...} : (tensor<64x113x113xf32>) -> tensor<64x56x56xf32>
+    ...
+    return %N : tensor<1000xf32>
+  }
+}
 ```
 
 统计（squeezenet_v1.1，实测）：
 
-- **126 个算子** = 74 个计算算子 + 52 个 const（26 个 conv 各带 weight+bias）
-- 计算算子分布：Convolution 26、ReLU 26、Split 8、Concat 8、Pooling 4、Softmax 1、Dropout 1、加图输入
-- 图输入 1 个：`data`，`[3,227,227] f32 ncnn_chw`
-- 图输出 1 个：`prob`，`[1000] f32`
+- **52 个 `arith.constant`**（26 个 conv 各带 weight + bias）。
+- 计算算子：`ncnn.conv2d` 26、`ncnn.relu` 26、`ncnn.split` 8、`ncnn.concat` 8、
+  `ncnn.pool2d` 4、`ncnn.softmax` 1、`ncnn.dropout` 1。
+- 函数入参 1 个：`%arg0 : tensor<3x227x227xf32>`；返回 1 个：`tensor<1000xf32>`。
 
 ---
 
-## 9. 与其它阶段对比
-
-| 维度 | parsed-graph | **ncnn-ir** | tosa（后续） |
-|------|-------------|-------------|-------------|
-| 结构 | 层的线性列表 | 类型化 SSA DAG | MLIR 方言 |
-| 权重 | 挂在层上（`w=[...]`） | 独立 `const` 算子 | 常量/attr |
-| 参数 | 原始数字 key（`0=64`） | 强类型属性（`kernel=[3,3]`） | tosa 属性 |
-| 类型/shape | 无（仅权重 shape） | 每个值带完整类型 | tensor 类型 |
-| use-def | 靠 blob 名隐式连接 | 显式 def + uses | SSA |
-| 布局 | ncnn 原生 | ncnn 原生（chw/oihw） | NHWC |
-| 用途 | 调试、交叉验证 | **下游 lowering 输入** | 接 MLIR 官方链 |
-
----
-
-## 10. 相关源码
+## 8. 相关源码
 
 | 内容 | 文件 |
 |------|------|
-| IR 数据结构（Operation/Value/TensorType…） | `include/ncnn_frontend/ir.hpp` |
-| parsed-graph → ncnn-ir 提升 | `src/frontend/importer.cpp` |
-| shape inference / op schema | `src/frontend/op_schema.cpp` |
-| 转储文本格式（本文档的权威定义） | `src/frontend/ir_dump.cpp` |
-| 校验（`--verify`） | `src/frontend/verifier.cpp` |
-| 驱动入口 | `tools/ncnn-mlir-driver.cpp` |
+| 方言/算子定义（TableGen） | `include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td` |
+| 算子形状推断 / verifier | `lib/Dialect/NCNN/IR/NCNNOps.cpp` |
+| parsed-graph → MLIR 提升 | `lib/Importer/NCNNImporter.cpp` |
+| 文本由 MLIR 通用 printer 产生 | （`ModuleOp::print`） |

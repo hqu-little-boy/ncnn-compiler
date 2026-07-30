@@ -1,7 +1,7 @@
 # parsed-graph 产物格式说明
 
 > 对应 `ncnn-mlir-driver --emit=parsed-graph` 的文本产物。
-> 源码：`compiler/src/graph.cpp` 的 `ncnn_graph::Graph::dump()`。
+> 源码：`compiler/lib/Graph/graph.cpp` 的 `ncnn_graph::Graph::dump()`。
 > 上游流水线见 [ncnn-mlir-driver-usage.md](ncnn-mlir-driver-usage.md)。
 
 ## 1. 这是什么阶段
@@ -14,18 +14,19 @@
 它的用途：
 
 - **交叉验证解析器**：和 netron 打开同一模型对照，确认层数/blob 数/参数值一致。
-- **排查导入 bug**：`ncnn-ir`（类型化 IR）出问题时，先看 `parsed-graph`
+- **排查导入 bug**：ncnn 方言 IR（类型化 IR）出问题时，先看 `parsed-graph`
   确认是解析层错了还是 import 层错了。
 - **理解模型结构**：一屏看清整张图的拓扑与权重规模。
 
-它**不是**给下游 pass 吃的 IR——那是 `ncnn-ir` 及之后的阶段。`parsed-graph`
+它**不是**给下游 pass 吃的 IR——那是 ncnn 方言 IR（`--emit=mlir`，见
+[ncnn-ir-format.md](ncnn-ir-format.md)）及之后的阶段。`parsed-graph`
 是纯人读的调试快照。
 
 ## 2. 生成方式
 
 ```bash
 cd /mnt/ncnn-compiler/compiler
-./build-make/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param \
+./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param \
     --emit=parsed-graph
 ```
 

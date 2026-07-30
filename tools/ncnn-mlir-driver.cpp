@@ -1,13 +1,12 @@
 // ncnn-mlir-driver：ncnn 编译器端到端驱动的入口。
 //
-// 当前阶段（M1）流水线：
-//   .param/.bin ──ncnn_graph::Graph::load──▶ 原始计算图
-//              ──ncnn_frontend::import_graph──▶ 类型化前端 IR
-//              ──ncnn_frontend::verify_graph──▶ 校验
-//              ──dump──▶ 文本产物
+// 流水线：
+//   .param/.bin ──ncnn_graph::Graph::load──▶ 原始计算图（parsed-graph）
+//              ──ncnn_importer::import_graph──▶ ncnn 方言 MLIR 模块
+//              ──print──▶ MLIR 文本产物
 //
-// 参数解析用 LLVM 自带的 llvm::cl（mlir-opt 同款 CommandLine 库），
-// 后续接入 MLIR pass 管线时可平滑复用同一套 option 基础设施。
+// 参数解析用 LLVM 自带的 llvm::cl（mlir-opt 同款 CommandLine 库），后续接入
+// tosa/linalg/llvm 下降阶段时可平滑复用同一套 option 基础设施。
 
 #include <fstream>
 #include <ios>
@@ -18,10 +17,14 @@
 
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
-
-#include "ncnn_frontend/importer.hpp"
-#include "ncnn_frontend/verifier.hpp"
-#include "ncnn_graph/graph.hpp"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
+#include "ncnn-mlir/Dialect/NCNN/IR/NCNNDialect.hpp"
+#include "ncnn-mlir/Graph/graph.hpp"
+#include "ncnn-mlir/Importer/NCNNImporter.hpp"
 
 namespace {
 
@@ -29,11 +32,10 @@ namespace {
 // codegen option，HideUnrelatedOptions 让 --help 只显示我们这一组。
 llvm::cl::OptionCategory g_driver_category("ncnn-mlir-driver options");
 
-llvm::cl::opt<std::string> g_input_path(
-  llvm::cl::Positional,
-  llvm::cl::desc("<input .param file>"),
-  llvm::cl::Required,
-  llvm::cl::cat(g_driver_category));
+llvm::cl::opt<std::string> g_input_path(llvm::cl::Positional,
+                                        llvm::cl::desc("<input .param file>"),
+                                        llvm::cl::Required,
+                                        llvm::cl::cat(g_driver_category));
 
 llvm::cl::opt<std::string> g_bin_path(
   "bin",
@@ -51,24 +53,23 @@ llvm::cl::opt<std::string> g_output_path(
   llvm::cl::cat(g_driver_category));
 
 // 产物阶段。后续 tosa/linalg/llvm/library 等阶段接入这同一个枚举即可。
-enum class EmitStage { ParsedGraph, NcnnIr };
+enum class EmitStage { ParsedGraph, Mlir };
 
 llvm::cl::opt<EmitStage> g_emit_stage(
   "emit",
   llvm::cl::desc("Select the stage to emit:"),
-  llvm::cl::init(EmitStage::NcnnIr),
-  llvm::cl::values(
-    clEnumValN(EmitStage::ParsedGraph,
-               "parsed-graph",
-               "Raw parsed ncnn graph (param + bound weights)"),
-    clEnumValN(EmitStage::NcnnIr,
-               "ncnn-ir",
-               "Typed ncnn frontend IR (default)")),
+  llvm::cl::init(EmitStage::Mlir),
+  llvm::cl::values(clEnumValN(EmitStage::ParsedGraph,
+                              "parsed-graph",
+                              "Raw parsed ncnn graph (param + bound weights)"),
+                   clEnumValN(EmitStage::Mlir,
+                              "mlir",
+                              "MLIR module in the ncnn dialect (default)")),
   llvm::cl::cat(g_driver_category));
 
 llvm::cl::opt<bool> g_verify(
   "verify",
-  llvm::cl::desc("Run the IR verifier on the typed ncnn IR (default: on)"),
+  llvm::cl::desc("Re-verify the imported MLIR module (default: on)"),
   llvm::cl::init(true),
   llvm::cl::cat(g_driver_category));
 
@@ -129,7 +130,14 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  auto imported = ncnn_frontend::import_graph(*decoded);
+  mlir::DialectRegistry registry;
+  registry.insert<mlir::ncnn::NCNNDialect,
+                  mlir::arith::ArithDialect,
+                  mlir::func::FuncDialect>();
+  mlir::MLIRContext context(registry);
+  context.loadAllAvailableDialects();
+
+  auto imported = ncnn_importer::import_graph(*decoded, &context);
   if (!imported.has_value()) {
     llvm::errs() << "error: failed to import graph: "
                  << imported.error().to_string() << "\n";
@@ -137,15 +145,18 @@ int main(int argc, char** argv) {
   }
 
   if (g_verify) {
-    auto verified = ncnn_frontend::verify_graph(*imported);
-    if (!verified.has_value()) {
-      llvm::errs() << "error: IR verification failed: " << verified.error()
-                   << "\n";
+    if (mlir::failed(mlir::verify(imported->get().getOperation()))) {
+      llvm::errs() << "error: MLIR module verification failed\n";
       return 1;
     }
   }
 
-  if (!write_output(g_output_path, imported->dump())) {
+  std::string rendered;
+  llvm::raw_string_ostream stream(rendered);
+  imported->get().print(stream);
+  stream.flush();
+  rendered += "\n";
+  if (!write_output(g_output_path, rendered)) {
     return 1;
   }
   return 0;
