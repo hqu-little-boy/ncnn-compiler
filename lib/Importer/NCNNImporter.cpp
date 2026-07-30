@@ -513,7 +513,7 @@ class ImportState {
         return std::unexpected(constant.error());
       }
       if (i == 0) {
-        // weight 单独作为 conv2d 的第二操作数，不进 tail。
+        // weight 单独作为 convolution 的第二操作数，不进 tail。
         weight_value = *constant;
       } else {
         tail.push_back(*constant);
@@ -554,24 +554,24 @@ class ImportState {
                                           ? "convolution shape inference failed"
                                           : captured_diag_));
     }
-    auto conv =
-      builder_.create<mlir::ncnn::Conv2DOp>(builder_.getUnknownLoc(),
-                                            *result_type,
-                                            *input,
-                                            weight_value,
-                                            mlir::ValueRange(tail),
-                                            i64(*kernel_height),
-                                            i64(*kernel_width),
-                                            i64(*stride_height),
-                                            i64(*stride_width),
-                                            i64(*dilation_height),
-                                            i64(*dilation_width),
-                                            i64(*pad_top),
-                                            i64(*pad_bottom),
-                                            i64(*pad_left),
-                                            i64(*pad_right),
-                                            builder_.getBoolAttr(*bias == 1),
-                                            i64(*int8_scale));
+    auto conv = builder_.create<mlir::ncnn::ConvolutionOp>(
+      builder_.getUnknownLoc(),
+      *result_type,
+      *input,
+      weight_value,
+      mlir::ValueRange(tail),
+      i64(*kernel_height),
+      i64(*kernel_width),
+      i64(*stride_height),
+      i64(*stride_width),
+      i64(*dilation_height),
+      i64(*dilation_width),
+      i64(*pad_top),
+      i64(*pad_bottom),
+      i64(*pad_left),
+      i64(*pad_right),
+      builder_.getBoolAttr(*bias == 1),
+      i64(*int8_scale));
     tag_source(conv.getOperation(), context);
     return bind_blob(
       context, std::string(context.layer.get_outputs()[0]), conv.getResult());
@@ -703,7 +703,7 @@ class ImportState {
     auto i64 = [this](std::int64_t value) {
       return builder_.getI64IntegerAttr(value);
     };
-    auto pool = builder_.create<mlir::ncnn::Pool2DOp>(
+    auto pool = builder_.create<mlir::ncnn::PoolingOp>(
       builder_.getUnknownLoc(),
       *result_type,
       *input,

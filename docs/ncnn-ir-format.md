@@ -36,7 +36,7 @@
 - **权重 → 常量算子**：conv 的 weight/bias 从"挂在层上的张量"变成独立的 `arith.constant`
   算子，产出各自的值，作为 conv 的操作数。
 - **参数字典 → 强类型属性**：ncnn 的 `{0=64 1=3 …}` 数字 key 解析成
-  `ncnn.conv2d {kernel_h=3, kernel_w=3, stride_h=2, …}` 这样的具名强类型属性
+  `ncnn.convolution {kernel_h=3, kernel_w=3, stride_h=2, …}` 这样的具名强类型属性
   （`I64Attr` / `BoolAttr` / `F32Attr`）。
 - **shape inference**：每个值都带推断出的静态形状与元素类型（`tensor<64x113x113xf32>`）。
   conv/pool/concat 实现了 `InferShapedTypeOpInterface`，结果类型在构建时推断、verifier 复核。
@@ -72,7 +72,7 @@ module {
   func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32> {
     %cst   = arith.constant dense<...> : tensor<64x3x3x3xf32>   // conv 权重 [O,I,H,W]
     %cst_0 = arith.constant dense<...> : tensor<64xf32>          // conv bias  [O]
-    %0 = ncnn.conv2d %arg0, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
+    %0 = ncnn.convolution %arg0, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
     %1 = ncnn.relu %0 {...} : (tensor<64x113x113xf32>) -> tensor<64x113x113xf32>
     ...
     return %N : tensor<1000xf32>
@@ -92,9 +92,9 @@ module {
 
 | 算子 | 操作数 | 属性 | 结果 |
 |------|--------|------|------|
-| `ncnn.conv2d` | input, weight, [bias, scales…] | `kernel_h/kernel_w`、`stride_h/stride_w`、`dilation_h/dilation_w`、`pad_top/pad_bottom/pad_left/pad_right`、`has_bias`、`int8_scale_term` | 1 个张量 |
+| `ncnn.convolution` | input, weight, [bias, scales…] | `kernel_h/kernel_w`、`stride_h/stride_w`、`dilation_h/dilation_w`、`pad_top/pad_bottom/pad_left/pad_right`、`has_bias`、`int8_scale_term` | 1 个张量 |
 | `ncnn.relu` | input | `negative_slope`（默认 0.0；非 0 = LeakyReLU） | 1 个（同类型） |
-| `ncnn.pool2d` | input | `kind`(0=max,1=average)、`mode`(0=regular,1=global,2=adaptive)、`kernel_h/kernel_w`、`stride_h/stride_w`、`pad_*`、`pad_mode`(0..3)、`include_pad` | 1 个张量 |
+| `ncnn.pooling` | input | `kind`(0=max,1=average)、`mode`(0=regular,1=global,2=adaptive)、`kernel_h/kernel_w`、`stride_h/stride_w`、`pad_*`、`pad_mode`(0..3)、`include_pad` | 1 个张量 |
 | `ncnn.split` | input | 无 | ≥2 个（都与输入同类型） |
 | `ncnn.concat` | ≥2 个输入 | `axis` | 1 个张量 |
 | `ncnn.dropout` | input | `scale`（默认 1.0；推理期恒等/缩放） | 1 个（同类型） |
@@ -103,10 +103,10 @@ module {
 每个算子还带两个 **discardable 属性**用于溯源：`ncnn.name`（ncnn 层名）、
 `ncnn.source_layer`（来自 parsed-graph 的第几层）。
 
-conv2d 真实样例：
+convolution 真实样例：
 
 ```mlir
-%0 = ncnn.conv2d %arg0, %cst, %cst_0 {dilation_h = 1 : i64, dilation_w = 1 : i64,
+%0 = ncnn.convolution %arg0, %cst, %cst_0 {dilation_h = 1 : i64, dilation_w = 1 : i64,
      has_bias = true, kernel_h = 3 : i64, kernel_w = 3 : i64, ncnn.name = "conv1",
      ncnn.source_layer = 1 : i64, pad_bottom = 0 : i64, pad_left = 0 : i64,
      pad_right = 0 : i64, pad_top = 0 : i64, stride_h = 2 : i64, stride_w = 2 : i64}
@@ -141,7 +141,7 @@ SAME padding 用 ncnn 哨兵表达：`pad_*` 全为 `-233` = SAME_UPPER，全为
 
 - `relu` / `dropout` / `softmax`：`SameOperandsAndResultType`（结果类型 = 输入类型）。
 - `split`：所有结果 = 输入类型（个数 = 输出 blob 数，≥2）。
-- `conv2d` / `pool2d` / `concat`：实现 `InferShapedTypeOpInterface::inferReturnTypeComponents`，
+- `convolution` / `pooling` / `concat`：实现 `InferShapedTypeOpInterface::inferReturnTypeComponents`，
   在构建时计算结果形状（conv 输出 `[O, H_out, W_out]`、pool 按 regular/global/adaptive、
   concat 沿 `axis` 求和）。verifier 会重算并与声明的结果类型比对，不一致即报错。
 
@@ -162,9 +162,9 @@ module {
   func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32> {
     %cst = arith.constant dense<...> : tensor<64x3x3x3xf32>
     %cst_0 = arith.constant dense<...> : tensor<64xf32>
-    %0 = ncnn.conv2d %arg0, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
+    %0 = ncnn.convolution %arg0, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
     %1 = ncnn.relu %0 {...} : (tensor<64x113x113xf32>) -> tensor<64x113x113xf32>
-    %2 = ncnn.pool2d %1 {kind = 0 : i64, mode = 0 : i64, ...} : (tensor<64x113x113xf32>) -> tensor<64x56x56xf32>
+    %2 = ncnn.pooling %1 {kind = 0 : i64, mode = 0 : i64, ...} : (tensor<64x113x113xf32>) -> tensor<64x56x56xf32>
     ...
     return %N : tensor<1000xf32>
   }
@@ -174,8 +174,8 @@ module {
 统计（squeezenet_v1.1，实测）：
 
 - **52 个 `arith.constant`**（26 个 conv 各带 weight + bias）。
-- 计算算子：`ncnn.conv2d` 26、`ncnn.relu` 26、`ncnn.split` 8、`ncnn.concat` 8、
-  `ncnn.pool2d` 4、`ncnn.softmax` 1、`ncnn.dropout` 1。
+- 计算算子：`ncnn.convolution` 26、`ncnn.relu` 26、`ncnn.split` 8、`ncnn.concat` 8、
+  `ncnn.pooling` 4、`ncnn.softmax` 1、`ncnn.dropout` 1。
 - 函数入参 1 个：`%arg0 : tensor<3x227x227xf32>`；返回 1 个：`tensor<1000xf32>`。
 
 ---

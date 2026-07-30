@@ -86,11 +86,11 @@ TEST(LoadSqueezenetTyped, ImportsAndVerifies) {
 
   EXPECT_EQ(count_ops<mlir::arith::ConstantOp>(module), 52)
     << "weight constants: 26 conv * (weight + bias)";
-  EXPECT_EQ(count_ops<mlir::ncnn::Conv2DOp>(module), 26);
+  EXPECT_EQ(count_ops<mlir::ncnn::ConvolutionOp>(module), 26);
   EXPECT_EQ(count_ops<mlir::ncnn::ReluOp>(module), 26);
   EXPECT_EQ(count_ops<mlir::ncnn::SplitOp>(module), 8);
   EXPECT_EQ(count_ops<mlir::ncnn::ConcatOp>(module), 8);
-  EXPECT_EQ(count_ops<mlir::ncnn::Pool2DOp>(module), 4);
+  EXPECT_EQ(count_ops<mlir::ncnn::PoolingOp>(module), 4);
   EXPECT_EQ(count_ops<mlir::ncnn::SoftmaxOp>(module), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::DropoutOp>(module), 1);
 

@@ -452,13 +452,13 @@ FailureOr<RankedTensorType> inferConcatResultType(
 }
 
 //===----------------------------------------------------------------------===//
-// Conv2DOp
+// ConvolutionOp
 //===----------------------------------------------------------------------===//
 
-LogicalResult Conv2DOp::inferReturnTypeComponents(
+LogicalResult ConvolutionOp::inferReturnTypeComponents(
   MLIRContext* context,
   std::optional<Location> location,
-  Conv2DOp::Adaptor adaptor,
+  ConvolutionOp::Adaptor adaptor,
   SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
   auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
   auto weight = llvm::dyn_cast<RankedTensorType>(adaptor.getWeight().getType());
@@ -492,7 +492,7 @@ LogicalResult Conv2DOp::inferReturnTypeComponents(
   return success();
 }
 
-LogicalResult Conv2DOp::verify() {
+LogicalResult ConvolutionOp::verify() {
   auto input = llvm::dyn_cast<RankedTensorType>(getInput().getType());
   auto weight = llvm::dyn_cast<RankedTensorType>(getWeight().getType());
   if (input == nullptr || weight == nullptr) {
@@ -526,13 +526,13 @@ LogicalResult Conv2DOp::verify() {
 }
 
 //===----------------------------------------------------------------------===//
-// Pool2DOp
+// PoolingOp
 //===----------------------------------------------------------------------===//
 
-LogicalResult Pool2DOp::inferReturnTypeComponents(
+LogicalResult PoolingOp::inferReturnTypeComponents(
   MLIRContext* context,
   std::optional<Location> location,
-  Pool2DOp::Adaptor adaptor,
+  PoolingOp::Adaptor adaptor,
   SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
   (void)context;
   auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
@@ -562,7 +562,7 @@ LogicalResult Pool2DOp::inferReturnTypeComponents(
   return success();
 }
 
-LogicalResult Pool2DOp::verify() {
+LogicalResult PoolingOp::verify() {
   auto input = llvm::dyn_cast<RankedTensorType>(getInput().getType());
   if (input == nullptr) {
     return emitOpError("input must be a ranked tensor");

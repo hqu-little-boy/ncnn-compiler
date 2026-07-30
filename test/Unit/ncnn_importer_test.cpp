@@ -255,11 +255,11 @@ TEST_F(NcnnImporterTest, ImportsSupportedGraph) {
 
   EXPECT_EQ(count_ops<mlir::arith::ConstantOp>(module), 2)
     << "f16 weight and f32 bias become constants";
-  EXPECT_EQ(count_ops<mlir::ncnn::Conv2DOp>(module), 1);
+  EXPECT_EQ(count_ops<mlir::ncnn::ConvolutionOp>(module), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::ReluOp>(module), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::SplitOp>(module), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::ConcatOp>(module), 1);
-  EXPECT_EQ(count_ops<mlir::ncnn::Pool2DOp>(module), 2);
+  EXPECT_EQ(count_ops<mlir::ncnn::PoolingOp>(module), 2);
   EXPECT_EQ(count_ops<mlir::ncnn::DropoutOp>(module), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::SoftmaxOp>(module), 1);
 

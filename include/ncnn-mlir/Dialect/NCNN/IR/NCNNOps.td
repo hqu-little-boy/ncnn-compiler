@@ -2,7 +2,7 @@
 //
 // ncnn 方言算子定义。算子集与原自定义前端 IR 的 8 个 kind 对应：
 //   const   -> 用 arith.constant（不在此方言内）
-//   conv2d / relu / pool2d / split / concat / dropout / softmax -> 本文件
+//   convolution / relu / pooling / split / concat / dropout / softmax -> 本文件
 // Input 层表示为 func.func 的 block argument，也不是算子。
 //
 //===----------------------------------------------------------------------===//
@@ -22,22 +22,27 @@ include "ncnn-mlir/Dialect/NCNN/IR/NCNNDialect.td"
 class NCNN_Op<string mnemonic, list<Trait> traits = []>
     : Op<NCNN_Dialect, mnemonic, traits> {
   // 统一汇编格式：打印全部操作数 + 属性字典 + 函数式类型签名。
-  // 对「定长 + 可变长」操作数混排的算子（conv2d）也能避免悬空逗号。
+  // 对「定长 + 可变长」操作数混排的算子（convolution）也能避免悬空逗号。
   let assemblyFormat =
     "operands attr-dict `:` functional-type(operands, results)";
 }
 
 //===----------------------------------------------------------------------===//
-// conv2d
+// convolution
 //===----------------------------------------------------------------------===//
 
-def NCNN_Conv2DOp : NCNN_Op<"conv2d", [InferShapedTypeOpAdaptor]> {
-  let summary = "2D cross-correlation convolution (ncnn Convolution).";
+def NCNN_ConvolutionOp : NCNN_Op<"convolution", [InferShapedTypeOpAdaptor]> {
+  let summary = "Cross-correlation convolution (1:1 mirrors ncnn `Convolution`).";
   let description = [{
+    Faithfully mirrors the ncnn `Convolution` layer; this dialect does NOT judge
+    dimensionality/layout — realizing it as `tosa.conv2d` (vs 1d/3d), the
+    CHW->NHWC layout conversion, and resolving SAME padding to explicit pads are
+    all deferred to the ncnn->tosa lowering.
+
     Operands are `input` `[C_in, H, W]`, `weight` `[O, I, H, W]`, then optional
     `bias` `[O]` and quantization scales (per ncnn `int8_scale_term`). The
-    result is `[O, H_out, W_out]`. SAME padding is encoded with the ncnn
-    sentinels `-233` (SAME_UPPER) / `-234` (SAME_LOWER) in the pad attributes.
+    inferred result is `[O, H_out, W_out]`. SAME padding is carried with the
+    ncnn sentinels `-233` (SAME_UPPER) / `-234` (SAME_LOWER) in the pad attrs.
   }];
   let arguments = (ins
     NCNN_RankedTensor:$input,
@@ -76,12 +81,16 @@ def NCNN_ReluOp : NCNN_Op<"relu", [Pure, SameOperandsAndResultType]> {
 }
 
 //===----------------------------------------------------------------------===//
-// pool2d
+// pooling
 //===----------------------------------------------------------------------===//
 
-def NCNN_Pool2DOp : NCNN_Op<"pool2d", [InferShapedTypeOpAdaptor]> {
-  let summary = "2D max/average pooling (ncnn Pooling).";
+def NCNN_PoolingOp : NCNN_Op<"pooling", [InferShapedTypeOpAdaptor]> {
+  let summary = "Max/average pooling (1:1 mirrors ncnn `Pooling`).";
   let description = [{
+    Faithfully mirrors the ncnn `Pooling` layer; dimensionality/layout and the
+    choice of target op (`tosa.max_pool2d`/`avg_pool2d`, vs 1d/3d) are deferred
+    to the ncnn->tosa lowering.
+
     `kind` selects max/average; `mode` selects regular sliding-window, global
     (reduce all spatial), or adaptive (kernel attrs carry the target output
     size, `-233` = keep input dim). `pad_mode`: 0=full(+tail), 1=valid,

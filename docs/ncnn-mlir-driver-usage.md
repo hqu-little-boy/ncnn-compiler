@@ -107,7 +107,7 @@ module {
   func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32> {
     %cst = arith.constant dense<...> : tensor<64x3x3x3xf32>
     %cst_0 = arith.constant dense<...> : tensor<64xf32>
-    %0 = ncnn.conv2d %arg0, %cst, %cst_0 {dilation_h = 1 : i64, dilation_w = 1 : i64,
+    %0 = ncnn.convolution %arg0, %cst, %cst_0 {dilation_h = 1 : i64, dilation_w = 1 : i64,
          has_bias = true, kernel_h = 3 : i64, kernel_w = 3 : i64, ncnn.name = "conv1",
          ncnn.source_layer = 1 : i64, pad_bottom = 0 : i64, pad_left = 0 : i64,
          pad_right = 0 : i64, pad_top = 0 : i64, stride_h = 2 : i64, stride_w = 2 : i64}
@@ -123,7 +123,7 @@ module {
 要点：
 - **输入**是 `func.func @model` 的 block argument（`%arg0`），形状 `[C,H,W]`（ncnn 原生 CHW）。
 - **权重**被抬成 `arith.constant`（`%cst`=卷积核 `[O,I,H,W]`、`%cst_0`=bias `[O]`），
-  作为 `ncnn.conv2d` 的操作数。
+  作为 `ncnn.convolution` 的操作数。
 - **ncnn 数字参数**变成具名强类型属性（`kernel_h`、`stride_h`、`pad_*`、`has_bias`…）。
 - **每个值带推断出的静态形状/元素类型**（`tensor<64x113x113xf32>`）。
 - **来源溯源**保留在 `ncnn.name` / `ncnn.source_layer` discardable 属性里。
