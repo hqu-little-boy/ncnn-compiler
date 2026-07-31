@@ -21,7 +21,7 @@ target_compile_options(unit_tests PRIVATE -fno-rtti)
 # libstdc++ 冲突；gtest 仅在 demangle 时用 <cxxabi.h>，关掉即可避免。
 target_compile_definitions(unit_tests PRIVATE
     GTEST_HAS_CXXABI_H_=0
-    NCNN_GRAPH_SOURCE_ROOT="${CMAKE_SOURCE_DIR}/.."
+    NCNN_GRAPH_SOURCE_ROOT="${CMAKE_SOURCE_DIR}/test/third_party"
     NCNN_GRAPH_TEST_TEMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-fixtures")
 
 gtest_discover_tests(unit_tests)

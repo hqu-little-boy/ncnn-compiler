@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(ncnn_compiler LANGUAGES CXX)
+project(ncnn_compiler LANGUAGES C CXX)
 
 # C++23, 严格点
 set(CMAKE_CXX_STANDARD 23)
@@ -54,6 +54,7 @@ file(GLOB_RECURSE NCNN_ALL_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/bin/*.h"
     "${CMAKE_SOURCE_DIR}/tools/*.cpp"
     "${CMAKE_SOURCE_DIR}/test/*.cpp")
+list(FILTER NCNN_ALL_SOURCES EXCLUDE REGEX "/test/third_party/")
 
 # clang-format：检查格式是否合规（不改文件，发现违例即失败）
 add_custom_target(format_check

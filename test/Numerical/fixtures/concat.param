@@ -1,0 +1,5 @@
+7767517
+3 3
+Input first 0 1 first 0=4 1=3 2=1
+Input second 0 1 second 0=4 1=3 2=2
+Concat concat 2 1 first second output 0=0

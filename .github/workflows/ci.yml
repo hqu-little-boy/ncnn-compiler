@@ -15,14 +15,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: compiler
-
-      - name: Checkout ncnn (test data)
-        uses: actions/checkout@v4
-        with:
-          repository: Tencent/ncnn
-          path: ncnn
-          sparse-checkout: examples/squeezenet_v1.1.*
-          sparse-checkout-cone-mode: false
+          submodules: true
 
       - name: Install LLVM 21
         run: |
@@ -39,7 +32,7 @@ jobs:
           cmake -S compiler -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm
-          cmake --build build -j$(nproc)
+          cmake --build build --parallel
 
       - name: Test
         run: ctest --test-dir build --output-on-failure -j$(nproc)

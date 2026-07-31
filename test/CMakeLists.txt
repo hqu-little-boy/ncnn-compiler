@@ -11,6 +11,7 @@ find_program(LLVM_NM NAMES llvm-nm-21 llvm-nm REQUIRED)
 find_program(LLVM_READELF NAMES llvm-readelf-21 llvm-readelf REQUIRED)
 find_library(MLIR_RUNNER_UTILS NAMES mlir_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
 find_library(MLIR_C_RUNNER_UTILS NAMES mlir_c_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
+add_subdirectory(Numerical)
 # LLVM 的 lit 运行器（Debian 安装在 <prefix>/build/utils/lit）。
 set(NCNN_LIT_PY "${LLVM_DIR}/../../../build/utils/lit/lit.py")
 get_filename_component(NCNN_LIT_PY "${NCNN_LIT_PY}" ABSOLUTE)
@@ -59,8 +60,8 @@ add_test(NAME squeezenet-shared-library
         --clang ${CLANG}
         --nm ${LLVM_NM}
         --readelf ${LLVM_READELF}
-        --param ${CMAKE_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.param
-        --bin ${CMAKE_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.bin
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn/examples/squeezenet_v1.1.param
+        --bin ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn/examples/squeezenet_v1.1.bin
         --model-name squeezenet_v1_1
         --expected-undefined expf,free,malloc
         --output-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/squeezenet
