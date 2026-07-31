@@ -22,7 +22,7 @@ jobs:
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
           sudo add-apt-repository "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main"
           sudo apt-get update
-          sudo apt-get install -y llvm-21-dev
+          sudo apt-get install -y llvm-21-dev libllvm-21-ocaml-dev libllvm21 llvm-21 llvm-21-dev llvm-21-doc llvm-21-examples llvm-21-runtime clang-21 clang-tools-21 clang-21-doc libclang-common-21-dev libclang-21-dev libclang1-21 clang-format-21 python3-clang-21 clangd-21 clang-tidy-21 libc++-21-dev libc++abi-21-dev libomp-21-dev libmlir-21-dev mlir-21-tools
 
       - name: Install dependencies
         run: sudo apt-get install -y cmake libgtest-dev
