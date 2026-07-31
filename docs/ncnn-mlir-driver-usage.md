@@ -224,8 +224,9 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 ./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
   | ./build/bin/ncnn-mlir-opt --convert-ncnn-model-to-func
 
-# M2 落地后的严格 SqueezeNet → TOSA：
-# ... | ncnn-mlir-opt --ncnn-to-tosa-pipeline
+# 严格 SqueezeNet → TOSA：
+./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
+  | ./build/bin/ncnn-mlir-opt --ncnn-to-tosa-pipeline
 ```
 
 `--ncnn-to-tosa-pipeline` 内部固定运行：

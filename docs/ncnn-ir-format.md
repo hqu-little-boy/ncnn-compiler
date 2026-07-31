@@ -25,8 +25,8 @@
   ──ncnn_graph::Graph::load──▶  parsed-graph        (原始层列表，1:1 镜像 ncnn 文件)
   ──ncnn_importer::import_graph──▶  ncnn 方言 MLIR 模块   ← 本文档
   ──convert-ncnn-model-to-func──▶  func.func + arith.constant + ncnn 计算 op
-  ──（后续）normalize-ncnn──▶  func.func + normalized ncnn 计算 op
-  ──（后续）convert-ncnn-to-tosa──▶  func.func + tosa + 未分配路径的 ncnn op
+  ──normalize-ncnn──▶  func.func + normalized ncnn 计算 op
+  ──convert-ncnn-to-tosa──▶  func.func + tosa + 未分配路径的 ncnn op
   ──（M2 pipeline）verify-no-ncnn-ops──▶  严格纯 TOSA IR
 ```
 

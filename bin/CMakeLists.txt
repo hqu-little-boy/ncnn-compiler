@@ -13,6 +13,7 @@ target_link_libraries(ncnn-mlir-opt PRIVATE
     NCNNDialect
     NCNNToFunc
     NCNNToTosa
+    NCNNPipelines
     NormalizeNCNN
     VerifyNoNCNNOps
     ${dialect_libs}
