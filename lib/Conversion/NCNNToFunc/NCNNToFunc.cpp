@@ -39,7 +39,7 @@ class ConvertNCNNModelToFuncPass final
   }
 
  private:
-  LogicalResult convertModel(ModelOp model) {
+  static LogicalResult convertModel(ModelOp model) {
     SmallVector<InputOp> inputs;
     SmallVector<OutputOp> outputs;
     for (Operation& operation : model.getBody().front()) {

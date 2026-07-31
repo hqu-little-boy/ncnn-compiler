@@ -7,5 +7,11 @@ target_link_libraries(NCNNPipelines PUBLIC
     NCNNToTosa
     NormalizeNCNN
     VerifyNoNCNNOps
+    VerifyNoTosaOps
+    MLIRFuncDialect
     MLIRPass
+    MLIRTosaToArith
+    MLIRTosaToLinalg
+    MLIRTosaToTensor
+    MLIRTosaTransforms
     MLIRTransforms)

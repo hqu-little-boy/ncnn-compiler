@@ -1,2 +1,3 @@
 add_subdirectory(NormalizeNCNN)
 add_subdirectory(VerifyNoNCNNOps)
+add_subdirectory(VerifyNoTosaOps)

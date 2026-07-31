@@ -127,8 +127,8 @@ kernel=3, stride=2, pad=0, global_pooling=0。`pool10` 是 `{0=1 ... 4=1}`，
 - 第二个 `[64:f32:256B]`：bias，shape `[64]`，float32，256 字节（= 64 × 4）。
 
 顺序 weight → bias 严格对应 `convolution.cpp` `load_model` 里的读取次序。
-`dtype` 目前 Phase-1 只处理 `f32`（flag `0x0002C056` 或全 0）；float16/int8
-在后续阶段支持。
+当前 importer 的 SqueezeNet 路径只接受 `f32`（flag `0x0002C056` 或全 0）；其他
+权重 dtype 不属于该路径的输入契约。
 
 ## 6. 完整示例：SqueezeNet v1.1
 
@@ -145,7 +145,7 @@ kernel=3, stride=2, pad=0, global_pooling=0。`pool10` 是 `{0=1 ... 4=1}`，
 
 数出来 26 个 `Convolution`、26 个 `ReLU`、8 个 `Split`、8 个 `Concat`、
 4 个 `Pooling`、1 个 `Dropout`、1 个 `Softmax`、1 个 `Input`，正好覆盖
-Phase-1 目标模型的 8 种算子。
+SqueezeNet v1.1 使用的 8 种算子。
 
 ## 7. 与 `ncnn-ir` 的区别
 
@@ -165,4 +165,4 @@ Phase-1 目标模型的 8 种算子。
 - [../../docs/netron-ncnn-parsing.md](../../docs/netron-ncnn-parsing.md) — ncnn
   `.param`/`.bin` 格式与 `-23300` 数组编码的权威解析原理。
 - [../../docs/ncnn-mlir-compiler-plan.md](../../docs/ncnn-mlir-compiler-plan.md) —
-  整体架构与分阶段路线图。
+  整体架构与项目计划。

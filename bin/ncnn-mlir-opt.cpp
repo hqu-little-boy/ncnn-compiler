@@ -16,6 +16,7 @@
 #include "ncnn-mlir/Pipelines/NCNNPipelines.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
+#include "ncnn-mlir/Transforms/VerifyNoTosaOps/VerifyNoTosaOps.hpp"
 
 int main(int argc, char** argv) {
   mlir::DialectRegistry registry;
@@ -27,6 +28,7 @@ int main(int argc, char** argv) {
   mlir::ncnn::registerNCNNPipelines();
   mlir::ncnn::registerNormalizeNCNNPasses();
   mlir::ncnn::registerVerifyNoNCNNOpsPasses();
+  mlir::ncnn::registerVerifyNoTosaOpsPasses();
   // 叠加 ncnn 方言（arith/func 等已含于 registerAllDialects，重复插入无害）。
   ncnn_mlir::register_all_dialects(registry);
   return mlir::asMainReturnCode(

@@ -27,7 +27,7 @@
   ──convert-ncnn-model-to-func──▶  func.func + arith.constant + ncnn 计算 op
   ──normalize-ncnn──▶  func.func + normalized ncnn 计算 op
   ──convert-ncnn-to-tosa──▶  func.func + tosa + 未分配路径的 ncnn op
-  ──（M2 pipeline）verify-no-ncnn-ops──▶  严格纯 TOSA IR
+  ──ncnn-to-tosa-pipeline/verify-no-ncnn-ops──▶  严格纯 TOSA IR
 ```
 
 `convert-ncnn-model-to-func` 是 normalize 和所有目标 conversion 的固定前置 pass，而不是
@@ -35,8 +35,8 @@
 它只消除模型边界并建立标准函数形态，不转换计算语义或 CHW/OIHW 布局；后续
 `normalize-ncnn` 保持 CHW/OIHW，收敛 axis、padding、融合属性等目标无关语义。
 `convert-ncnn-to-tosa` 只处理函数体内明确属于 TOSA 支持集合的计算算子；单独运行时允许
-其他 ncnn op 留给后续 Linalg/SCF 或 Host conversion。M2 使用组合的
-`ncnn-to-tosa-pipeline`，通过最终残留检查要求 SqueezeNet 严格全 TOSA。
+其他 ncnn op 留给其他 conversion。组合的 `ncnn-to-tosa-pipeline` 通过最终残留检查要求
+输入模型严格转换为纯 TOSA。
 
 与 parsed-graph 的关键区别：**parsed-graph 是层的线性列表，ncnn 方言模块是类型化的 SSA DAG**。
 `import_graph` 做了这些提升：

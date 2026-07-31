@@ -36,7 +36,7 @@ cmake --build build --target ncnn-mlir-driver ncnn-mlir-opt -j
 | 输入 | ncnn 模型 `.param`(+`.bin`) | MLIR 文本 `.mlir` |
 | 输出 | MLIR 模块（或原始 parsed-graph） | MLIR 文本（原样重印） |
 | 职责 | ncnn 模型 → ncnn 方言 IR | MLIR 解析/校验/pass 管线 |
-| 依赖 | NCNNGraph + NCNNImporter + NCNNDialect | NCNNDialect + NCNNToFunc + 上游方言/pass |
+| 依赖 | NCNNGraph + NCNNImporter + NCNNDialect | NCNNDialect + NCNNToFunc + NormalizeNCNN + NCNNToTosa + VerifyNoNCNNOps + NCNNPipelines + 上游方言/pass |
 
 ---
 
@@ -218,7 +218,6 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 转移到 `func.func` 参数/结果与 `arith.constant`，并删除模型边界算子。该 pass 是
 `--normalize-ncnn` 和各目标 conversion 的固定前置。`--convert-ncnn-to-tosa` 采用长期
 部分转换契约：只转换明确支持的算子，其他 ncnn op 可留给后续 Linalg/SCF 或 Host 路径。
-后续阶段（tosa → linalg → llvm → 原生库）会作为新的 `--emit` 取值接入。
 
 ```bash
 ./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
@@ -239,13 +238,8 @@ convert-ncnn-model-to-func
 → verify-no-ncnn-ops
 ```
 
-完整 M2 验收由 `test/Pipelines/squeezenet-m2.mlir` 自动执行：导入仓库自带的
-SqueezeNet v1.1，运行严格 pipeline，检查零 ncnn operation，通过 MLIR 21
-`--tosa-validate`，并继续进入官方 TOSA→Linalg named/tensor/arith 前段。
-
 单独运行 `--convert-ncnn-to-tosa` 用于开发和调试某条 conversion，不表示模型已完整
-lowering。只有严格 TOSA pipeline，或未来串联 TOSA/Linalg/Host 的完整
-`--ncnn-lowering-pipeline`，才以最终“无 ncnn op 残留”为成功标准。
+lowering。`--ncnn-to-tosa-pipeline` 以最终“无 ncnn op 残留”为成功标准。
 
 ---
 
@@ -255,5 +249,8 @@ lowering。只有严格 TOSA pipeline，或未来串联 TOSA/Linalg/Host 的完�
 - opt 工具：`compiler/bin/ncnn-mlir-opt.cpp`（+ `compiler/bin/RegisterNCNNDialects.h`）
 - importer：`compiler/lib/Importer/NCNNImporter.cpp`
 - ncnn 方言：`compiler/lib/Dialect/NCNN/IR/`（+ `compiler/include/ncnn-mlir/Dialect/NCNN/IR/`）
+- 转换/规范化：`compiler/lib/{Conversion,Transforms}/`
+- TOSA pipeline：`compiler/lib/Pipelines/NCNNPipelines.cpp`
+- SqueezeNet pipeline 测试：`compiler/test/Pipelines/squeezenet-m2.mlir`
 - 解析器/数据模型：`compiler/lib/Graph/`（`ncnn_graph` 库）
 - 构建配置：各目录 `CMakeLists.txt`（顶层 `compiler/CMakeLists.txt`）

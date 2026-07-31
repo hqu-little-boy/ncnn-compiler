@@ -402,7 +402,7 @@ std::expected<void, std::string> align4();
   组合模拟枚举。
 - 公共接口的所有权、错误语义、单位、shape/layout 和生命周期必须可从声明及文档
   明确判断。
-- 未来导出的推理入口必须是标准 C ABI，以原生数组和 shape 信息传递数据；不得把
+- 导出的推理入口必须是标准 C ABI，以原生数组和 shape 信息传递数据；不得把
   C++ STL 类型或项目自定义 runtime 对象暴露到 ABI。
 
 ## 11. 格式化与静态检查
