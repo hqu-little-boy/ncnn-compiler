@@ -14,8 +14,11 @@
 ```bash
 cd /mnt/ncnn-compiler/compiler
 cmake -S . -B build -G "Unix Makefiles"
-cmake --build build --target ncnn-mlir-driver ncnn-mlir-opt -j
+cmake --build build --parallel
 ```
+
+完整构建必须使用上述 `cmake --build build --parallel` 命令，统一通过 CMake 的
+`--parallel` 选项启用并行构建。
 
 产物：
 - `build/tools/ncnn-mlir-driver` —— `.param/.bin → MLIR` 前端驱动（本文主角）。
@@ -267,8 +270,21 @@ ASan/LSan。完整 SqueezeNet 的重复调用验收需要产品 LLVM lowering �
 `mlir-translate-21`、`clang-21 -fPIC` 和严格共享库链接；最终 `.so` 只依赖 libc/libm，
 未定义符号只允许 `malloc`、`free`、`expf`，且禁止 `memrefCopy` 和 runner/project runtime。
 
-当前库只导出 `_mlir_ciface_model`，参数是 ranked-memref descriptor 指针，不是裸
-`float *`。稳定的 `ncnn_run(const float *, float *)` wrapper 属于下一 ABI 阶段。
+编译入口默认从 `.param` 文件名推导 C 标识符，可用 `--model-name` 覆盖。它根据实际静态 f32
+输入输出生成 `<模型名>.h`、`lib<模型名>.so` 和 JSON ABI manifest；公共函数参数顺序是全部
+输入后全部输出。每个输入在头文件中声明为 `const float *`，每个输出声明为 `float *`，并生成
+对应元素数量宏。任一参数为空返回 1且不执行模型，成功返回 0。
+
+SqueezeNet 默认接口为：
+
+```c
+#define SQUEEZENET_V1_1_INPUT1_ELEMENTS 154587
+#define SQUEEZENET_V1_1_OUTPUT1_ELEMENTS 1000
+int squeezenet_v1_1(const float *input1, float *output1);
+```
+
+动态库只导出模型名函数；内部模型为 private，不生成 `_mlir_ciface_*`。当前 ABI 要求所有输入
+输出都是非空、调用方持有、native-endian、连续的 float 数组；第一版只定义错误码 1为空指针。
 
 ---
 

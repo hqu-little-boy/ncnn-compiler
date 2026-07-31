@@ -1,4 +1,5 @@
 add_subdirectory(BufferizeNCNN)
+add_subdirectory(GenerateCAPI)
 add_subdirectory(NormalizeNCNN)
 add_subdirectory(VerifyBufferizedModel)
 add_subdirectory(VerifyNoNCNNOps)

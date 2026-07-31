@@ -4,6 +4,7 @@ add_library(NCNNPipelines STATIC
 target_compile_options(NCNNPipelines PRIVATE -fno-rtti)
 target_link_libraries(NCNNPipelines PUBLIC
     BufferizeNCNN
+    GenerateCAPI
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN

@@ -24,6 +24,7 @@
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 #include "ncnn-mlir/Conversion/NCNNToTosa/NCNNToTosa.hpp"
 #include "ncnn-mlir/Transforms/BufferizeNCNN/BufferizeNCNN.hpp"
+#include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
@@ -77,6 +78,7 @@ void buildNCNNMemRefToLLVMPipeline(OpPassManager& passManager) {
   passManager.addPass(createArithToLLVMConversionPass());
   passManager.addPass(createFinalizeMemRefToLLVMConversionPass());
   passManager.addPass(createConvertFuncToLLVMPass());
+  passManager.addPass(createFinalizeCAPIPass());
   passManager.addPass(createConvertControlFlowToLLVMPass());
   passManager.addPass(createReconcileUnrealizedCastsPass());
 }

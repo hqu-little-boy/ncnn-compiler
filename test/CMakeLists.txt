@@ -61,8 +61,10 @@ add_test(NAME squeezenet-shared-library
         --readelf ${LLVM_READELF}
         --param ${CMAKE_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.param
         --bin ${CMAKE_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.bin
-        --exports ${CMAKE_CURRENT_SOURCE_DIR}/Native/exports.map
-        --output-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/squeezenet)
+        --model-name squeezenet_v1_1
+        --expected-undefined expf,free,malloc
+        --output-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/squeezenet
+        --verify-execution)
 set_tests_properties(squeezenet-shared-library PROPERTIES
     LABELS "native;integration"
     RUN_SERIAL TRUE

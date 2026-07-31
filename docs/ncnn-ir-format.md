@@ -30,6 +30,7 @@
   ──ncnn-to-tosa-pipeline/verify-no-ncnn-ops──▶  严格纯 TOSA IR
   ──ncnn-tosa-to-linalg-pipeline──▶  tensor + Linalg/Arith/Math IR
   ──ncnn-linalg-to-memref-pipeline──▶  caller-owned output memref + void return
+  ──generate-ncnn-c-api──▶  private model + prepared bare-pointer ABI metadata
   ──ncnn-memref-to-llvm-pipeline──▶  纯 LLVM dialect IR
 ```
 
@@ -47,7 +48,9 @@ tensor/memref，调用方拥有 input/output buffer，函数只释放内部临�
 `memref.alloc` 有唯一且后支配所有使用的释放。
 `ncnn-memref-to-llvm-pipeline` 将 Linalg copy 和计算统一降为 loops，再完成
 Affine/SCF/Math/Arith/MemRef/Func/CF 到 LLVM dialect 的转换，因此不会引入外部
-`memrefCopy` runtime 符号。
+`memrefCopy` runtime 符号。若模块经过 `generate-ncnn-c-api`，该 pipeline 还会在 Func→LLVM
+后生成裸指针 wrapper：公共参数顺序固定为全部输入后全部输出，内部再按原函数参数顺序组装
+静态连续 memref descriptor。模型实现被改为 private，任一空指针返回 1，成功返回 0。
 
 与 parsed-graph 的关键区别：**parsed-graph 是层的线性列表，ncnn 方言模块是类型化的 SSA DAG**。
 `import_graph` 做了这些提升：
