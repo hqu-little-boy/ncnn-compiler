@@ -3,7 +3,7 @@
 // 流水线：
 //   .param/.bin ──ncnn_graph::Graph::load──▶ 原始计算图（parsed-graph）
 //              ──ncnn_importer::import_graph──▶ ncnn 方言 MLIR 模块
-//              ──print──▶ MLIR 文本产物
+//              ──print──▶ ncnn.model 形式的 MLIR 文本产物
 //
 // 参数解析用 LLVM 自带的 llvm::cl（mlir-opt 同款 CommandLine 库），后续接入
 // tosa/linalg/llvm 下降阶段时可平滑复用同一套 option 基础设施。

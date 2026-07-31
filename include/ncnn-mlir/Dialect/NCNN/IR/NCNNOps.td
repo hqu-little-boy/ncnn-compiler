@@ -1,9 +1,7 @@
 //===- NCNNOps.td - ncnn dialect ops ----------------------*- tablegen -*-===//
 //
-// ncnn 方言算子定义。算子集与原自定义前端 IR 的 8 个 kind 对应：
-//   const   -> 用 arith.constant（不在此方言内）
-//   convolution / relu / pooling / split / concat / dropout / softmax -> 本文件
-// Input 层表示为 func.func 的 block argument，也不是算子。
+// ncnn 方言算子定义。解析期由 model/input/const/output 表达完整网络，计算层
+// 保持 ncnn 原生语义；后续显式函数化 pass 才建立 func.func 与 ABI。
 //
 //===----------------------------------------------------------------------===//
 
@@ -13,6 +11,7 @@
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/IR/SymbolInterfaces.td"
 include "ncnn-mlir/Dialect/NCNN/IR/NCNNDialect.td"
 
 //===----------------------------------------------------------------------===//
@@ -25,6 +24,40 @@ class NCNN_Op<string mnemonic, list<Trait> traits = []>
   // 对「定长 + 可变长」操作数混排的算子（convolution）也能避免悬空逗号。
   let assemblyFormat =
     "operands attr-dict `:` functional-type(operands, results)";
+}
+
+//===----------------------------------------------------------------------===//
+// 模型边界
+//===----------------------------------------------------------------------===//
+
+def NCNN_ModelOp : NCNN_Op<"model", [Symbol, IsolatedFromAbove, SingleBlock,
+                                      NoTerminator, NoRegionArguments]> {
+  let summary = "An imported ncnn network before function ABI construction.";
+  let arguments = (ins SymbolNameAttr:$sym_name);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = "$sym_name attr-dict-with-keyword $body";
+  let hasVerifier = 1;
+}
+
+def NCNN_InputOp : NCNN_Op<"input", [Pure, HasParent<"ModelOp">]> {
+  let summary = "A source ncnn Input layer.";
+  let arguments = (ins StrAttr:$layer_name, StrAttr:$blob_name);
+  let results = (outs NCNN_RankedTensor:$output);
+  let assemblyFormat = "attr-dict `:` type($output)";
+}
+
+def NCNN_ConstOp : NCNN_Op<"const", [Pure, HasParent<"ModelOp">]> {
+  let summary = "An embedded weight tensor from the ncnn .bin file.";
+  let arguments = (ins StrAttr:$name, ElementsAttr:$value);
+  let results = (outs NCNN_RankedTensor:$output);
+  let assemblyFormat = "attr-dict `:` type($output)";
+  let hasVerifier = 1;
+}
+
+def NCNN_OutputOp : NCNN_Op<"output", [HasParent<"ModelOp">]> {
+  let summary = "A blob selected as an exported model output.";
+  let arguments = (ins NCNN_RankedTensor:$input, StrAttr:$blob_name);
+  let assemblyFormat = "$input attr-dict `:` type($input)";
 }
 
 //===----------------------------------------------------------------------===//

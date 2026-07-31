@@ -11,6 +11,7 @@ target_include_directories(ncnn-mlir-opt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(ncnn-mlir-opt PRIVATE -fno-rtti)
 target_link_libraries(ncnn-mlir-opt PRIVATE
     NCNNDialect
+    NCNNToFunc
     ${dialect_libs}
     ${conversion_libs}
     ${extension_libs}

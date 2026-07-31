@@ -6,7 +6,7 @@
 > 相关文档：[parsed-graph-format.md](parsed-graph-format.md)、[ncnn-mlir-driver-usage.md](ncnn-mlir-driver-usage.md)。
 
 `ncnn` 方言 IR 是编译器**类型化前端 IR**，是一个标准的 **MLIR 模块**（`builtin.module`
-里一个 `func.func`）。它由 `ncnn_importer::import_graph()` 从原始
+里一个 `ncnn.model`）。它由 `ncnn_importer::import_graph()` 从原始
 [parsed-graph](parsed-graph-format.md) 提升而来，是下游 lowering（ncnn → tosa → linalg → …）
 真正消费的输入。
 
@@ -24,6 +24,7 @@
 .param/.bin
   ──ncnn_graph::Graph::load──▶  parsed-graph        (原始层列表，1:1 镜像 ncnn 文件)
   ──ncnn_importer::import_graph──▶  ncnn 方言 MLIR 模块   ← 本文档
+  ──convert-ncnn-model-to-func──▶  func.func + ABI
   ──（后续）convert-ncnn-to-tosa──▶  tosa …
 ```
 
@@ -31,9 +32,9 @@
 `import_graph` 做了这些提升：
 
 - **blob 名 → SSA 值**：每条 ncnn blob 变成一个带 `RankedTensorType` 的 MLIR `Value`
-  （`%0`、`%1`…，输入是 block argument `%arg0`）。唯一定义点与 use-def 链由 MLIR 自动维护；
+  （`%0`、`%1`…，输入由 `ncnn.input` 定义）。唯一定义点与 use-def 链由 MLIR 自动维护；
   blob 名保留在定义它的算子的 `ncnn.name` 属性里（溯源用）。
-- **权重 → 常量算子**：conv 的 weight/bias 从"挂在层上的张量"变成独立的 `arith.constant`
+- **权重 → 常量算子**：conv 的 weight/bias 从"挂在层上的张量"变成独立的 `ncnn.const`
   算子，产出各自的值，作为 conv 的操作数。
 - **参数字典 → 强类型属性**：ncnn 的 `{0=64 1=3 …}` 数字 key 解析成
   `ncnn.convolution {kernel_h=3, kernel_w=3, stride_h=2, …}` 这样的具名强类型属性
@@ -65,30 +66,31 @@ cd /mnt/ncnn-compiler/compiler
 
 ## 3. 整体结构
 
-输出是标准 MLIR 文本：一个 `module`，内含一个 `func.func @model`。
+输出是标准 MLIR 文本：一个 `module`，内含一个 `ncnn.model @model`。
 
 ```mlir
 module {
-  func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32> {
-    %cst   = arith.constant dense<...> : tensor<64x3x3x3xf32>   // conv 权重 [O,I,H,W]
-    %cst_0 = arith.constant dense<...> : tensor<64xf32>          // conv bias  [O]
-    %0 = ncnn.convolution %arg0, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
+  ncnn.model @model {
+    %input = ncnn.input {blob_name = "data", layer_name = "data"} : tensor<3x227x227xf32>
+    %cst = ncnn.const {name = "conv1.weight.0", value = dense<...>} : tensor<64x3x3x3xf32>
+    %cst_0 = ncnn.const {name = "conv1.weight.1", value = dense<...>} : tensor<64xf32>
+    %0 = ncnn.convolution %input, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
     %1 = ncnn.relu %0 {...} : (tensor<64x113x113xf32>) -> tensor<64x113x113xf32>
     ...
-    return %N : tensor<1000xf32>
+    ncnn.output %N {blob_name = "prob"} : tensor<1000xf32>
   }
 }
 ```
 
-- **函数入参**对应 ncnn `Input` 层（block argument），形状 `[C,H,W]`。
-- **函数返回**对应 `graph.output_blob_names`。
-- 计算层是 `ncnn.*` 算子；权重是 `arith.constant`。
+- **`ncnn.input`**对应 ncnn `Input` 层，形状 `[C,H,W]`。
+- **`ncnn.output`**对应 `graph.output_blob_names` 选择的导出 blob。
+- 计算层和权重都由 `ncnn.*` 算子表示，尚未建立函数 ABI。
 
 ---
 
 ## 4. 算子与属性
 
-7 个计算算子（`Input` 是函数入参、权重是 `arith.constant`，都不是 `ncnn.*` 算子）：
+模型边界由 `ncnn.model`、`ncnn.input`、`ncnn.const`、`ncnn.output` 表示，另有 7 个计算算子：
 
 | 算子 | 操作数 | 属性 | 结果 |
 |------|--------|------|------|
@@ -159,24 +161,24 @@ SAME（`-233`/`-234`）：`out = 1 + (in-1)/stride`。
 
 ```mlir
 module {
-  func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32> {
-    %cst = arith.constant dense<...> : tensor<64x3x3x3xf32>
-    %cst_0 = arith.constant dense<...> : tensor<64xf32>
-    %0 = ncnn.convolution %arg0, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
+  ncnn.model @model {
+    %input = ncnn.input {blob_name = "data", layer_name = "data"} : tensor<3x227x227xf32>
+    %cst = ncnn.const {name = "conv1.weight.0", value = dense<...>} : tensor<64x3x3x3xf32>
+    %0 = ncnn.convolution %input, %cst, %cst_0 {...} : (...) -> tensor<64x113x113xf32>
     %1 = ncnn.relu %0 {...} : (tensor<64x113x113xf32>) -> tensor<64x113x113xf32>
     %2 = ncnn.pooling %1 {kind = 0 : i64, mode = 0 : i64, ...} : (tensor<64x113x113xf32>) -> tensor<64x56x56xf32>
     ...
-    return %N : tensor<1000xf32>
+    ncnn.output %N {blob_name = "prob"} : tensor<1000xf32>
   }
 }
 ```
 
 统计（squeezenet_v1.1，实测）：
 
-- **52 个 `arith.constant`**（26 个 conv 各带 weight + bias）。
+- **52 个 `ncnn.const`**（26 个 conv 各带 weight + bias）。
 - 计算算子：`ncnn.convolution` 26、`ncnn.relu` 26、`ncnn.split` 8、`ncnn.concat` 8、
   `ncnn.pooling` 4、`ncnn.softmax` 1、`ncnn.dropout` 1。
-- 函数入参 1 个：`%arg0 : tensor<3x227x227xf32>`；返回 1 个：`tensor<1000xf32>`。
+- `ncnn.input` 1 个；`ncnn.output` 1 个。函数化后分别成为函数参数和返回值。
 
 ---
 

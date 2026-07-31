@@ -72,19 +72,26 @@ TEST(LoadSqueezenetTyped, ImportsAndVerifies) {
   EXPECT_TRUE(mlir::succeeded(mlir::verify(module.getOperation())))
     << "imported module verifies";
 
-  auto func = *module.getOps<mlir::func::FuncOp>().begin();
-  ASSERT_EQ(func.getFunctionType().getNumInputs(), 1u);
-  ASSERT_EQ(func.getFunctionType().getNumResults(), 1u);
-  auto input_type =
-    mlir::dyn_cast<mlir::RankedTensorType>(func.getFunctionType().getInput(0));
-  auto output_type =
-    mlir::dyn_cast<mlir::RankedTensorType>(func.getFunctionType().getResult(0));
+  ASSERT_EQ(count_ops<mlir::ncnn::ModelOp>(module), 1);
+  ASSERT_EQ(count_ops<mlir::ncnn::InputOp>(module), 1);
+  ASSERT_EQ(count_ops<mlir::ncnn::OutputOp>(module), 1);
+  EXPECT_EQ(count_ops<mlir::func::FuncOp>(module), 0);
+  mlir::RankedTensorType input_type;
+  mlir::RankedTensorType output_type;
+  module->walk([&](mlir::ncnn::InputOp input) {
+    input_type =
+      mlir::dyn_cast<mlir::RankedTensorType>(input.getOutput().getType());
+  });
+  module->walk([&](mlir::ncnn::OutputOp output) {
+    output_type =
+      mlir::dyn_cast<mlir::RankedTensorType>(output.getInput().getType());
+  });
   EXPECT_TRUE(shape_is(input_type, {3, 227, 227}))
     << "input is one [3,227,227] f32 graph argument";
   EXPECT_TRUE(input_type != nullptr && input_type.getElementType().isF32());
   EXPECT_TRUE(shape_is(output_type, {1000})) << "output is one [1000] value";
 
-  EXPECT_EQ(count_ops<mlir::arith::ConstantOp>(module), 52)
+  EXPECT_EQ(count_ops<mlir::ncnn::ConstOp>(module), 52)
     << "weight constants: 26 conv * (weight + bias)";
   EXPECT_EQ(count_ops<mlir::ncnn::ConvolutionOp>(module), 26);
   EXPECT_EQ(count_ops<mlir::ncnn::ReluOp>(module), 26);

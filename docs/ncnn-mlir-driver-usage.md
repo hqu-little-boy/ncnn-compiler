@@ -56,7 +56,7 @@ ncnn-mlir-driver [options] <input .param file>
 
 `--emit` 的取值：
 
-- `mlir`（默认）：**MLIR `ncnn` 方言模块**——类型化 SSA DAG，权重为 `arith.constant`，
+- `mlir`（默认）：**MLIR `ncnn` 方言模块**——类型化 SSA DAG，权重为 `ncnn.const`，
   每个值带推断出的 `RankedTensorType`，是后续下降到 tosa/linalg 的起点。
 - `parsed-graph`：原始解析出的 ncnn 计算图（layer/blob/参数 + 绑定的权重形状），
   最贴近 `.param`/`.bin` 原貌，适合排查解析问题。
@@ -104,10 +104,11 @@ cd /mnt/ncnn-compiler/compiler
 
 ```mlir
 module {
-  func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32> {
-    %cst = arith.constant dense<...> : tensor<64x3x3x3xf32>
-    %cst_0 = arith.constant dense<...> : tensor<64xf32>
-    %0 = ncnn.convolution %arg0, %cst, %cst_0 {dilation_h = 1 : i64, dilation_w = 1 : i64,
+  ncnn.model @model {
+    %input = ncnn.input {blob_name = "data", layer_name = "data"} : tensor<3x227x227xf32>
+    %cst = ncnn.const {name = "conv1.weight.0", value = dense<...>} : tensor<64x3x3x3xf32>
+    %cst_0 = ncnn.const {name = "conv1.weight.1", value = dense<...>} : tensor<64xf32>
+    %0 = ncnn.convolution %input, %cst, %cst_0 {dilation_h = 1 : i64, dilation_w = 1 : i64,
          has_bias = true, kernel_h = 3 : i64, kernel_w = 3 : i64, ncnn.name = "conv1",
          ncnn.source_layer = 1 : i64, pad_bottom = 0 : i64, pad_left = 0 : i64,
          pad_right = 0 : i64, pad_top = 0 : i64, stride_h = 2 : i64, stride_w = 2 : i64}
@@ -116,13 +117,14 @@ module {
     %1 = ncnn.relu %0 {ncnn.name = "relu_conv1", ncnn.source_layer = 2 : i64}
          : (tensor<64x113x113xf32>) -> tensor<64x113x113xf32>
     ...
+    ncnn.output %N {blob_name = "prob"} : tensor<1000xf32>
   }
 }
 ```
 
 要点：
-- **输入**是 `func.func @model` 的 block argument（`%arg0`），形状 `[C,H,W]`（ncnn 原生 CHW）。
-- **权重**被抬成 `arith.constant`（`%cst`=卷积核 `[O,I,H,W]`、`%cst_0`=bias `[O]`），
+- **输入**是 `ncnn.input`，形状 `[C,H,W]`（ncnn 原生 CHW）。
+- **权重**被抬成 `ncnn.const`（`%cst`=卷积核 `[O,I,H,W]`、`%cst_0`=bias `[O]`），
   作为 `ncnn.convolution` 的操作数。
 - **ncnn 数字参数**变成具名强类型属性（`kernel_h`、`stride_h`、`pad_*`、`has_bias`…）。
 - **每个值带推断出的静态形状/元素类型**（`tensor<64x113x113xf32>`）。
@@ -207,12 +209,14 @@ $ echo $?
 ```
 .param/.bin
   └─ ncnn_graph::Graph::load          →  原始计算图 (--emit=parsed-graph 到此为止)
-       └─ ncnn_importer::import_graph →  MLIR ncnn 方言模块（arith.constant + ncnn.* 算子）
-            └─ mlir::verify            (--verify)
-                 └─ ModuleOp::print     →  MLIR 文本 (--emit=mlir，默认)
+       └─ ncnn_importer::import_graph →  MLIR ncnn 模型（model/input/const/output + 计算算子）
+             └─ mlir::verify            (--verify)
+                  └─ ModuleOp::print     →  MLIR 文本 (--emit=mlir，默认)
 ```
 
-后续阶段（tosa → linalg → llvm → 原生库）会作为新的 `--emit` 取值接入。
+建立 ABI 时运行 `--convert-ncnn-model-to-func`，一次性把输入、输出和权重转移到
+`func.func` 参数/结果与 `arith.constant`，并删除模型边界算子。后续阶段
+（tosa → linalg → llvm → 原生库）会作为新的 `--emit` 取值接入。
 
 ---
 

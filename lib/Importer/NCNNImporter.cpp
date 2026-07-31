@@ -19,8 +19,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/Twine.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -223,7 +221,7 @@ class ImportState {
     : context_(context),
       builder_(context),
       module_(mlir::ModuleOp::create(builder_.getUnknownLoc())),
-      func_(),
+      model_(),
       blobs_(),
       captured_diag_() {
     builder_.setInsertionPointToEnd(module_->getBody());
@@ -231,15 +229,12 @@ class ImportState {
 
   std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> run(
     const ncnn_graph::Graph& source) {
-    auto prepared = prepare_function(source);
+    auto prepared = prepare_model(source);
     if (!prepared) {
       return std::unexpected(prepared.error());
     }
     for (std::size_t index = 0; index < source.get_layers().size(); ++index) {
       const auto& layer = source.get_layers()[index];
-      if (layer.get_type() == "Input") {
-        continue;
-      }
       auto imported =
         import_layer(LayerContext{.index = index, .layer = layer});
       if (!imported) {
@@ -250,39 +245,12 @@ class ImportState {
   }
 
  private:
-  // 预扫 Input 层，建立 func.func 的入参（block argument）并绑定 blob 名。
-  std::expected<void, ImportError> prepare_function(
+  std::expected<void, ImportError> prepare_model(
     const ncnn_graph::Graph& source) {
-    llvm::SmallVector<mlir::Type> input_types;
-    llvm::SmallVector<std::string> input_names;
-    for (std::size_t index = 0; index < source.get_layers().size(); ++index) {
-      const auto& layer = source.get_layers()[index];
-      if (layer.get_type() != "Input") {
-        continue;
-      }
-      LayerContext context{.index = index, .layer = layer};
-      auto type = make_input_type(context);
-      if (!type) {
-        return std::unexpected(type.error());
-      }
-      input_types.push_back(*type);
-      input_names.emplace_back(layer.get_outputs()[0]);
-    }
-    auto func_type =
-      mlir::FunctionType::get(context_, input_types, /*results=*/{});
-    func_ = builder_.create<mlir::func::FuncOp>(
-      builder_.getUnknownLoc(), "model", func_type);
-    mlir::Block* block = func_.addEntryBlock();
+    model_ = builder_.create<mlir::ncnn::ModelOp>(
+      builder_.getUnknownLoc(), builder_.getStringAttr("model"));
+    mlir::Block* block = &model_.getBody().emplaceBlock();
     builder_.setInsertionPointToStart(block);
-    for (std::size_t i = 0; i < input_names.size(); ++i) {
-      auto inserted = blobs_.insert({input_names[i], block->getArgument(i)});
-      if (!inserted.second) {
-        return std::unexpected(ImportError(source.get_layers().size(),
-                                           "Input",
-                                           input_names[i],
-                                           "blob has multiple definitions"));
-      }
-    }
     return {};
   }
 
@@ -324,6 +292,9 @@ class ImportState {
 
   std::expected<void, ImportError> import_layer(const LayerContext& context) {
     const auto type = context.layer.get_type();
+    if (type == "Input") {
+      return import_input(context);
+    }
     if (type == "Convolution") {
       return import_convolution(context);
     }
@@ -349,6 +320,21 @@ class ImportState {
       make_error(context, std::format("unsupported layer type {}", type)));
   }
 
+  std::expected<void, ImportError> import_input(const LayerContext& context) {
+    auto type = make_input_type(context);
+    if (!type) {
+      return std::unexpected(type.error());
+    }
+    auto input = builder_.create<mlir::ncnn::InputOp>(
+      builder_.getUnknownLoc(),
+      *type,
+      builder_.getStringAttr(context.layer.get_name()),
+      builder_.getStringAttr(context.layer.get_outputs()[0]));
+    tag_source(input.getOperation(), context);
+    return bind_blob(
+      context, std::string(context.layer.get_outputs()[0]), input.getOutput());
+  }
+
   std::expected<mlir::Value, ImportError> find_blob(const LayerContext& context,
                                                     std::string_view name) {
     auto it = blobs_.find(name);
@@ -370,16 +356,23 @@ class ImportState {
     return {};
   }
 
-  // 建一个 arith.constant 承载权重，返回其结果值。
+  // 将 .bin 中隐式挂在 layer 上的权重显式化为模型内 SSA 定义。
   std::expected<mlir::Value, ImportError> make_constant(
-    const LayerContext& context, const ncnn_graph::Tensor& tensor) {
+    const LayerContext& context,
+    const ncnn_graph::Tensor& tensor,
+    std::size_t weight_index) {
     auto attr = make_dense_attr(context_, tensor);
     if (!attr) {
       return std::unexpected(make_error(context, attr.error()));
     }
-    auto constant =
-      builder_.create<mlir::arith::ConstantOp>(builder_.getUnknownLoc(), *attr);
-    return constant.getResult();
+    auto constant = builder_.create<mlir::ncnn::ConstOp>(
+      builder_.getUnknownLoc(),
+      attr->getType(),
+      builder_.getStringAttr(
+        std::format("{}.weight.{}", context.layer.get_name(), weight_index)),
+      *attr);
+    tag_source(constant.getOperation(), context);
+    return constant.getOutput();
   }
 
   // 在算子上保留来源 ncnn 层名/层号（discardable 属性），便于回溯与调试，
@@ -508,7 +501,7 @@ class ImportState {
     llvm::SmallVector<mlir::Value> tail;
     mlir::Value weight_value;
     for (std::size_t i = 0; i < expected_weights; ++i) {
-      auto constant = make_constant(context, context.layer.get_weights()[i]);
+      auto constant = make_constant(context, context.layer.get_weights()[i], i);
       if (!constant) {
         return std::unexpected(constant.error());
       }
@@ -886,14 +879,13 @@ class ImportState {
       }
       outputs.push_back(value->second);
     }
-    builder_.setInsertionPointToEnd(&func_.getBody().front());
-    builder_.create<mlir::func::ReturnOp>(builder_.getUnknownLoc(), outputs);
-    llvm::SmallVector<mlir::Type> result_types;
-    for (mlir::Value value : outputs) {
-      result_types.push_back(value.getType());
+    builder_.setInsertionPointToEnd(&model_.getBody().front());
+    for (std::size_t index = 0; index < outputs.size(); ++index) {
+      builder_.create<mlir::ncnn::OutputOp>(
+        builder_.getUnknownLoc(),
+        outputs[index],
+        builder_.getStringAttr(source.get_output_blob_names()[index]));
     }
-    func_.setType(mlir::FunctionType::get(
-      context_, func_.getFunctionType().getInputs(), result_types));
     captured_diag_.clear();
     mlir::ScopedDiagnosticHandler handler(context_,
                                           [this](mlir::Diagnostic& diagnostic) {
@@ -914,7 +906,7 @@ class ImportState {
   mlir::MLIRContext* context_;
   mlir::OpBuilder builder_;
   mlir::OwningOpRef<mlir::ModuleOp> module_;
-  mlir::func::FuncOp func_;
+  mlir::ncnn::ModelOp model_;
   llvm::StringMap<mlir::Value> blobs_;
   std::string captured_diag_;
 };

@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -449,6 +450,48 @@ FailureOr<RankedTensorType> inferPoolResultType(
 FailureOr<RankedTensorType> inferConcatResultType(
   std::optional<Location> location, ValueRange inputs, int64_t axis) {
   return computeConcatResult(location, inputs, axis);
+}
+
+//===----------------------------------------------------------------------===//
+// Model boundary ops
+//===----------------------------------------------------------------------===//
+
+LogicalResult ModelOp::verify() {
+  if (getBody().empty()) {
+    return emitOpError("requires one body block");
+  }
+  Block& body = getBody().front();
+  if (body.getNumArguments() != 0) {
+    return emitOpError("body cannot have block arguments");
+  }
+
+  llvm::StringSet<> inputBlobs;
+  bool hasOutput = false;
+  for (Operation& operation : body) {
+    if (operation.getDialect() != getOperation()->getDialect()) {
+      return emitOpError("body can only contain ncnn dialect operations");
+    }
+    if (auto input = llvm::dyn_cast<InputOp>(operation)) {
+      if (!inputBlobs.insert(input.getBlobName()).second) {
+        return input.emitOpError("duplicates input blob '")
+               << input.getBlobName() << "'";
+      }
+    }
+    hasOutput = hasOutput || llvm::isa<OutputOp>(operation);
+  }
+  if (!hasOutput) {
+    return emitOpError("requires at least one ncnn.output");
+  }
+  return success();
+}
+
+LogicalResult ConstOp::verify() {
+  if (getValue().getType() != getOutput().getType()) {
+    return emitOpError("value type ")
+           << getValue().getType() << " does not match result type "
+           << getOutput().getType();
+  }
+  return success();
 }
 
 //===----------------------------------------------------------------------===//

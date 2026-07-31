@@ -53,9 +53,12 @@ mlir::RankedTensorType result_type_by_name(mlir::ModuleOp module,
 }
 
 mlir::RankedTensorType output_type(mlir::ModuleOp module) {
-  auto func = *module.getOps<mlir::func::FuncOp>().begin();
-  return mlir::dyn_cast<mlir::RankedTensorType>(
-    func.getFunctionType().getResult(0));
+  mlir::RankedTensorType result;
+  module->walk([&](mlir::ncnn::OutputOp output) {
+    result =
+      mlir::dyn_cast<mlir::RankedTensorType>(output.getInput().getType());
+  });
+  return result;
 }
 
 bool shape_is(mlir::RankedTensorType type,
@@ -253,8 +256,13 @@ TEST_F(NcnnImporterTest, ImportsSupportedGraph) {
   mlir::ModuleOp module = imported->get();
   EXPECT_TRUE(mlir::succeeded(mlir::verify(module.getOperation())));
 
-  EXPECT_EQ(count_ops<mlir::arith::ConstantOp>(module), 2)
-    << "f16 weight and f32 bias become constants";
+  EXPECT_EQ(count_ops<mlir::ncnn::ModelOp>(module), 1);
+  EXPECT_EQ(count_ops<mlir::ncnn::InputOp>(module), 1);
+  EXPECT_EQ(count_ops<mlir::ncnn::OutputOp>(module), 1);
+  EXPECT_EQ(count_ops<mlir::ncnn::ConstOp>(module), 2)
+    << "f16 weight and f32 bias become ncnn model constants";
+  EXPECT_EQ(count_ops<mlir::func::FuncOp>(module), 0)
+    << "import does not establish the function ABI";
   EXPECT_EQ(count_ops<mlir::ncnn::ConvolutionOp>(module), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::ReluOp>(module), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::SplitOp>(module), 1);
@@ -272,7 +280,7 @@ TEST_F(NcnnImporterTest, ImportsSupportedGraph) {
 TEST_F(NcnnImporterTest, ImportsInt8Quantization) {
   auto int8 = import(make_int8_graph());
   ASSERT_TRUE(int8.has_value()) << int8.error().to_string();
-  EXPECT_EQ(count_ops<mlir::arith::ConstantOp>(int8->get()), 4)
+  EXPECT_EQ(count_ops<mlir::ncnn::ConstOp>(int8->get()), 4)
     << "int8 kernel and three quantization scales become constants";
 
   auto int8_chain = import(make_int8_chain_graph());
