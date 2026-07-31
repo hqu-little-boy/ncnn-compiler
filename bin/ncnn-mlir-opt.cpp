@@ -14,6 +14,7 @@
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 #include "ncnn-mlir/Conversion/NCNNToTosa/NCNNToTosa.hpp"
 #include "ncnn-mlir/Pipelines/NCNNPipelines.hpp"
+#include "ncnn-mlir/Transforms/BufferizeNCNN/BufferizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
@@ -27,6 +28,7 @@ int main(int argc, char** argv) {
   mlir::ncnn::registerNCNNToFuncPasses();
   mlir::ncnn::registerNCNNToTosaPasses();
   mlir::ncnn::registerNCNNPipelines();
+  mlir::ncnn::registerBufferizeNCNNPasses();
   mlir::ncnn::registerNormalizeNCNNPasses();
   mlir::ncnn::registerVerifyBufferizedModelPasses();
   mlir::ncnn::registerVerifyNoNCNNOpsPasses();

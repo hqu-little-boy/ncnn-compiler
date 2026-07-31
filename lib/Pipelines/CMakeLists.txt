@@ -3,6 +3,7 @@ add_library(NCNNPipelines STATIC
 )
 target_compile_options(NCNNPipelines PRIVATE -fno-rtti)
 target_link_libraries(NCNNPipelines PUBLIC
+    BufferizeNCNN
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN
@@ -12,7 +13,17 @@ target_link_libraries(NCNNPipelines PUBLIC
     MLIRFuncDialect
     MLIRBufferizationPipelines
     MLIRBufferizationTransforms
+    MLIRAffineToStandard
+    MLIRArithToLLVM
+    MLIRControlFlowToLLVM
+    MLIRFuncToLLVM
+    MLIRLinalgTransforms
+    MLIRMathToLibm
+    MLIRMemRefToLLVM
+    MLIRMemRefTransforms
     MLIRPass
+    MLIRReconcileUnrealizedCasts
+    MLIRSCFToControlFlow
     MLIRTosaToArith
     MLIRTosaToLinalg
     MLIRTosaToTensor

@@ -5,6 +5,10 @@ add_subdirectory(Unit)
 find_program(FILECHECK NAMES FileCheck-21 FileCheck)
 find_program(MLIR_OPT NAMES mlir-opt-21 mlir-opt REQUIRED)
 find_program(MLIR_RUNNER NAMES mlir-runner-21 mlir-runner REQUIRED)
+find_program(MLIR_TRANSLATE NAMES mlir-translate-21 mlir-translate REQUIRED)
+find_program(CLANG NAMES clang-21 clang REQUIRED)
+find_program(LLVM_NM NAMES llvm-nm-21 llvm-nm REQUIRED)
+find_program(LLVM_READELF NAMES llvm-readelf-21 llvm-readelf REQUIRED)
 find_library(MLIR_RUNNER_UTILS NAMES mlir_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
 find_library(MLIR_C_RUNNER_UTILS NAMES mlir_c_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
 # LLVM 的 lit 运行器（Debian 安装在 <prefix>/build/utils/lit）。
@@ -46,3 +50,20 @@ set_tests_properties(repeated-call-memory PROPERTIES
     LABELS "memory;runtime"
     RUN_SERIAL TRUE
     TIMEOUT 120)
+
+add_test(NAME squeezenet-shared-library
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/compile_ncnn_model.py
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --param ${CMAKE_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.param
+        --bin ${CMAKE_SOURCE_DIR}/../ncnn/examples/squeezenet_v1.1.bin
+        --exports ${CMAKE_CURRENT_SOURCE_DIR}/Native/exports.map
+        --output-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/squeezenet)
+set_tests_properties(squeezenet-shared-library PROPERTIES
+    LABELS "native;integration"
+    RUN_SERIAL TRUE
+    TIMEOUT 180)

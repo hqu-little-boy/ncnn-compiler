@@ -6,6 +6,8 @@
 // RUN: FileCheck %s --check-prefix=LINALG < %t.linalg.mlir
 // RUN: ncnn-mlir-opt --ncnn-linalg-to-memref-pipeline %t.linalg.mlir -o %t.memref.mlir
 // RUN: FileCheck %s --check-prefix=MEMREF < %t.memref.mlir
+// RUN: ncnn-mlir-opt --ncnn-memref-to-llvm-pipeline %t.memref.mlir -o %t.llvm.mlir
+// RUN: FileCheck %s --check-prefix=LLVM < %t.llvm.mlir
 
 // TOSA-LABEL: func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32>
 // TOSA: tosa.conv2d
@@ -33,3 +35,20 @@
 // MEMREF-NOT: memref.dealloc %[[INPUT]]
 // MEMREF-NOT: memref.dealloc %[[OUTPUT]]
 // MEMREF: return
+
+// LLVM-DAG: llvm.func @malloc(
+// LLVM-DAG: llvm.func @free(
+// LLVM-DAG: llvm.func @expf(
+// LLVM-LABEL: llvm.func @model(
+// LLVM: llvm.func @_mlir_ciface_model(
+// LLVM-NOT: memrefCopy
+// LLVM-NOT: affine.
+// LLVM-NOT: arith.
+// LLVM-NOT: bufferization.
+// LLVM-NOT: cf.
+// LLVM-NOT: func.
+// LLVM-NOT: linalg.
+// LLVM-NOT: math.
+// LLVM-NOT: memref.
+// LLVM-NOT: scf.
+// LLVM-NOT: tensor.

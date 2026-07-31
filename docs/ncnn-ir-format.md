@@ -30,6 +30,7 @@
   ──ncnn-to-tosa-pipeline/verify-no-ncnn-ops──▶  严格纯 TOSA IR
   ──ncnn-tosa-to-linalg-pipeline──▶  tensor + Linalg/Arith/Math IR
   ──ncnn-linalg-to-memref-pipeline──▶  caller-owned output memref + void return
+  ──ncnn-memref-to-llvm-pipeline──▶  纯 LLVM dialect IR
 ```
 
 `convert-ncnn-model-to-func` 是 normalize 和所有目标 conversion 的固定前置 pass，而不是
@@ -44,6 +45,9 @@ memref result 提升为带 `bufferize.result` 的输出参数，再执行 deallo
 tensor/memref，调用方拥有 input/output buffer，函数只释放内部临时分配。最终 gate 禁止
 `tensor.*`、`bufferization.*`、`ncnn.*`、`tosa.*` 和 unrealized cast 残留，并验证每个
 `memref.alloc` 有唯一且后支配所有使用的释放。
+`ncnn-memref-to-llvm-pipeline` 将 Linalg copy 和计算统一降为 loops，再完成
+Affine/SCF/Math/Arith/MemRef/Func/CF 到 LLVM dialect 的转换，因此不会引入外部
+`memrefCopy` runtime 符号。
 
 与 parsed-graph 的关键区别：**parsed-graph 是层的线性列表，ncnn 方言模块是类型化的 SSA DAG**。
 `import_graph` 做了这些提升：

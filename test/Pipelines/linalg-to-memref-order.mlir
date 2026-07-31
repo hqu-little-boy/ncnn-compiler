@@ -2,7 +2,7 @@
 
 module {}
 
-// CHECK: one-shot-bufferize{{.*}}bufferize-function-boundaries=true{{.*}}function-boundary-type-conversion=identity-layout-map
+// CHECK: bufferize-ncnn
 // CHECK: buffer-results-to-out-params{{.*}}add-result-attr=true{{.*}}hoist-static-allocs=true
 // CHECK: ownership-based-buffer-deallocation{{.*}}private-function-dynamic-ownership=false
 // CHECK: bufferization-lower-deallocations

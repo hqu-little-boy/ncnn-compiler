@@ -229,6 +229,11 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 
 # 已经是 Linalg IR 时，转换为调用方提供输出缓冲区的 memref IR：
 ./build/bin/ncnn-mlir-opt --ncnn-linalg-to-memref-pipeline model.linalg.mlir
+
+# 从 ncnn 模型生成经过严格链接和符号检查的动态库：
+python3 tools/compile_ncnn_model.py \
+  --param ../ncnn/examples/squeezenet_v1.1.param \
+  --bin ../ncnn/examples/squeezenet_v1.1.bin
 ```
 
 `--ncnn-to-tosa-pipeline` 内部固定运行：
@@ -257,6 +262,14 @@ func.func @model(%input: memref<3x227x227xf32>,
 LLVM dialect，在同一 JIT 进程内调用 500 次并检查 RSS 趋势；sanitizer 构建还会启用
 ASan/LSan。完整 SqueezeNet 的重复调用验收需要产品 LLVM lowering 和最终 C ABI。
 
+`--ncnn-memref-to-llvm-pipeline` 消除 Linalg/Affine/SCF/Math/Arith/MemRef/Func/CF，并将
+`math.exp` 映射到系统 `expf`。`tools/compile_ncnn_model.py` 随后调用
+`mlir-translate-21`、`clang-21 -fPIC` 和严格共享库链接；最终 `.so` 只依赖 libc/libm，
+未定义符号只允许 `malloc`、`free`、`expf`，且禁止 `memrefCopy` 和 runner/project runtime。
+
+当前库只导出 `_mlir_ciface_model`，参数是 ranked-memref descriptor 指针，不是裸
+`float *`。稳定的 `ncnn_run(const float *, float *)` wrapper 属于下一 ABI 阶段。
+
 ---
 
 ## 6. 源码位置
@@ -267,6 +280,7 @@ ASan/LSan。完整 SqueezeNet 的重复调用验收需要产品 LLVM lowering �
 - ncnn 方言：`compiler/lib/Dialect/NCNN/IR/`（+ `compiler/include/ncnn-mlir/Dialect/NCNN/IR/`）
 - 转换/规范化：`compiler/lib/{Conversion,Transforms}/`
 - lowering pipeline：`compiler/lib/Pipelines/NCNNPipelines.cpp`
+- 严格动态库入口：`compiler/tools/compile_ncnn_model.py`
 - SqueezeNet pipeline 测试：`compiler/test/Pipelines/squeezenet-m2.mlir`
 - 解析器/数据模型：`compiler/lib/Graph/`（`ncnn_graph` 库）
 - 构建配置：各目录 `CMakeLists.txt`（顶层 `compiler/CMakeLists.txt`）

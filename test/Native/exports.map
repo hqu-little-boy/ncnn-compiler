@@ -1,0 +1,4 @@
+{
+  global: _mlir_ciface_model;
+  local: *;
+};
