@@ -26,7 +26,7 @@
 
 ```bash
 cd /mnt/ncnn-compiler/compiler
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param \
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param \
     --emit=parsed-graph
 ```
 

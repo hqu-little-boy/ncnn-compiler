@@ -3,7 +3,8 @@
 > 对应源码：`include/ncnn-mlir/Dialect/NCNN/IR/`（NCNNDialect.td/.hpp、NCNNOps.td/.hpp）；
 > `lib/Dialect/NCNN/IR/`（NCNNDialect.cpp、NCNNOps.cpp）。
 > 生成工具：`ncnn-mlir-driver --emit=mlir`（默认阶段）。
-> 相关文档：[parsed-graph-format.md](parsed-graph-format.md)、[ncnn-mlir-driver-usage.md](ncnn-mlir-driver-usage.md)。
+> 相关文档：[parsed-graph-format.md](parsed-graph-format.md)、[ncnn-mlir-driver-usage.md](ncnn-mlir-driver-usage.md)、
+> [operator-numerical-validation-guide.md](operator-numerical-validation-guide.md)。
 
 `ncnn` 方言 IR 是编译器**类型化前端 IR**，是一个标准的 **MLIR 模块**（`builtin.module`
 里一个 `ncnn.model`）。它由 `ncnn_importer::import_graph()` 从原始
@@ -74,11 +75,11 @@ Affine/SCF/Math/Arith/MemRef/Func/CF 到 LLVM dialect 的转换，因此不会�
 cd /mnt/ncnn-compiler/compiler
 
 # 默认就是 MLIR（--emit 可省略）
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param
 
 # 显式写法 + 输出到文件
 ./build/tools/ncnn-mlir-driver --emit=mlir \
-  ../ncnn/examples/squeezenet_v1.1.param -o squeezenet.mlir
+  test/third_party/ncnn/examples/squeezenet_v1.1.param -o squeezenet.mlir
 
 # 用 ncnn-mlir-opt 做 round-trip 校验（parse -> verify -> print）
 ./build/bin/ncnn-mlir-opt squeezenet.mlir
@@ -180,7 +181,7 @@ SAME（`-233`/`-234`）：`out = 1 + (in-1)/stride`。
 ## 7. 完整示例（SqueezeNet v1.1 节选）
 
 ```bash
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null | head
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param 2>/dev/null | head
 ```
 
 ```mlir

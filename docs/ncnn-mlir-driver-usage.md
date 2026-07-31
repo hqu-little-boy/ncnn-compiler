@@ -100,7 +100,7 @@ ncnn-mlir-driver options:
 
 ```bash
 cd /mnt/ncnn-compiler/compiler
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param
 ```
 
 `.bin` 自动由 `.param` 推导，输出（节选）：
@@ -138,14 +138,14 @@ MLIR 模块格式详见 [ncnn-ir-format.md](ncnn-ir-format.md)。
 ### 3.2 显式指定 .bin
 
 ```bash
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param \
-  --bin=../ncnn/examples/squeezenet_v1.1.bin
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param \
+  --bin=test/third_party/ncnn/examples/squeezenet_v1.1.bin
 ```
 
 ### 3.3 查看原始解析图
 
 ```bash
-./build/tools/ncnn-mlir-driver --emit=parsed-graph ../ncnn/examples/squeezenet_v1.1.param
+./build/tools/ncnn-mlir-driver --emit=parsed-graph test/third_party/ncnn/examples/squeezenet_v1.1.param
 ```
 
 ```
@@ -168,16 +168,16 @@ layers:
 ### 3.4 写到文件 / 管道
 
 ```bash
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param -o /tmp/squeezenet.mlir
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param -o /tmp/squeezenet.mlir
 # 诊断走 stderr、产物走 stdout，可直接管道：
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
   | ./build/bin/ncnn-mlir-opt   # 再用 opt 做一次 round-trip 校验
 ```
 
 ### 3.5 关闭校验
 
 ```bash
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param --verify=false
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param --verify=false
 ```
 
 ---
@@ -223,11 +223,11 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 部分转换契约：只转换明确支持的算子，其他 ncnn op 可留给后续 Linalg/SCF 或 Host 路径。
 
 ```bash
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
   | ./build/bin/ncnn-mlir-opt --convert-ncnn-model-to-func
 
 # 严格 SqueezeNet → TOSA：
-./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
+./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
   | ./build/bin/ncnn-mlir-opt --ncnn-to-tosa-pipeline
 
 # 已经是 Linalg IR 时，转换为调用方提供输出缓冲区的 memref IR：
@@ -235,8 +235,8 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 
 # 从 ncnn 模型生成经过严格链接和符号检查的动态库：
 python3 tools/compile_ncnn_model.py \
-  --param ../ncnn/examples/squeezenet_v1.1.param \
-  --bin ../ncnn/examples/squeezenet_v1.1.bin
+  --param test/third_party/ncnn/examples/squeezenet_v1.1.param \
+  --bin test/third_party/ncnn/examples/squeezenet_v1.1.bin
 ```
 
 `--ncnn-to-tosa-pipeline` 内部固定运行：
@@ -268,7 +268,8 @@ ASan/LSan。完整 SqueezeNet 的重复调用验收需要产品 LLVM lowering �
 `--ncnn-memref-to-llvm-pipeline` 消除 Linalg/Affine/SCF/Math/Arith/MemRef/Func/CF，并将
 `math.exp` 映射到系统 `expf`。`tools/compile_ncnn_model.py` 随后调用
 `mlir-translate-21`、`clang-21 -fPIC` 和严格共享库链接；最终 `.so` 只依赖 libc/libm，
-未定义符号只允许 `malloc`、`free`、`expf`，且禁止 `memrefCopy` 和 runner/project runtime。
+未定义符号只允许 `malloc`、`free`、`expf`、`memcpy`，且禁止 `memrefCopy` 和
+runner/project runtime。
 
 编译入口默认从 `.param` 文件名推导 C 标识符，可用 `--model-name` 覆盖。它根据实际静态 f32
 输入输出生成 `<模型名>.h`、`lib<模型名>.so` 和 JSON ABI manifest；公共函数参数顺序是全部
@@ -297,6 +298,7 @@ int squeezenet_v1_1(const float *input1, float *output1);
 - 转换/规范化：`compiler/lib/{Conversion,Transforms}/`
 - lowering pipeline：`compiler/lib/Pipelines/NCNNPipelines.cpp`
 - 严格动态库入口：`compiler/tools/compile_ncnn_model.py`
+- 算子数值适配避坑指南：`compiler/docs/operator-numerical-validation-guide.md`
 - SqueezeNet pipeline 测试：`compiler/test/Pipelines/squeezenet-m2.mlir`
 - 解析器/数据模型：`compiler/lib/Graph/`（`ncnn_graph` 库）
 - 构建配置：各目录 `CMakeLists.txt`（顶层 `compiler/CMakeLists.txt`）

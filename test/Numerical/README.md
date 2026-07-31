@@ -1,5 +1,10 @@
 # Numerical Golden Tests
 
+完整的适配注意事项见
+[`docs/operator-numerical-validation-guide.md`](../../docs/operator-numerical-validation-guide.md)。
+已发现但尚未由 upstream 确认的问题见
+[`docs/ncnn-suspected-issues.md`](../../docs/ncnn-suspected-issues.md)。
+
 该测试工程使用 GTest，将编译器生成的裸指针动态库与 upstream ncnn 的纯标量 CPU
 结果进行比较。CMake 和运行时 `ncnn::Option` 都会关闭 SIMD、runtime CPU dispatch、
 packing、线程、Vulkan、Winograd、SGEMM、fp16、bf16 和 int8 路径。固定种子输入采用
