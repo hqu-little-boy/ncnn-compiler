@@ -28,6 +28,8 @@
   ──normalize-ncnn──▶  func.func + normalized ncnn 计算 op
   ──convert-ncnn-to-tosa──▶  func.func + tosa + 未分配路径的 ncnn op
   ──ncnn-to-tosa-pipeline/verify-no-ncnn-ops──▶  严格纯 TOSA IR
+  ──ncnn-tosa-to-linalg-pipeline──▶  tensor + Linalg/Arith/Math IR
+  ──ncnn-linalg-to-memref-pipeline──▶  caller-owned output memref + void return
 ```
 
 `convert-ncnn-model-to-func` 是 normalize 和所有目标 conversion 的固定前置 pass，而不是
@@ -37,6 +39,9 @@
 `convert-ncnn-to-tosa` 只处理函数体内明确属于 TOSA 支持集合的计算算子；单独运行时允许
 其他 ncnn op 留给其他 conversion。组合的 `ncnn-to-tosa-pipeline` 通过最终残留检查要求
 输入模型严格转换为纯 TOSA。
+`ncnn-linalg-to-memref-pipeline` 在 Linalg 阶段之后执行 One-Shot Bufferize，随后立即将
+memref result 提升为带 `bufferize.result` 的输出参数，再执行 deallocation。入口函数不返回
+tensor/memref，调用方拥有 input/output buffer，函数只释放内部临时分配。
 
 与 parsed-graph 的关键区别：**parsed-graph 是层的线性列表，ncnn 方言模块是类型化的 SSA DAG**。
 `import_graph` 做了这些提升：

@@ -226,6 +226,9 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 # 严格 SqueezeNet → TOSA：
 ./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
   | ./build/bin/ncnn-mlir-opt --ncnn-to-tosa-pipeline
+
+# 已经是 Linalg IR 时，转换为调用方提供输出缓冲区的 memref IR：
+./build/bin/ncnn-mlir-opt --ncnn-linalg-to-memref-pipeline model.linalg.mlir
 ```
 
 `--ncnn-to-tosa-pipeline` 内部固定运行：
@@ -241,6 +244,16 @@ convert-ncnn-model-to-func
 单独运行 `--convert-ncnn-to-tosa` 用于开发和调试某条 conversion，不表示模型已完整
 lowering。`--ncnn-to-tosa-pipeline` 以最终“无 ncnn op 残留”为成功标准。
 
+`--ncnn-linalg-to-memref-pipeline` 固定执行 function-boundary One-Shot Bufferize、
+`buffer-results-to-out-params` 和标准 deallocation pipeline。对于 SqueezeNet，入口契约为：
+
+```mlir
+func.func @model(%input: memref<3x227x227xf32>,
+                 %output: memref<1000xf32> {bufferize.result})
+```
+
+函数无返回值；`%input` 和 `%output` 由调用方拥有，不会被函数释放。
+
 ---
 
 ## 6. 源码位置
@@ -250,7 +263,7 @@ lowering。`--ncnn-to-tosa-pipeline` 以最终“无 ncnn op 残留”为成功�
 - importer：`compiler/lib/Importer/NCNNImporter.cpp`
 - ncnn 方言：`compiler/lib/Dialect/NCNN/IR/`（+ `compiler/include/ncnn-mlir/Dialect/NCNN/IR/`）
 - 转换/规范化：`compiler/lib/{Conversion,Transforms}/`
-- TOSA pipeline：`compiler/lib/Pipelines/NCNNPipelines.cpp`
+- lowering pipeline：`compiler/lib/Pipelines/NCNNPipelines.cpp`
 - SqueezeNet pipeline 测试：`compiler/test/Pipelines/squeezenet-m2.mlir`
 - 解析器/数据模型：`compiler/lib/Graph/`（`ncnn_graph` 库）
 - 构建配置：各目录 `CMakeLists.txt`（顶层 `compiler/CMakeLists.txt`）

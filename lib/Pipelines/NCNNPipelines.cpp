@@ -5,12 +5,15 @@
 #include "mlir/Conversion/TosaToArith/TosaToArith.h"
 #include "mlir/Conversion/TosaToLinalg/TosaToLinalg.h"
 #include "mlir/Conversion/TosaToTensor/TosaToTensor.h"
+#include "mlir/Dialect/Bufferization/Pipelines/Passes.h"
+#include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 #include "ncnn-mlir/Conversion/NCNNToTosa/NCNNToTosa.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
+#include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoTosaOps/VerifyNoTosaOps.hpp"
 
@@ -37,6 +40,27 @@ void buildNCNNTosaToLinalgPipeline(OpPassManager& passManager) {
   passManager.addPass(createVerifyNoTosaOpsPass());
 }
 
+void buildNCNNLinalgToMemRefPipeline(OpPassManager& passManager) {
+  bufferization::OneShotBufferizePassOptions bufferizeOptions;
+  bufferizeOptions.bufferizeFunctionBoundaries = true;
+  bufferizeOptions.functionBoundaryTypeConversion =
+    bufferization::LayoutMapOption::IdentityLayoutMap;
+  passManager.addPass(
+    bufferization::createOneShotBufferizePass(bufferizeOptions));
+
+  bufferization::BufferResultsToOutParamsPassOptions outParamOptions;
+  outParamOptions.addResultAttribute = true;
+  outParamOptions.hoistStaticAllocs = true;
+  passManager.addPass(
+    bufferization::createBufferResultsToOutParamsPass(outParamOptions));
+
+  bufferization::BufferDeallocationPipelineOptions deallocationOptions;
+  deallocationOptions.privateFunctionDynamicOwnership = false;
+  bufferization::buildBufferDeallocationPipeline(passManager,
+                                                 deallocationOptions);
+  passManager.addPass(createVerifyBufferizedModelPass());
+}
+
 void registerNCNNPipelines() {
   static PassPipelineRegistration<> ncnnToTosaRegistration(
     "ncnn-to-tosa-pipeline",
@@ -46,6 +70,10 @@ void registerNCNNPipelines() {
     "ncnn-tosa-to-linalg-pipeline",
     "Strict TOSA-to-Linalg pipeline for ncnn models",
     buildNCNNTosaToLinalgPipeline);
+  static PassPipelineRegistration<> linalgToMemRefRegistration(
+    "ncnn-linalg-to-memref-pipeline",
+    "Bufferize ncnn Linalg models with caller-owned output parameters",
+    buildNCNNLinalgToMemRefPipeline);
 }
 
 }  // namespace mlir::ncnn

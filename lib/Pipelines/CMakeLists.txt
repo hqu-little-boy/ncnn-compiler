@@ -6,9 +6,12 @@ target_link_libraries(NCNNPipelines PUBLIC
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN
+    VerifyBufferizedModel
     VerifyNoNCNNOps
     VerifyNoTosaOps
     MLIRFuncDialect
+    MLIRBufferizationPipelines
+    MLIRBufferizationTransforms
     MLIRPass
     MLIRTosaToArith
     MLIRTosaToLinalg
