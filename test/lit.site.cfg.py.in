@@ -4,7 +4,11 @@
 import os
 
 config.ncnn_mlir_tools_dir = "@CMAKE_BINARY_DIR@/bin"
+config.ncnn_mlir_driver = "@CMAKE_BINARY_DIR@/tools/ncnn-mlir-driver"
 config.filecheck = "@FILECHECK@"
+config.mlir_opt = "@MLIR_OPT@"
+config.squeezenet_param = "@PROJECT_SOURCE_DIR@/../ncnn/examples/squeezenet_v1.1.param"
+config.squeezenet_bin = "@PROJECT_SOURCE_DIR@/../ncnn/examples/squeezenet_v1.1.bin"
 config.environment["LD_LIBRARY_PATH"] = "@LLVM_LIBRARY_DIR@" + os.pathsep + config.environment.get("LD_LIBRARY_PATH", "")
 
 config.test_source_root = "@CMAKE_CURRENT_SOURCE_DIR@"

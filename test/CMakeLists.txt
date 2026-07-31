@@ -3,6 +3,7 @@ add_subdirectory(Unit)
 
 # ── lit (.mlir) 测试 ─────────────────────────────────────
 find_program(FILECHECK NAMES FileCheck-21 FileCheck)
+find_program(MLIR_OPT NAMES mlir-opt-21 mlir-opt REQUIRED)
 # LLVM 的 lit 运行器（Debian 安装在 <prefix>/build/utils/lit）。
 set(NCNN_LIT_PY "${LLVM_DIR}/../../../build/utils/lit/lit.py")
 get_filename_component(NCNN_LIT_PY "${NCNN_LIT_PY}" ABSOLUTE)

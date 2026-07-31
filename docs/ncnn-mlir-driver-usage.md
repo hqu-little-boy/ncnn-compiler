@@ -239,6 +239,10 @@ convert-ncnn-model-to-func
 → verify-no-ncnn-ops
 ```
 
+完整 M2 验收由 `test/Pipelines/squeezenet-m2.mlir` 自动执行：导入仓库自带的
+SqueezeNet v1.1，运行严格 pipeline，检查零 ncnn operation，通过 MLIR 21
+`--tosa-validate`，并继续进入官方 TOSA→Linalg named/tensor/arith 前段。
+
 单独运行 `--convert-ncnn-to-tosa` 用于开发和调试某条 conversion，不表示模型已完整
 lowering。只有严格 TOSA pipeline，或未来串联 TOSA/Linalg/Host 的完整
 `--ncnn-lowering-pipeline`，才以最终“无 ncnn op 残留”为成功标准。
