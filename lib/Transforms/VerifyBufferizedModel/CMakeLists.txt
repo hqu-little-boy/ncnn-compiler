@@ -6,7 +6,9 @@ target_include_directories(VerifyBufferizedModel PUBLIC
     ${PROJECT_SOURCE_DIR}/include
     ${MLIR_INCLUDE_DIRS})
 target_link_libraries(VerifyBufferizedModel PUBLIC
+    MLIRAnalysis
     MLIRFuncDialect
     MLIRIR
     MLIRMemRefDialect
+    MLIRMemRefUtils
     MLIRPass)

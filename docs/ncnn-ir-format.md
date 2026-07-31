@@ -41,7 +41,9 @@
 输入模型严格转换为纯 TOSA。
 `ncnn-linalg-to-memref-pipeline` 在 Linalg 阶段之后执行 One-Shot Bufferize，随后立即将
 memref result 提升为带 `bufferize.result` 的输出参数，再执行 deallocation。入口函数不返回
-tensor/memref，调用方拥有 input/output buffer，函数只释放内部临时分配。
+tensor/memref，调用方拥有 input/output buffer，函数只释放内部临时分配。最终 gate 禁止
+`tensor.*`、`bufferization.*`、`ncnn.*`、`tosa.*` 和 unrealized cast 残留，并验证每个
+`memref.alloc` 有唯一且后支配所有使用的释放。
 
 与 parsed-graph 的关键区别：**parsed-graph 是层的线性列表，ncnn 方言模块是类型化的 SSA DAG**。
 `import_graph` 做了这些提升：

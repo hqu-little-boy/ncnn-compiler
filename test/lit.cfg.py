@@ -5,6 +5,7 @@ import lit.formats
 config.name = "ncnn-mlir"
 config.test_format = lit.formats.ShTest(False)
 config.suffixes = [".mlir"]
+config.excludes = ["Runtime"]
 
 # 路径变量由 lit.site.cfg.py（CMake 生成）注入。
 config.substitutions.append(("%FileCheck", config.filecheck))

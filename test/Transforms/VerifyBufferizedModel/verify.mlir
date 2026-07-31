@@ -14,6 +14,18 @@ module {
 // -----
 
 module {
+  func.func @residual_bufferization(%output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
+    %clone = bufferization.clone %output : memref<4xf32> to memref<4xf32>
+    memref.dealloc %clone : memref<4xf32>
+    return
+  }
+}
+
+// CHECK: error: 'bufferization.clone' op belongs to forbidden residual dialect 'bufferization'
+
+// -----
+
+module {
   func.func @missing_output(%input: memref<4xf32>) attributes {ncnn.entry_point} {
     return
   }
@@ -30,4 +42,97 @@ module {
   }
 }
 
-// CHECK: error: 'memref.dealloc' op must not release a caller-owned function argument
+// CHECK: error: 'memref.dealloc' op must not release a caller-owned function argument or its alias
+
+// -----
+
+module {
+  func.func private @private_leak() {
+    %allocation = memref.alloc() : memref<4xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.alloc' op has no matching deallocation
+
+// -----
+
+module {
+  func.func @alias_double_free(%output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
+    %allocation = memref.alloc() : memref<4xf32>
+    %alias = memref.cast %allocation : memref<4xf32> to memref<?xf32>
+    memref.dealloc %allocation : memref<4xf32>
+    memref.dealloc %alias : memref<?xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.alloc' op has 2 matching deallocations; expected exactly one to avoid double-free
+
+// -----
+
+module {
+  func.func @use_after_free(%output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
+    %allocation = memref.alloc() : memref<4xf32>
+    %alias = memref.cast %allocation : memref<4xf32> to memref<?xf32>
+    memref.dealloc %allocation : memref<4xf32>
+    %index = arith.constant 0 : index
+    %value = memref.load %alias[%index] : memref<?xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.load' op may execute after or without the allocation deallocation
+
+// -----
+
+module {
+  func.func @control_flow_double_free(%condition: i1, %output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
+    %allocation = memref.alloc() : memref<4xf32>
+    cf.cond_br %condition, ^free, ^exit
+  ^free:
+    memref.dealloc %allocation : memref<4xf32>
+    cf.br ^exit
+  ^exit:
+    memref.dealloc %allocation : memref<4xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.alloc' op has 2 matching deallocations; expected exactly one to avoid double-free
+
+// -----
+
+module {
+  func.func @leaks(%output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
+    %allocation = memref.alloc() : memref<4xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.alloc' op has no matching deallocation
+
+// -----
+
+module {
+  func.func @double_free(%output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
+    %allocation = memref.alloc() : memref<4xf32>
+    memref.dealloc %allocation : memref<4xf32>
+    memref.dealloc %allocation : memref<4xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.alloc' op has 2 matching deallocations; expected exactly one to avoid double-free
+
+// -----
+
+module {
+  func.func @releases_output_alias(%output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
+    %alias = memref.cast %output : memref<4xf32> to memref<?xf32>
+    memref.dealloc %alias : memref<?xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.dealloc' op must not release a caller-owned function argument or its alias
