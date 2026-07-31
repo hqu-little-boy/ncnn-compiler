@@ -169,8 +169,7 @@ class ConvertNCNNToTosaPass final
     bool hasNCNNOps = false;
     function.walk([&](Operation* operation) {
       hasNCNNOps =
-        hasNCNNOps || (operation->getDialect() != nullptr &&
-                       operation->getDialect()->getNamespace() == "ncnn");
+        hasNCNNOps || operation->getName().getDialectNamespace() == "ncnn";
     });
     if (!hasNCNNOps) {
       return success();
@@ -202,6 +201,12 @@ class ConvertNCNNToTosaPass final
       }
       builder.setInsertionPoint(&operation);
       if (auto convolution = dyn_cast<ConvolutionOp>(operation)) {
+        if (convolution.getInt8ScaleTerm() != 0) {
+          if (failed(bridgeResidualNCNNOp(operation, builder, values))) {
+            return failure();
+          }
+          continue;
+        }
         if (failed(convertConvolution(convolution, builder, values))) {
           return failure();
         }
@@ -210,6 +215,17 @@ class ConvertNCNNToTosaPass final
           return failure();
         }
       } else if (auto pooling = dyn_cast<PoolingOp>(operation)) {
+        const bool unsupportedMode =
+          pooling.getMode() == static_cast<int64_t>(PoolMode::Adaptive);
+        const bool unsupportedAveragePadding =
+          pooling.getKind() == static_cast<int64_t>(PoolKind::Average) &&
+          pooling.getIncludePad();
+        if (unsupportedMode || unsupportedAveragePadding) {
+          if (failed(bridgeResidualNCNNOp(operation, builder, values))) {
+            return failure();
+          }
+          continue;
+        }
         if (failed(convertPooling(pooling, builder, values))) {
           return failure();
         }
@@ -233,10 +249,11 @@ class ConvertNCNNToTosaPass final
         if (failed(convertSoftmax(softmax, builder, values))) {
           return failure();
         }
-      } else if (operation.getDialect() != nullptr &&
-                 operation.getDialect()->getNamespace() == "ncnn") {
-        return operation.emitOpError(
-          "is not supported by convert-ncnn-to-tosa");
+      } else if (operation.getName().getDialectNamespace() == "ncnn") {
+        if (failed(bridgeResidualNCNNOp(operation, builder, values))) {
+          return failure();
+        }
+        continue;
       } else {
         continue;
       }
@@ -266,6 +283,41 @@ class ConvertNCNNToTosaPass final
     return success();
   }
 
+  static LogicalResult bridgeResidualNCNNOp(Operation& operation,
+                                            OpBuilder& builder,
+                                            DenseMap<Value, Value>& values) {
+    for (OpOperand& operand : operation.getOpOperands()) {
+      Value source = operand.get();
+      Value converted = values.lookup(source);
+      if (!converted || converted == source) {
+        continue;
+      }
+      auto sourceType = dyn_cast<RankedTensorType>(source.getType());
+      auto convertedType = dyn_cast<RankedTensorType>(converted.getType());
+      if (sourceType != nullptr && convertedType != nullptr &&
+          sourceType.getRank() == 3 && convertedType.getRank() == 4) {
+        converted =
+          convertNHWCToCHW(builder, operation.getLoc(), converted, sourceType);
+      }
+      if (converted.getType() != source.getType()) {
+        return operation.emitOpError(
+          "cannot bridge a converted operand back to its source type");
+      }
+      operand.set(converted);
+    }
+
+    builder.setInsertionPointAfter(&operation);
+    for (OpResult result : operation.getResults()) {
+      auto type = dyn_cast<RankedTensorType>(result.getType());
+      if (type != nullptr && type.getRank() == 3) {
+        values[result] = convertCHWToNHWC(builder, operation.getLoc(), result);
+      } else {
+        values[result] = result;
+      }
+    }
+    return success();
+  }
+
   static Value lookup(Operation* operation,
                       Value source,
                       const DenseMap<Value, Value>& values) {
@@ -279,9 +331,6 @@ class ConvertNCNNToTosaPass final
   static LogicalResult convertConvolution(ConvolutionOp operation,
                                           OpBuilder& builder,
                                           DenseMap<Value, Value>& values) {
-    if (operation.getInt8ScaleTerm() != 0) {
-      return operation.emitOpError("quantized convolution is not supported");
-    }
     const int64_t padTop = operation.getPadTopAttr().getInt();
     const int64_t padBottom = operation.getPadBottomAttr().getInt();
     const int64_t padLeft = operation.getPadLeftAttr().getInt();
@@ -380,14 +429,6 @@ class ConvertNCNNToTosaPass final
   static LogicalResult convertPooling(PoolingOp operation,
                                       OpBuilder& builder,
                                       DenseMap<Value, Value>& values) {
-    if (operation.getMode() == static_cast<int64_t>(PoolMode::Adaptive)) {
-      return operation.emitOpError("adaptive pooling is not supported");
-    }
-    if (operation.getKind() == static_cast<int64_t>(PoolKind::Average) &&
-        operation.getIncludePad()) {
-      return operation.emitOpError(
-        "average pooling with include_pad=true is not supported");
-    }
     Value input = lookup(operation, operation.getInput(), values);
     if (!input) {
       return failure();

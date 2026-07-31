@@ -14,6 +14,7 @@
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 #include "ncnn-mlir/Conversion/NCNNToTosa/NCNNToTosa.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
+#include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
 
 int main(int argc, char** argv) {
   mlir::DialectRegistry registry;
@@ -23,6 +24,7 @@ int main(int argc, char** argv) {
   mlir::ncnn::registerNCNNToFuncPasses();
   mlir::ncnn::registerNCNNToTosaPasses();
   mlir::ncnn::registerNormalizeNCNNPasses();
+  mlir::ncnn::registerVerifyNoNCNNOpsPasses();
   // 叠加 ncnn 方言（arith/func 等已含于 registerAllDialects，重复插入无害）。
   ncnn_mlir::register_all_dialects(registry);
   return mlir::asMainReturnCode(

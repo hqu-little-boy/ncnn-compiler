@@ -14,6 +14,7 @@ target_link_libraries(ncnn-mlir-opt PRIVATE
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN
+    VerifyNoNCNNOps
     ${dialect_libs}
     ${conversion_libs}
     ${extension_libs}
