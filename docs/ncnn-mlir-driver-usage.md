@@ -1,7 +1,7 @@
 # ncnn-mlir-driver 使用文档
 
 > 编译器**前端入口**：把 ncnn 模型（`.param` + `.bin`）解析并提升为 **MLIR `ncnn` 方言模块**，
-> 是后续 `ncnn → tosa → linalg → llvm` 下降管线的起点。
+> 是后续 ncnn→TOSA、ncnn→Linalg/SCF、ncnn→Host 多路径下降管线的起点。
 > 参数解析用 LLVM 自带的 `llvm::cl`（`mlir-opt` 同款 CommandLine 库）。
 
 > 注意：项目根目录是 `/mnt/ncnn-compiler`。本文中相对路径均以 `compiler/` 为基准。
@@ -35,8 +35,8 @@ cmake --build build --target ncnn-mlir-driver ncnn-mlir-opt -j
 |---|---|---|
 | 输入 | ncnn 模型 `.param`(+`.bin`) | MLIR 文本 `.mlir` |
 | 输出 | MLIR 模块（或原始 parsed-graph） | MLIR 文本（原样重印） |
-| 职责 | ncnn 模型 → ncnn 方言 IR | MLIR 解析/校验/round-trip |
-| 依赖 | NCNNGraph + NCNNImporter + NCNNDialect | 仅 NCNNDialect |
+| 职责 | ncnn 模型 → ncnn 方言 IR | MLIR 解析/校验/pass 管线 |
+| 依赖 | NCNNGraph + NCNNImporter + NCNNDialect | NCNNDialect + NCNNToFunc + 上游方言/pass |
 
 ---
 
@@ -214,9 +214,33 @@ $ echo $?
                   └─ ModuleOp::print     →  MLIR 文本 (--emit=mlir，默认)
 ```
 
-建立 ABI 时运行 `--convert-ncnn-model-to-func`，一次性把输入、输出和权重转移到
-`func.func` 参数/结果与 `arith.constant`，并删除模型边界算子。后续阶段
-（tosa → linalg → llvm → 原生库）会作为新的 `--emit` 取值接入。
+Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把输入、输出和权重
+转移到 `func.func` 参数/结果与 `arith.constant`，并删除模型边界算子。该 pass 是
+`--normalize-ncnn` 和各目标 conversion 的固定前置。`--convert-ncnn-to-tosa` 采用长期
+部分转换契约：只转换明确支持的算子，其他 ncnn op 可留给后续 Linalg/SCF 或 Host 路径。
+后续阶段（tosa → linalg → llvm → 原生库）会作为新的 `--emit` 取值接入。
+
+```bash
+./build/tools/ncnn-mlir-driver ../ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
+  | ./build/bin/ncnn-mlir-opt --convert-ncnn-model-to-func
+
+# M2 落地后的严格 SqueezeNet → TOSA：
+# ... | ncnn-mlir-opt --ncnn-to-tosa-pipeline
+```
+
+`--ncnn-to-tosa-pipeline` 内部固定运行：
+
+```text
+convert-ncnn-model-to-func
+→ normalize-ncnn
+→ convert-ncnn-to-tosa
+→ canonicalize → cse
+→ verify-no-ncnn-ops
+```
+
+单独运行 `--convert-ncnn-to-tosa` 用于开发和调试某条 conversion，不表示模型已完整
+lowering。只有严格 TOSA pipeline，或未来串联 TOSA/Linalg/Host 的完整
+`--ncnn-lowering-pipeline`，才以最终“无 ncnn op 残留”为成功标准。
 
 ---
 

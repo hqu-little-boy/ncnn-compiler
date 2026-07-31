@@ -7,7 +7,7 @@
 
 `ncnn` 方言 IR 是编译器**类型化前端 IR**，是一个标准的 **MLIR 模块**（`builtin.module`
 里一个 `ncnn.model`）。它由 `ncnn_importer::import_graph()` 从原始
-[parsed-graph](parsed-graph-format.md) 提升而来，是下游 lowering（ncnn → tosa → linalg → …）
+[parsed-graph](parsed-graph-format.md) 提升而来，是下游多路径 lowering（TOSA、Linalg/SCF、Host）
 真正消费的输入。
 
 > 本方言取代了早期的自定义 C++ 前端 IR（`ncnn_frontend`，已删除）。同样的
@@ -24,9 +24,19 @@
 .param/.bin
   ──ncnn_graph::Graph::load──▶  parsed-graph        (原始层列表，1:1 镜像 ncnn 文件)
   ──ncnn_importer::import_graph──▶  ncnn 方言 MLIR 模块   ← 本文档
-  ──convert-ncnn-model-to-func──▶  func.func + ABI
-  ──（后续）convert-ncnn-to-tosa──▶  tosa …
+  ──convert-ncnn-model-to-func──▶  func.func + arith.constant + ncnn 计算 op
+  ──（后续）normalize-ncnn──▶  func.func + normalized ncnn 计算 op
+  ──（后续）convert-ncnn-to-tosa──▶  func.func + tosa + 未分配路径的 ncnn op
+  ──（M2 pipeline）verify-no-ncnn-ops──▶  严格纯 TOSA IR
 ```
+
+`convert-ncnn-model-to-func` 是 normalize 和所有目标 conversion 的固定前置 pass，而不是
+后端 ABI 收尾步骤。
+它只消除模型边界并建立标准函数形态，不转换计算语义或 CHW/OIHW 布局；后续
+`normalize-ncnn` 保持 CHW/OIHW，收敛 axis、padding、融合属性等目标无关语义。
+`convert-ncnn-to-tosa` 只处理函数体内明确属于 TOSA 支持集合的计算算子；单独运行时允许
+其他 ncnn op 留给后续 Linalg/SCF 或 Host conversion。M2 使用组合的
+`ncnn-to-tosa-pipeline`，通过最终残留检查要求 SqueezeNet 严格全 TOSA。
 
 与 parsed-graph 的关键区别：**parsed-graph 是层的线性列表，ncnn 方言模块是类型化的 SSA DAG**。
 `import_graph` 做了这些提升：

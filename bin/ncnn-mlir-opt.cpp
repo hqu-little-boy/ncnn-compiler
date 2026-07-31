@@ -12,6 +12,7 @@
 #include "mlir/InitAllPasses.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
+#include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 
 int main(int argc, char** argv) {
   mlir::DialectRegistry registry;
@@ -19,6 +20,7 @@ int main(int argc, char** argv) {
   mlir::registerAllExtensions(registry);
   mlir::registerAllPasses();
   mlir::ncnn::registerNCNNToFuncPasses();
+  mlir::ncnn::registerNormalizeNCNNPasses();
   // 叠加 ncnn 方言（arith/func 等已含于 registerAllDialects，重复插入无害）。
   ncnn_mlir::register_all_dialects(registry);
   return mlir::asMainReturnCode(
