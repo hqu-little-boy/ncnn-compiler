@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <cstdint>
+#include <format>
 #include <memory>
 #include <string>
 
@@ -140,15 +141,17 @@ class GenerateCAPIPass final
         shape.push_back(dimension);
       }
       llvm::json::Object argument;
-      argument["name"] = (info.output ? "output" : "input") +
-                         std::to_string(info.output ? outputManifest.size() + 1
-                                                    : inputManifest.size() + 1);
+      argument["name"] = std::format(
+        "{}{}",
+        info.output ? "output" : "input",
+        info.output ? outputManifest.size() + 1 : inputManifest.size() + 1);
       argument["shape"] = std::move(shape);
       (info.output ? outputManifest : inputManifest)
         .push_back(std::move(argument));
     }
 
-    const std::string internalName = "__ncnn_internal_" + exportName;
+    const std::string internalName =
+      std::format("__ncnn_internal_{}", exportName.getValue());
     if (SymbolTable::lookupSymbolIn(getOperation(), internalName)) {
       return function.emitOpError()
              << "cannot create duplicate internal symbol '" << internalName

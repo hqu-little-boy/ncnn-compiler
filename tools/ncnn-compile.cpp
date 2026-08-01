@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <format>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -289,8 +290,11 @@ using ToolResult = std::expected<std::optional<std::string>, std::string>;
     std::error_code error;
     fs::path canonical = fs::weakly_canonical(path, error);
     if (error) {
-      return std::unexpected("cannot canonicalize compiler tool '" +
-                             path.string() + "': " + error.message());
+      return std::unexpected(
+        std::format("cannot canonicalize compiler tool "
+                    "'{}': {}",
+                    path.string(),
+                    error.message()));
     }
     return canonical.string();
   };
@@ -306,8 +310,11 @@ using ToolResult = std::expected<std::optional<std::string>, std::string>;
         return canonicalize(candidate);
       }
       if (error && error != std::errc::no_such_file_or_directory) {
-        return std::unexpected("cannot inspect compiler tool '" +
-                               candidate.string() + "': " + error.message());
+        return std::unexpected(
+          std::format("cannot inspect compiler tool "
+                      "'{}': {}",
+                      candidate.string(),
+                      error.message()));
       }
     }
   }
@@ -374,14 +381,15 @@ int run(const std::vector<std::string>& command,
   std::error_code error;
   llvm::raw_fd_ostream output(path.string(), error);
   if (error) {
-    return std::unexpected("cannot write '" + path.string() +
-                           "': " + error.message());
+    return std::unexpected(
+      std::format("cannot write '{}': {}", path.string(), error.message()));
   }
   output << contents;
   output.flush();
   output.close();
   if (output.has_error()) {
-    return std::unexpected("cannot finish writing '" + path.string() + "'");
+    return std::unexpected(
+      std::format("cannot finish writing '{}'", path.string()));
   }
   return {};
 }
@@ -390,13 +398,15 @@ int run(const std::vector<std::string>& command,
   const fs::path& path) {
   auto buffer = llvm::MemoryBuffer::getFile(path.string());
   if (!buffer) {
-    return std::unexpected("cannot read ABI manifest '" + path.string() +
-                           "': " + buffer.getError().message());
+    return std::unexpected(std::format("cannot read ABI manifest '{}': {}",
+                                       path.string(),
+                                       buffer.getError().message()));
   }
   auto value = llvm::json::parse((*buffer)->getBuffer());
   if (!value) {
-    return std::unexpected("invalid ABI manifest '" + path.string() +
-                           "': " + llvm::toString(value.takeError()));
+    return std::unexpected(std::format("invalid ABI manifest '{}': {}",
+                                       path.string(),
+                                       llvm::toString(value.takeError())));
   }
   auto* object = value->getAsObject();
   if (object == nullptr) {
@@ -455,9 +465,10 @@ int run(const std::vector<std::string>& command,
     const std::string original = argument->name;
     argument->name = c_identifier(original);
     if (!argument_names.insert(argument->name).second) {
-      return std::unexpected("ABI manifest argument '" + original +
-                             "' duplicates sanitized C identifier '" +
-                             argument->name + "'");
+      return std::unexpected(std::format(
+        "ABI manifest argument '{}' duplicates sanitized C identifier '{}'",
+        original,
+        argument->name));
     }
   }
   return manifest;
@@ -468,8 +479,9 @@ int run(const std::vector<std::string>& command,
   for (std::int64_t dimension : argument.shape) {
     if (static_cast<std::uint64_t>(dimension) >
         std::numeric_limits<std::size_t>::max()) {
-      return std::unexpected("argument '" + argument.name +
-                             "' has a dimension that does not fit size_t");
+      return std::unexpected(
+        std::format("argument '{}' has a dimension that does not fit size_t",
+                    argument.name));
     }
     if (dimension == 0) {
       return 0;
@@ -479,8 +491,8 @@ int run(const std::vector<std::string>& command,
   for (std::int64_t dimension : argument.shape) {
     const auto size = static_cast<std::size_t>(dimension);
     if (count > std::numeric_limits<std::size_t>::max() / size) {
-      return std::unexpected("argument '" + argument.name +
-                             "' element count overflows size_t");
+      return std::unexpected(std::format(
+        "argument '{}' element count overflows size_t", argument.name));
     }
     count *= size;
   }
@@ -513,11 +525,12 @@ int run(const std::vector<std::string>& command,
 
 [[nodiscard]] std::expected<void, std::string> write_header(
   const fs::path& path, const Manifest& manifest) {
-  std::string guard = "NCNN_" + manifest.function + "_H";
+  std::string guard = std::format("NCNN_{}_H", manifest.function);
   std::ranges::transform(guard, guard.begin(), [](unsigned char c) {
     return static_cast<char>(std::toupper(c));
   });
-  std::string contents = "#ifndef " + guard + "\n#define " + guard + "\n\n";
+  std::string contents =
+    std::format("#ifndef {}\n#define {}\n\n", guard, guard);
   std::set<std::string> macros;
   for (const Argument* argument : [&] {
          std::vector<const Argument*> result;
@@ -529,33 +542,36 @@ int run(const std::vector<std::string>& command,
          }
          return result;
        }()) {
-    std::string macro = manifest.function + "_" + argument->name + "_elements";
+    std::string macro =
+      std::format("{}_{}_elements", manifest.function, argument->name);
     std::ranges::transform(
       macro, macro.begin(), [](unsigned char c) { return std::toupper(c); });
     if (!macros.insert(macro).second) {
-      return std::unexpected("argument '" + argument->name +
-                             "' duplicates generated element-count macro '" +
-                             macro + "'");
+      return std::unexpected(std::format(
+        "argument '{}' duplicates generated element-count macro '{}'",
+        argument->name,
+        macro));
     }
     auto count = element_count(*argument);
     if (!count) {
       return std::unexpected(count.error());
     }
-    contents += "#define " + macro + " " + std::to_string(*count) + "\n";
+    contents += std::format("#define {} {}\n", macro, *count);
   }
-  contents += "\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\nint " +
-              manifest.function + "(";
+  contents +=
+    std::format("\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\nint {}(",
+                manifest.function);
   bool first = true;
   for (const Argument& input : manifest.inputs) {
-    contents += (first ? "" : ", ") + std::string("const float *") + input.name;
+    contents += std::format("{}const float *{}", first ? "" : ", ", input.name);
     first = false;
   }
   for (const Argument& output : manifest.outputs) {
-    contents += (first ? "" : ", ") + std::string("float *") + output.name;
+    contents += std::format("{}float *{}", first ? "" : ", ", output.name);
     first = false;
   }
-  contents +=
-    ");\n\n#ifdef __cplusplus\n}\n#endif\n\n#endif  // " + guard + "\n";
+  contents += std::format(
+    ");\n\n#ifdef __cplusplus\n}}\n#endif\n\n#endif  // {}\n", guard);
   return write_file(path, contents);
 }
 
@@ -579,8 +595,8 @@ std::set<std::string> symbols(std::string_view output) {
   const fs::path& path) {
   auto buffer = llvm::MemoryBuffer::getFile(path.string());
   if (!buffer) {
-    return std::unexpected("cannot read '" + path.string() +
-                           "': " + buffer.getError().message());
+    return std::unexpected(std::format(
+      "cannot read '{}': {}", path.string(), buffer.getError().message()));
   }
   return (*buffer)->getBuffer().str();
 }
@@ -610,58 +626,66 @@ validate_output_directory(const fs::path& output_dir,
   std::error_code error;
   const bool exists = fs::exists(output_dir, error);
   if (error) {
-    return std::unexpected("cannot inspect output path '" +
-                           output_dir.string() + "': " + error.message());
+    return std::unexpected(std::format("cannot inspect output path '{}': {}",
+                                       output_dir.string(),
+                                       error.message()));
   }
   if (!exists) {
     return OutputDirectoryState{.exists = false, .identity = std::nullopt};
   }
   if (!fs::is_directory(output_dir, error)) {
     if (error) {
-      return std::unexpected("cannot inspect output directory '" +
-                             output_dir.string() + "': " + error.message());
+      return std::unexpected(
+        std::format("cannot inspect output directory '{}': {}",
+                    output_dir.string(),
+                    error.message()));
     }
-    return std::unexpected("output path is not a directory: " +
-                           output_dir.string());
+    return std::unexpected(
+      std::format("output path is not a directory: {}", output_dir.string()));
   }
   llvm::sys::fs::UniqueID identity;
   if (std::error_code identity_error =
         llvm::sys::fs::getUniqueID(output_dir.string(), identity)) {
-    return std::unexpected("cannot identify output directory '" +
-                           output_dir.string() +
-                           "': " + identity_error.message());
+    return std::unexpected(
+      std::format("cannot identify output directory '{}': {}",
+                  output_dir.string(),
+                  identity_error.message()));
   }
   fs::directory_iterator iterator(output_dir, error);
   if (error) {
-    return std::unexpected("cannot iterate output directory '" +
-                           output_dir.string() + "': " + error.message());
+    return std::unexpected(
+      std::format("cannot iterate output directory '{}': {}",
+                  output_dir.string(),
+                  error.message()));
   }
   const fs::directory_iterator end;
   while (iterator != end) {
     error.clear();
     const bool is_symlink = iterator->is_symlink(error);
     if (error) {
-      return std::unexpected("cannot inspect output entry '" +
-                             iterator->path().string() +
-                             "': " + error.message());
+      return std::unexpected(std::format("cannot inspect output entry '{}': {}",
+                                         iterator->path().string(),
+                                         error.message()));
     }
     error.clear();
     const bool is_regular_file = iterator->is_regular_file(error);
     if (error) {
-      return std::unexpected("cannot inspect output entry '" +
-                             iterator->path().string() +
-                             "': " + error.message());
+      return std::unexpected(std::format("cannot inspect output entry '{}': {}",
+                                         iterator->path().string(),
+                                         error.message()));
     }
     if (is_symlink || !is_regular_file ||
         !is_generated_output(iterator->path(), model_name)) {
-      return std::unexpected(
-        "output directory contains a file not owned by ncnn-compile: " +
-        iterator->path().filename().string());
+      return std::unexpected(std::format(
+        "output directory contains a file not owned by ncnn-compile: {}",
+        iterator->path().filename().string()));
     }
     iterator.increment(error);
     if (error) {
-      return std::unexpected("cannot continue iterating output directory '" +
-                             output_dir.string() + "': " + error.message());
+      return std::unexpected(
+        std::format("cannot continue iterating output directory '{}': {}",
+                    output_dir.string(),
+                    error.message()));
     }
   }
   return OutputDirectoryState{.exists = true, .identity = identity};
@@ -687,23 +711,28 @@ validate_output_directory(const fs::path& output_dir,
         continue;
       }
       if (error != std::errc::file_exists) {
-        return std::unexpected("cannot create replacement directory '" +
-                               candidate.string() + "': " + error.message());
+        return std::unexpected(
+          std::format("cannot create replacement directory '{}': {}",
+                      candidate.string(),
+                      error.message()));
       }
     } else if (!fs::exists(candidate, error)) {
       if (error) {
-        return std::unexpected("cannot inspect backup path '" +
-                               candidate.string() + "': " + error.message());
+        return std::unexpected(
+          std::format("cannot inspect backup path '{}': {}",
+                      candidate.string(),
+                      error.message()));
       }
       return candidate;
     } else if (error) {
-      return std::unexpected("cannot inspect backup path '" +
-                             candidate.string() + "': " + error.message());
+      return std::unexpected(std::format("cannot inspect backup path '{}': {}",
+                                         candidate.string(),
+                                         error.message()));
     }
   }
   return std::unexpected(
-    "cannot reserve a sibling path for output directory '" +
-    output_dir.string() + "'");
+    std::format("cannot reserve a sibling path for output directory '{}'",
+                output_dir.string()));
 }
 
 [[nodiscard]] std::expected<void, std::string> write_harness(
@@ -715,22 +744,23 @@ validate_output_directory(const fs::path& output_dir,
   for (const Argument& output : manifest.outputs) {
     arguments.push_back(&output);
   }
-  std::string code =
+  std::string code = std::format(
     "#include <math.h>\n#include <stddef.h>\n#include <stdio.h>\n"
-    "#include <stdlib.h>\n"
-    "#include \"" +
-    std::string(header) + "\"\n\nint main(void) {\n";
+    "#include <stdlib.h>\n#include \"{}\"\n\nint main(void) {{\n",
+    header);
   for (const Argument* argument : arguments) {
     auto count = element_count(*argument);
     if (!count) {
       return std::unexpected(count.error());
     }
-    code += "  float *" + argument->name + " = calloc(" +
-            std::to_string(std::max<std::size_t>(1, *count)) +
-            ", sizeof(float));\n";
-    code += "  if (!" + argument->name +
-            ") { fprintf(stderr, \"ABI verification failed: cannot allocate " +
-            argument->name + "\\n\"); return 2; }\n";
+    code += std::format("  float *{} = calloc({}, sizeof(float));\n",
+                        argument->name,
+                        std::max<std::size_t>(1, *count));
+    code += std::format(
+      "  if (!{}) {{ fprintf(stderr, \"ABI verification failed: cannot "
+      "allocate {}\\n\"); return 2; }}\n",
+      argument->name,
+      argument->name);
   }
   auto call = [&](std::optional<std::size_t> null_index) {
     std::string result = manifest.function + "(";
@@ -742,7 +772,7 @@ validate_output_directory(const fs::path& output_dir,
     }
     return result + ")";
   };
-  code += "  int model_status = " + call(std::nullopt) + ";\n";
+  code += std::format("  int model_status = {};\n", call(std::nullopt));
   code +=
     "  if (model_status != 0) { fprintf(stderr, \"ABI verification "
     "failed: model returned %d\\n\", model_status); return 4; }\n";
@@ -751,19 +781,23 @@ validate_output_directory(const fs::path& output_dir,
     if (!count) {
       return std::unexpected(count.error());
     }
-    code += "  for (size_t i = 0; i < " + std::to_string(*count) +
-            "; ++i) if (!isfinite(" + output.name +
-            "[i])) { fprintf(stderr, \"ABI verification failed: output " +
-            output.name + "[%zu] is not finite\\n\", i); return 5; }\n";
+    code += std::format(
+      "  for (size_t i = 0; i < {}; ++i) if (!isfinite({}[i])) {{ "
+      "fprintf(stderr, \"ABI verification failed: output {}[%zu] is not "
+      "finite\\n\", i); return 5; }}\n",
+      *count,
+      output.name,
+      output.name);
   }
   for (std::size_t index = 0; index < arguments.size(); ++index) {
-    code += "  if (" + call(index) +
-            " == 0) { fprintf(stderr, \"ABI verification failed: NULL "
-            "argument " +
-            arguments[index]->name + " was accepted\\n\"); return 3; }\n";
+    code += std::format(
+      "  if ({} == 0) {{ fprintf(stderr, \"ABI verification failed: NULL "
+      "argument {} was accepted\\n\"); return 3; }}\n",
+      call(index),
+      arguments[index]->name);
   }
   for (const Argument* argument : arguments) {
-    code += "  free(" + argument->name + ");\n";
+    code += std::format("  free({});\n", argument->name);
   }
   code += "  return 0;\n}\n";
   return write_file(path, code);
@@ -1017,8 +1051,8 @@ int main(int argc, char** argv) {
   if (!header_result) {
     return fail(header_result.error());
   }
-  auto exports_result =
-    write_file(exports, "{\n  global: " + model_name + ";\n  local: *;\n};\n");
+  auto exports_result = write_file(
+    exports, std::format("{{\n  global: {};\n  local: *;\n}};\n", model_name));
   if (!exports_result) {
     return fail(exports_result.error());
   }
@@ -1100,7 +1134,8 @@ int main(int argc, char** argv) {
        ++match) {
     const std::string name = (*match)[1];
     if (!name.starts_with("libc.so") && !name.starts_with("libm.so")) {
-      return fail("shared library has an unexpected dependency: " + name);
+      return fail(
+        std::format("shared library has an unexpected dependency: {}", name));
     }
   }
   capture_path = staging.path() / "symbols.txt";
@@ -1179,9 +1214,9 @@ int main(int argc, char** argv) {
                   fs::copy_options::none,
                   error);
     if (error) {
-      return std::unexpected("cannot prepare output '" +
-                             source.filename().string() +
-                             "': " + error.message());
+      return std::unexpected(std::format("cannot prepare output '{}': {}",
+                                         source.filename().string(),
+                                         error.message()));
     }
     return {};
   };
@@ -1258,8 +1293,7 @@ int main(int argc, char** argv) {
         backup.release();
         return fail(llvm::Twine("cannot publish replacement output: ") +
                     publication_error +
-                    "; rollback also failed; previous "
-                    "output remains at '" +
+                    "; rollback also failed; previous output remains at '" +
                     backup.path().string() + "': " + error.message());
       }
     }

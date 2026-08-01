@@ -632,7 +632,7 @@ std::expected<Tensor, std::string> load_weight(
   if (type == 0) {
     auto flag = cursor.read_u32_le();
     if (!flag) {
-      return std::unexpected("weight flag: " + flag.error());
+      return std::unexpected(std::format("weight flag: {}", flag.error()));
     }
     if (*flag == kFloat16Flag) {
       dtype = DataType::Float16;
@@ -663,13 +663,14 @@ std::expected<Tensor, std::string> load_weight(
   }
   auto bytes = cursor.read_bytes(*byte_count);
   if (!bytes) {
-    return std::unexpected("weight data: " + bytes.error());
+    return std::unexpected(std::format("weight data: {}", bytes.error()));
   }
   std::vector<std::byte> data(bytes->begin(), bytes->end());
   if (needs_alignment) {
     auto aligned = cursor.align4();
     if (!aligned) {
-      return std::unexpected("weight alignment: " + aligned.error());
+      return std::unexpected(
+        std::format("weight alignment: {}", aligned.error()));
     }
   }
   Tensor tensor;
@@ -799,14 +800,14 @@ std::expected<void, std::string> load_layer_weights(Layer& layer,
                              *kernel_h_value,
                              *kernel_w_value});
   if (!weight) {
-    return std::unexpected("conv weight: " + weight.error());
+    return std::unexpected(std::format("conv weight: {}", weight.error()));
   }
   layer.add_weight(std::move(*weight));
 
   if (*bias_term == 1) {
     auto bias = load_weight(cursor, *num_output_value, 1, {*num_output_value});
     if (!bias) {
-      return std::unexpected("conv bias: " + bias.error());
+      return std::unexpected(std::format("conv bias: {}", bias.error()));
     }
     layer.add_weight(std::move(*bias));
   }
@@ -815,21 +816,23 @@ std::expected<void, std::string> load_layer_weights(Layer& layer,
     auto weight_scales =
       load_weight(cursor, *num_output_value, 1, {*num_output_value});
     if (!weight_scales) {
-      return std::unexpected("conv weight int8 scales: " +
-                             weight_scales.error());
+      return std::unexpected(
+        std::format("conv weight int8 scales: {}", weight_scales.error()));
     }
     layer.add_weight(std::move(*weight_scales));
 
     auto bottom_scale = load_weight(cursor, 1, 1, {1});
     if (!bottom_scale) {
-      return std::unexpected("conv bottom int8 scale: " + bottom_scale.error());
+      return std::unexpected(
+        std::format("conv bottom int8 scale: {}", bottom_scale.error()));
     }
     layer.add_weight(std::move(*bottom_scale));
   }
   if (*int8_scale_term > 100) {
     auto top_scale = load_weight(cursor, 1, 1, {1});
     if (!top_scale) {
-      return std::unexpected("conv top int8 scale: " + top_scale.error());
+      return std::unexpected(
+        std::format("conv top int8 scale: {}", top_scale.error()));
     }
     layer.add_weight(std::move(*top_scale));
   }

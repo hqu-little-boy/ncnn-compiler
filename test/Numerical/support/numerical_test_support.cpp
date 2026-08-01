@@ -6,6 +6,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <numeric>
 #include <random>
@@ -295,27 +296,27 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
   for (const ReferenceInput& input : inputs) {
     auto input_elements = input.get_shape().element_count();
     if (!input_elements) {
-      return std::unexpected("reference input blob '" +
-                             std::string(input.get_blob_name()) +
-                             "': " + input_elements.error());
+      return std::unexpected(std::format("reference input blob '{}': {}",
+                                         input.get_blob_name(),
+                                         input_elements.error()));
     }
     auto input_bytes = input.get_shape().byte_count(sizeof(float));
     if (!input_bytes) {
-      return std::unexpected("reference input blob '" +
-                             std::string(input.get_blob_name()) +
-                             "': " + input_bytes.error());
+      return std::unexpected(std::format("reference input blob '{}': {}",
+                                         input.get_blob_name(),
+                                         input_bytes.error()));
     }
     if (input.get_values().size() != *input_elements) {
-      return std::unexpected("reference input blob '" +
-                             std::string(input.get_blob_name()) +
-                             "': value count does not match its shape");
+      return std::unexpected(std::format(
+        "reference input blob '{}': value count does not match its shape",
+        input.get_blob_name()));
     }
     input_mats.emplace_back(input.get_shape().get_width(),
                             input.get_shape().get_height(),
                             input.get_shape().get_channels());
     if (input_mats.back().empty()) {
-      return std::unexpected("ncnn failed to allocate input blob '" +
-                             std::string(input.get_blob_name()) + "'");
+      return std::unexpected(std::format(
+        "ncnn failed to allocate input blob '{}'", input.get_blob_name()));
     }
     const std::size_t channel_elements =
       input.get_shape().get_channels() == 0
@@ -336,8 +337,8 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
     }
     if (extractor.input(std::string(input.get_blob_name()).c_str(),
                         input_mats.back()) != 0) {
-      return std::unexpected("ncnn failed to bind input blob '" +
-                             std::string(input.get_blob_name()) + "'");
+      return std::unexpected(std::format("ncnn failed to bind input blob '{}'",
+                                         input.get_blob_name()));
     }
   }
 
@@ -346,18 +347,18 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
   for (std::string_view output_blob_name : output_blob_names) {
     ncnn::Mat output;
     if (extractor.extract(std::string(output_blob_name).c_str(), output) != 0) {
-      return std::unexpected("ncnn failed to extract output blob '" +
-                             std::string(output_blob_name) + "'");
+      return std::unexpected(std::format(
+        "ncnn failed to extract output blob '{}'", output_blob_name));
     }
     if (output.elempack != 1 || output.elemsize != sizeof(float)) {
-      return std::unexpected("ncnn reference output blob '" +
-                             std::string(output_blob_name) +
-                             "' is not unpacked float32");
+      return std::unexpected(
+        std::format("ncnn reference output blob '{}' is not unpacked float32",
+                    output_blob_name));
     }
     if (output.w < 0 || output.h < 0 || output.d < 0 || output.c < 0) {
-      return std::unexpected("ncnn reference output blob '" +
-                             std::string(output_blob_name) +
-                             "' has a negative dimension");
+      return std::unexpected(
+        std::format("ncnn reference output blob '{}' has a negative dimension",
+                    output_blob_name));
     }
     const auto checked_multiply =
       [output_blob_name](
@@ -365,9 +366,9 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
         std::size_t right) -> std::expected<std::size_t, std::string> {
       if (right != 0 &&
           left > std::numeric_limits<std::size_t>::max() / right) {
-        return std::unexpected("ncnn reference output blob '" +
-                               std::string(output_blob_name) +
-                               "' size overflows size_t");
+        return std::unexpected(
+          std::format("ncnn reference output blob '{}' size overflows size_t",
+                      output_blob_name));
       }
       return left * right;
     };
@@ -387,9 +388,9 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
     }
     if (*logical_elements >
         std::numeric_limits<std::size_t>::max() / sizeof(float)) {
-      return std::unexpected("ncnn reference output blob '" +
-                             std::string(output_blob_name) +
-                             "' byte count overflows size_t");
+      return std::unexpected(std::format(
+        "ncnn reference output blob '{}' byte count overflows size_t",
+        output_blob_name));
     }
     std::vector<float> flattened;
     flattened.reserve(*logical_elements);

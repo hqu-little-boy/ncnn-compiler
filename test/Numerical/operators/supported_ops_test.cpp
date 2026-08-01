@@ -1,6 +1,7 @@
 #include "numerical_test_support.hpp"
 
 #include <array>
+#include <format>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -37,7 +38,7 @@ void expect_single_input_operator(std::string_view name,
   const std::string symbol = name == "convolution" || name == "relu" ||
                                  name == "pooling" || name == "dropout" ||
                                  name == "softmax"
-                               ? std::string(name) + "_scalar"
+                               ? std::format("{}_scalar", name)
                                : std::string(name);
   CompiledModel compiled(library_path, symbol);
   ASSERT_TRUE(compiled.valid()) << compiled.error();
