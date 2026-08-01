@@ -53,7 +53,7 @@ set_tests_properties(repeated-call-memory PROPERTIES
     TIMEOUT 120)
 
 add_test(NAME squeezenet-shared-library
-    COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/compile_ncnn_model.py
+    COMMAND $<TARGET_FILE:ncnn-compile>
         --driver $<TARGET_FILE:ncnn-mlir-driver>
         --opt $<TARGET_FILE:ncnn-mlir-opt>
         --translate ${MLIR_TRANSLATE}
@@ -65,7 +65,7 @@ add_test(NAME squeezenet-shared-library
         --model-name squeezenet_v1_1
         --expected-undefined expf,free,malloc,memset
         --output-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/squeezenet
-        --keep-manifest
+        --emit-manifest
         --verify-execution)
 set_tests_properties(squeezenet-shared-library PROPERTIES
     LABELS "native;integration"
@@ -75,7 +75,7 @@ set_tests_properties(squeezenet-shared-library PROPERTIES
 add_test(NAME ncnn-compile-cli
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_ncnn_compile.py
         --compiler ${CMAKE_BINARY_DIR}/tools/ncnn-compile
-        --legacy-compiler ${CMAKE_SOURCE_DIR}/tools/compile_ncnn_model.py
+        --debug-compiler ${CMAKE_SOURCE_DIR}/tools/compile_ncnn_model.py
         --build-dir ${CMAKE_BINARY_DIR}
         --param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/relu.param
         --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin

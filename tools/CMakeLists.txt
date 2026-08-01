@@ -13,20 +13,14 @@ target_link_libraries(ncnn-mlir-driver PRIVATE
     ${NCNN_DRIVER_LLVM_LIBS})
 install(TARGETS ncnn-mlir-driver RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
+add_executable(ncnn-compile ncnn-compile.cpp)
+target_include_directories(ncnn-compile SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_link_libraries(ncnn-compile PRIVATE ${NCNN_DRIVER_LLVM_LIBS})
+install(TARGETS ncnn-compile RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/compile_ncnn_model.py
     ${CMAKE_CURRENT_BINARY_DIR}/compile_ncnn_model.py
     COPYONLY)
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/ncnn-compile
-    ${CMAKE_CURRENT_BINARY_DIR}/ncnn-compile
-    COPYONLY)
-file(CHMOD ${CMAKE_CURRENT_BINARY_DIR}/ncnn-compile
-    PERMISSIONS
-        OWNER_READ OWNER_WRITE OWNER_EXECUTE
-        GROUP_READ GROUP_EXECUTE
-        WORLD_READ WORLD_EXECUTE)
-install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/ncnn-compile
-    DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/compile_ncnn_model.py
     DESTINATION ${CMAKE_INSTALL_BINDIR})

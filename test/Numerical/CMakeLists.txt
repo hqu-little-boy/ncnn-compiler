@@ -50,7 +50,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     add_custom_command(
         OUTPUT ${library} ${output_dir}/${name}.h ${output_dir}/${name}.json
         COMMAND ${CMAKE_COMMAND} -E make_directory ${output_dir}
-        COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/compile_ncnn_model.py
+        COMMAND $<TARGET_FILE:ncnn-compile>
             --driver $<TARGET_FILE:ncnn-mlir-driver>
             --opt $<TARGET_FILE:ncnn-mlir-opt>
             --translate ${MLIR_TRANSLATE}
@@ -61,11 +61,12 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             --bin ${bin_file}
             --model-name ${name}
             --output-dir ${output_dir}
-            --keep-manifest
+            --emit-manifest
         DEPENDS
+            ncnn-compile
             ncnn-mlir-driver
             ncnn-mlir-opt
-            ${CMAKE_SOURCE_DIR}/tools/compile_ncnn_model.py
+            ${CMAKE_SOURCE_DIR}/tools/ncnn-compile.cpp
             ${param_file}
             ${bin_file}
         VERBATIM)

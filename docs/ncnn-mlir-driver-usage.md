@@ -265,7 +265,7 @@ LLVM dialect，在同一 JIT 进程内调用 500 次并检查 RSS 趋势；sanit
 ASan/LSan。完整 SqueezeNet 的重复调用验收需要产品 LLVM lowering 和最终 C ABI。
 
 `--ncnn-memref-to-llvm-pipeline` 消除 Linalg/Affine/SCF/Math/Arith/MemRef/Func/CF，并将
-`math.exp` 映射到系统 `expf`。`ncnn-compile` 通过内部 Python 编排器调用
+`math.exp` 映射到系统 `expf`。C++ `ncnn-compile` driver 直接调用
 `mlir-translate-21`、`clang-21 -fPIC` 和严格共享库链接；最终 `.so` 只依赖 libc/libm，
 未定义符号只允许 `malloc`、`free`、`expf`、`memcpy`、`memset`，且禁止 `memrefCopy` 和
 runner/project runtime。
@@ -296,6 +296,9 @@ ncnn-compile model.param --emit all
 支持的阶段为 `ncnn`、`tosa`、`linalg`、`memref`、`capi` 和 `llvm`。`llvm` 指 LLVM dialect
 MLIR，不是临时 LLVM IR `.ll`；内部 `.ll` 和 object 不属于公共产物。
 
+ABI manifest 默认是内部临时产物。需要检查 ABI 或供内部测试使用时，显式增加
+`--emit-manifest`，输出目录中会额外生成 `<model>.json`。
+
 代码生成选项包括：
 
 ```text
@@ -318,12 +321,12 @@ sysroot；当前产物和链接审计只支持 64 位 Linux ELF target。`--veri
 `--clang-arg=-ffast-math`，也可写成 `--clang-arg -ffast-math`；target feature 和 linker
 参数同理。
 
-输出先在目标目录内的临时目录完成编译、严格链接和符号审计，成功后才发布。失败不会覆盖
+输出先在系统临时目录完成编译、严格链接和符号审计，成功后才发布。编译失败不会覆盖
 上一份有效 `.h/.so`。成功重编译会移除该输出目录中的旧编译产物和不再请求的 MLIR；如果目录
 含有不属于 `ncnn-compile` 的文件，命令会拒绝执行，避免误删用户数据。
 
 CMake 构建后入口位于 `build/tools/ncnn-compile`。执行 `cmake --install build` 会把
-`ncnn-compile`、内部编排器、`ncnn-mlir-driver` 和 `ncnn-mlir-opt` 安装到同一个 `bin` 目录，
+`ncnn-compile`、Python 调试脚本、`ncnn-mlir-driver` 和 `ncnn-mlir-opt` 安装到同一个 `bin` 目录，
 安装后的 `ncnn-compile` 会自动发现这些内部工具。
 
 SqueezeNet 默认接口为：
@@ -347,8 +350,8 @@ int squeezenet_v1_1(const float *input1, float *output1);
 - ncnn 方言：`compiler/lib/Dialect/NCNN/IR/`（+ `compiler/include/ncnn-mlir/Dialect/NCNN/IR/`）
 - 转换/规范化：`compiler/lib/{Conversion,Transforms}/`
 - lowering pipeline：`compiler/lib/Pipelines/NCNNPipelines.cpp`
-- 稳定编译入口：`compiler/tools/ncnn-compile`
-- 外部工具编排：`compiler/tools/compile_ncnn_model.py`
+- 稳定 C++ compiler driver：`compiler/tools/ncnn-compile.cpp`
+- Python 调试流水线：`compiler/tools/compile_ncnn_model.py`（快速验证阶段和观察中间过程）
 - 算子数值适配避坑指南：`compiler/docs/operator-numerical-validation-guide.md`
 - SqueezeNet pipeline 测试：`compiler/test/Pipelines/squeezenet-m2.mlir`
 - 解析器/数据模型：`compiler/lib/Graph/`（`ncnn_graph` 库）

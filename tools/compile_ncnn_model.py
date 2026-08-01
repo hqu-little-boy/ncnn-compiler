@@ -245,7 +245,9 @@ def main():
     parser.add_argument("--linker-arg", action="append", default=[])
     parser.add_argument("--verify-execution", action="store_true")
     parser.add_argument("--expected-undefined", help=argparse.SUPPRESS)
-    parser.add_argument("--keep-manifest", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--emit-manifest", action="store_true", help="Emit the JSON ABI manifest"
+    )
     args = parser.parse_args(normalize_passthrough_args(sys.argv[1:]))
 
     global VERBOSE
@@ -453,7 +455,7 @@ def main():
     shutil.copy2(header_path, output_dir / header_path.name)
     shutil.copy2(library, output_dir / library.name)
     public_manifest = output_dir / manifest_path.name
-    if args.keep_manifest:
+    if args.emit_manifest:
         shutil.copy2(manifest_path, public_manifest)
     else:
         public_manifest.unlink(missing_ok=True)

@@ -9,7 +9,8 @@
 - 数值测试工程：`test/Numerical/`
 - 测试支持层：`test/Numerical/support/numerical_test_support.cpp`
 - fixture 注册：`test/Numerical/CMakeLists.txt`
-- 稳定模型编译入口：`tools/ncnn-compile`（内部编排：`tools/compile_ncnn_model.py`）
+- 稳定 C++ 模型编译入口：`tools/ncnn-compile.cpp`
+- Python 流水线调试入口：`tools/compile_ncnn_model.py`
 - 方言和 lowering：`include/ncnn-mlir/Dialect/NCNN/IR/`、`lib/Conversion/NCNNToTosa/`
 - ncnn 疑似问题与上游报告前检查项：[`docs/ncnn-suspected-issues.md`](ncnn-suspected-issues.md)
 

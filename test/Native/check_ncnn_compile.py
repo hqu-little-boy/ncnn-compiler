@@ -20,7 +20,7 @@ def assert_files(directory, expected):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
-    parser.add_argument("--legacy-compiler", required=True)
+    parser.add_argument("--debug-compiler", required=True)
     parser.add_argument("--build-dir", required=True)
     parser.add_argument("--param", required=True)
     parser.add_argument("--bin", required=True)
@@ -50,6 +50,7 @@ def main():
             all_output,
             "--emit",
             "all",
+            "--emit-manifest",
             "-O2",
         ]
     )
@@ -58,6 +59,7 @@ def main():
         {
             "librelu_all.so",
             "relu_all.h",
+            "relu_all.json",
             "model.ncnn.mlir",
             "model.tosa.mlir",
             "model.linalg.mlir",
@@ -123,23 +125,23 @@ def main():
     )
     assert_files(selected_output, {"librelu_selected.so", "relu_selected.h"})
 
-    legacy_output = work_dir / "legacy"
+    debug_output = work_dir / "debug"
     run(
         [
             "python3",
-            args.legacy_compiler,
+            args.debug_compiler,
             "--param",
             args.param,
             "--bin",
             args.bin,
             "--model-name",
-            "legacy",
+            "debug",
             "-o",
-            legacy_output,
+            debug_output,
             "-O1",
         ]
     )
-    assert_files(legacy_output, {"liblegacy.so", "legacy.h"})
+    assert_files(debug_output, {"libdebug.so", "debug.h"})
 
     install_prefix = work_dir / "install"
     run(["cmake", "--install", args.build_dir, "--prefix", install_prefix])
