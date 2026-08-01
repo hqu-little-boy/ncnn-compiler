@@ -7,17 +7,17 @@
 namespace ncnn_compiler::test {
 namespace {
 
-constexpr TensorShape kInputShape{.width = 227, .height = 227, .channels = 3};
+const TensorShape kInputShape(227, 227, 3);
 constexpr std::size_t kOutputElements = 1000;
-const ReferenceModel kReference{.param_path = SQUEEZENET_PARAM_PATH,
-                                .bin_path = SQUEEZENET_BIN_PATH,
-                                .input_blob = "data",
-                                .output_blob = "prob",
-                                .input_shape = kInputShape};
+const ReferenceModel kReference(
+  SQUEEZENET_PARAM_PATH, SQUEEZENET_BIN_PATH, "data", "prob", kInputShape);
 
 TEST(NumericalModel, SqueezeNetMatchesNcnn) {
+  const auto input_elements = kInputShape.element_count();
+  ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
+  ASSERT_TRUE(kInputShape.byte_count(sizeof(float)).has_value());
   const std::vector<float> input =
-    make_random_input(kInputShape.element_count(), 0x53515545U, -0.01F, 0.01F);
+    make_random_input(*input_elements, 0x53515545U, -0.01F, 0.01F);
   const auto expected = run_ncnn_reference(kReference, input);
   ASSERT_TRUE(expected.has_value()) << expected.error();
   ASSERT_EQ(expected->size(), kOutputElements);

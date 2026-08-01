@@ -7,6 +7,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/MathExtras.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
@@ -115,15 +116,63 @@ FailureOr<SmallVector<int64_t>> getPoolPadding(PoolingOp operation) {
 
   auto input = cast<RankedTensorType>(operation.getInput().getType());
   auto output = cast<RankedTensorType>(operation.getOutput().getType());
-  const int64_t requiredHeight =
-    ((output.getShape()[1] - 1) * operation.getStrideH()) +
-    operation.getKernelH();
-  const int64_t requiredWidth =
-    ((output.getShape()[2] - 1) * operation.getStrideW()) +
-    operation.getKernelW();
-  bottom = std::max(bottom, requiredHeight - input.getShape()[1] - top);
-  right = std::max(right, requiredWidth - input.getShape()[2] - left);
+  auto calculateTrailingPadding =
+    [&](StringRef dimension,
+        int64_t outputSize,
+        int64_t stride,
+        int64_t kernel,
+        int64_t inputSize,
+        int64_t leadingPadding) -> FailureOr<int64_t> {
+    auto overflow = [&](StringRef arithmetic) {
+      operation.emitOpError() << "pool padding " << dimension
+                              << " arithmetic overflow during " << arithmetic;
+      return failure();
+    };
+    int64_t outputOffset;
+    if (llvm::SubOverflow(outputSize, int64_t{1}, outputOffset)) {
+      return overflow("output size - 1");
+    }
+    int64_t stridedOffset;
+    if (llvm::MulOverflow(outputOffset, stride, stridedOffset)) {
+      return overflow("(output size - 1) * stride");
+    }
+    int64_t requiredSize;
+    if (llvm::AddOverflow(stridedOffset, kernel, requiredSize)) {
+      return overflow("strided offset + kernel");
+    }
+    int64_t padding;
+    if (llvm::SubOverflow(requiredSize, inputSize, padding)) {
+      return overflow("required size - input size");
+    }
+    if (llvm::SubOverflow(padding, leadingPadding, padding)) {
+      return overflow("required padding - leading padding");
+    }
+    return padding;
+  };
+  FailureOr<int64_t> requiredBottom =
+    calculateTrailingPadding("height",
+                             output.getShape()[1],
+                             operation.getStrideH(),
+                             operation.getKernelH(),
+                             input.getShape()[1],
+                             top);
+  if (failed(requiredBottom)) {
+    return failure();
+  }
+  FailureOr<int64_t> requiredRight =
+    calculateTrailingPadding("width",
+                             output.getShape()[2],
+                             operation.getStrideW(),
+                             operation.getKernelW(),
+                             input.getShape()[2],
+                             left);
+  if (failed(requiredRight)) {
+    return failure();
+  }
+  bottom = std::max(bottom, *requiredBottom);
+  right = std::max(right, *requiredRight);
   if (top < 0 || bottom < 0 || left < 0 || right < 0) {
+    operation.emitOpError("pool padding must be non-negative");
     return failure();
   }
   return SmallVector<int64_t>{top, bottom, left, right};
@@ -153,12 +202,14 @@ class ConvertNCNNToTosaPass final
       signalPassFailure();
       return;
     }
-    for (func::FuncOp function : module.getOps<func::FuncOp>()) {
+    OwningOpRef<ModuleOp> candidate = cast<ModuleOp>(module->clone());
+    for (func::FuncOp function : candidate->getOps<func::FuncOp>()) {
       if (failed(convertFunction(function))) {
         signalPassFailure();
         return;
       }
     }
+    module.getBodyRegion().takeBody(candidate->getBodyRegion());
   }
 
  private:
@@ -177,6 +228,17 @@ class ConvertNCNNToTosaPass final
     if (!llvm::hasSingleElement(function.getBody())) {
       return function.emitOpError(
         "convert-ncnn-to-tosa requires a single-block function");
+    }
+    for (PoolingOp pooling : function.getOps<PoolingOp>()) {
+      const bool unsupportedMode =
+        pooling.getMode() == static_cast<int64_t>(PoolMode::Adaptive);
+      const bool unsupportedAveragePadding =
+        pooling.getKind() == static_cast<int64_t>(PoolKind::Average) &&
+        pooling.getIncludePad();
+      if (!unsupportedMode && !unsupportedAveragePadding &&
+          failed(getPoolPadding(pooling))) {
+        return failure();
+      }
     }
     DenseMap<Value, Value> values;
     Block& block = function.getBody().front();
@@ -453,7 +515,7 @@ class ConvertNCNNToTosaPass final
                                static_cast<int64_t>(operation.getStrideW())};
     FailureOr<SmallVector<int64_t>> padding = getPoolPadding(operation);
     if (failed(padding)) {
-      return operation.emitOpError("cannot map pooling padding to TOSA");
+      return failure();
     }
     Value result;
     if (operation.getKind() == static_cast<int64_t>(PoolKind::Maximum)) {

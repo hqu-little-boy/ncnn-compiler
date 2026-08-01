@@ -21,9 +21,11 @@
 - CMake 必须设置 `CMAKE_CXX_STANDARD 23`、
   `CMAKE_CXX_STANDARD_REQUIRED ON` 和 `CMAKE_CXX_EXTENSIONS OFF`。
 - 禁止依赖 GNU C++ 扩展或其他未显式声明的编译器扩展。
-- 项目使用 LLVM/Clang 21 工具链，并与 MLIR/LLVM 21 保持版本一致。
-- 当前工具路径为 `/usr/bin/clang-21`、`/usr/bin/clang++-21`、
-  `/usr/bin/clang-format-21` 和 `/usr/bin/clang-tidy-21`。
+- 项目不强制指定宿主 C/C++ 编译器；编译器必须完整支持 C++23，并能与项目使用的
+  LLVM/MLIR 21 库兼容。CMake 尊重用户通过 toolchain file、`CC`/`CXX` 或 cache
+  选择的编译器。
+- 格式化和静态检查使用 `/usr/bin/clang-format-21` 和
+  `/usr/bin/clang-tidy-21`，以保证检查结果一致。
 - MLIR/LLVM 命令使用带 `-21` 后缀的版本，例如
   `/usr/bin/mlir-opt-21`、`/usr/bin/mlir-tblgen-21` 和
   `/usr/bin/FileCheck-21`。
@@ -34,7 +36,8 @@ CMake 和 `compile_commands.json` 决定。
 
 ### 1.2 CMake
 
-- 编译器必须在顶层 `project()` 调用之前设置。
+- 如需指定编译器，必须通过 CMake toolchain file、`CC`/`CXX` 环境变量或首次配置时的
+  `CMAKE_C_COMPILER`/`CMAKE_CXX_COMPILER` cache 参数完成；项目不能覆盖调用方选择。
 - 必须导出 `compile_commands.json`，供 clang-tidy、clangd 和其他工具读取
   真实编译参数。
 - 每个 target 必须通过 `target_include_directories`、
@@ -152,6 +155,11 @@ class Tensor {
 - setter 对取得所有权的值使用值传递后移动，例如
   `void set_name(std::string name)`。
 - 不应提供返回可变容器引用的接口来绕过对象不变量。
+- 仅限 `.cpp` 匿名 namespace 内部、无行为且无不变量的短生命周期 value record，
+  可以使用 `struct` 聚合公开字段；该例外不得用于头文件、公共 API、持久状态或需要受控
+  mutation 的对象。
+- 布尔 predicate 使用 `is_*`、`has_*`、`can_*` 或惯用的 `empty()` 命名，不强制增加
+  `get_` 前缀；其他读取接口仍使用 `get_*`。
 
 ### 4.2 所有成员在构造函数中显式初始化
 
@@ -225,8 +233,9 @@ class Graph {
   - `std::from_chars` 的 pointer range；
   - `std::get_if` 返回的类型检查指针；
   - 标准 C ABI 导出函数的数组指针。
-- C ABI 的每个数组指针必须同时有明确的元素数量或 shape 参数，并在接口文档中
-  规定所有权、可变性、生命周期和错误返回方式。
+- C ABI 的每个数组指针必须有明确的元素数量或 shape 契约。动态 shape 通过函数参数
+  传递；编译期固定 shape 可以由同一生成头文件中的元素数量宏和可选 ABI manifest 描述。
+  接口文档必须规定所有权、可变性、生命周期和错误返回方式。
 - `std::span` 和 `std::string_view` 不拥有数据。返回或保存它们时必须保证底层对象
   生命周期更长，禁止返回指向局部对象或临时对象的 view。
 

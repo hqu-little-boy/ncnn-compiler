@@ -10,6 +10,7 @@ add_executable(ncnn-mlir-opt ncnn-mlir-opt.cpp)
 target_include_directories(ncnn-mlir-opt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(ncnn-mlir-opt PRIVATE -fno-rtti)
 set_target_properties(ncnn-mlir-opt PROPERTIES
+    BUILD_RPATH "${LLVM_LIBRARY_DIR}"
     INSTALL_RPATH "${LLVM_LIBRARY_DIR}")
 target_link_libraries(ncnn-mlir-opt PRIVATE
     BufferizeNCNN

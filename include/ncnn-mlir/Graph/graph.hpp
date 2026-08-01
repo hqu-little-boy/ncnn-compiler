@@ -29,11 +29,11 @@ class ParamValue {
   static ParamValue make_string(std::string value);
 
   Kind get_kind() const noexcept;
-  std::int64_t get_int() const noexcept;
-  float get_float() const noexcept;
-  std::span<const std::int64_t> get_int_array() const noexcept;
-  std::span<const float> get_float_array() const noexcept;
-  std::string_view get_string() const noexcept;
+  std::optional<std::int64_t> get_int() const noexcept;
+  std::optional<float> get_float() const noexcept;
+  std::optional<std::span<const std::int64_t>> get_int_array() const noexcept;
+  std::optional<std::span<const float>> get_float_array() const noexcept;
+  std::optional<std::string_view> get_string() const noexcept;
 
  private:
   friend class ParamDict;
@@ -81,9 +81,11 @@ class Tensor {
   [[nodiscard]] std::expected<void, std::string> set_shape(
     std::vector<std::int64_t> shape);
   DataType get_dtype() const noexcept;
-  void set_dtype(DataType dtype) noexcept;
   std::span<const std::byte> get_data() const noexcept;
-  void set_data(std::vector<std::byte> data);
+  [[nodiscard]] std::expected<void, std::string> set_contents(
+    std::vector<std::int64_t> shape,
+    DataType dtype,
+    std::vector<std::byte> data);
 
   std::size_t element_count() const noexcept;
   std::size_t byte_size() const noexcept;

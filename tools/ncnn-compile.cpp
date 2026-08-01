@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <ranges>
 #include <regex>
@@ -14,9 +16,11 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileSystem/UniqueID.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -155,17 +159,27 @@ struct Manifest {
   std::vector<Argument> outputs;
 };
 
-class StagingDirectory {
+class ScopedDirectory {
  public:
-  explicit StagingDirectory(fs::path path) : path_(std::move(path)) {}
-  ~StagingDirectory() {
+  explicit ScopedDirectory(fs::path path)
+    : path_(std::move(path)), remove_(true) {}
+  ~ScopedDirectory() {
+    if (!remove_) {
+      return;
+    }
     std::error_code error;
     fs::remove_all(path_, error);
+    if (error) {
+      llvm::errs() << "ncnn-compile: warning: cannot clean up '"
+                   << path_.string() << "': " << error.message() << '\n';
+    }
   }
   const fs::path& path() const { return path_; }
+  void release() { remove_ = false; }
 
  private:
   fs::path path_;
+  bool remove_;
 };
 
 int fail(llvm::Twine message) {
@@ -184,33 +198,104 @@ std::string derive_bin_path(std::string path) {
 std::string c_identifier(std::string_view name) {
   std::string result;
   result.reserve(name.size());
+  bool previous_was_replacement = false;
   for (unsigned char character : name) {
-    result += std::isalnum(character) || character == '_' ? character : '_';
+    const bool ascii_alphanumeric = (character >= 'a' && character <= 'z') ||
+                                    (character >= 'A' && character <= 'Z') ||
+                                    (character >= '0' && character <= '9');
+    if (ascii_alphanumeric || character == '_') {
+      result += static_cast<char>(character);
+      previous_was_replacement = false;
+    } else if (!previous_was_replacement) {
+      result += '_';
+      previous_was_replacement = true;
+    }
   }
-  static const std::set<std::string> keywords = {
-    "auto",      "break",          "case",         "char",     "const",
-    "continue",  "default",        "do",           "double",   "else",
-    "enum",      "extern",         "float",        "for",      "goto",
-    "if",        "inline",         "int",          "long",     "register",
-    "restrict",  "return",         "short",        "signed",   "sizeof",
-    "static",    "struct",         "switch",       "typedef",  "union",
-    "unsigned",  "void",           "volatile",     "while",    "_Alignas",
-    "_Alignof",  "_Atomic",        "_Bool",        "_Complex", "_Generic",
-    "_Noreturn", "_Static_assert", "_Thread_local"};
-  if (result.empty() || std::isdigit(static_cast<unsigned char>(result[0])) ||
+  static const std::set<std::string> keywords = {"alignas",
+                                                 "alignof",
+                                                 "auto",
+                                                 "bool",
+                                                 "break",
+                                                 "case",
+                                                 "char",
+                                                 "const",
+                                                 "constexpr",
+                                                 "continue",
+                                                 "default",
+                                                 "do",
+                                                 "double",
+                                                 "else",
+                                                 "enum",
+                                                 "extern",
+                                                 "false",
+                                                 "float",
+                                                 "for",
+                                                 "goto",
+                                                 "if",
+                                                 "inline",
+                                                 "int",
+                                                 "long",
+                                                 "main",
+                                                 "nullptr",
+                                                 "register",
+                                                 "restrict",
+                                                 "return",
+                                                 "short",
+                                                 "signed",
+                                                 "sizeof",
+                                                 "static",
+                                                 "static_assert",
+                                                 "struct",
+                                                 "switch",
+                                                 "thread_local",
+                                                 "true",
+                                                 "typedef",
+                                                 "typeof",
+                                                 "typeof_unqual",
+                                                 "union",
+                                                 "unsigned",
+                                                 "void",
+                                                 "volatile",
+                                                 "while",
+                                                 "_Alignas",
+                                                 "_Alignof",
+                                                 "_Atomic",
+                                                 "_BitInt",
+                                                 "_Bool",
+                                                 "_Complex",
+                                                 "_Decimal128",
+                                                 "_Decimal32",
+                                                 "_Decimal64",
+                                                 "_Generic",
+                                                 "_Imaginary",
+                                                 "_Noreturn",
+                                                 "_Static_assert",
+                                                 "_Thread_local"};
+  if (result.empty() || (result[0] >= '0' && result[0] <= '9') ||
       result[0] == '_' || keywords.contains(result)) {
     result.insert(0, "ncnn_");
   }
   return result;
 }
 
-std::optional<std::string> find_tool(
+using ToolResult = std::expected<std::optional<std::string>, std::string>;
+
+[[nodiscard]] ToolResult find_tool(
   const fs::path& executable_dir,
   std::string_view explicit_path,
   std::initializer_list<std::string_view> nearby_names,
   std::initializer_list<std::string_view> path_names) {
+  auto canonicalize = [](const fs::path& path) -> ToolResult {
+    std::error_code error;
+    fs::path canonical = fs::weakly_canonical(path, error);
+    if (error) {
+      return std::unexpected("cannot canonicalize compiler tool '" +
+                             path.string() + "': " + error.message());
+    }
+    return canonical.string();
+  };
   if (!explicit_path.empty()) {
-    return std::string(explicit_path);
+    return canonicalize(explicit_path);
   }
   for (std::string_view name : nearby_names) {
     for (const fs::path& directory :
@@ -218,14 +303,18 @@ std::optional<std::string> find_tool(
       fs::path candidate = directory / name;
       std::error_code error;
       if (fs::is_regular_file(candidate, error)) {
-        return fs::weakly_canonical(candidate, error).string();
+        return canonicalize(candidate);
+      }
+      if (error && error != std::errc::no_such_file_or_directory) {
+        return std::unexpected("cannot inspect compiler tool '" +
+                               candidate.string() + "': " + error.message());
       }
     }
   }
   for (std::string_view name : path_names) {
     auto program = llvm::sys::findProgramByName(name);
     if (program) {
-      return *program;
+      return canonicalize(*program);
     }
   }
   return std::nullopt;
@@ -280,40 +369,42 @@ int run(const std::vector<std::string>& command,
   return status;
 }
 
-bool write_file(const fs::path& path, std::string_view contents) {
+[[nodiscard]] std::expected<void, std::string> write_file(
+  const fs::path& path, std::string_view contents) {
   std::error_code error;
   llvm::raw_fd_ostream output(path.string(), error);
   if (error) {
-    llvm::errs() << "ncnn-compile: error: cannot write '" << path.string()
-                 << "': " << error.message() << '\n';
-    return false;
+    return std::unexpected("cannot write '" + path.string() +
+                           "': " + error.message());
   }
   output << contents;
-  return true;
+  output.flush();
+  output.close();
+  if (output.has_error()) {
+    return std::unexpected("cannot finish writing '" + path.string() + "'");
+  }
+  return {};
 }
 
-std::optional<Manifest> read_manifest(const fs::path& path) {
+[[nodiscard]] std::expected<Manifest, std::string> read_manifest(
+  const fs::path& path) {
   auto buffer = llvm::MemoryBuffer::getFile(path.string());
   if (!buffer) {
-    fail(llvm::Twine("cannot read ABI manifest: ") +
-         buffer.getError().message());
-    return std::nullopt;
+    return std::unexpected("cannot read ABI manifest '" + path.string() +
+                           "': " + buffer.getError().message());
   }
   auto value = llvm::json::parse((*buffer)->getBuffer());
   if (!value) {
-    fail(llvm::Twine("invalid ABI manifest: ") +
-         llvm::toString(value.takeError()));
-    return std::nullopt;
+    return std::unexpected("invalid ABI manifest '" + path.string() +
+                           "': " + llvm::toString(value.takeError()));
   }
   auto* object = value->getAsObject();
   if (object == nullptr) {
-    fail("ABI manifest must be a JSON object");
-    return std::nullopt;
+    return std::unexpected("ABI manifest must be a JSON object");
   }
   auto function = object->getString("function");
   if (!function) {
-    fail("ABI manifest has no function name");
-    return std::nullopt;
+    return std::unexpected("ABI manifest has no function name");
   }
   Manifest manifest{
     .function = std::string(*function), .inputs = {}, .outputs = {}};
@@ -347,26 +438,87 @@ std::optional<Manifest> read_manifest(const fs::path& path) {
   };
   if (!parse_arguments("inputs", manifest.inputs) ||
       !parse_arguments("outputs", manifest.outputs)) {
-    fail("ABI manifest has invalid inputs or outputs");
-    return std::nullopt;
+    return std::unexpected("ABI manifest has invalid inputs or outputs");
+  }
+  manifest.function = c_identifier(manifest.function);
+  std::set<std::string> argument_names;
+  for (Argument* argument : [&] {
+         std::vector<Argument*> result;
+         for (Argument& input : manifest.inputs) {
+           result.push_back(&input);
+         }
+         for (Argument& output : manifest.outputs) {
+           result.push_back(&output);
+         }
+         return result;
+       }()) {
+    const std::string original = argument->name;
+    argument->name = c_identifier(original);
+    if (!argument_names.insert(argument->name).second) {
+      return std::unexpected("ABI manifest argument '" + original +
+                             "' duplicates sanitized C identifier '" +
+                             argument->name + "'");
+    }
   }
   return manifest;
 }
 
-std::uint64_t element_count(const Argument& argument) {
-  std::uint64_t count = 1;
+[[nodiscard]] std::expected<std::size_t, std::string> element_count(
+  const Argument& argument) {
   for (std::int64_t dimension : argument.shape) {
-    count *= static_cast<std::uint64_t>(dimension);
+    if (static_cast<std::uint64_t>(dimension) >
+        std::numeric_limits<std::size_t>::max()) {
+      return std::unexpected("argument '" + argument.name +
+                             "' has a dimension that does not fit size_t");
+    }
+    if (dimension == 0) {
+      return 0;
+    }
+  }
+  std::size_t count = 1;
+  for (std::int64_t dimension : argument.shape) {
+    const auto size = static_cast<std::size_t>(dimension);
+    if (count > std::numeric_limits<std::size_t>::max() / size) {
+      return std::unexpected("argument '" + argument.name +
+                             "' element count overflows size_t");
+    }
+    count *= size;
   }
   return count;
 }
 
-bool write_header(const fs::path& path, const Manifest& manifest) {
+[[nodiscard]] std::expected<void, std::string> write_manifest(
+  const fs::path& path, const Manifest& manifest) {
+  auto arguments = [](const std::vector<Argument>& source) {
+    llvm::json::Array result;
+    for (const Argument& argument : source) {
+      llvm::json::Array shape;
+      for (std::int64_t dimension : argument.shape) {
+        shape.push_back(dimension);
+      }
+      llvm::json::Object object;
+      object["name"] = argument.name;
+      object["shape"] = std::move(shape);
+      result.push_back(std::move(object));
+    }
+    return result;
+  };
+  llvm::json::Object object;
+  object["function"] = manifest.function;
+  object["inputs"] = arguments(manifest.inputs);
+  object["outputs"] = arguments(manifest.outputs);
+  return write_file(
+    path, llvm::formatv("{0:2}\n", llvm::json::Value(std::move(object))).str());
+}
+
+[[nodiscard]] std::expected<void, std::string> write_header(
+  const fs::path& path, const Manifest& manifest) {
   std::string guard = "NCNN_" + manifest.function + "_H";
   std::ranges::transform(guard, guard.begin(), [](unsigned char c) {
     return static_cast<char>(std::toupper(c));
   });
   std::string contents = "#ifndef " + guard + "\n#define " + guard + "\n\n";
+  std::set<std::string> macros;
   for (const Argument* argument : [&] {
          std::vector<const Argument*> result;
          for (const Argument& input : manifest.inputs) {
@@ -380,8 +532,16 @@ bool write_header(const fs::path& path, const Manifest& manifest) {
     std::string macro = manifest.function + "_" + argument->name + "_elements";
     std::ranges::transform(
       macro, macro.begin(), [](unsigned char c) { return std::toupper(c); });
-    contents += "#define " + macro + " " +
-                std::to_string(element_count(*argument)) + "\n";
+    if (!macros.insert(macro).second) {
+      return std::unexpected("argument '" + argument->name +
+                             "' duplicates generated element-count macro '" +
+                             macro + "'");
+    }
+    auto count = element_count(*argument);
+    if (!count) {
+      return std::unexpected(count.error());
+    }
+    contents += "#define " + macro + " " + std::to_string(*count) + "\n";
   }
   contents += "\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\nint " +
               manifest.function + "(";
@@ -415,12 +575,12 @@ std::set<std::string> symbols(std::string_view output) {
   return result;
 }
 
-std::optional<std::string> read_text(const fs::path& path) {
+[[nodiscard]] std::expected<std::string, std::string> read_text(
+  const fs::path& path) {
   auto buffer = llvm::MemoryBuffer::getFile(path.string());
   if (!buffer) {
-    fail(llvm::Twine("cannot read '") + path.string() +
-         "': " + buffer.getError().message());
-    return std::nullopt;
+    return std::unexpected("cannot read '" + path.string() +
+                           "': " + buffer.getError().message());
   }
   return (*buffer)->getBuffer().str();
 }
@@ -432,24 +592,122 @@ bool is_generated_output(const fs::path& path, std::string_view model_name) {
                                        "model.linalg.mlir",
                                        "model.memref.mlir",
                                        "model.capi.mlir",
-                                       "model.llvm.mlir",
-                                       "model.ll",
-                                       "model.o",
-                                       "exports.map",
-                                       "harness",
-                                       "harness.c",
-                                       "libncnn_model.so",
-                                       "ncnn_model.h",
-                                       "ncnn_model.json"};
-  return name.starts_with(".ncnn-compile-") || fixed.contains(name) ||
+                                       "model.llvm.mlir"};
+  return fixed.contains(name) ||
          name == "lib" + std::string(model_name) + ".so" ||
          name == std::string(model_name) + ".h" ||
          name == std::string(model_name) + ".json";
 }
 
-bool write_harness(const fs::path& path,
-                   std::string_view header,
-                   const Manifest& manifest) {
+struct OutputDirectoryState {
+  bool exists;
+  std::optional<llvm::sys::fs::UniqueID> identity;
+};
+
+[[nodiscard]] std::expected<OutputDirectoryState, std::string>
+validate_output_directory(const fs::path& output_dir,
+                          std::string_view model_name) {
+  std::error_code error;
+  const bool exists = fs::exists(output_dir, error);
+  if (error) {
+    return std::unexpected("cannot inspect output path '" +
+                           output_dir.string() + "': " + error.message());
+  }
+  if (!exists) {
+    return OutputDirectoryState{.exists = false, .identity = std::nullopt};
+  }
+  if (!fs::is_directory(output_dir, error)) {
+    if (error) {
+      return std::unexpected("cannot inspect output directory '" +
+                             output_dir.string() + "': " + error.message());
+    }
+    return std::unexpected("output path is not a directory: " +
+                           output_dir.string());
+  }
+  llvm::sys::fs::UniqueID identity;
+  if (std::error_code identity_error =
+        llvm::sys::fs::getUniqueID(output_dir.string(), identity)) {
+    return std::unexpected("cannot identify output directory '" +
+                           output_dir.string() +
+                           "': " + identity_error.message());
+  }
+  fs::directory_iterator iterator(output_dir, error);
+  if (error) {
+    return std::unexpected("cannot iterate output directory '" +
+                           output_dir.string() + "': " + error.message());
+  }
+  const fs::directory_iterator end;
+  while (iterator != end) {
+    error.clear();
+    const bool is_symlink = iterator->is_symlink(error);
+    if (error) {
+      return std::unexpected("cannot inspect output entry '" +
+                             iterator->path().string() +
+                             "': " + error.message());
+    }
+    error.clear();
+    const bool is_regular_file = iterator->is_regular_file(error);
+    if (error) {
+      return std::unexpected("cannot inspect output entry '" +
+                             iterator->path().string() +
+                             "': " + error.message());
+    }
+    if (is_symlink || !is_regular_file ||
+        !is_generated_output(iterator->path(), model_name)) {
+      return std::unexpected(
+        "output directory contains a file not owned by ncnn-compile: " +
+        iterator->path().filename().string());
+    }
+    iterator.increment(error);
+    if (error) {
+      return std::unexpected("cannot continue iterating output directory '" +
+                             output_dir.string() + "': " + error.message());
+    }
+  }
+  return OutputDirectoryState{.exists = true, .identity = identity};
+}
+
+[[nodiscard]] std::expected<fs::path, std::string> unique_sibling_path(
+  const fs::path& output_dir, std::string_view purpose, bool create) {
+  fs::path parent = output_dir.parent_path();
+  if (parent.empty()) {
+    parent = ".";
+  }
+  const std::string stem = output_dir.filename().string() + ".ncnn-compile-" +
+                           std::string(purpose) + "-" +
+                           std::to_string(llvm::sys::Process::getProcessId());
+  for (unsigned attempt = 0; attempt < 1000; ++attempt) {
+    fs::path candidate = parent / (stem + "-" + std::to_string(attempt));
+    std::error_code error;
+    if (create) {
+      if (fs::create_directory(candidate, error)) {
+        return candidate;
+      }
+      if (!error) {
+        continue;
+      }
+      if (error != std::errc::file_exists) {
+        return std::unexpected("cannot create replacement directory '" +
+                               candidate.string() + "': " + error.message());
+      }
+    } else if (!fs::exists(candidate, error)) {
+      if (error) {
+        return std::unexpected("cannot inspect backup path '" +
+                               candidate.string() + "': " + error.message());
+      }
+      return candidate;
+    } else if (error) {
+      return std::unexpected("cannot inspect backup path '" +
+                             candidate.string() + "': " + error.message());
+    }
+  }
+  return std::unexpected(
+    "cannot reserve a sibling path for output directory '" +
+    output_dir.string() + "'");
+}
+
+[[nodiscard]] std::expected<void, std::string> write_harness(
+  const fs::path& path, std::string_view header, const Manifest& manifest) {
   std::vector<const Argument*> arguments;
   for (const Argument& input : manifest.inputs) {
     arguments.push_back(&input);
@@ -463,8 +721,13 @@ bool write_harness(const fs::path& path,
     "#include \"" +
     std::string(header) + "\"\n\nint main(void) {\n";
   for (const Argument* argument : arguments) {
+    auto count = element_count(*argument);
+    if (!count) {
+      return std::unexpected(count.error());
+    }
     code += "  float *" + argument->name + " = calloc(" +
-            std::to_string(element_count(*argument)) + ", sizeof(float));\n";
+            std::to_string(std::max<std::size_t>(1, *count)) +
+            ", sizeof(float));\n";
     code += "  if (!" + argument->name +
             ") { fprintf(stderr, \"ABI verification failed: cannot allocate " +
             argument->name + "\\n\"); return 2; }\n";
@@ -484,9 +747,12 @@ bool write_harness(const fs::path& path,
     "  if (model_status != 0) { fprintf(stderr, \"ABI verification "
     "failed: model returned %d\\n\", model_status); return 4; }\n";
   for (const Argument& output : manifest.outputs) {
-    code += "  for (size_t i = 0; i < " +
-            std::to_string(element_count(output)) + "; ++i) if (!isfinite(" +
-            output.name +
+    auto count = element_count(output);
+    if (!count) {
+      return std::unexpected(count.error());
+    }
+    code += "  for (size_t i = 0; i < " + std::to_string(*count) +
+            "; ++i) if (!isfinite(" + output.name +
             "[i])) { fprintf(stderr, \"ABI verification failed: output " +
             output.name + "[%zu] is not finite\\n\", i); return 5; }\n";
   }
@@ -545,11 +811,15 @@ int main(int argc, char** argv) {
   }
   const std::string bin_path =
     g_bin.empty() ? derive_bin_path(param_path) : g_bin;
-  if (!fs::is_regular_file(param_path)) {
-    return fail(llvm::Twine("input file does not exist: ") + param_path);
+  std::error_code error;
+  if (!fs::is_regular_file(param_path, error)) {
+    return fail(llvm::Twine("cannot use input file '") + param_path +
+                "': " + (error ? error.message() : "not a regular file"));
   }
-  if (!fs::is_regular_file(bin_path)) {
-    return fail(llvm::Twine("weight file does not exist: ") + bin_path);
+  error.clear();
+  if (!fs::is_regular_file(bin_path, error)) {
+    return fail(llvm::Twine("cannot use weight file '") + bin_path +
+                "': " + (error ? error.message() : "not a regular file"));
   }
   if (g_optimization != "0" && g_optimization != "1" && g_optimization != "2" &&
       g_optimization != "3") {
@@ -570,21 +840,21 @@ int main(int argc, char** argv) {
 
   const std::string model_name = c_identifier(
     g_model_name.empty() ? fs::path(param_path).stem().string() : g_model_name);
-  const fs::path output_dir = g_output_dir.empty()
-                                ? fs::path(model_name)
-                                : fs::path(g_output_dir.getValue());
-  std::error_code error;
-  fs::create_directories(output_dir, error);
-  if (error) {
-    return fail(llvm::Twine("cannot create output directory: ") +
-                error.message());
+  fs::path output_dir =
+    (g_output_dir.empty() ? fs::path(model_name)
+                          : fs::path(g_output_dir.getValue()))
+      .lexically_normal();
+  while (output_dir.filename().empty() &&
+         output_dir != output_dir.root_path()) {
+    output_dir = output_dir.parent_path();
   }
-  for (const fs::directory_entry& entry : fs::directory_iterator(output_dir)) {
-    if (!is_generated_output(entry.path(), model_name)) {
-      return fail(llvm::Twine("output directory contains a file not owned by "
-                              "ncnn-compile: ") +
-                  entry.path().filename().string());
-    }
+  if (output_dir.filename().empty() || output_dir.filename() == "." ||
+      output_dir.filename() == "..") {
+    return fail("output directory must name a non-root directory");
+  }
+  auto output_exists = validate_output_directory(output_dir, model_name);
+  if (!output_exists) {
+    return fail(output_exists.error());
   }
 
   const std::set<std::string> valid_stages = {
@@ -607,23 +877,34 @@ int main(int argc, char** argv) {
     executable_dir, g_driver, {"ncnn-mlir-driver"}, {"ncnn-mlir-driver"});
   auto opt =
     find_tool(executable_dir, g_opt, {"ncnn-mlir-opt"}, {"ncnn-mlir-opt"});
-  auto translate = find_tool(
-    executable_dir, g_translate, {}, {"mlir-translate-21", "mlir-translate"});
-  auto clang = find_tool(executable_dir, g_clang, {}, {"clang-21", "clang"});
-  auto nm = find_tool(executable_dir, g_nm, {}, {"llvm-nm-21", "llvm-nm"});
-  auto readelf = find_tool(
-    executable_dir, g_readelf, {}, {"llvm-readelf-21", "llvm-readelf"});
-  if (!driver || !opt || !translate || !clang || !nm || !readelf) {
+  auto translate =
+    find_tool(executable_dir, g_translate, {}, {"mlir-translate-21"});
+  auto clang = find_tool(executable_dir, g_clang, {}, {"clang-21"});
+  auto nm = find_tool(executable_dir, g_nm, {}, {"llvm-nm-21"});
+  auto readelf = find_tool(executable_dir, g_readelf, {}, {"llvm-readelf-21"});
+  for (const ToolResult* tool :
+       {&driver, &opt, &translate, &clang, &nm, &readelf}) {
+    if (!*tool) {
+      return fail(tool->error());
+    }
+  }
+  if (!*driver || !*opt || !*translate || !*clang || !*nm || !*readelf) {
     return fail(
       "required compiler tool not found; use -v and verify PATH or "
       "the installed toolchain");
   }
+  const std::string& driver_path = **driver;
+  const std::string& opt_path = **opt;
+  const std::string& translate_path = **translate;
+  const std::string& clang_path = **clang;
+  const std::string& nm_path = **nm;
+  const std::string& readelf_path = **readelf;
 
   llvm::SmallString<256> staging_storage;
   if (llvm::sys::fs::createUniqueDirectory("ncnn-compile", staging_storage)) {
     return fail("cannot create staging directory");
   }
-  StagingDirectory staging(fs::path(staging_storage.str().str()));
+  ScopedDirectory staging(fs::path(staging_storage.str().str()));
   const fs::path ncnn_ir = staging.path() / "model.ncnn.mlir";
   const fs::path tosa_ir = staging.path() / "model.tosa.mlir";
   const fs::path linalg_ir = staging.path() / "model.linalg.mlir";
@@ -637,25 +918,25 @@ int main(int argc, char** argv) {
   const fs::path exports = staging.path() / "exports.map";
   const fs::path library = staging.path() / ("lib" + model_name + ".so");
 
-  if (int status =
-        run({*driver, param_path, "--bin", bin_path, "-o", ncnn_ir.string()})) {
+  if (int status = run(
+        {driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()})) {
     return status;
   }
-  if (int status = run({*opt,
+  if (int status = run({opt_path,
                         "--ncnn-to-tosa-pipeline",
                         ncnn_ir.string(),
                         "-o",
                         tosa_ir.string()})) {
     return status;
   }
-  if (int status = run({*opt,
+  if (int status = run({opt_path,
                         "--ncnn-tosa-to-linalg-pipeline",
                         tosa_ir.string(),
                         "-o",
                         linalg_ir.string()})) {
     return status;
   }
-  if (int status = run({*opt,
+  if (int status = run({opt_path,
                         "--ncnn-linalg-to-memref-pipeline",
                         linalg_ir.string(),
                         "-o",
@@ -665,18 +946,18 @@ int main(int argc, char** argv) {
   const std::string capi_option =
     "--generate-ncnn-c-api=export-name=" + model_name +
     " manifest-path=" + manifest_path.string();
-  if (int status =
-        run({*opt, capi_option, memref_ir.string(), "-o", capi_ir.string()})) {
+  if (int status = run(
+        {opt_path, capi_option, memref_ir.string(), "-o", capi_ir.string()})) {
     return status;
   }
-  if (int status = run({*opt,
+  if (int status = run({opt_path,
                         "--ncnn-memref-to-llvm-pipeline",
                         capi_ir.string(),
                         "-o",
                         llvm_dialect_ir.string()})) {
     return status;
   }
-  if (int status = run({*translate,
+  if (int status = run({translate_path,
                         "--mlir-to-llvmir",
                         llvm_dialect_ir.string(),
                         "-o",
@@ -710,7 +991,7 @@ int main(int argc, char** argv) {
   }
   const std::string optimization = "-O" + g_optimization;
   std::vector<std::string> compile = {
-    *clang, "-x", "ir", "-fPIC", optimization};
+    clang_path, "-x", "ir", "-fPIC", optimization};
   compile.insert(compile.end(), target_args.begin(), target_args.end());
   compile.insert(compile.end(), codegen_args.begin(), codegen_args.end());
   compile.insert(compile.end(), g_clang_args.begin(), g_clang_args.end());
@@ -721,13 +1002,28 @@ int main(int argc, char** argv) {
   }
 
   auto manifest = read_manifest(manifest_path);
-  if (!manifest || !write_header(header, *manifest) ||
-      !write_file(exports,
-                  "{\n  global: " + model_name + ";\n  local: *;\n};\n")) {
-    return 1;
+  if (!manifest) {
+    return fail(manifest.error());
+  }
+  if (manifest->function != model_name) {
+    return fail(llvm::Twine("ABI manifest function '") + manifest->function +
+                "' does not match requested model name '" + model_name + "'");
+  }
+  auto manifest_result = write_manifest(manifest_path, *manifest);
+  if (!manifest_result) {
+    return fail(manifest_result.error());
+  }
+  auto header_result = write_header(header, *manifest);
+  if (!header_result) {
+    return fail(header_result.error());
+  }
+  auto exports_result =
+    write_file(exports, "{\n  global: " + model_name + ";\n  local: *;\n};\n");
+  if (!exports_result) {
+    return fail(exports_result.error());
   }
   std::vector<std::string> link = {
-    *clang, "-shared", "-nostdlib", optimization};
+    clang_path, "-shared", "-nostdlib", optimization};
   link.insert(link.end(), target_args.begin(), target_args.end());
   link.push_back(object.string());
   link.insert(link.end(), g_linker_args.begin(), g_linker_args.end());
@@ -745,13 +1041,13 @@ int main(int argc, char** argv) {
   }
 
   fs::path capture_path = staging.path() / "undefined.txt";
-  if (int status =
-        run({*nm, "-D", "--undefined-only", library.string()}, capture_path)) {
+  if (int status = run({nm_path, "-D", "--undefined-only", library.string()},
+                       capture_path)) {
     return status;
   }
   auto text = read_text(capture_path);
   if (!text) {
-    return 1;
+    return fail(text.error());
   }
   const std::set<std::string> undefined = symbols(*text);
   const std::set<std::string> allowed = {
@@ -774,41 +1070,46 @@ int main(int argc, char** argv) {
     }
   }
   capture_path = staging.path() / "defined.txt";
-  if (int status =
-        run({*nm, "-D", "--defined-only", library.string()}, capture_path)) {
+  if (int status = run({nm_path, "-D", "--defined-only", library.string()},
+                       capture_path)) {
     return status;
   }
   text = read_text(capture_path);
-  if (!text || symbols(*text) != std::set<std::string>{model_name}) {
+  if (!text) {
+    return fail(text.error());
+  }
+  if (symbols(*text) != std::set<std::string>{model_name}) {
     return fail(
       "shared library exports symbols other than the model entry point");
   }
   capture_path = staging.path() / "needed.txt";
   if (int status =
-        run({*readelf, "--needed-libs", library.string()}, capture_path)) {
+        run({readelf_path, "--needed-libs", library.string()}, capture_path)) {
     return status;
   }
   text = read_text(capture_path);
   if (!text) {
-    return 1;
+    return fail(text.error());
   }
-  static const std::regex needed_pattern(R"(lib[^\s]+\.so(?:\.\d+)*)");
+  static const std::regex needed_pattern(
+    R"(^\s*(lib[^\s]+\.so(?:\.\d+)*)\s*$)",
+    std::regex_constants::ECMAScript | std::regex_constants::multiline);
   for (auto match =
          std::sregex_iterator(text->begin(), text->end(), needed_pattern);
        match != std::sregex_iterator();
        ++match) {
-    const std::string name = (*match)[0];
+    const std::string name = (*match)[1];
     if (!name.starts_with("libc.so") && !name.starts_with("libm.so")) {
       return fail("shared library has an unexpected dependency: " + name);
     }
   }
   capture_path = staging.path() / "symbols.txt";
-  if (int status = run({*nm, "-D", library.string()}, capture_path)) {
+  if (int status = run({nm_path, "-D", library.string()}, capture_path)) {
     return status;
   }
   text = read_text(capture_path);
   if (!text) {
-    return 1;
+    return fail(text.error());
   }
   for (std::string_view forbidden :
        {"memrefCopy", "runner_utils", "RunnerUtils", "ncnn_runtime"}) {
@@ -820,10 +1121,18 @@ int main(int argc, char** argv) {
   if (g_verify_execution) {
     const fs::path harness_source = staging.path() / "harness.c";
     const fs::path harness = staging.path() / "harness";
-    if (!write_harness(harness_source, header.filename().string(), *manifest)) {
-      return 1;
+    auto harness_result =
+      write_harness(harness_source, header.filename().string(), *manifest);
+    if (!harness_result) {
+      return fail(harness_result.error());
     }
-    if (int status = run({*clang,
+    error.clear();
+    fs::path absolute_staging = fs::absolute(staging.path(), error);
+    if (error) {
+      return fail(llvm::Twine("cannot make staging path absolute: ") +
+                  error.message());
+    }
+    if (int status = run({clang_path,
                           "-std=c23",
                           harness_source.string(),
                           "-I",
@@ -831,7 +1140,7 @@ int main(int argc, char** argv) {
                           "-L",
                           staging.path().string(),
                           "-l" + model_name,
-                          "-Wl,-rpath," + fs::absolute(staging.path()).string(),
+                          "-Wl,-rpath," + absolute_staging.string(),
                           "-lm",
                           "-o",
                           harness.string()})) {
@@ -848,26 +1157,44 @@ int main(int argc, char** argv) {
     llvm::errs() << "ncnn-compile: ABI execution verification passed\n";
   }
 
-  for (const fs::directory_entry& entry : fs::directory_iterator(output_dir)) {
-    fs::remove_all(entry.path(), error);
-    if (error) {
-      return fail(llvm::Twine("cannot remove stale output '") +
-                  entry.path().string() + "': " + error.message());
-    }
+  fs::path output_parent = output_dir.parent_path();
+  if (output_parent.empty()) {
+    output_parent = ".";
   }
-  auto publish = [&](const fs::path& source) {
+  fs::create_directories(output_parent, error);
+  if (error) {
+    return fail(llvm::Twine("cannot create output parent directory '") +
+                output_parent.string() + "': " + error.message());
+  }
+  auto replacement_path = unique_sibling_path(output_dir, "replacement", true);
+  if (!replacement_path) {
+    return fail(replacement_path.error());
+  }
+  ScopedDirectory replacement(*replacement_path);
+  auto publish =
+    [&](const fs::path& source) -> std::expected<void, std::string> {
     error.clear();
     fs::copy_file(source,
-                  output_dir / source.filename(),
-                  fs::copy_options::overwrite_existing,
+                  replacement.path() / source.filename(),
+                  fs::copy_options::none,
                   error);
-    return !error;
+    if (error) {
+      return std::unexpected("cannot prepare output '" +
+                             source.filename().string() +
+                             "': " + error.message());
+    }
+    return {};
   };
-  if (!publish(header) || !publish(library)) {
-    return fail("cannot publish output files");
+  if (auto result = publish(header); !result) {
+    return fail(result.error());
   }
-  if (g_emit_manifest && !publish(manifest_path)) {
-    return fail("cannot publish ABI manifest");
+  if (auto result = publish(library); !result) {
+    return fail(result.error());
+  }
+  if (g_emit_manifest) {
+    if (auto result = publish(manifest_path); !result) {
+      return fail(result.error());
+    }
   }
   const std::vector<std::pair<std::string, fs::path>> stages = {
     {"ncnn", ncnn_ir},
@@ -877,10 +1204,69 @@ int main(int argc, char** argv) {
     {"capi", capi_ir},
     {"llvm", llvm_dialect_ir}};
   for (const auto& [stage, path] : stages) {
-    if (emitted.contains(stage) && !publish(path)) {
-      return fail("cannot publish MLIR stage");
+    if (emitted.contains(stage)) {
+      if (auto result = publish(path); !result) {
+        return fail(result.error());
+      }
     }
   }
+
+  auto current_output_exists =
+    validate_output_directory(output_dir, model_name);
+  if (!current_output_exists) {
+    return fail(current_output_exists.error());
+  }
+  if (current_output_exists->exists != output_exists->exists ||
+      current_output_exists->identity != output_exists->identity) {
+    return fail("output directory changed while compilation was in progress");
+  }
+  auto backup_path = unique_sibling_path(output_dir, "backup", false);
+  if (!backup_path) {
+    return fail(backup_path.error());
+  }
+  ScopedDirectory backup(*backup_path);
+  if (output_exists->exists) {
+    fs::rename(output_dir, backup.path(), error);
+    if (error) {
+      return fail(llvm::Twine("cannot move previous output directory '") +
+                  output_dir.string() + "' to backup: " + error.message());
+    }
+    llvm::sys::fs::UniqueID backup_identity;
+    if (std::error_code identity_error =
+          llvm::sys::fs::getUniqueID(backup.path().string(), backup_identity);
+        identity_error || backup_identity != *output_exists->identity) {
+      error.clear();
+      fs::rename(backup.path(), output_dir, error);
+      if (error) {
+        backup.release();
+        return fail(
+          llvm::Twine("output directory changed during publication; ") +
+          "rollback failed and the moved directory remains at '" +
+          backup.path().string() + "': " + error.message());
+      }
+      return fail("output directory changed during publication");
+    }
+  }
+  error.clear();
+  fs::rename(replacement.path(), output_dir, error);
+  if (error) {
+    const std::string publication_error = error.message();
+    if (output_exists->exists) {
+      error.clear();
+      fs::rename(backup.path(), output_dir, error);
+      if (error) {
+        backup.release();
+        return fail(llvm::Twine("cannot publish replacement output: ") +
+                    publication_error +
+                    "; rollback also failed; previous "
+                    "output remains at '" +
+                    backup.path().string() + "': " + error.message());
+      }
+    }
+    return fail(llvm::Twine("cannot publish replacement output: ") +
+                publication_error);
+  }
+  replacement.release();
   llvm::outs() << output_dir.string() << '\n';
   return 0;
 }

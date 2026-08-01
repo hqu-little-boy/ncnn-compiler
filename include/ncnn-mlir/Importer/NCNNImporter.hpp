@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <expected>
 #include <string>
+#include <string_view>
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
@@ -39,6 +40,6 @@ class ImportError {
 // TOSA、 Linalg/SCF 或 Host conversion 消费计算算子。 失败时返回带 layer
 // 上下文的 ImportError；形状/类型推断的诊断信息会被捕获进 message。
 [[nodiscard]] std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError>
-import_graph(const ncnn_graph::Graph& graph, mlir::MLIRContext* context);
+import_graph(const ncnn_graph::Graph& graph, mlir::MLIRContext& context);
 
 }  // namespace ncnn_importer

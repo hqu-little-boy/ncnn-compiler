@@ -64,7 +64,7 @@ TEST(LoadSqueezenetTyped, ImportsAndVerifies) {
     NCNN_GRAPH_SOURCE_ROOT "/ncnn/examples/squeezenet_v1.1.bin");
   ASSERT_TRUE(decoded.has_value()) << (decoded ? "" : decoded.error());
 
-  auto imported = ncnn_importer::import_graph(*decoded, &context);
+  auto imported = ncnn_importer::import_graph(*decoded, context);
   ASSERT_TRUE(imported.has_value())
     << (imported ? "" : imported.error().to_string());
 

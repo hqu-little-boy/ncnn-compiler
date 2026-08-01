@@ -1,5 +1,4 @@
-#ifndef NCNN_COMPILER_TEST_NUMERICAL_TEST_SUPPORT_HPP
-#define NCNN_COMPILER_TEST_NUMERICAL_TEST_SUPPORT_HPP
+#pragma once
 
 #include <cstddef>
 #include <cstdint>
@@ -13,26 +12,60 @@
 
 namespace ncnn_compiler::test {
 
-struct TensorShape {
-  int width;
-  int height;
-  int channels;
+class TensorShape final {
+ public:
+  explicit TensorShape(int width, int height, int channels);
 
-  [[nodiscard]] std::size_t element_count() const;
+  [[nodiscard]] int get_width() const noexcept;
+  [[nodiscard]] int get_height() const noexcept;
+  [[nodiscard]] int get_channels() const noexcept;
+
+  [[nodiscard]] std::expected<std::size_t, std::string> element_count() const;
+  [[nodiscard]] std::expected<std::size_t, std::string> byte_count(
+    std::size_t element_size) const;
+
+ private:
+  int width_;
+  int height_;
+  int channels_;
 };
 
-struct ReferenceModel {
-  std::string param_path;
-  std::string bin_path;
-  std::string input_blob;
-  std::string output_blob;
-  TensorShape input_shape;
+class ReferenceModel final {
+ public:
+  explicit ReferenceModel(std::string param_path,
+                          std::string bin_path,
+                          std::string input_blob,
+                          std::string output_blob,
+                          TensorShape input_shape);
+
+  [[nodiscard]] const std::string& get_param_path() const noexcept;
+  [[nodiscard]] const std::string& get_bin_path() const noexcept;
+  [[nodiscard]] const std::string& get_input_blob() const noexcept;
+  [[nodiscard]] const std::string& get_output_blob() const noexcept;
+  [[nodiscard]] const TensorShape& get_input_shape() const noexcept;
+
+ private:
+  std::string param_path_;
+  std::string bin_path_;
+  std::string input_blob_;
+  std::string output_blob_;
+  TensorShape input_shape_;
 };
 
-struct ReferenceInput {
-  std::string_view blob_name;
-  TensorShape shape;
-  std::span<const float> values;
+class ReferenceInput final {
+ public:
+  explicit ReferenceInput(std::string_view blob_name,
+                          TensorShape shape,
+                          std::span<const float> values);
+
+  [[nodiscard]] std::string_view get_blob_name() const noexcept;
+  [[nodiscard]] const TensorShape& get_shape() const noexcept;
+  [[nodiscard]] std::span<const float> get_values() const noexcept;
+
+ private:
+  std::string_view blob_name_;
+  TensorShape shape_;
+  std::span<const float> values_;
 };
 
 class CompiledModel final {
@@ -43,8 +76,8 @@ class CompiledModel final {
   CompiledModel(const CompiledModel&) = delete;
   CompiledModel& operator=(const CompiledModel&) = delete;
 
-  [[nodiscard]] bool valid() const;
-  [[nodiscard]] std::string_view error() const;
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] std::string_view error() const noexcept;
   int run(std::span<const float> input, std::span<float> output) const;
   int run_two_outputs(std::span<const float> input,
                       std::span<float> first_output,
@@ -54,8 +87,8 @@ class CompiledModel final {
                      std::span<float> output) const;
 
  private:
-  void* handle_ = nullptr;
-  void* symbol_ = nullptr;
+  void* handle_;
+  void* symbol_;
   std::string error_;
 };
 
@@ -63,14 +96,13 @@ std::vector<float> make_random_input(std::size_t size,
                                      std::uint32_t seed,
                                      float minimum,
                                      float maximum);
-std::expected<std::vector<float>, std::string> run_ncnn_reference(
-  const ReferenceModel& model,
-  std::span<const float> input);
-std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
-  std::string_view param_path,
-  std::string_view bin_path,
-  std::span<const ReferenceInput> inputs,
-  std::span<const std::string_view> output_blob_names);
+[[nodiscard]] std::expected<std::vector<float>, std::string> run_ncnn_reference(
+  const ReferenceModel& model, std::span<const float> input);
+[[nodiscard]] std::expected<std::vector<std::vector<float>>, std::string>
+run_ncnn_reference(std::string_view param_path,
+                   std::string_view bin_path,
+                   std::span<const ReferenceInput> inputs,
+                   std::span<const std::string_view> output_blob_names);
 ::testing::AssertionResult compare_values(std::span<const float> actual,
                                           std::span<const float> expected,
                                           float maximum_absolute_error);
@@ -78,5 +110,3 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
                                          std::span<const float> expected);
 
 }  // namespace ncnn_compiler::test
-
-#endif  // NCNN_COMPILER_TEST_NUMERICAL_TEST_SUPPORT_HPP

@@ -55,11 +55,12 @@ Checks: >
 
 # ── 警告即错误 ──────────────────────────────────────────────
 # CI/本地均把 tidy 警告当错误。开发时可临时去掉。
-WarningsAsErrors: ''
+WarningsAsErrors: '*'
 
 # ── 头文件过滤 ─────────────────────────────────────────────
-# 不检查第三方/系统头；只检查本项目源码。
-HeaderFilterRegex: '^(src|include|test)/.*\.(hpp|cpp)$'
+# clang-tidy reports canonical/absolute header paths. Keep only first-party
+# header trees; the CMake tidy targets further anchor this to CMAKE_SOURCE_DIR.
+HeaderFilterRegex: '^.*/(include|lib|bin|tools|test)/.*\.(h|hpp)$'
 
 # ── 现代 C++ 设定 ───────────────────────────────────────────
 # 注意：clang-tidy 不从本文件读 `-std`（`ExtraArguments` 非其合法键）。
@@ -71,4 +72,4 @@ HeaderFilterRegex: '^(src|include|test)/.*\.(hpp|cpp)$'
 # 如需可加 misc-* 系列，此处保持最小集。
 
 # ── 不检查的目录 ─────────────────────────────────────────
-ExcludeHeaderFilterRegex: 'build/.*'
+ExcludeHeaderFilterRegex: '(^|.*/)(build[^/]*|test/third_party|third_party|generated)(/|$)'

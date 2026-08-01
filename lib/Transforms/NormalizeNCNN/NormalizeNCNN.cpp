@@ -62,7 +62,8 @@ class NormalizeNCNNPass final
       return;
     }
 
-    WalkResult validation = module.walk([&](Operation* operation) {
+    OwningOpRef<ModuleOp> candidate = cast<ModuleOp>(module->clone());
+    WalkResult validation = candidate->walk([&](Operation* operation) {
       if (operation->getDialect() == nullptr ||
           operation->getDialect()->getNamespace() != "ncnn") {
         return WalkResult::advance();
@@ -79,7 +80,7 @@ class NormalizeNCNNPass final
     }
 
     SmallVector<SplitOp> splits;
-    WalkResult normalization = module.walk([&](Operation* operation) {
+    WalkResult normalization = candidate->walk([&](Operation* operation) {
       if (auto convolution = dyn_cast<ConvolutionOp>(operation)) {
         return normalizeConvolution(convolution);
       }
@@ -110,6 +111,7 @@ class NormalizeNCNNPass final
     for (SplitOp split : splits) {
       split.erase();
     }
+    module.getBodyRegion().takeBody(candidate->getBodyRegion());
   }
 
  private:

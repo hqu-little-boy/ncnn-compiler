@@ -101,13 +101,18 @@ TEST_F(MalformedGraphTest, TensorShapeValidation) {
   auto scalar_shape = tensor.set_shape({});
   EXPECT_TRUE(scalar_shape && tensor.element_count() == 1)
     << "empty shape has scalar element count";
-  tensor.set_dtype(ncnn_graph::DataType::Float32);
-  auto matrix_shape = tensor.set_shape({2, 3});
-  EXPECT_TRUE(matrix_shape && tensor.element_count() == 6 &&
+  auto matrix_contents = tensor.set_contents(
+    {2, 3}, ncnn_graph::DataType::Float32, std::vector<std::byte>(24));
+  EXPECT_TRUE(matrix_contents && tensor.element_count() == 6 &&
               tensor.byte_size() == 24)
     << "valid tensor shape computes element and byte counts";
-  auto zero_shape = tensor.set_shape({2, 0, 4});
-  EXPECT_TRUE(zero_shape && tensor.element_count() == 0 &&
+  auto mismatched_shape = tensor.set_shape({3, 3});
+  EXPECT_FALSE(mismatched_shape);
+  EXPECT_EQ(tensor.element_count(), 6U)
+    << "failed shape replacement preserves tensor contents";
+  auto zero_contents =
+    tensor.set_contents({2, 0, 4}, ncnn_graph::DataType::Float32, {});
+  EXPECT_TRUE(zero_contents && tensor.element_count() == 0 &&
               tensor.byte_size() == 0)
     << "zero tensor dimension produces zero elements";
   auto negative_shape = tensor.set_shape({2, -1});
@@ -218,8 +223,24 @@ TEST_F(MalformedGraphTest, WeightLoading) {
 
   auto empty_convolution =
     load_text("empty-convolution", kConvolutionGraph, empty_bin_path.string());
-  EXPECT_TRUE(!empty_convolution && contains(empty_convolution.error(), "EOF"))
-    << "provided empty bin does not skip convolution weight loading";
+  EXPECT_TRUE(
+    !empty_convolution && contains(empty_convolution.error(), "EOF") &&
+    contains(empty_convolution.error(), "layer 1 (Convolution, conv)"))
+    << "weight errors include layer index, type, and name";
+
+  expect_graph_failure("bad-int8-scale-term",
+                       "7767517\n2 2\nInput input 0 1 in\n"
+                       "Convolution conv 1 1 in out 0=1 1=1 5=0 6=1 8=3\n",
+                       "int8_scale_term must be 0, 1, 2, 101, or 102",
+                       "unsupported scale term is rejected before bin reads",
+                       empty_bin_path.string());
+
+  expect_graph_failure("wrong-weight-param-kind",
+                       "7767517\n2 2\nInput input 0 1 in\n"
+                       "Convolution conv 1 1 in out 0=1 1=relu 5=0 6=1\n",
+                       "parameter 1 (kernel_w) must be integer",
+                       "wrong parameter kind is not replaced with a default",
+                       empty_bin_path.string());
 
   std::vector<std::byte> truncated_weight;
   append_u32_le(truncated_weight, 0);

@@ -80,7 +80,7 @@ std::expected<std::int64_t, std::string> get_int(
     return std::unexpected(
       std::format("parameter {} ({}) must be integer", id, name));
   }
-  return value->get_int();
+  return *value->get_int();
 }
 
 std::expected<float, std::string> get_float(const ncnn_graph::ParamDict& params,
@@ -95,11 +95,11 @@ std::expected<float, std::string> get_float(const ncnn_graph::ParamDict& params,
     return std::unexpected(
       std::format("parameter {} ({}) must be float", id, name));
   }
-  if (!std::isfinite(value->get_float())) {
+  if (!std::isfinite(*value->get_float())) {
     return std::unexpected(
       std::format("parameter {} ({}) must be finite", id, name));
   }
-  return value->get_float();
+  return *value->get_float();
 }
 
 std::expected<void, std::string> expect_boolean(std::int64_t value,
@@ -131,7 +131,7 @@ std::expected<void, std::string> validate_feature_mask(
     return {};
   }
   if (value->get_kind() != ncnn_graph::ParamValue::Kind::Int ||
-      !std::in_range<int>(value->get_int())) {
+      !std::in_range<int>(*value->get_int())) {
     return std::unexpected(
       "parameter 31 (feature mask) must fit the ncnn int type");
   }
@@ -217,9 +217,9 @@ namespace {
 
 class ImportState {
  public:
-  explicit ImportState(mlir::MLIRContext* context)
-    : context_(context),
-      builder_(context),
+  explicit ImportState(mlir::MLIRContext& context)
+    : context_(&context),
+      builder_(&context),
       module_(mlir::ModuleOp::create(builder_.getUnknownLoc())),
       model_(),
       blobs_(),
@@ -229,7 +229,7 @@ class ImportState {
 
   std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> run(
     const ncnn_graph::Graph& source) {
-    auto prepared = prepare_model(source);
+    auto prepared = prepare_model();
     if (!prepared) {
       return std::unexpected(prepared.error());
     }
@@ -245,8 +245,7 @@ class ImportState {
   }
 
  private:
-  std::expected<void, ImportError> prepare_model(
-    const ncnn_graph::Graph& source) {
+  std::expected<void, ImportError> prepare_model() {
     model_ = builder_.create<mlir::ncnn::ModelOp>(
       builder_.getUnknownLoc(), builder_.getStringAttr("model"));
     mlir::Block* block = &model_.getBody().emplaceBlock();
@@ -914,7 +913,7 @@ class ImportState {
 }  // namespace
 
 std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> import_graph(
-  const ncnn_graph::Graph& graph, mlir::MLIRContext* context) {
+  const ncnn_graph::Graph& graph, mlir::MLIRContext& context) {
   ImportState state(context);
   return state.run(graph);
 }

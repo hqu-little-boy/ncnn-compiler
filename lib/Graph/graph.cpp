@@ -55,30 +55,32 @@ ParamValue::Kind ParamValue::get_kind() const noexcept {
   }
 }
 
-std::int64_t ParamValue::get_int() const noexcept {
+std::optional<std::int64_t> ParamValue::get_int() const noexcept {
   const auto* value = std::get_if<std::int64_t>(&storage_);
-  return value ? *value : 0;
+  return value ? std::optional(*value) : std::nullopt;
 }
 
-float ParamValue::get_float() const noexcept {
+std::optional<float> ParamValue::get_float() const noexcept {
   const auto* value = std::get_if<float>(&storage_);
-  return value ? *value : 0.0f;
+  return value ? std::optional(*value) : std::nullopt;
 }
 
-std::span<const std::int64_t> ParamValue::get_int_array() const noexcept {
+std::optional<std::span<const std::int64_t>> ParamValue::get_int_array()
+  const noexcept {
   const auto* value = std::get_if<std::vector<std::int64_t>>(&storage_);
-  return value ? std::span<const std::int64_t>(*value)
-               : std::span<const std::int64_t>();
+  return value ? std::optional(std::span<const std::int64_t>(*value))
+               : std::nullopt;
 }
 
-std::span<const float> ParamValue::get_float_array() const noexcept {
+std::optional<std::span<const float>> ParamValue::get_float_array()
+  const noexcept {
   const auto* value = std::get_if<std::vector<float>>(&storage_);
-  return value ? std::span<const float>(*value) : std::span<const float>();
+  return value ? std::optional(std::span<const float>(*value)) : std::nullopt;
 }
 
-std::string_view ParamValue::get_string() const noexcept {
+std::optional<std::string_view> ParamValue::get_string() const noexcept {
   const auto* value = std::get_if<std::string>(&storage_);
-  return value ? std::string_view(*value) : std::string_view();
+  return value ? std::optional(std::string_view(*value)) : std::nullopt;
 }
 
 ParamValue::ParamValue(Storage storage) : storage_(std::move(storage)) {}
@@ -120,7 +122,7 @@ std::int64_t ParamDict::get_int(int id, std::int64_t default_value) const {
   if (!value || value->get().get_kind() != ParamValue::Kind::Int) {
     return default_value;
   }
-  return value->get().get_int();
+  return value->get().get_int().value_or(default_value);
 }
 
 float ParamDict::get_float(int id, float default_value) const {
@@ -128,7 +130,7 @@ float ParamDict::get_float(int id, float default_value) const {
   if (!value || value->get().get_kind() != ParamValue::Kind::Float) {
     return default_value;
   }
-  return value->get().get_float();
+  return value->get().get_float().value_or(default_value);
 }
 
 std::optional<std::reference_wrapper<const std::string>> ParamDict::get_string(
@@ -146,12 +148,18 @@ std::optional<std::reference_wrapper<const std::string>> ParamDict::get_string(
 
 std::span<const std::int64_t> ParamDict::get_int_array(int id) const {
   auto value = find_value(id);
-  return value ? value->get().get_int_array() : std::span<const std::int64_t>();
+  if (!value) {
+    return {};
+  }
+  return value->get().get_int_array().value_or(std::span<const std::int64_t>());
 }
 
 std::span<const float> ParamDict::get_float_array(int id) const {
   auto value = find_value(id);
-  return value ? value->get().get_float_array() : std::span<const float>();
+  if (!value) {
+    return {};
+  }
+  return value->get().get_float_array().value_or(std::span<const float>());
 }
 
 // ───────────────────────── Tensor ─────────────────────────
@@ -182,6 +190,26 @@ std::expected<void, std::string> Tensor::set_shape(
   if (count > std::numeric_limits<std::size_t>::max() / kMaximumElementWidth) {
     return std::unexpected("tensor byte size overflows size_t");
   }
+  std::size_t element_width = 0;
+  switch (dtype_) {
+    case DataType::Unknown:
+      break;
+    case DataType::Float32:
+      element_width = sizeof(float);
+      break;
+    case DataType::Float16:
+      element_width = 2;
+      break;
+    case DataType::Int8:
+      element_width = 1;
+      break;
+  }
+  if (dtype_ != DataType::Unknown && count * element_width != data_.size()) {
+    return std::unexpected(
+      std::format("tensor shape requires {} data bytes, tensor has {}",
+                  count * element_width,
+                  data_.size()));
+  }
   shape_ = std::move(shape);
   return {};
 }
@@ -190,16 +218,31 @@ DataType Tensor::get_dtype() const noexcept {
   return dtype_;
 }
 
-void Tensor::set_dtype(DataType dtype) noexcept {
-  dtype_ = dtype;
-}
-
 std::span<const std::byte> Tensor::get_data() const noexcept {
   return data_;
 }
 
-void Tensor::set_data(std::vector<std::byte> data) {
+std::expected<void, std::string> Tensor::set_contents(
+  std::vector<std::int64_t> shape,
+  DataType dtype,
+  std::vector<std::byte> data) {
+  Tensor candidate;
+  auto shape_result = candidate.set_shape(std::move(shape));
+  if (!shape_result) {
+    return std::unexpected(shape_result.error());
+  }
+  candidate.dtype_ = dtype;
+  if (candidate.byte_size() != data.size()) {
+    return std::unexpected(
+      std::format("tensor byte size mismatch: shape and dtype require {}, "
+                  "data has {}",
+                  candidate.byte_size(),
+                  data.size()));
+  }
+  shape_ = std::move(candidate.shape_);
+  dtype_ = dtype;
   data_ = std::move(data);
+  return {};
 }
 
 std::size_t Tensor::element_count() const noexcept {
@@ -573,15 +616,17 @@ std::size_t BinCursor::get_remaining() const noexcept {
   return data_.size() - position_;
 }
 
-std::expected<Tensor, std::string> load_weight(BinCursor& cursor,
-                                               std::int64_t element_count,
-                                               int type) {
+std::expected<Tensor, std::string> load_weight(
+  BinCursor& cursor,
+  std::int64_t element_count,
+  int type,
+  std::vector<std::int64_t> shape) {
   auto count = positive_size(element_count, "weight element count");
   if (!count) {
     return std::unexpected(count.error());
   }
 
-  Tensor tensor;
+  DataType dtype = DataType::Unknown;
   std::size_t element_width = 0;
   bool needs_alignment = false;
   if (type == 0) {
@@ -590,22 +635,22 @@ std::expected<Tensor, std::string> load_weight(BinCursor& cursor,
       return std::unexpected("weight flag: " + flag.error());
     }
     if (*flag == kFloat16Flag) {
-      tensor.set_dtype(DataType::Float16);
+      dtype = DataType::Float16;
       element_width = 2;
       needs_alignment = true;
     } else if (*flag == kInt8Flag) {
-      tensor.set_dtype(DataType::Int8);
+      dtype = DataType::Int8;
       element_width = 1;
       needs_alignment = true;
     } else if (*flag == kFloat32Flag || *flag == 0) {
-      tensor.set_dtype(DataType::Float32);
+      dtype = DataType::Float32;
       element_width = sizeof(float);
     } else {
       return std::unexpected(std::format(
         "quantized lookup-table weight flag 0x{:08x} is unsupported", *flag));
     }
   } else if (type == 1) {
-    tensor.set_dtype(DataType::Float32);
+    dtype = DataType::Float32;
     element_width = sizeof(float);
   } else {
     return std::unexpected(
@@ -620,26 +665,38 @@ std::expected<Tensor, std::string> load_weight(BinCursor& cursor,
   if (!bytes) {
     return std::unexpected("weight data: " + bytes.error());
   }
-  tensor.set_data(std::vector<std::byte>(bytes->begin(), bytes->end()));
+  std::vector<std::byte> data(bytes->begin(), bytes->end());
   if (needs_alignment) {
     auto aligned = cursor.align4();
     if (!aligned) {
       return std::unexpected("weight alignment: " + aligned.error());
     }
   }
+  Tensor tensor;
+  auto contents = tensor.set_contents(std::move(shape), dtype, std::move(data));
+  if (!contents) {
+    return std::unexpected(contents.error());
+  }
   return tensor;
 }
 
-std::expected<void, std::string> validate_tensor_data(
-  const Tensor& tensor, std::string_view description) {
-  if (tensor.byte_size() != tensor.get_data().size()) {
-    return std::unexpected(
-      std::format("{} byte size mismatch: shape requires {}, data has {}",
-                  description,
-                  tensor.byte_size(),
-                  tensor.get_data().size()));
+std::expected<std::int64_t, std::string> get_layer_param_int(
+  const Layer& layer,
+  int id,
+  std::int64_t default_value,
+  std::string_view name) {
+  for (const auto& [entry_id, value] : layer.get_params().get_entries()) {
+    if (entry_id != id) {
+      continue;
+    }
+    auto result = value.get_int();
+    if (!result) {
+      return std::unexpected(
+        std::format("parameter {} ({}) must be integer", id, name));
+    }
+    return *result;
   }
-  return {};
+  return default_value;
 }
 
 std::expected<void, std::string> load_layer_weights(Layer& layer,
@@ -648,29 +705,58 @@ std::expected<void, std::string> load_layer_weights(Layer& layer,
     return {};
   }
 
-  std::int64_t dynamic_weight = layer.get_param_int(19);
-  if (dynamic_weight != 0 && dynamic_weight != 1) {
+  auto dynamic_weight = get_layer_param_int(layer, 19, 0, "dynamic_weight");
+  if (!dynamic_weight) {
+    return std::unexpected(dynamic_weight.error());
+  }
+  if (*dynamic_weight != 0 && *dynamic_weight != 1) {
     return std::unexpected("convolution dynamic_weight must be 0 or 1");
   }
-  if (dynamic_weight == 1) {
+  if (*dynamic_weight == 1) {
     return {};
   }
 
-  std::int64_t num_output_value = layer.get_param_int(0);
-  std::int64_t weight_count_value = layer.get_param_int(6);
-  std::int64_t kernel_w_value = layer.get_param_int(1);
-  std::int64_t kernel_h_value = layer.get_param_int(11, kernel_w_value);
-  std::int64_t bias_term = layer.get_param_int(5);
-  std::int64_t int8_scale_term = layer.get_param_int(8);
-  if (bias_term != 0 && bias_term != 1) {
+  auto num_output_value = get_layer_param_int(layer, 0, 0, "num_output");
+  auto weight_count_value =
+    get_layer_param_int(layer, 6, 0, "weight_data_size");
+  auto kernel_w_value = get_layer_param_int(layer, 1, 0, "kernel_w");
+  auto bias_term = get_layer_param_int(layer, 5, 0, "bias_term");
+  auto int8_scale_term = get_layer_param_int(layer, 8, 0, "int8_scale_term");
+  if (!num_output_value || !weight_count_value || !kernel_w_value ||
+      !bias_term || !int8_scale_term) {
+    if (!num_output_value) {
+      return std::unexpected(num_output_value.error());
+    }
+    if (!weight_count_value) {
+      return std::unexpected(weight_count_value.error());
+    }
+    if (!kernel_w_value) {
+      return std::unexpected(kernel_w_value.error());
+    }
+    if (!bias_term) {
+      return std::unexpected(bias_term.error());
+    }
+    return std::unexpected(int8_scale_term.error());
+  }
+  auto kernel_h_value =
+    get_layer_param_int(layer, 11, *kernel_w_value, "kernel_h");
+  if (!kernel_h_value) {
+    return std::unexpected(kernel_h_value.error());
+  }
+  if (*bias_term != 0 && *bias_term != 1) {
     return std::unexpected("convolution bias_term must be 0 or 1");
   }
+  if (*int8_scale_term != 0 && *int8_scale_term != 1 && *int8_scale_term != 2 &&
+      *int8_scale_term != 101 && *int8_scale_term != 102) {
+    return std::unexpected(
+      "convolution int8_scale_term must be 0, 1, 2, 101, or 102");
+  }
 
-  auto num_output = positive_size(num_output_value, "convolution num_output");
+  auto num_output = positive_size(*num_output_value, "convolution num_output");
   auto weight_count =
-    positive_size(weight_count_value, "convolution weight count");
-  auto kernel_w = positive_size(kernel_w_value, "convolution kernel width");
-  auto kernel_h = positive_size(kernel_h_value, "convolution kernel height");
+    positive_size(*weight_count_value, "convolution weight count");
+  auto kernel_w = positive_size(*kernel_w_value, "convolution kernel width");
+  auto kernel_h = positive_size(*kernel_h_value, "convolution kernel height");
   if (!num_output) {
     return std::unexpected(num_output.error());
   }
@@ -705,72 +791,45 @@ std::expected<void, std::string> load_layer_weights(Layer& layer,
     return std::unexpected("convolution input channel count is invalid");
   }
 
-  auto weight = load_weight(cursor, weight_count_value, 0);
+  auto weight = load_weight(cursor,
+                            *weight_count_value,
+                            0,
+                            {*num_output_value,
+                             static_cast<std::int64_t>(num_input),
+                             *kernel_h_value,
+                             *kernel_w_value});
   if (!weight) {
     return std::unexpected("conv weight: " + weight.error());
   }
-  auto shape_result = weight->set_shape({num_output_value,
-                                         static_cast<std::int64_t>(num_input),
-                                         kernel_h_value,
-                                         kernel_w_value});
-  if (!shape_result) {
-    return std::unexpected("conv weight shape: " + shape_result.error());
-  }
-  auto weight_data_result = validate_tensor_data(*weight, "conv weight");
-  if (!weight_data_result) {
-    return std::unexpected(weight_data_result.error());
-  }
   layer.add_weight(std::move(*weight));
 
-  if (bias_term == 1) {
-    auto bias = load_weight(cursor, num_output_value, 1);
+  if (*bias_term == 1) {
+    auto bias = load_weight(cursor, *num_output_value, 1, {*num_output_value});
     if (!bias) {
       return std::unexpected("conv bias: " + bias.error());
-    }
-    auto bias_shape_result = bias->set_shape({num_output_value});
-    if (!bias_shape_result) {
-      return std::unexpected("conv bias shape: " + bias_shape_result.error());
-    }
-    auto bias_data_result = validate_tensor_data(*bias, "conv bias");
-    if (!bias_data_result) {
-      return std::unexpected(bias_data_result.error());
     }
     layer.add_weight(std::move(*bias));
   }
 
-  if (int8_scale_term != 0) {
-    auto weight_scales = load_weight(cursor, num_output_value, 1);
+  if (*int8_scale_term != 0) {
+    auto weight_scales =
+      load_weight(cursor, *num_output_value, 1, {*num_output_value});
     if (!weight_scales) {
       return std::unexpected("conv weight int8 scales: " +
                              weight_scales.error());
     }
-    auto weight_scales_shape = weight_scales->set_shape({num_output_value});
-    if (!weight_scales_shape) {
-      return std::unexpected("conv weight int8 scales shape: " +
-                             weight_scales_shape.error());
-    }
     layer.add_weight(std::move(*weight_scales));
 
-    auto bottom_scale = load_weight(cursor, 1, 1);
+    auto bottom_scale = load_weight(cursor, 1, 1, {1});
     if (!bottom_scale) {
       return std::unexpected("conv bottom int8 scale: " + bottom_scale.error());
     }
-    auto bottom_scale_shape = bottom_scale->set_shape({1});
-    if (!bottom_scale_shape) {
-      return std::unexpected("conv bottom int8 scale shape: " +
-                             bottom_scale_shape.error());
-    }
     layer.add_weight(std::move(*bottom_scale));
   }
-  if (int8_scale_term > 100) {
-    auto top_scale = load_weight(cursor, 1, 1);
+  if (*int8_scale_term > 100) {
+    auto top_scale = load_weight(cursor, 1, 1, {1});
     if (!top_scale) {
       return std::unexpected("conv top int8 scale: " + top_scale.error());
-    }
-    auto top_scale_shape = top_scale->set_shape({1});
-    if (!top_scale_shape) {
-      return std::unexpected("conv top int8 scale shape: " +
-                             top_scale_shape.error());
     }
     layer.add_weight(std::move(*top_scale));
   }
@@ -983,10 +1042,15 @@ std::expected<Graph, std::string> Graph::load(std::string_view param_path,
 
   bool weights_loaded = false;
   if (bin_supplied) {
-    for (auto& layer : layers) {
+    for (std::size_t index = 0; index < layers.size(); ++index) {
+      auto& layer = layers[index];
       auto result = load_layer_weights(layer, cursor);
       if (!result) {
-        return std::unexpected(result.error());
+        return std::unexpected(std::format("layer {} ({}, {}): {}",
+                                           index,
+                                           layer.get_type(),
+                                           layer.get_name(),
+                                           result.error()));
       }
     }
     if (cursor.get_remaining() != 0) {
@@ -1075,17 +1139,17 @@ std::string Graph::dump() const {
         output << id << "=";
         switch (value.get_kind()) {
           case ParamValue::Kind::Int:
-            output << value.get_int();
+            output << *value.get_int();
             break;
           case ParamValue::Kind::Float:
-            output << value.get_float();
+            output << *value.get_float();
             break;
           case ParamValue::Kind::String:
-            output << "\"" << value.get_string() << "\"";
+            output << "\"" << *value.get_string() << "\"";
             break;
           case ParamValue::Kind::IntArray: {
             output << "[";
-            auto values = value.get_int_array();
+            auto values = *value.get_int_array();
             for (std::size_t item = 0; item < values.size(); ++item) {
               if (item) {
                 output << ",";
@@ -1096,7 +1160,7 @@ std::string Graph::dump() const {
           } break;
           case ParamValue::Kind::FloatArray: {
             output << "[";
-            auto values = value.get_float_array();
+            auto values = *value.get_float_array();
             for (std::size_t item = 0; item < values.size(); ++item) {
               if (item) {
                 output << ",";

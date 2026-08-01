@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
 
-  auto imported = ncnn_importer::import_graph(*decoded, &context);
+  auto imported = ncnn_importer::import_graph(*decoded, context);
   if (!imported.has_value()) {
     llvm::errs() << "error: failed to import graph: "
                  << imported.error().to_string() << "\n";

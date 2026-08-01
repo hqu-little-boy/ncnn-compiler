@@ -55,6 +55,25 @@ TEST(ParserTest, ZeroLengthExplicitArray) {
     << "zero-length explicit array parses";
 }
 
+TEST(ParserTest, ParamValueWrongKindReturnsNullopt) {
+  auto integer = ncnn_graph::ParamValue::make_int(0);
+  EXPECT_EQ(integer.get_int(), 0);
+  EXPECT_FALSE(integer.get_float());
+  EXPECT_FALSE(integer.get_int_array());
+  EXPECT_FALSE(integer.get_float_array());
+  EXPECT_FALSE(integer.get_string());
+
+  auto empty_string = ncnn_graph::ParamValue::make_string("");
+  ASSERT_TRUE(empty_string.get_string());
+  EXPECT_TRUE(empty_string.get_string()->empty());
+  EXPECT_FALSE(empty_string.get_int());
+
+  auto empty_array = ncnn_graph::ParamValue::make_int_array({});
+  ASSERT_TRUE(empty_array.get_int_array());
+  EXPECT_TRUE(empty_array.get_int_array()->empty());
+  EXPECT_FALSE(empty_array.get_float_array());
+}
+
 namespace {
 
 void expect_failure(std::string_view text,

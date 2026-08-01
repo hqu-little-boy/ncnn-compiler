@@ -154,6 +154,11 @@ class GenerateCAPIPass final
              << "cannot create duplicate internal symbol '" << internalName
              << "'";
     }
+    if (failed(
+          writeManifest(std::move(inputManifest), std::move(outputManifest)))) {
+      return failure();
+    }
+
     function.setSymName(internalName);
     function.setPrivate();
     function->removeAttr("llvm.emit_c_interface");
@@ -166,8 +171,7 @@ class GenerateCAPIPass final
                             builder.getArrayAttr(argumentTypes));
     getOperation()->setAttr(kOutputIndicesAttr,
                             builder.getDenseI32ArrayAttr(outputIndices));
-
-    return writeManifest(std::move(inputManifest), std::move(outputManifest));
+    return success();
   }
 
   LogicalResult writeManifest(SmallVector<llvm::json::Object> inputs,
@@ -196,6 +200,14 @@ class GenerateCAPIPass final
     manifest["outputs"] = std::move(outputArray);
     stream->os() << llvm::formatv("{0:2}\n",
                                   llvm::json::Value(std::move(manifest)));
+    stream->os().close();
+    if (stream->os().has_error()) {
+      std::error_code error = stream->os().error();
+      stream->os().clear_error();
+      getOperation().emitError() << "cannot write ABI manifest '"
+                                 << manifestPath << "': " << error.message();
+      return failure();
+    }
     stream->keep();
     return success();
   }

@@ -74,8 +74,30 @@ ncnn_graph::Tensor make_tensor(std::vector<std::int64_t> shape,
     std::cerr << shaped.error() << '\n';
     std::terminate();
   }
-  tensor.set_dtype(type);
-  tensor.set_data(std::vector<std::byte>(tensor.byte_size()));
+  std::size_t element_width = 0;
+  switch (type) {
+    case ncnn_graph::DataType::Unknown:
+      break;
+    case ncnn_graph::DataType::Float32:
+      element_width = sizeof(float);
+      break;
+    case ncnn_graph::DataType::Float16:
+      element_width = 2;
+      break;
+    case ncnn_graph::DataType::Int8:
+      element_width = 1;
+      break;
+  }
+  std::vector<std::int64_t> contents_shape(tensor.get_shape().begin(),
+                                           tensor.get_shape().end());
+  auto contents = tensor.set_contents(
+    std::move(contents_shape),
+    type,
+    std::vector<std::byte>(tensor.element_count() * element_width));
+  if (!contents) {
+    std::cerr << contents.error() << '\n';
+    std::terminate();
+  }
   return tensor;
 }
 
@@ -241,7 +263,7 @@ class NcnnImporterTest : public ::testing::Test {
 
   std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ncnn_importer::ImportError>
   import(const ncnn_graph::Graph& graph) {
-    return ncnn_importer::import_graph(graph, &context_);
+    return ncnn_importer::import_graph(graph, context_);
   }
 
   mlir::MLIRContext context_;

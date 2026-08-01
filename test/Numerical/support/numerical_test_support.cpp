@@ -6,6 +6,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <set>
@@ -62,13 +63,105 @@ std::vector<std::size_t> top_indices(std::span<const float> values,
 
 }  // namespace
 
-std::size_t TensorShape::element_count() const {
-  return static_cast<std::size_t>(width) * static_cast<std::size_t>(height) *
-         static_cast<std::size_t>(channels);
+TensorShape::TensorShape(int width, int height, int channels)
+  : width_(width), height_(height), channels_(channels) {}
+
+int TensorShape::get_width() const noexcept {
+  return width_;
+}
+
+int TensorShape::get_height() const noexcept {
+  return height_;
+}
+
+int TensorShape::get_channels() const noexcept {
+  return channels_;
+}
+
+std::expected<std::size_t, std::string> TensorShape::element_count() const {
+  if (width_ < 0 || height_ < 0 || channels_ < 0) {
+    return std::unexpected("tensor shape dimensions must be non-negative");
+  }
+  const auto checked_multiply =
+    [](std::size_t left,
+       std::size_t right) -> std::expected<std::size_t, std::string> {
+    if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right) {
+      return std::unexpected("tensor element count overflows size_t");
+    }
+    return left * right;
+  };
+  auto elements = checked_multiply(static_cast<std::size_t>(width_),
+                                   static_cast<std::size_t>(height_));
+  if (!elements) {
+    return std::unexpected(elements.error());
+  }
+  return checked_multiply(*elements, static_cast<std::size_t>(channels_));
+}
+
+std::expected<std::size_t, std::string> TensorShape::byte_count(
+  std::size_t element_size) const {
+  auto elements = element_count();
+  if (!elements) {
+    return std::unexpected(elements.error());
+  }
+  if (element_size != 0 &&
+      *elements > std::numeric_limits<std::size_t>::max() / element_size) {
+    return std::unexpected("tensor byte count overflows size_t");
+  }
+  return *elements * element_size;
+}
+
+ReferenceModel::ReferenceModel(std::string param_path,
+                               std::string bin_path,
+                               std::string input_blob,
+                               std::string output_blob,
+                               TensorShape input_shape)
+  : param_path_(std::move(param_path)),
+    bin_path_(std::move(bin_path)),
+    input_blob_(std::move(input_blob)),
+    output_blob_(std::move(output_blob)),
+    input_shape_(input_shape) {}
+
+const std::string& ReferenceModel::get_param_path() const noexcept {
+  return param_path_;
+}
+
+const std::string& ReferenceModel::get_bin_path() const noexcept {
+  return bin_path_;
+}
+
+const std::string& ReferenceModel::get_input_blob() const noexcept {
+  return input_blob_;
+}
+
+const std::string& ReferenceModel::get_output_blob() const noexcept {
+  return output_blob_;
+}
+
+const TensorShape& ReferenceModel::get_input_shape() const noexcept {
+  return input_shape_;
+}
+
+ReferenceInput::ReferenceInput(std::string_view blob_name,
+                               TensorShape shape,
+                               std::span<const float> values)
+  : blob_name_(blob_name), shape_(shape), values_(values) {}
+
+std::string_view ReferenceInput::get_blob_name() const noexcept {
+  return blob_name_;
+}
+
+const TensorShape& ReferenceInput::get_shape() const noexcept {
+  return shape_;
+}
+
+std::span<const float> ReferenceInput::get_values() const noexcept {
+  return values_;
 }
 
 CompiledModel::CompiledModel(std::string_view library_path,
-                             std::string_view symbol_name) {
+                             std::string_view symbol_name)
+  : handle_(nullptr), symbol_(nullptr), error_() {
   handle_ = dlopen(std::string(library_path).c_str(), RTLD_NOW | RTLD_LOCAL);
   if (handle_ == nullptr) {
     error_ = dlerror();
@@ -91,11 +184,11 @@ CompiledModel::~CompiledModel() {
   }
 }
 
-bool CompiledModel::valid() const {
+bool CompiledModel::valid() const noexcept {
   return symbol_ != nullptr;
 }
 
-std::string_view CompiledModel::error() const {
+std::string_view CompiledModel::error() const noexcept {
   return error_;
 }
 
@@ -147,11 +240,11 @@ std::vector<float> make_random_input(std::size_t size,
 
 std::expected<std::vector<float>, std::string> run_ncnn_reference(
   const ReferenceModel& model, std::span<const float> input) {
-  const ReferenceInput reference_input{
-    .blob_name = model.input_blob, .shape = model.input_shape, .values = input};
-  const std::string_view output_name = model.output_blob;
-  auto outputs = run_ncnn_reference(model.param_path,
-                                    model.bin_path,
+  const ReferenceInput reference_input(
+    model.get_input_blob(), model.get_input_shape(), input);
+  const std::string_view output_name = model.get_output_blob();
+  auto outputs = run_ncnn_reference(model.get_param_path(),
+                                    model.get_bin_path(),
                                     std::span(&reference_input, 1),
                                     std::span(&output_name, 1));
   if (!outputs) {
@@ -200,26 +293,51 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
   std::vector<ncnn::Mat> input_mats;
   input_mats.reserve(inputs.size());
   for (const ReferenceInput& input : inputs) {
-    if (input.values.size() != input.shape.element_count()) {
-      return std::unexpected("reference input size does not match its shape");
+    auto input_elements = input.get_shape().element_count();
+    if (!input_elements) {
+      return std::unexpected("reference input blob '" +
+                             std::string(input.get_blob_name()) +
+                             "': " + input_elements.error());
     }
-    input_mats.emplace_back(
-      input.shape.width, input.shape.height, input.shape.channels);
+    auto input_bytes = input.get_shape().byte_count(sizeof(float));
+    if (!input_bytes) {
+      return std::unexpected("reference input blob '" +
+                             std::string(input.get_blob_name()) +
+                             "': " + input_bytes.error());
+    }
+    if (input.get_values().size() != *input_elements) {
+      return std::unexpected("reference input blob '" +
+                             std::string(input.get_blob_name()) +
+                             "': value count does not match its shape");
+    }
+    input_mats.emplace_back(input.get_shape().get_width(),
+                            input.get_shape().get_height(),
+                            input.get_shape().get_channels());
     if (input_mats.back().empty()) {
-      return std::unexpected("ncnn failed to allocate input tensor");
+      return std::unexpected("ncnn failed to allocate input blob '" +
+                             std::string(input.get_blob_name()) + "'");
     }
     const std::size_t channel_elements =
-      static_cast<std::size_t>(input.shape.width) *
-      static_cast<std::size_t>(input.shape.height);
-    for (int channel = 0; channel < input.shape.channels; ++channel) {
+      input.get_shape().get_channels() == 0
+        ? 0
+        : *input_elements /
+            static_cast<std::size_t>(input.get_shape().get_channels());
+    const std::size_t channel_bytes =
+      input.get_shape().get_channels() == 0
+        ? 0
+        : *input_bytes /
+            static_cast<std::size_t>(input.get_shape().get_channels());
+    for (int channel = 0; channel < input.get_shape().get_channels();
+         ++channel) {
       std::memcpy(input_mats.back().channel(channel),
-                  input.values.data() +
+                  input.get_values().data() +
                     (static_cast<std::size_t>(channel) * channel_elements),
-                  channel_elements * sizeof(float));
+                  channel_bytes);
     }
-    if (extractor.input(std::string(input.blob_name).c_str(),
+    if (extractor.input(std::string(input.get_blob_name()).c_str(),
                         input_mats.back()) != 0) {
-      return std::unexpected("ncnn failed to bind input blob");
+      return std::unexpected("ncnn failed to bind input blob '" +
+                             std::string(input.get_blob_name()) + "'");
     }
   }
 
@@ -228,27 +346,61 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
   for (std::string_view output_blob_name : output_blob_names) {
     ncnn::Mat output;
     if (extractor.extract(std::string(output_blob_name).c_str(), output) != 0) {
-      return std::unexpected("ncnn failed to extract output blob");
+      return std::unexpected("ncnn failed to extract output blob '" +
+                             std::string(output_blob_name) + "'");
     }
     if (output.elempack != 1 || output.elemsize != sizeof(float)) {
-      return std::unexpected("ncnn reference output is not unpacked float32");
+      return std::unexpected("ncnn reference output blob '" +
+                             std::string(output_blob_name) +
+                             "' is not unpacked float32");
     }
-    const auto width = static_cast<std::size_t>(output.w);
-    const auto height = static_cast<std::size_t>(output.h);
-    const auto depth = static_cast<std::size_t>(output.d);
-    const auto channels = static_cast<std::size_t>(output.c);
-    const std::size_t channel_elements = width * height * depth;
-    const std::size_t logical_elements = channel_elements * channels;
+    if (output.w < 0 || output.h < 0 || output.d < 0 || output.c < 0) {
+      return std::unexpected("ncnn reference output blob '" +
+                             std::string(output_blob_name) +
+                             "' has a negative dimension");
+    }
+    const auto checked_multiply =
+      [output_blob_name](
+        std::size_t left,
+        std::size_t right) -> std::expected<std::size_t, std::string> {
+      if (right != 0 &&
+          left > std::numeric_limits<std::size_t>::max() / right) {
+        return std::unexpected("ncnn reference output blob '" +
+                               std::string(output_blob_name) +
+                               "' size overflows size_t");
+      }
+      return left * right;
+    };
+    auto channel_elements = checked_multiply(
+      static_cast<std::size_t>(output.w), static_cast<std::size_t>(output.h));
+    if (channel_elements) {
+      channel_elements =
+        checked_multiply(*channel_elements, static_cast<std::size_t>(output.d));
+    }
+    if (!channel_elements) {
+      return std::unexpected(channel_elements.error());
+    }
+    auto logical_elements =
+      checked_multiply(*channel_elements, static_cast<std::size_t>(output.c));
+    if (!logical_elements) {
+      return std::unexpected(logical_elements.error());
+    }
+    if (*logical_elements >
+        std::numeric_limits<std::size_t>::max() / sizeof(float)) {
+      return std::unexpected("ncnn reference output blob '" +
+                             std::string(output_blob_name) +
+                             "' byte count overflows size_t");
+    }
     std::vector<float> flattened;
-    flattened.reserve(logical_elements);
+    flattened.reserve(*logical_elements);
     if (output.dims >= 3) {
       for (int channel = 0; channel < output.c; ++channel) {
         const float* begin = output.channel(channel);
-        flattened.insert(flattened.end(), begin, begin + channel_elements);
+        flattened.insert(flattened.end(), begin, begin + *channel_elements);
       }
     } else {
       const auto* begin = static_cast<const float*>(output.data);
-      flattened.assign(begin, begin + logical_elements);
+      flattened.assign(begin, begin + *logical_elements);
     }
     results.push_back(std::move(flattened));
   }

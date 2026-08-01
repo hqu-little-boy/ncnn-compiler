@@ -34,6 +34,12 @@ jobs:
             -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm
           cmake --build build --parallel
 
+      - name: Check formatting
+        run: cmake --build build --target format_check
+
+      - name: Run clang-tidy
+        run: cmake --build build --target tidy
+
       - name: Test
         run: ctest --test-dir build --output-on-failure -j$(nproc)
 
