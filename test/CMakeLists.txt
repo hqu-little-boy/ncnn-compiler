@@ -63,10 +63,24 @@ add_test(NAME squeezenet-shared-library
         --param ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn/examples/squeezenet_v1.1.param
         --bin ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn/examples/squeezenet_v1.1.bin
         --model-name squeezenet_v1_1
-        --expected-undefined expf,free,malloc
+        --expected-undefined expf,free,malloc,memset
         --output-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/squeezenet
+        --keep-manifest
         --verify-execution)
 set_tests_properties(squeezenet-shared-library PROPERTIES
     LABELS "native;integration"
+    RUN_SERIAL TRUE
+    TIMEOUT 180)
+
+add_test(NAME ncnn-compile-cli
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_ncnn_compile.py
+        --compiler ${CMAKE_BINARY_DIR}/tools/ncnn-compile
+        --legacy-compiler ${CMAKE_SOURCE_DIR}/tools/compile_ncnn_model.py
+        --build-dir ${CMAKE_BINARY_DIR}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/relu.param
+        --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
+        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/ncnn-compile-cli)
+set_tests_properties(ncnn-compile-cli PROPERTIES
+    LABELS "native;integration;cli"
     RUN_SERIAL TRUE
     TIMEOUT 180)

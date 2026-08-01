@@ -2,6 +2,7 @@
 // RUN: FileCheck %s --check-prefix=PREPARED < %t.mlir
 // RUN: FileCheck %s --check-prefix=MANIFEST < %t.json
 // RUN: ncnn-mlir-opt --ncnn-memref-to-llvm-pipeline %t.mlir | FileCheck %s --check-prefix=LLVM
+// RUN: ncnn-mlir-opt --generate-ncnn-c-api='export-name=model' %s | FileCheck %s --check-prefix=SAME-NAME
 
 module {
   func.func @model(%output1: memref<2xf32> {bufferize.result},
@@ -33,3 +34,5 @@ module {
 // LLVM: llvm.func @__ncnn_internal_multi_io(
 // LLVM-SAME: attributes {sym_visibility = "private"}
 // LLVM-NOT: _mlir_ciface
+
+// SAME-NAME-LABEL: func.func private @__ncnn_internal_model(

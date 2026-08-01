@@ -9,6 +9,8 @@ add_executable(ncnn-mlir-opt ncnn-mlir-opt.cpp)
 # 本目录在 include 路径上，便于以 "RegisterNCNNDialects.h" 直接引用。
 target_include_directories(ncnn-mlir-opt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(ncnn-mlir-opt PRIVATE -fno-rtti)
+set_target_properties(ncnn-mlir-opt PROPERTIES
+    INSTALL_RPATH "${LLVM_LIBRARY_DIR}")
 target_link_libraries(ncnn-mlir-opt PRIVATE
     BufferizeNCNN
     GenerateCAPI
@@ -25,3 +27,4 @@ target_link_libraries(ncnn-mlir-opt PRIVATE
     ${extension_libs}
     MLIRMlirOptMain
     MLIRPass)
+install(TARGETS ncnn-mlir-opt RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

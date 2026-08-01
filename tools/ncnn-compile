@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Stable top-level ncnn compiler entry point."""
+
+import pathlib
+import runpy
+
+
+runpy.run_path(str(pathlib.Path(__file__).with_name("compile_ncnn_model.py")), run_name="__main__")

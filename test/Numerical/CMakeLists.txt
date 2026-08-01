@@ -61,6 +61,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             --bin ${bin_file}
             --model-name ${name}
             --output-dir ${output_dir}
+            --keep-manifest
         DEPENDS
             ncnn-mlir-driver
             ncnn-mlir-opt

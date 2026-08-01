@@ -234,9 +234,8 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 ./build/bin/ncnn-mlir-opt --ncnn-linalg-to-memref-pipeline model.linalg.mlir
 
 # 从 ncnn 模型生成经过严格链接和符号检查的动态库：
-python3 tools/compile_ncnn_model.py \
-  --param test/third_party/ncnn/examples/squeezenet_v1.1.param \
-  --bin test/third_party/ncnn/examples/squeezenet_v1.1.bin
+./build/tools/ncnn-compile \
+  test/third_party/ncnn/examples/squeezenet_v1.1.param
 ```
 
 `--ncnn-to-tosa-pipeline` 内部固定运行：
@@ -266,15 +265,66 @@ LLVM dialect，在同一 JIT 进程内调用 500 次并检查 RSS 趋势；sanit
 ASan/LSan。完整 SqueezeNet 的重复调用验收需要产品 LLVM lowering 和最终 C ABI。
 
 `--ncnn-memref-to-llvm-pipeline` 消除 Linalg/Affine/SCF/Math/Arith/MemRef/Func/CF，并将
-`math.exp` 映射到系统 `expf`。`tools/compile_ncnn_model.py` 随后调用
+`math.exp` 映射到系统 `expf`。`ncnn-compile` 通过内部 Python 编排器调用
 `mlir-translate-21`、`clang-21 -fPIC` 和严格共享库链接；最终 `.so` 只依赖 libc/libm，
-未定义符号只允许 `malloc`、`free`、`expf`、`memcpy`，且禁止 `memrefCopy` 和
+未定义符号只允许 `malloc`、`free`、`expf`、`memcpy`、`memset`，且禁止 `memrefCopy` 和
 runner/project runtime。
 
-编译入口默认从 `.param` 文件名推导 C 标识符，可用 `--model-name` 覆盖。它根据实际静态 f32
-输入输出生成 `<模型名>.h`、`lib<模型名>.so` 和 JSON ABI manifest；公共函数参数顺序是全部
-输入后全部输出。每个输入在头文件中声明为 `const float *`，每个输出声明为 `float *`，并生成
-对应元素数量宏。任一参数为空返回 1且不执行模型，成功返回 0。
+`ncnn-compile model.param` 默认从文件名推导模型名和同名输出目录，并自动使用同目录的
+`model.bin`。默认目录只包含用户需要的两个文件：
+
+```text
+model/
+├── model.h
+└── libmodel.so
+```
+
+可用 `--model-name` 覆盖模型名，使用 `-o/--output-dir` 覆盖输出目录，使用 `--bin` 覆盖权重
+路径。公共函数参数顺序是全部输入后全部输出。每个输入在头文件中声明为 `const float *`，每个
+输出声明为 `float *`，并生成对应元素数量宏。任一参数为空返回 1且不执行模型，成功返回 0。
+
+`--emit` 用于保留调试所需的中间 MLIR，可重复指定或使用逗号分隔：
+
+```bash
+# 只保留 ncnn、TOSA 和 LLVM dialect MLIR
+ncnn-compile model.param --emit ncnn,tosa --emit llvm
+
+# 保留全部中间 MLIR
+ncnn-compile model.param --emit all
+```
+
+支持的阶段为 `ncnn`、`tosa`、`linalg`、`memref`、`capi` 和 `llvm`。`llvm` 指 LLVM dialect
+MLIR，不是临时 LLVM IR `.ll`；内部 `.ll` 和 object 不属于公共产物。
+
+代码生成选项包括：
+
+```text
+-O0 / -O1 / -O2 / -O3
+--target-triple <triple>
+--march <architecture>
+--mcpu <cpu>
+--mtune <cpu>
+--target-feature <+feature|-feature>  # 可重复
+--sysroot <path>
+-g / --debug-info
+--clang-arg <argument>                # 高级编译参数，可重复
+--linker-arg <argument>               # 高级链接参数，可重复
+-v / --verbose
+```
+
+默认优化等级为 `-O3`。交叉编译时调用方必须提供与 target triple 匹配的 clang 工具链和
+sysroot；当前产物和链接审计只支持 64 位 Linux ELF target。`--verify-execution` 只适用于
+生成库可在当前宿主执行的情况。以 `-` 开头的高级参数既可写成
+`--clang-arg=-ffast-math`，也可写成 `--clang-arg -ffast-math`；target feature 和 linker
+参数同理。
+
+输出先在目标目录内的临时目录完成编译、严格链接和符号审计，成功后才发布。失败不会覆盖
+上一份有效 `.h/.so`。成功重编译会移除该输出目录中的旧编译产物和不再请求的 MLIR；如果目录
+含有不属于 `ncnn-compile` 的文件，命令会拒绝执行，避免误删用户数据。
+
+CMake 构建后入口位于 `build/tools/ncnn-compile`。执行 `cmake --install build` 会把
+`ncnn-compile`、内部编排器、`ncnn-mlir-driver` 和 `ncnn-mlir-opt` 安装到同一个 `bin` 目录，
+安装后的 `ncnn-compile` 会自动发现这些内部工具。
 
 SqueezeNet 默认接口为：
 
@@ -297,7 +347,8 @@ int squeezenet_v1_1(const float *input1, float *output1);
 - ncnn 方言：`compiler/lib/Dialect/NCNN/IR/`（+ `compiler/include/ncnn-mlir/Dialect/NCNN/IR/`）
 - 转换/规范化：`compiler/lib/{Conversion,Transforms}/`
 - lowering pipeline：`compiler/lib/Pipelines/NCNNPipelines.cpp`
-- 严格动态库入口：`compiler/tools/compile_ncnn_model.py`
+- 稳定编译入口：`compiler/tools/ncnn-compile`
+- 外部工具编排：`compiler/tools/compile_ncnn_model.py`
 - 算子数值适配避坑指南：`compiler/docs/operator-numerical-validation-guide.md`
 - SqueezeNet pipeline 测试：`compiler/test/Pipelines/squeezenet-m2.mlir`
 - 解析器/数据模型：`compiler/lib/Graph/`（`ncnn_graph` 库）

@@ -94,7 +94,9 @@ class GenerateCAPIPass final
     if (function.getNumResults() != 0) {
       return function.emitOpError("must have no results before C ABI wrapping");
     }
-    if (SymbolTable::lookupSymbolIn(getOperation(), exportName)) {
+    Operation* existing =
+      SymbolTable::lookupSymbolIn(getOperation(), exportName);
+    if (existing && existing != function.getOperation()) {
       return function.emitOpError()
              << "cannot export duplicate symbol '" << exportName << "'";
     }
@@ -147,6 +149,11 @@ class GenerateCAPIPass final
     }
 
     const std::string internalName = "__ncnn_internal_" + exportName;
+    if (SymbolTable::lookupSymbolIn(getOperation(), internalName)) {
+      return function.emitOpError()
+             << "cannot create duplicate internal symbol '" << internalName
+             << "'";
+    }
     function.setSymName(internalName);
     function.setPrivate();
     function->removeAttr("llvm.emit_c_interface");
