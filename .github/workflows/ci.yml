@@ -36,3 +36,17 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure -j$(nproc)
+
+      - name: Build with ASan and UBSan
+        run: |
+          cmake -S compiler -B build-sanitize \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-sanitize --parallel
+
+      - name: Test with ASan and UBSan once
+        run: ctest --test-dir build-sanitize --output-on-failure -j$(nproc)
