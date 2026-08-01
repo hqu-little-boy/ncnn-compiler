@@ -372,6 +372,13 @@ TEST_F(NcnnImporterTest, RejectsInvalidGraphs) {
   unknown_graph.set_output_blob_names({"out"});
   EXPECT_FALSE(import(unknown_graph)) << "unknown layer type is rejected";
 
+  ncnn_graph::Graph grouped_convolution;
+  grouped_convolution.add_layer(
+    make_layer("ConvolutionDepthWise", "grouped", {}, {"out"}));
+  grouped_convolution.set_output_blob_names({"out"});
+  EXPECT_FALSE(import(grouped_convolution))
+    << "group convolution is a distinct unsupported source layer";
+
   auto bad_kind = make_supported_graph();
   std::vector<ncnn_graph::Layer> layers(bad_kind.get_layers().begin(),
                                         bad_kind.get_layers().end());

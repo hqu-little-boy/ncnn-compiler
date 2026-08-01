@@ -233,18 +233,22 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
     if (output.elempack != 1 || output.elemsize != sizeof(float)) {
       return std::unexpected("ncnn reference output is not unpacked float32");
     }
+    const auto width = static_cast<std::size_t>(output.w);
+    const auto height = static_cast<std::size_t>(output.h);
+    const auto depth = static_cast<std::size_t>(output.d);
+    const auto channels = static_cast<std::size_t>(output.c);
+    const std::size_t channel_elements = width * height * depth;
+    const std::size_t logical_elements = channel_elements * channels;
     std::vector<float> flattened;
-    flattened.reserve(output.total());
-    if (output.dims == 3) {
-      const std::size_t channel_elements =
-        static_cast<std::size_t>(output.w) * static_cast<std::size_t>(output.h);
+    flattened.reserve(logical_elements);
+    if (output.dims >= 3) {
       for (int channel = 0; channel < output.c; ++channel) {
         const float* begin = output.channel(channel);
         flattened.insert(flattened.end(), begin, begin + channel_elements);
       }
     } else {
       const auto* begin = static_cast<const float*>(output.data);
-      flattened.assign(begin, begin + output.total());
+      flattened.assign(begin, begin + logical_elements);
     }
     results.push_back(std::move(flattened));
   }

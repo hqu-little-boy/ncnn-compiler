@@ -162,8 +162,18 @@ TOSA pool 还要求 padded extent、kernel 和 stride 满足其 verifier 约束�
 6. TOSA 的输出 shape 和传入 pad 数组是否完全一致。
 
 小型单算子 fixture 建议先使用无歧义、可整除的 valid shape，分别增加专门 fixture 覆盖
-full-tail、SAME_UPPER、SAME_LOWER 和 average include-pad。真实模型测试不能替代这些分支，
-但可继续覆盖 SqueezeNet 的实际 `pad_mode=0` 路径。
+full-tail、SAME_UPPER、SAME_LOWER 和 average exclude-pad。当前 average `include_pad=1`
+会保留 `ncnn.pooling`，因此严格 native pipeline 会拒绝该组合；它应作为明确的未支持
+参数边界，而不是 numerical golden。类似地，`pad_mode=0` 在某些 `stride > kernel` 的
+组合下可能产生超过 TOSA kernel 约束的 padding，需要单独修复 lowering 后再纳入矩阵。
+真实模型测试不能替代这些分支，但可继续覆盖 SqueezeNet 的实际 `pad_mode=0` 路径。
+
+当前 Numerical 参数矩阵已覆盖：Convolution 的无 bias、dilation、非对称显式 padding、
+SAME_UPPER/LOWER；ReLU 的普通、零/负输入和 leaky slope；Pooling 的 max/average、global、
+SAME_UPPER/LOWER 与 tail；Concat 的 rank-3 正负 axis；Softmax 的 rank-3 正负 axis；以及
+三路 Split 输出经过多级 consumer 的拓扑。ncnn 的 group/depthwise convolution 使用独立的
+`ConvolutionDepthWise` layer，当前 importer 未支持，不能通过给普通 `Convolution` 增加
+group 参数来宣称支持。
 
 ## 9. 多输入、多输出 ABI 必须实际调用，不能只检查 manifest
 
