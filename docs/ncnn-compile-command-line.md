@@ -482,6 +482,11 @@ x86-64 主机上生成 AArch64 动态库时，driver 可以完成编译和静态
 harness。
 
 `--verify-execution` 只是 ABI smoke test，不会将结果与原始 ncnn runtime 做完整数值比较。
+验证通过时，driver 会在终端打印 `ncnn-compile: ABI execution verification passed`。harness
+源码、测试可执行文件和零初始化输入都位于系统临时目录，执行后自动删除，不会发布到输出目录；
+该测试也不会打印或保存输出张量数值。验证失败时，harness 会指出失败的检查项，例如内存分配
+失败、模型返回非零、某个输出元素不是有限值，或者某个空指针参数被错误接受；driver 同时保留
+harness 的非零退出码。
 
 ## 8. 通用帮助选项
 

@@ -458,13 +458,16 @@ bool write_harness(const fs::path& path,
     arguments.push_back(&output);
   }
   std::string code =
-    "#include <math.h>\n#include <stddef.h>\n#include <stdlib.h>\n"
+    "#include <math.h>\n#include <stddef.h>\n#include <stdio.h>\n"
+    "#include <stdlib.h>\n"
     "#include \"" +
     std::string(header) + "\"\n\nint main(void) {\n";
   for (const Argument* argument : arguments) {
     code += "  float *" + argument->name + " = calloc(" +
             std::to_string(element_count(*argument)) + ", sizeof(float));\n";
-    code += "  if (!" + argument->name + ") return 2;\n";
+    code += "  if (!" + argument->name +
+            ") { fprintf(stderr, \"ABI verification failed: cannot allocate " +
+            argument->name + "\\n\"); return 2; }\n";
   }
   auto call = [&](std::optional<std::size_t> null_index) {
     std::string result = manifest.function + "(";
@@ -476,14 +479,22 @@ bool write_harness(const fs::path& path,
     }
     return result + ")";
   };
-  code += "  if (" + call(std::nullopt) + " != 0) return 4;\n";
+  code += "  int model_status = " + call(std::nullopt) + ";\n";
+  code +=
+    "  if (model_status != 0) { fprintf(stderr, \"ABI verification "
+    "failed: model returned %d\\n\", model_status); return 4; }\n";
   for (const Argument& output : manifest.outputs) {
     code += "  for (size_t i = 0; i < " +
             std::to_string(element_count(output)) + "; ++i) if (!isfinite(" +
-            output.name + "[i])) return 5;\n";
+            output.name +
+            "[i])) { fprintf(stderr, \"ABI verification failed: output " +
+            output.name + "[%zu] is not finite\\n\", i); return 5; }\n";
   }
   for (std::size_t index = 0; index < arguments.size(); ++index) {
-    code += "  if (" + call(index) + " == 0) return 3;\n";
+    code += "  if (" + call(index) +
+            " == 0) { fprintf(stderr, \"ABI verification failed: NULL "
+            "argument " +
+            arguments[index]->name + " was accepted\\n\"); return 3; }\n";
   }
   for (const Argument* argument : arguments) {
     code += "  free(" + argument->name + ");\n";
@@ -824,11 +835,17 @@ int main(int argc, char** argv) {
                           "-lm",
                           "-o",
                           harness.string()})) {
+      llvm::errs()
+        << "ncnn-compile: error: ABI verification harness compilation failed\n";
       return status;
     }
     if (int status = run({harness.string()})) {
+      llvm::errs() << "ncnn-compile: error: ABI execution verification failed "
+                      "with harness exit code "
+                   << status << '\n';
       return status;
     }
+    llvm::errs() << "ncnn-compile: ABI execution verification passed\n";
   }
 
   for (const fs::directory_entry& entry : fs::directory_iterator(output_dir)) {
