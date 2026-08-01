@@ -76,6 +76,12 @@ add_test(NAME ncnn-compile-cli
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_ncnn_compile.py
         --compiler ${CMAKE_BINARY_DIR}/tools/ncnn-compile
         --debug-compiler ${CMAKE_SOURCE_DIR}/tools/compile_ncnn_model.py
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
         --build-dir ${CMAKE_BINARY_DIR}
         --param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/relu.param
         --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin

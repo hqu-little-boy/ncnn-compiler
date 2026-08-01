@@ -21,6 +21,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--debug-compiler", required=True)
+    parser.add_argument("--driver", required=True)
+    parser.add_argument("--opt", required=True)
+    parser.add_argument("--translate", required=True)
+    parser.add_argument("--clang", required=True)
+    parser.add_argument("--nm", required=True)
+    parser.add_argument("--readelf", required=True)
     parser.add_argument("--build-dir", required=True)
     parser.add_argument("--param", required=True)
     parser.add_argument("--bin", required=True)
@@ -130,6 +136,18 @@ def main():
         [
             "python3",
             args.debug_compiler,
+            "--driver",
+            args.driver,
+            "--opt",
+            args.opt,
+            "--translate",
+            args.translate,
+            "--clang",
+            args.clang,
+            "--nm",
+            args.nm,
+            "--readelf",
+            args.readelf,
             "--param",
             args.param,
             "--bin",
