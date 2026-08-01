@@ -260,9 +260,7 @@ func.func @model(%input: memref<3x227x227xf32>,
 ```
 
 函数无返回值；`%input` 和 `%output` 由调用方拥有，不会被函数释放。
-默认 CTest 的 `repeated-call-memory` 会把一个覆盖临时 alloc/dealloc 的小型 memref 模型降到
-LLVM dialect，在同一 JIT 进程内调用 500 次并检查 RSS 趋势；sanitizer 构建还会启用
-ASan/LSan。完整 SqueezeNet 的重复调用验收需要产品 LLVM lowering 和最终 C ABI。
+完整 SqueezeNet 的重复调用验收需要产品 LLVM lowering 和最终 C ABI。
 
 `--ncnn-memref-to-llvm-pipeline` 消除 Linalg/Affine/SCF/Math/Arith/MemRef/Func/CF，并将
 `math.exp` 映射到系统 `expf`。C++ `ncnn-compile` driver 直接调用
