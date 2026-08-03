@@ -7,39 +7,19 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 
 namespace mlir::ncnn {
 namespace {
 
-class ConvertNCNNModelToFuncPass final
-  : public PassWrapper<ConvertNCNNModelToFuncPass, OperationPass<ModuleOp>> {
+class ConvertModel final : public OpConversionPattern<ModelOp> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertNCNNModelToFuncPass)
+  using OpConversionPattern::OpConversionPattern;
 
-  StringRef getArgument() const final { return "convert-ncnn-model-to-func"; }
-  StringRef getDescription() const final {
-    return "Build a function boundary for each ncnn.model";
-  }
-
-  void getDependentDialects(DialectRegistry& registry) const final {
-    registry.insert<arith::ArithDialect, func::FuncDialect>();
-  }
-
-  void runOnOperation() final {
-    SmallVector<ModelOp> models(getOperation().getOps<ModelOp>());
-    for (ModelOp model : models) {
-      if (failed(convertModel(model))) {
-        signalPassFailure();
-        return;
-      }
-    }
-  }
-
- private:
-  static LogicalResult convertModel(ModelOp model) {
+  LogicalResult matchAndRewrite(
+    ModelOp model, OpAdaptor, ConversionPatternRewriter& rewriter) const final {
     SmallVector<InputOp> inputs;
     SmallVector<OutputOp> outputs;
     for (Operation& operation : model.getBody().front()) {
@@ -62,46 +42,84 @@ class ConvertNCNNModelToFuncPass final
       outputTypes.push_back(output.getInput().getType());
     }
 
-    OpBuilder builder(model);
-    auto function = builder.create<func::FuncOp>(
+    rewriter.setInsertionPoint(model);
+    auto function = rewriter.create<func::FuncOp>(
       model.getLoc(),
       model.getSymName(),
       FunctionType::get(model.getContext(), inputTypes, outputTypes));
-    function->setAttr("ncnn.entry_point", builder.getUnitAttr());
-    function->setAttr("llvm.emit_c_interface", builder.getUnitAttr());
-    Block* entry = function.addEntryBlock();
-    builder.setInsertionPointToStart(entry);
+    function->setAttr("ncnn.entry_point", rewriter.getUnitAttr());
+    function->setAttr("llvm.emit_c_interface", rewriter.getUnitAttr());
+    SmallVector<Location> argumentLocations(inputTypes.size(), model.getLoc());
+    Block* entry = rewriter.createBlock(&function.getBody(),
+                                        function.getBody().end(),
+                                        inputTypes,
+                                        argumentLocations);
+    rewriter.inlineBlockBefore(&model.getBody().front(), entry, entry->end());
 
-    IRMapping mapping;
     for (auto [input, argument] : llvm::zip(inputs, entry->getArguments())) {
-      mapping.map(input.getOutput(), argument);
-    }
-
-    for (Operation& operation : model.getBody().front()) {
-      if (isa<InputOp, OutputOp>(operation)) {
-        continue;
-      }
-      if (auto constant = dyn_cast<ConstOp>(operation)) {
-        auto lowered = builder.create<arith::ConstantOp>(constant.getLoc(),
-                                                         constant.getValue());
-        mapping.map(constant.getOutput(), lowered.getResult());
-        continue;
-      }
-      builder.clone(operation, mapping);
+      rewriter.replaceOp(input, argument);
     }
 
     SmallVector<Value> results;
     for (OutputOp output : outputs) {
-      Value mapped = mapping.lookupOrNull(output.getInput());
+      Value mapped = rewriter.getRemappedValue(output.getInput());
       if (!mapped) {
-        function.erase();
-        return output.emitOpError("input was not converted into the function");
+        return output.emitOpError("input was not remapped into the function");
       }
       results.push_back(mapped);
+      rewriter.eraseOp(output);
     }
-    builder.create<func::ReturnOp>(model.getLoc(), results);
-    model.erase();
+    rewriter.setInsertionPointToEnd(entry);
+    rewriter.create<func::ReturnOp>(model.getLoc(), results);
+    rewriter.eraseOp(model);
     return success();
+  }
+};
+
+class ConvertConst final : public OpConversionPattern<ConstOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    ConstOp operation,
+    OpAdaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(operation,
+                                                   operation.getValue());
+    return success();
+  }
+};
+
+class ConvertNCNNModelToFuncPass final
+  : public PassWrapper<ConvertNCNNModelToFuncPass, OperationPass<ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertNCNNModelToFuncPass)
+
+  StringRef getArgument() const final { return "convert-ncnn-model-to-func"; }
+  StringRef getDescription() const final {
+    return "Build a function boundary for each ncnn.model";
+  }
+
+  void getDependentDialects(DialectRegistry& registry) const final {
+    registry.insert<arith::ArithDialect, func::FuncDialect>();
+  }
+
+  void runOnOperation() final {
+    MLIRContext* context = getOperation().getContext();
+    RewritePatternSet patterns(context);
+    patterns.add<ConvertModel, ConvertConst>(context);
+
+    ConversionTarget target(*context);
+    target.addLegalDialect<arith::ArithDialect, func::FuncDialect>();
+    target.addLegalOp<ModuleOp>();
+    target.addIllegalOp<ModelOp, InputOp, ConstOp, OutputOp>();
+    target.markUnknownOpDynamicallyLegal(
+      [](Operation*) -> std::optional<bool> { return true; });
+
+    FrozenRewritePatternSet frozen(std::move(patterns));
+    if (failed(applyFullConversion(getOperation(), target, frozen))) {
+      signalPassFailure();
+    }
   }
 };
 

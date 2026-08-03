@@ -37,7 +37,10 @@
 
 `convert-ncnn-model-to-func` 是 normalize 和所有目标 conversion 的固定前置 pass，而不是
 后端 ABI 收尾步骤。
-它只消除模型边界并建立标准函数形态，不转换计算语义或 CHW/OIHW 布局；后续
+它使用 MLIR full dialect conversion 消除模型边界并建立标准函数形态：`ModelOp` pattern
+创建函数并把原 region 内容移动到函数 block，input/output 映射为参数和单个 return，
+`ConstOp` pattern 转为 `arith.constant`。conversion driver 管理 SSA remap、合法性和失败
+回滚，不 clone 整个模型 SSA 图。该 pass 不转换计算语义或 CHW/OIHW 布局；后续
 `normalize-ncnn` 保持 CHW/OIHW，收敛 axis、padding、融合属性等目标无关语义。该 pass
 先只读验证所有 ncnn op 的函数边界并预计算可能失败的 SAME padding，全部成功后才原地
 提交属性更新和 Split 消除；失败不会留下部分规范化结果，也不需要 clone 整个模块。

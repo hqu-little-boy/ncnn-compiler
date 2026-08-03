@@ -221,6 +221,9 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 转移到 `func.func` 参数/结果与 `arith.constant`，并删除模型边界算子。该 pass 是
 `--normalize-ncnn` 和各目标 conversion 的固定前置。`--convert-ncnn-to-tosa` 采用长期
 部分转换契约：只转换明确支持的算子，其他 ncnn op 可留给后续 Linalg/SCF 或 Host 路径。
+模型函数化使用 MLIR full dialect conversion：`ModelOp` pattern 移动原 region 并建立函数
+边界，`ConstOp` pattern 转换权重，conversion driver 负责 SSA remap、合法性和失败回滚，
+不会复制整个模型计算图。
 `--normalize-ncnn` 会先只读验证并预计算 SAME padding，再原地提交全部规范化修改；验证失败
 不会产生部分结果。`--convert-ncnn-to-tosa` 使用 MLIR dialect conversion patterns，借助
 `TypeConverter` 的 source/target materialization 在 CHW 和 NHWC 间转换，并由 conversion
