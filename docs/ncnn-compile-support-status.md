@@ -80,7 +80,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | ncnn→TOSA | `convert-ncnn-to-tosa` | MLIR dialect conversion patterns + CHW/NHWC 双向 materialization |
 | TOSA→Linalg | 上游 `addTosaToLinalgPasses` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith |
 | Linalg→MemRef | `bufferize-ncnn` + `buffer-results-to-out-params` | One-Shot Bufferize，输出提升为 caller-owned 参数 |
-| C API 生成 | `generate-ncnn-c-api` | 准备 bare-pointer ABI 元数据 |
+| C API 生成 | `generate-ncnn-c-api` | 准备 bare-pointer ABI 元数据，通过 MLIR `SymbolTable` 重命名内部函数并更新全部符号引用 |
 | MemRef→LLVM | `convert-linalg-to-loops` → ... → `finalize-ncnn-c-api` | 完整下降到 LLVM 方言 |
 | 代码生成 | `mlir-translate` + `clang` | LLVM IR → 目标文件 → 共享库 |
 

@@ -162,7 +162,11 @@ class GenerateCAPIPass final
       return failure();
     }
 
-    function.setSymName(internalName);
+    SymbolTable symbolTable(getOperation());
+    if (failed(symbolTable.rename(function, internalName))) {
+      return function.emitOpError(
+        "cannot update all symbol uses for internal C ABI name");
+    }
     function.setPrivate();
     function->removeAttr("llvm.emit_c_interface");
     function->removeAttr("ncnn.entry_point");
