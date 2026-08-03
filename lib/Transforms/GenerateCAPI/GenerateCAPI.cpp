@@ -20,6 +20,11 @@
 #include "mlir/Support/FileUtilities.h"
 
 namespace mlir::ncnn {
+
+#define GEN_PASS_DEF_FINALIZECAPIPASS
+#define GEN_PASS_DEF_GENERATECAPIPASS
+#include "ncnn-mlir/Passes.h.inc"
+
 namespace {
 
 struct ArgumentInfo {
@@ -46,24 +51,9 @@ bool isCIdentifier(StringRef name) {
 }
 
 class GenerateCAPIPass final
-  : public PassWrapper<GenerateCAPIPass, OperationPass<ModuleOp>> {
+  : public impl::GenerateCAPIPassBase<GenerateCAPIPass> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(GenerateCAPIPass)
-
-  GenerateCAPIPass() = default;
-  GenerateCAPIPass(const GenerateCAPIPass& other) : PassWrapper(other) {
-    exportName = other.exportName.getValue();
-    manifestPath = other.manifestPath.getValue();
-  }
-
-  StringRef getArgument() const final { return "generate-ncnn-c-api"; }
-  StringRef getDescription() const final {
-    return "Generate a null-checked bare-pointer C wrapper for an ncnn entry";
-  }
-
-  void getDependentDialects(DialectRegistry& registry) const final {
-    registry.insert<LLVM::LLVMDialect>();
-  }
+  using Base::Base;
 
   void runOnOperation() final {
     SmallVector<func::FuncOp> entries;
@@ -218,28 +208,12 @@ class GenerateCAPIPass final
     stream->keep();
     return success();
   }
-
-  Option<std::string> exportName{
-    *this, "export-name", llvm::cl::desc("Exported C function name")};
-  Option<std::string> manifestPath{
-    *this,
-    "manifest-path",
-    llvm::cl::desc("Optional JSON ABI manifest output path")};
 };
 
 class FinalizeCAPIPass final
-  : public PassWrapper<FinalizeCAPIPass, OperationPass<ModuleOp>> {
+  : public impl::FinalizeCAPIPassBase<FinalizeCAPIPass> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FinalizeCAPIPass)
-
-  StringRef getArgument() const final { return "finalize-ncnn-c-api"; }
-  StringRef getDescription() const final {
-    return "Materialize a prepared ncnn bare-pointer wrapper in LLVM dialect";
-  }
-
-  void getDependentDialects(DialectRegistry& registry) const final {
-    registry.insert<LLVM::LLVMDialect>();
-  }
+  using Base::Base;
 
   void runOnOperation() final {
     auto exportName =
@@ -353,18 +327,5 @@ class FinalizeCAPIPass final
 };
 
 }  // namespace
-
-std::unique_ptr<Pass> createGenerateCAPIPass() {
-  return std::make_unique<GenerateCAPIPass>();
-}
-
-std::unique_ptr<Pass> createFinalizeCAPIPass() {
-  return std::make_unique<FinalizeCAPIPass>();
-}
-
-void registerGenerateCAPIPasses() {
-  static PassRegistration<GenerateCAPIPass> registration;
-  static PassRegistration<FinalizeCAPIPass> finalizeRegistration;
-}
 
 }  // namespace mlir::ncnn

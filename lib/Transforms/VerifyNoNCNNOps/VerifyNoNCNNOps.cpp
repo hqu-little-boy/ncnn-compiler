@@ -7,17 +7,16 @@
 #include "mlir/Pass/PassRegistry.h"
 
 namespace mlir::ncnn {
+
+#define GEN_PASS_DEF_VERIFYNONCNNOPSPASS
+#include "ncnn-mlir/Passes.h.inc"
+
 namespace {
 
 class VerifyNoNCNNOpsPass final
-  : public PassWrapper<VerifyNoNCNNOpsPass, OperationPass<ModuleOp>> {
+  : public impl::VerifyNoNCNNOpsPassBase<VerifyNoNCNNOpsPass> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VerifyNoNCNNOpsPass)
-
-  StringRef getArgument() const final { return "verify-no-ncnn-ops"; }
-  StringRef getDescription() const final {
-    return "Fail if any ncnn dialect operation remains";
-  }
+  using Base::Base;
 
   void runOnOperation() final {
     bool foundResidual = false;
@@ -51,13 +50,5 @@ class VerifyNoNCNNOpsPass final
 };
 
 }  // namespace
-
-std::unique_ptr<Pass> createVerifyNoNCNNOpsPass() {
-  return std::make_unique<VerifyNoNCNNOpsPass>();
-}
-
-void registerVerifyNoNCNNOpsPasses() {
-  static PassRegistration<VerifyNoNCNNOpsPass> registration;
-}
 
 }  // namespace mlir::ncnn

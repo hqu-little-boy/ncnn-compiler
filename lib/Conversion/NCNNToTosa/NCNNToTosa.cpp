@@ -18,6 +18,10 @@
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 
 namespace mlir::ncnn {
+
+#define GEN_PASS_DEF_CONVERTNCNNTOTOSAPASS
+#include "ncnn-mlir/Passes.h.inc"
+
 namespace {
 
 RankedTensorType getNHWCType(RankedTensorType chwType) {
@@ -442,19 +446,9 @@ class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
 };
 
 class ConvertNCNNToTosaPass final
-  : public PassWrapper<ConvertNCNNToTosaPass, OperationPass<ModuleOp>> {
+  : public impl::ConvertNCNNToTosaPassBase<ConvertNCNNToTosaPass> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertNCNNToTosaPass)
-
-  StringRef getArgument() const final { return "convert-ncnn-to-tosa"; }
-  StringRef getDescription() const final {
-    return "Convert the SqueezeNet ncnn op set to TOSA";
-  }
-
-  void getDependentDialects(DialectRegistry& registry) const final {
-    registry
-      .insert<arith::ArithDialect, func::FuncDialect, tosa::TosaDialect>();
-  }
+  using Base::Base;
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
@@ -534,13 +528,5 @@ class ConvertNCNNToTosaPass final
 };
 
 }  // namespace
-
-std::unique_ptr<Pass> createConvertNCNNToTosaPass() {
-  return std::make_unique<ConvertNCNNToTosaPass>();
-}
-
-void registerNCNNToTosaPasses() {
-  static PassRegistration<ConvertNCNNToTosaPass> registration;
-}
 
 }  // namespace mlir::ncnn

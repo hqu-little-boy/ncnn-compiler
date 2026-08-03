@@ -2,105 +2,171 @@
 
 #include <memory>
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Analysis/AliasAnalysis.h"
+#include "mlir/Analysis/Liveness.h"
+#include "mlir/Dialect/Bufferization/IR/AllocationOpInterface.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/MemRef/Utils/MemRefUtils.h"
+#include "mlir/Dialect/MemRef/Transforms/AllocationOpInterfaceImpl.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassRegistry.h"
 
 namespace mlir::ncnn {
+
+#define GEN_PASS_DEF_VERIFYBUFFERIZEDMODELPASS
+#include "ncnn-mlir/Passes.h.inc"
+
 namespace {
 
 class VerifyBufferizedModelPass final
-  : public PassWrapper<VerifyBufferizedModelPass, OperationPass<ModuleOp>> {
+  : public impl::VerifyBufferizedModelPassBase<VerifyBufferizedModelPass> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VerifyBufferizedModelPass)
+  using Base::Base;
 
-  StringRef getArgument() const final { return "verify-bufferized-model"; }
-  StringRef getDescription() const final {
-    return "Verify the bufferized ncnn entry point and its buffer ownership";
+  void getDependentDialects(DialectRegistry& registry) const final {
+    registry.insert<memref::MemRefDialect>();
+    memref::registerAllocationOpInterfaceExternalModels(registry);
   }
 
-  static Value getAllocationRoot(Value value) {
-    auto memrefValue = dyn_cast<TypedValue<BaseMemRefType>>(value);
-    if (!memrefValue) {
-      return {};
-    }
-    return memref::skipViewLikeOps(memrefValue);
-  }
+  struct Allocation {
+    Value value;
+    Operation* operation;
+  };
 
-  static bool isFunctionArgument(Value value, func::FuncOp function) {
-    auto argument = dyn_cast<BlockArgument>(value);
-    return argument && argument.getOwner() == &function.getBody().front();
+  struct Release {
+    Value value;
+    Operation* operation;
+  };
+
+  static bool isDefiniteAlias(AliasResult result) {
+    return result.isMust() || result.isPartial();
   }
 
   static void verifyAllocationLifetimes(func::FuncOp function,
                                         bool& failedVerification) {
-    DenseMap<Value, SmallVector<memref::DeallocOp>> deallocations;
-    function.walk([&](memref::DeallocOp dealloc) {
-      Value root = getAllocationRoot(dealloc.getMemref());
-      if (isFunctionArgument(root, function)) {
-        dealloc.emitOpError(
-          "must not release a caller-owned function argument or its alias");
-        failedVerification = true;
+    SmallVector<Allocation> allocations;
+    SmallVector<Release> releases;
+    function.walk([&](Operation* operation) {
+      auto effects = dyn_cast<MemoryEffectOpInterface>(operation);
+      if (!effects) {
         return;
       }
-      if (!root.getDefiningOp<memref::AllocOp>()) {
-        dealloc.emitOpError(
-          "does not resolve to a unique heap allocation root");
-        failedVerification = true;
-        return;
+      SmallVector<MemoryEffects::EffectInstance> instances;
+      effects.getEffects(instances);
+      if (isa<bufferization::AllocationOpInterface>(operation)) {
+        for (const MemoryEffects::EffectInstance& effect : instances) {
+          Value value = effect.getValue();
+          if (!isa<MemoryEffects::Allocate>(effect.getEffect()) || !value ||
+              !isa<BaseMemRefType>(value.getType()) ||
+              isa<SideEffects::AutomaticAllocationScopeResource>(
+                effect.getResource())) {
+            continue;
+          }
+          allocations.push_back({value, operation});
+        }
       }
-      deallocations[root].push_back(dealloc);
+      for (const MemoryEffects::EffectInstance& effect : instances) {
+        Value value = effect.getValue();
+        if (isa<MemoryEffects::Free>(effect.getEffect()) && value &&
+            isa<BaseMemRefType>(value.getType())) {
+          releases.push_back({value, operation});
+        }
+      }
     });
 
+    AliasAnalysis aliases(function);
+    Liveness liveness(function);
     PostDominanceInfo postDominance(function);
-    function.walk([&](memref::AllocOp allocation) {
-      Value root = allocation.getResult();
-      auto iterator = deallocations.find(root);
-      const size_t count =
-        iterator == deallocations.end() ? 0 : iterator->second.size();
-      if (count == 0) {
-        allocation.emitOpError("has no matching deallocation");
-        failedVerification = true;
-        return;
+    SmallVector<SmallVector<Operation*>> matchingReleases(allocations.size());
+    for (const Release& release : releases) {
+      bool callerOwned = false;
+      for (BlockArgument argument : function.getArguments()) {
+        if (isa<BaseMemRefType>(argument.getType()) &&
+            isDefiniteAlias(aliases.alias(release.value, argument))) {
+          callerOwned = true;
+          break;
+        }
       }
-      if (count != 1) {
-        allocation.emitOpError() << "has " << count
-                                 << " matching deallocations; expected exactly "
-                                    "one to avoid double-free";
+      if (callerOwned) {
+        release.operation->emitOpError(
+          "must not release a caller-owned function argument or its alias");
         failedVerification = true;
-        return;
+        continue;
       }
 
-      Operation* dealloc = iterator->second.front().getOperation();
-      if (!postDominance.properlyPostDominates(dealloc,
-                                               allocation.getOperation())) {
-        allocation.emitOpError(
+      SmallVector<unsigned> roots;
+      for (auto [index, allocation] : llvm::enumerate(allocations)) {
+        if (isDefiniteAlias(aliases.alias(release.value, allocation.value))) {
+          roots.push_back(index);
+        }
+      }
+      if (roots.size() != 1) {
+        release.operation->emitOpError(
+          "does not resolve to a unique heap allocation root");
+        failedVerification = true;
+        continue;
+      }
+      matchingReleases[roots.front()].push_back(release.operation);
+    }
+
+    for (auto [index, allocation] : llvm::enumerate(allocations)) {
+      ArrayRef<Operation*> allocationReleases = matchingReleases[index];
+      const size_t count = allocationReleases.size();
+      if (count == 0) {
+        allocation.operation->emitOpError("has no matching deallocation");
+        failedVerification = true;
+        continue;
+      }
+      if (count != 1) {
+        allocation.operation->emitOpError()
+          << "has " << count
+          << " matching deallocations; expected exactly one to avoid "
+             "double-free";
+        failedVerification = true;
+        continue;
+      }
+
+      Operation* dealloc = allocationReleases.front();
+      if (!postDominance.properlyPostDominates(dealloc, allocation.operation)) {
+        allocation.operation->emitOpError(
           "deallocation does not execute on every path after allocation");
         failedVerification = true;
       }
-      function.walk([&](Operation* user) {
-        if (user == dealloc) {
-          return;
-        }
-        for (Value operand : user->getOperands()) {
-          if (getAllocationRoot(operand) != root) {
-            continue;
+
+      SmallVector<Value> allocationAliases;
+      function.walk([&](Block* block) {
+        for (BlockArgument argument : block->getArguments()) {
+          if (isa<BaseMemRefType>(argument.getType()) &&
+              isDefiniteAlias(aliases.alias(allocation.value, argument))) {
+            allocationAliases.push_back(argument);
           }
-          if (!postDominance.postDominates(dealloc, user)) {
+        }
+      });
+      function.walk([&](Operation* operation) {
+        for (Value result : operation->getResults()) {
+          if (isa<BaseMemRefType>(result.getType()) &&
+              isDefiniteAlias(aliases.alias(allocation.value, result))) {
+            allocationAliases.push_back(result);
+          }
+        }
+      });
+      for (Value alias : allocationAliases) {
+        if (liveness.isDeadAfter(alias, dealloc)) {
+          continue;
+        }
+        for (Operation* user : alias.getUsers()) {
+          if (user != dealloc && !postDominance.postDominates(dealloc, user)) {
             user->emitOpError(
               "may execute after or without the allocation deallocation");
             failedVerification = true;
           }
-          break;
         }
-      });
-    });
+      }
+    }
   }
 
   void runOnOperation() final {
@@ -190,13 +256,5 @@ class VerifyBufferizedModelPass final
 };
 
 }  // namespace
-
-std::unique_ptr<Pass> createVerifyBufferizedModelPass() {
-  return std::make_unique<VerifyBufferizedModelPass>();
-}
-
-void registerVerifyBufferizedModelPasses() {
-  static PassRegistration<VerifyBufferizedModelPass> registration;
-}
 
 }  // namespace mlir::ncnn

@@ -15,6 +15,10 @@
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 
 namespace mlir::ncnn {
+
+#define GEN_PASS_DEF_NORMALIZENCNNPASS
+#include "ncnn-mlir/Passes.h.inc"
+
 namespace {
 
 struct ExplicitPadding {
@@ -45,14 +49,9 @@ FailureOr<ExplicitPadding> computeSamePadding(int64_t input,
 }
 
 class NormalizeNCNNPass final
-  : public PassWrapper<NormalizeNCNNPass, OperationPass<ModuleOp>> {
+  : public impl::NormalizeNCNNPassBase<NormalizeNCNNPass> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(NormalizeNCNNPass)
-
-  StringRef getArgument() const final { return "normalize-ncnn"; }
-  StringRef getDescription() const final {
-    return "Normalize target-independent ncnn semantics";
-  }
+  using Base::Base;
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
@@ -232,13 +231,5 @@ class NormalizeNCNNPass final
 };
 
 }  // namespace
-
-std::unique_ptr<Pass> createNormalizeNCNNPass() {
-  return std::make_unique<NormalizeNCNNPass>();
-}
-
-void registerNormalizeNCNNPasses() {
-  static PassRegistration<NormalizeNCNNPass> registration;
-}
 
 }  // namespace mlir::ncnn

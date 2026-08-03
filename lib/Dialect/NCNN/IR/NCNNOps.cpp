@@ -376,83 +376,6 @@ FailureOr<RankedTensorType> computeConcatResult(
 }  // namespace
 
 //===----------------------------------------------------------------------===//
-// 公开的形状推断入口（供 importer 在构建算子前计算结果类型）
-//===----------------------------------------------------------------------===//
-
-FailureOr<RankedTensorType> inferConvResultType(
-  MLIRContext* context,
-  std::optional<Location> location,
-  RankedTensorType input,
-  RankedTensorType weight,
-  ValueRange biasAndScales,
-  bool hasBias,
-  int64_t term,
-  int64_t kernelH,
-  int64_t kernelW,
-  int64_t strideH,
-  int64_t strideW,
-  int64_t dilationH,
-  int64_t dilationW,
-  int64_t padTop,
-  int64_t padBottom,
-  int64_t padLeft,
-  int64_t padRight) {
-  return computeConvResult(context,
-                           location,
-                           input,
-                           weight,
-                           biasAndScales,
-                           hasBias,
-                           term,
-                           kernelH,
-                           kernelW,
-                           strideH,
-                           strideW,
-                           dilationH,
-                           dilationW,
-                           padTop,
-                           padBottom,
-                           padLeft,
-                           padRight);
-}
-
-FailureOr<RankedTensorType> inferPoolResultType(
-  std::optional<Location> location,
-  RankedTensorType input,
-  int64_t kind,
-  int64_t mode,
-  int64_t kernelH,
-  int64_t kernelW,
-  int64_t strideH,
-  int64_t strideW,
-  int64_t padTop,
-  int64_t padBottom,
-  int64_t padLeft,
-  int64_t padRight,
-  int64_t padMode,
-  bool includePad) {
-  return computePoolResult(location,
-                           input,
-                           static_cast<PoolKind>(kind),
-                           static_cast<PoolMode>(mode),
-                           kernelH,
-                           kernelW,
-                           strideH,
-                           strideW,
-                           padTop,
-                           padBottom,
-                           padLeft,
-                           padRight,
-                           padMode,
-                           includePad);
-}
-
-FailureOr<RankedTensorType> inferConcatResultType(
-  std::optional<Location> location, ValueRange inputs, int64_t axis) {
-  return computeConcatResult(location, inputs, axis);
-}
-
-//===----------------------------------------------------------------------===//
 // Model boundary ops
 //===----------------------------------------------------------------------===//
 
@@ -535,39 +458,6 @@ LogicalResult ConvolutionOp::inferReturnTypeComponents(
   return success();
 }
 
-LogicalResult ConvolutionOp::verify() {
-  auto input = llvm::dyn_cast<RankedTensorType>(getInput().getType());
-  auto weight = llvm::dyn_cast<RankedTensorType>(getWeight().getType());
-  if (input == nullptr || weight == nullptr) {
-    return emitOpError("input and weight must be ranked tensors");
-  }
-  FailureOr<RankedTensorType> result = computeConvResult(getContext(),
-                                                         getLoc(),
-                                                         input,
-                                                         weight,
-                                                         getBiasAndScales(),
-                                                         getHasBias(),
-                                                         getInt8ScaleTerm(),
-                                                         getKernelH(),
-                                                         getKernelW(),
-                                                         getStrideH(),
-                                                         getStrideW(),
-                                                         getDilationH(),
-                                                         getDilationW(),
-                                                         getPadTop(),
-                                                         getPadBottom(),
-                                                         getPadLeft(),
-                                                         getPadRight());
-  if (failed(result)) {
-    return failure();
-  }
-  if (getResult().getType() != *result) {
-    return emitOpError("result type ")
-           << getResult().getType() << " does not match inferred " << *result;
-  }
-  return success();
-}
-
 //===----------------------------------------------------------------------===//
 // PoolingOp
 //===----------------------------------------------------------------------===//
@@ -605,36 +495,6 @@ LogicalResult PoolingOp::inferReturnTypeComponents(
   return success();
 }
 
-LogicalResult PoolingOp::verify() {
-  auto input = llvm::dyn_cast<RankedTensorType>(getInput().getType());
-  if (input == nullptr) {
-    return emitOpError("input must be a ranked tensor");
-  }
-  FailureOr<RankedTensorType> result =
-    computePoolResult(getLoc(),
-                      input,
-                      static_cast<PoolKind>(getKind()),
-                      static_cast<PoolMode>(getMode()),
-                      getKernelH(),
-                      getKernelW(),
-                      getStrideH(),
-                      getStrideW(),
-                      getPadTop(),
-                      getPadBottom(),
-                      getPadLeft(),
-                      getPadRight(),
-                      getPadMode(),
-                      getIncludePad());
-  if (failed(result)) {
-    return failure();
-  }
-  if (getResult().getType() != *result) {
-    return emitOpError("result type ")
-           << getResult().getType() << " does not match inferred " << *result;
-  }
-  return success();
-}
-
 //===----------------------------------------------------------------------===//
 // ConcatOp
 //===----------------------------------------------------------------------===//
@@ -655,19 +515,6 @@ LogicalResult ConcatOp::inferReturnTypeComponents(
   return success();
 }
 
-LogicalResult ConcatOp::verify() {
-  FailureOr<RankedTensorType> result =
-    computeConcatResult(getLoc(), getInputs(), getAxis());
-  if (failed(result)) {
-    return failure();
-  }
-  if (getResult().getType() != *result) {
-    return emitOpError("result type ")
-           << getResult().getType() << " does not match inferred " << *result;
-  }
-  return success();
-}
-
 //===----------------------------------------------------------------------===//
 // SplitOp
 //===----------------------------------------------------------------------===//
@@ -675,12 +522,6 @@ LogicalResult ConcatOp::verify() {
 LogicalResult SplitOp::verify() {
   if (getResults().size() < 2) {
     return emitOpError("requires at least two results");
-  }
-  const Type inputType = getInput().getType();
-  for (OpResult result : getResults()) {
-    if (result.getType() != inputType) {
-      return emitOpError("all results must have the same type as the input");
-    }
   }
   return success();
 }

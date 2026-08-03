@@ -1,16 +1,9 @@
 #pragma once
 
-#include <memory>
+#include "ncnn-mlir/Passes.hpp"
 
-#include "mlir/Pass/Pass.h"
-
-namespace mlir {
-class Pass;
-
-namespace ncnn {
-
-std::unique_ptr<Pass> createConvertNCNNModelToFuncPass();
-void registerNCNNToFuncPasses();
-
-}  // namespace ncnn
-}  // namespace mlir
+namespace mlir::ncnn {
+inline void registerNCNNToFuncPasses() {
+  registerConvertNCNNModelToFuncPass();
+}
+}  // namespace mlir::ncnn

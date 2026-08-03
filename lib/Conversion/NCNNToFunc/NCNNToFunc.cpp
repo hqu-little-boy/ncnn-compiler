@@ -12,6 +12,10 @@
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 
 namespace mlir::ncnn {
+
+#define GEN_PASS_DEF_CONVERTNCNNMODELTOFUNCPASS
+#include "ncnn-mlir/Passes.h.inc"
+
 namespace {
 
 class ConvertModel final : public OpConversionPattern<ModelOp> {
@@ -91,18 +95,9 @@ class ConvertConst final : public OpConversionPattern<ConstOp> {
 };
 
 class ConvertNCNNModelToFuncPass final
-  : public PassWrapper<ConvertNCNNModelToFuncPass, OperationPass<ModuleOp>> {
+  : public impl::ConvertNCNNModelToFuncPassBase<ConvertNCNNModelToFuncPass> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertNCNNModelToFuncPass)
-
-  StringRef getArgument() const final { return "convert-ncnn-model-to-func"; }
-  StringRef getDescription() const final {
-    return "Build a function boundary for each ncnn.model";
-  }
-
-  void getDependentDialects(DialectRegistry& registry) const final {
-    registry.insert<arith::ArithDialect, func::FuncDialect>();
-  }
+  using Base::Base;
 
   void runOnOperation() final {
     MLIRContext* context = getOperation().getContext();
@@ -124,13 +119,5 @@ class ConvertNCNNModelToFuncPass final
 };
 
 }  // namespace
-
-std::unique_ptr<Pass> createConvertNCNNModelToFuncPass() {
-  return std::make_unique<ConvertNCNNModelToFuncPass>();
-}
-
-void registerNCNNToFuncPasses() {
-  static PassRegistration<ConvertNCNNModelToFuncPass> registration;
-}
 
 }  // namespace mlir::ncnn

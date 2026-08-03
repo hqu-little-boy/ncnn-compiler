@@ -396,6 +396,29 @@ class ImportState {
     return fn();
   }
 
+  template <typename Op>
+  mlir::FailureOr<mlir::RankedTensorType> inferSingleTensorResult(
+    mlir::Location location,
+    mlir::ValueRange operands,
+    typename Op::Properties& properties) {
+    llvm::SmallVector<mlir::Type, 1> inferredTypes;
+    if (mlir::failed(Op::inferReturnTypes(context_,
+                                          location,
+                                          operands,
+                                          mlir::DictionaryAttr{},
+                                          mlir::OpaqueProperties(&properties),
+                                          mlir::RegionRange{},
+                                          inferredTypes)) ||
+        inferredTypes.size() != 1) {
+      return mlir::failure();
+    }
+    auto result = llvm::dyn_cast<mlir::RankedTensorType>(inferredTypes.front());
+    if (!result) {
+      return mlir::failure();
+    }
+    return result;
+  }
+
   std::expected<void, ImportError> import_convolution(
     const LayerContext& context) {
     auto arity = expect_source_arity(context.layer, 1, 1);
@@ -514,31 +537,25 @@ class ImportState {
     auto i64 = [this](std::int64_t value) {
       return builder_.getI64IntegerAttr(value);
     };
-    auto input_type = llvm::dyn_cast<mlir::RankedTensorType>(input->getType());
-    auto weight_type =
-      llvm::dyn_cast<mlir::RankedTensorType>(weight_value.getType());
-    if (input_type == nullptr || weight_type == nullptr) {
-      return std::unexpected(
-        make_error(context, "convolution operands must be ranked tensors"));
-    }
+    const mlir::Location location = builder_.getUnknownLoc();
+    llvm::SmallVector<mlir::Value> operands{*input, weight_value};
+    operands.append(tail);
+    mlir::ncnn::ConvolutionOp::Properties properties;
+    properties.kernel_h = i64(*kernel_height);
+    properties.kernel_w = i64(*kernel_width);
+    properties.stride_h = i64(*stride_height);
+    properties.stride_w = i64(*stride_width);
+    properties.dilation_h = i64(*dilation_height);
+    properties.dilation_w = i64(*dilation_width);
+    properties.pad_top = i64(*pad_top);
+    properties.pad_bottom = i64(*pad_bottom);
+    properties.pad_left = i64(*pad_left);
+    properties.pad_right = i64(*pad_right);
+    properties.has_bias = builder_.getBoolAttr(*bias == 1);
+    properties.int8_scale_term = i64(*int8_scale);
     auto result_type = capturing([&] {
-      return mlir::ncnn::inferConvResultType(context_,
-                                             builder_.getUnknownLoc(),
-                                             input_type,
-                                             weight_type,
-                                             mlir::ValueRange(tail),
-                                             *bias == 1,
-                                             *int8_scale,
-                                             *kernel_height,
-                                             *kernel_width,
-                                             *stride_height,
-                                             *stride_width,
-                                             *dilation_height,
-                                             *dilation_width,
-                                             *pad_top,
-                                             *pad_bottom,
-                                             *pad_left,
-                                             *pad_right);
+      return inferSingleTensorResult<mlir::ncnn::ConvolutionOp>(
+        location, operands, properties);
     });
     if (mlir::failed(result_type)) {
       return std::unexpected(make_error(context,
@@ -547,7 +564,7 @@ class ImportState {
                                           : captured_diag_));
     }
     auto conv = builder_.create<mlir::ncnn::ConvolutionOp>(
-      builder_.getUnknownLoc(),
+      location,
       *result_type,
       *input,
       weight_value,
@@ -665,26 +682,26 @@ class ImportState {
     if (!input) {
       return std::unexpected(input.error());
     }
-    auto input_type = llvm::dyn_cast<mlir::RankedTensorType>(input->getType());
-    if (input_type == nullptr) {
-      return std::unexpected(
-        make_error(context, "pooling input must be a ranked tensor"));
-    }
+    auto i64 = [this](std::int64_t value) {
+      return builder_.getI64IntegerAttr(value);
+    };
+    const mlir::Location location = builder_.getUnknownLoc();
+    mlir::ncnn::PoolingOp::Properties properties;
+    properties.kind = i64(*kind);
+    properties.mode = i64(mode);
+    properties.kernel_h = i64(effective_kernel_h);
+    properties.kernel_w = i64(effective_kernel_w);
+    properties.stride_h = i64(*stride_height);
+    properties.stride_w = i64(*stride_width);
+    properties.pad_top = i64(*pad_top);
+    properties.pad_bottom = i64(*pad_bottom);
+    properties.pad_left = i64(*pad_left);
+    properties.pad_right = i64(*pad_right);
+    properties.pad_mode = i64(*pad_mode);
+    properties.include_pad = builder_.getBoolAttr(*include_pad == 1);
     auto result_type = capturing([&] {
-      return mlir::ncnn::inferPoolResultType(builder_.getUnknownLoc(),
-                                             input_type,
-                                             *kind,
-                                             mode,
-                                             effective_kernel_h,
-                                             effective_kernel_w,
-                                             *stride_height,
-                                             *stride_width,
-                                             *pad_top,
-                                             *pad_bottom,
-                                             *pad_left,
-                                             *pad_right,
-                                             *pad_mode,
-                                             *include_pad == 1);
+      return inferSingleTensorResult<mlir::ncnn::PoolingOp>(
+        location, mlir::ValueRange{*input}, properties);
     });
     if (mlir::failed(result_type)) {
       return std::unexpected(make_error(context,
@@ -692,11 +709,8 @@ class ImportState {
                                           ? "pooling shape inference failed"
                                           : captured_diag_));
     }
-    auto i64 = [this](std::int64_t value) {
-      return builder_.getI64IntegerAttr(value);
-    };
     auto pool = builder_.create<mlir::ncnn::PoolingOp>(
-      builder_.getUnknownLoc(),
+      location,
       *result_type,
       *input,
       i64(*kind),
@@ -776,9 +790,12 @@ class ImportState {
       }
       inputs.push_back(*value);
     }
+    const mlir::Location location = builder_.getUnknownLoc();
+    mlir::ncnn::ConcatOp::Properties properties;
+    properties.axis = builder_.getI64IntegerAttr(*axis);
     auto result_type = capturing([&] {
-      return mlir::ncnn::inferConcatResultType(
-        builder_.getUnknownLoc(), mlir::ValueRange(inputs), *axis);
+      return inferSingleTensorResult<mlir::ncnn::ConcatOp>(
+        location, mlir::ValueRange(inputs), properties);
     });
     if (mlir::failed(result_type)) {
       return std::unexpected(make_error(context,
@@ -787,7 +804,7 @@ class ImportState {
                                           : captured_diag_));
     }
     auto concat =
-      builder_.create<mlir::ncnn::ConcatOp>(builder_.getUnknownLoc(),
+      builder_.create<mlir::ncnn::ConcatOp>(location,
                                             *result_type,
                                             mlir::ValueRange(inputs),
                                             builder_.getI64IntegerAttr(*axis));

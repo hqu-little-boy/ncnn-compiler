@@ -2,7 +2,7 @@
 
 // 校验失败用例：声明的结果类型与形状推断不一致，verifier 应拒绝。
 
-// CHECK: does not match inferred
+// CHECK: inferred type(s) {{.*}} are incompatible with return type(s)
 func.func @bad_conv_result(%arg0: tensor<3x8x8xf32>) -> tensor<64x8x8xf32> {
   %w = arith.constant dense<0.000000e+00> : tensor<64x3x3x3xf32>
   %b = arith.constant dense<0.000000e+00> : tensor<64xf32>

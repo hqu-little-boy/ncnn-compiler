@@ -74,7 +74,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | 阶段 | Pass / 工具 | 作用 |
 |---|---|---|
 | 解析 | `ncnn_graph::Graph::load` | 解析 `.param`（magic `7767517`）和 `.bin` 为 parsed-graph |
-| 导入 | `ncnn_importer::import_graph` | 提升为类型化 MLIR SSA DAG，执行静态形状推断 |
+| 导入 | `ncnn_importer::import_graph` | 提升为类型化 MLIR SSA DAG，通过 op 的 `InferTypeOpInterface` 执行静态形状推断 |
 | 模型→函数 | `convert-ncnn-model-to-func` | Full dialect conversion：移动模型 region，建立 `func.func` + `arith.constant`，不 clone SSA 图 |
 | 规范化 | `normalize-ncnn` | 两阶段校验/提交：解析 SAME padding、归一化负 axis、消除 Split |
 | ncnn→TOSA | `convert-ncnn-to-tosa` | MLIR dialect conversion patterns + CHW/NHWC 双向 materialization |
@@ -83,6 +83,9 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | C API 生成 | `generate-ncnn-c-api` | 准备 bare-pointer ABI 元数据，通过 MLIR `SymbolTable` 重命名内部函数并更新全部符号引用 |
 | MemRef→LLVM | `convert-linalg-to-loops` → ... → `finalize-ncnn-c-api` | 完整下降到 LLVM 方言 |
 | 代码生成 | `mlir-translate` + `clang` | LLVM IR → 目标文件 → 共享库 |
+
+项目 pass 的参数、说明、dependent dialect、factory 和统一注册由
+`include/ncnn-mlir/Passes.td` 生成；各实现只继承生成的 pass base 并提供核心逻辑。
 
 ### 3.2 布局处理
 
@@ -164,7 +167,8 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 
 - `test/Dialect/NCNN/`：op 解析/打印/验证
 - `test/Conversion/NCNNToFunc/`、`test/Conversion/NCNNToTosa/`：转换正确性、合法 op 边界物化和失败回滚
-- `test/Transforms/`：NormalizeNCNN 两阶段提交、GenerateCAPI、各 verify gate
+- `test/Transforms/`：NormalizeNCNN 两阶段提交、GenerateCAPI、各 verify gate；bufferized
+  ownership 检查覆盖 view 和 CFG block argument alias
 - `test/Pipelines/`：完整流水线组合、SqueezeNet 端到端、严格失败路径
 
 ### 7.2 GTest 单元测试

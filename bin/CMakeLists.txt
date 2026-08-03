@@ -6,8 +6,11 @@ get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 
 add_executable(ncnn-mlir-opt ncnn-mlir-opt.cpp)
+add_dependencies(ncnn-mlir-opt NCNNPassesIncGen)
 # 本目录在 include 路径上，便于以 "RegisterNCNNDialects.h" 直接引用。
-target_include_directories(ncnn-mlir-opt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(ncnn-mlir-opt PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_BINARY_DIR}/include)
 target_compile_options(ncnn-mlir-opt PRIVATE -fno-rtti)
 set_target_properties(ncnn-mlir-opt PROPERTIES
     BUILD_RPATH "${LLVM_LIBRARY_DIR}"

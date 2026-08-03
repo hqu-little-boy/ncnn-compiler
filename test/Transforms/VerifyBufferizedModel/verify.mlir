@@ -47,6 +47,19 @@ module {
 // -----
 
 module {
+  func.func @releases_branch_carried_output(%output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
+    cf.br ^release(%output : memref<4xf32>)
+  ^release(%alias: memref<4xf32>):
+    memref.dealloc %alias : memref<4xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.dealloc' op must not release a caller-owned function argument or its alias
+
+// -----
+
+module {
   func.func private @private_leak() {
     %allocation = memref.alloc() : memref<4xf32>
     return

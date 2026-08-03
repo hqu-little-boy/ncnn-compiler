@@ -229,6 +229,9 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 `TypeConverter` 的 source/target materialization 在 CHW 和 NHWC 间转换，并由 conversion
 driver 管理 SSA remap 和失败回滚。两者均不通过 clone 整个模块换取事务性。
 
+所有项目 pass 的 CLI 名称、选项、dependent dialect、factory 和注册均由统一的
+`ncnn-mlir/Passes.td` 生成，`ncnn-mlir-opt` 通过一次 `registerNCNNPasses()` 完成注册。
+
 ```bash
 ./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
   | ./build/bin/ncnn-mlir-opt --convert-ncnn-model-to-func

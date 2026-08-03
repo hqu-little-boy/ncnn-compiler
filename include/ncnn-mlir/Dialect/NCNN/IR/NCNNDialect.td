@@ -22,10 +22,4 @@ def NCNN_Dialect : Dialect {
   }];
 }
 
-// 秩已知的张量约束。ncnn 方言只处理 ranked tensor；元素类型（f32/f16/i8）
-// 由各算子的 verifier / 形状推断进一步约束。
-def NCNN_RankedTensor
-    : Type<CPred<"::llvm::isa<::mlir::RankedTensorType>($_self)">,
-           "ranked tensor">;
-
 #endif  // NCNN_DIALECT

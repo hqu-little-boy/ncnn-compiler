@@ -14,24 +14,16 @@
 #include "mlir/Pass/PassRegistry.h"
 
 namespace mlir::ncnn {
+
+#define GEN_PASS_DEF_BUFFERIZENCNNPASS
+#include "ncnn-mlir/Passes.h.inc"
+
 namespace {
 
 class BufferizeNCNNPass final
-  : public PassWrapper<BufferizeNCNNPass, OperationPass<ModuleOp>> {
+  : public impl::BufferizeNCNNPassBase<BufferizeNCNNPass> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(BufferizeNCNNPass)
-
-  StringRef getArgument() const final { return "bufferize-ncnn"; }
-  StringRef getDescription() const final {
-    return "One-shot bufferize with copies represented as Linalg operations";
-  }
-
-  void getDependentDialects(DialectRegistry& registry) const final {
-    registry.insert<bufferization::BufferizationDialect,
-                    func::FuncDialect,
-                    linalg::LinalgDialect,
-                    memref::MemRefDialect>();
-  }
+  using Base::Base;
 
   void runOnOperation() final {
     bufferization::OneShotBufferizationOptions options;
@@ -53,13 +45,5 @@ class BufferizeNCNNPass final
 };
 
 }  // namespace
-
-std::unique_ptr<Pass> createBufferizeNCNNPass() {
-  return std::make_unique<BufferizeNCNNPass>();
-}
-
-void registerBufferizeNCNNPasses() {
-  static PassRegistration<BufferizeNCNNPass> registration;
-}
 
 }  // namespace mlir::ncnn

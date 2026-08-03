@@ -6,17 +6,16 @@
 #include "mlir/Pass/PassRegistry.h"
 
 namespace mlir::ncnn {
+
+#define GEN_PASS_DEF_VERIFYNOTOSAOPSPASS
+#include "ncnn-mlir/Passes.h.inc"
+
 namespace {
 
 class VerifyNoTosaOpsPass final
-  : public PassWrapper<VerifyNoTosaOpsPass, OperationPass<ModuleOp>> {
+  : public impl::VerifyNoTosaOpsPassBase<VerifyNoTosaOpsPass> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VerifyNoTosaOpsPass)
-
-  StringRef getArgument() const final { return "verify-no-tosa-ops"; }
-  StringRef getDescription() const final {
-    return "Fail if any TOSA dialect operation remains";
-  }
+  using Base::Base;
 
   void runOnOperation() final {
     bool foundResidual = false;
@@ -35,13 +34,5 @@ class VerifyNoTosaOpsPass final
 };
 
 }  // namespace
-
-std::unique_ptr<Pass> createVerifyNoTosaOpsPass() {
-  return std::make_unique<VerifyNoTosaOpsPass>();
-}
-
-void registerVerifyNoTosaOpsPasses() {
-  static PassRegistration<VerifyNoTosaOpsPass> registration;
-}
 
 }  // namespace mlir::ncnn

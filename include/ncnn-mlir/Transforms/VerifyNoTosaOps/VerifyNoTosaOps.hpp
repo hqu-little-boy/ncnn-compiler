@@ -1,16 +1,9 @@
 #pragma once
 
-#include <memory>
+#include "ncnn-mlir/Passes.hpp"
 
-#include "mlir/Pass/Pass.h"
-
-namespace mlir {
-class Pass;
-
-namespace ncnn {
-
-std::unique_ptr<Pass> createVerifyNoTosaOpsPass();
-void registerVerifyNoTosaOpsPasses();
-
-}  // namespace ncnn
-}  // namespace mlir
+namespace mlir::ncnn {
+inline void registerVerifyNoTosaOpsPasses() {
+  registerVerifyNoTosaOpsPass();
+}
+}  // namespace mlir::ncnn

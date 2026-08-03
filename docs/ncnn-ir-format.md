@@ -77,7 +77,8 @@ Affine/SCF/Math/Arith/MemRef/Func/CF 到 LLVM dialect 的转换，因此不会�
   `ncnn.convolution {kernel_h=3, kernel_w=3, stride_h=2, …}` 这样的具名强类型属性
   （`I64Attr` / `BoolAttr` / `F32Attr`）。
 - **shape inference**：每个值都带推断出的静态形状与元素类型（`tensor<64x113x113xf32>`）。
-  conv/pool/concat 实现了 `InferShapedTypeOpInterface`，结果类型在构建时推断、verifier 复核。
+  conv/pool/concat 实现 `InferTensorTypeAdaptor`，importer 通过标准 `inferReturnTypes` 获取结果，
+  `InferTypeOpInterface` 用相同实现精确复核声明类型。
 
 ---
 
@@ -180,9 +181,10 @@ SAME padding 用 ncnn 哨兵表达：`pad_*` 全为 `-233` = SAME_UPPER，全为
 
 - `relu` / `dropout` / `softmax`：`SameOperandsAndResultType`（结果类型 = 输入类型）。
 - `split`：所有结果 = 输入类型（个数 = 输出 blob 数，≥2）。
-- `convolution` / `pooling` / `concat`：实现 `InferShapedTypeOpInterface::inferReturnTypeComponents`，
-  在构建时计算结果形状（conv 输出 `[O, H_out, W_out]`、pool 按 regular/global/adaptive、
-  concat 沿 `axis` 求和）。verifier 会重算并与声明的结果类型比对，不一致即报错。
+- `convolution` / `pooling` / `concat`：通过 `InferTensorTypeAdaptor` 实现
+  `inferReturnTypeComponents`，在构建时计算结果形状（conv 输出 `[O, H_out, W_out]`、pool
+  按 regular/global/adaptive、concat 沿 `axis` 求和）。标准 `InferTypeOpInterface` verifier
+  会重算并与声明的结果类型精确比对，不一致即报错；importer 不维护额外的公开推断入口。
 
 conv 输出尺寸公式（显式 pad）：
 `extent = dilation*(kernel-1)+1`；`out = 1 + (in + pad_before + pad_after - extent)/stride`。

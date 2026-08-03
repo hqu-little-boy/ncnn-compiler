@@ -11,30 +11,16 @@
 #include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
-#include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
-#include "ncnn-mlir/Conversion/NCNNToTosa/NCNNToTosa.hpp"
+#include "ncnn-mlir/Passes.hpp"
 #include "ncnn-mlir/Pipelines/NCNNPipelines.hpp"
-#include "ncnn-mlir/Transforms/BufferizeNCNN/BufferizeNCNN.hpp"
-#include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
-#include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
-#include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
-#include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
-#include "ncnn-mlir/Transforms/VerifyNoTosaOps/VerifyNoTosaOps.hpp"
 
 int main(int argc, char** argv) {
   mlir::DialectRegistry registry;
   mlir::registerAllDialects(registry);
   mlir::registerAllExtensions(registry);
   mlir::registerAllPasses();
-  mlir::ncnn::registerNCNNToFuncPasses();
-  mlir::ncnn::registerNCNNToTosaPasses();
+  mlir::ncnn::registerNCNNPasses();
   mlir::ncnn::registerNCNNPipelines();
-  mlir::ncnn::registerBufferizeNCNNPasses();
-  mlir::ncnn::registerGenerateCAPIPasses();
-  mlir::ncnn::registerNormalizeNCNNPasses();
-  mlir::ncnn::registerVerifyBufferizedModelPasses();
-  mlir::ncnn::registerVerifyNoNCNNOpsPasses();
-  mlir::ncnn::registerVerifyNoTosaOpsPasses();
   // 叠加 ncnn 方言（arith/func 等已含于 registerAllDialects，重复插入无害）。
   ncnn_mlir::register_all_dialects(registry);
   return mlir::asMainReturnCode(
