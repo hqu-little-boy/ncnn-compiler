@@ -47,6 +47,51 @@ module {
 // -----
 
 module {
+  func.func @releases_output_subview(%output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
+    %alias = memref.subview %output[0] [4] [1] : memref<4xf32> to memref<4xf32, strided<[1]>>
+    memref.dealloc %alias : memref<4xf32, strided<[1]>>
+    return
+  }
+}
+
+// CHECK: error: 'memref.dealloc' op must not release a caller-owned function argument or its alias
+
+// -----
+
+module {
+  func.func private @identity(%input: memref<4xf32>) -> memref<4xf32> {
+    return %input : memref<4xf32>
+  }
+
+  func.func private @unproven_call_alias() {
+    %allocation = memref.alloc() : memref<4xf32>
+    %alias = call @identity(%allocation) : (memref<4xf32>) -> memref<4xf32>
+    memref.dealloc %alias : memref<4xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.dealloc' op does not resolve to a unique heap allocation root
+// CHECK: error: 'memref.alloc' op has no matching deallocation
+
+// -----
+
+module {
+  func.func private @reallocation_use_after_free() {
+    %allocation = memref.alloc() : memref<4xf32>
+    %resized = memref.realloc %allocation : memref<4xf32> to memref<8xf32>
+    %index = arith.constant 0 : index
+    %value = memref.load %allocation[%index] : memref<4xf32>
+    memref.dealloc %resized : memref<8xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.load' op may execute after or without the allocation deallocation
+
+// -----
+
+module {
   func.func @releases_branch_carried_output(%output: memref<4xf32> {bufferize.result}) attributes {ncnn.entry_point} {
     cf.br ^release(%output : memref<4xf32>)
   ^release(%alias: memref<4xf32>):

@@ -168,7 +168,8 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 - `test/Dialect/NCNN/`：op 解析/打印/验证
 - `test/Conversion/NCNNToFunc/`、`test/Conversion/NCNNToTosa/`：转换正确性、合法 op 边界物化和失败回滚
 - `test/Transforms/`：NormalizeNCNN 两阶段提交、GenerateCAPI、各 verify gate；bufferized
-  ownership 检查覆盖 view 和 CFG block argument alias
+  ownership 检查覆盖 view、CFG block argument 和 region yield alias；缺少显式所有权契约的
+  call result 按保守策略拒绝
 - `test/Pipelines/`：完整流水线组合、SqueezeNet 端到端、严格失败路径
 
 ### 7.2 GTest 单元测试
