@@ -5,7 +5,6 @@
 #include <limits>
 #include <memory>
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -15,6 +14,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 
 namespace mlir::ncnn {
@@ -178,221 +178,14 @@ FailureOr<SmallVector<int64_t>> getPoolPadding(PoolingOp operation) {
   return SmallVector<int64_t>{top, bottom, left, right};
 }
 
-class ConvertNCNNToTosaPass final
-  : public PassWrapper<ConvertNCNNToTosaPass, OperationPass<ModuleOp>> {
+class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
  public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertNCNNToTosaPass)
+  using OpConversionPattern::OpConversionPattern;
 
-  StringRef getArgument() const final { return "convert-ncnn-to-tosa"; }
-  StringRef getDescription() const final {
-    return "Convert the SqueezeNet ncnn op set to TOSA";
-  }
-
-  void getDependentDialects(DialectRegistry& registry) const final {
-    registry
-      .insert<arith::ArithDialect, func::FuncDialect, tosa::TosaDialect>();
-  }
-
-  void runOnOperation() final {
-    ModuleOp module = getOperation();
-    if (!module.getOps<ModelOp>().empty()) {
-      module.emitError(
-        "convert-ncnn-to-tosa requires ncnn.model to be "
-        "converted to func.func first");
-      signalPassFailure();
-      return;
-    }
-    OwningOpRef<ModuleOp> candidate = cast<ModuleOp>(module->clone());
-    for (func::FuncOp function : candidate->getOps<func::FuncOp>()) {
-      if (failed(convertFunction(function))) {
-        signalPassFailure();
-        return;
-      }
-    }
-    module.getBodyRegion().takeBody(candidate->getBodyRegion());
-  }
-
- private:
-  static LogicalResult convertFunction(func::FuncOp function) {
-    if (function.isExternal()) {
-      return success();
-    }
-    bool hasNCNNOps = false;
-    function.walk([&](Operation* operation) {
-      hasNCNNOps =
-        hasNCNNOps || operation->getName().getDialectNamespace() == "ncnn";
-    });
-    if (!hasNCNNOps) {
-      return success();
-    }
-    if (!llvm::hasSingleElement(function.getBody())) {
-      return function.emitOpError(
-        "convert-ncnn-to-tosa requires a single-block function");
-    }
-    for (PoolingOp pooling : function.getOps<PoolingOp>()) {
-      const bool unsupportedMode =
-        pooling.getMode() == static_cast<int64_t>(PoolMode::Adaptive);
-      const bool unsupportedAveragePadding =
-        pooling.getKind() == static_cast<int64_t>(PoolKind::Average) &&
-        pooling.getIncludePad();
-      if (!unsupportedMode && !unsupportedAveragePadding &&
-          failed(getPoolPadding(pooling))) {
-        return failure();
-      }
-    }
-    DenseMap<Value, Value> values;
-    Block& block = function.getBody().front();
-    OpBuilder builder(function.getContext());
-    builder.setInsertionPointToStart(&block);
-    for (BlockArgument argument : block.getArguments()) {
-      auto type = dyn_cast<RankedTensorType>(argument.getType());
-      if (type != nullptr && type.getRank() == 3) {
-        values[argument] =
-          convertCHWToNHWC(builder, function.getLoc(), argument);
-      } else {
-        values[argument] = argument;
-      }
-    }
-
-    SmallVector<Operation*> erase;
-    for (Operation& operation : llvm::make_early_inc_range(block)) {
-      if (isa<arith::ConstantOp, func::ReturnOp>(operation) ||
-          (operation.getDialect() != nullptr &&
-           operation.getDialect()->getNamespace() == "tosa")) {
-        continue;
-      }
-      builder.setInsertionPoint(&operation);
-      if (auto convolution = dyn_cast<ConvolutionOp>(operation)) {
-        if (convolution.getInt8ScaleTerm() != 0) {
-          if (failed(bridgeResidualNCNNOp(operation, builder, values))) {
-            return failure();
-          }
-          continue;
-        }
-        if (failed(convertConvolution(convolution, builder, values))) {
-          return failure();
-        }
-      } else if (auto relu = dyn_cast<ReluOp>(operation)) {
-        if (failed(convertRelu(relu, builder, values))) {
-          return failure();
-        }
-      } else if (auto pooling = dyn_cast<PoolingOp>(operation)) {
-        const bool unsupportedMode =
-          pooling.getMode() == static_cast<int64_t>(PoolMode::Adaptive);
-        const bool unsupportedAveragePadding =
-          pooling.getKind() == static_cast<int64_t>(PoolKind::Average) &&
-          pooling.getIncludePad();
-        if (unsupportedMode || unsupportedAveragePadding) {
-          if (failed(bridgeResidualNCNNOp(operation, builder, values))) {
-            return failure();
-          }
-          continue;
-        }
-        if (failed(convertPooling(pooling, builder, values))) {
-          return failure();
-        }
-      } else if (auto split = dyn_cast<SplitOp>(operation)) {
-        Value input = lookup(split, split.getInput(), values);
-        if (!input) {
-          return failure();
-        }
-        for (OpResult result : split.getResults()) {
-          values[result] = input;
-        }
-      } else if (auto concat = dyn_cast<ConcatOp>(operation)) {
-        if (failed(convertConcat(concat, builder, values))) {
-          return failure();
-        }
-      } else if (auto dropout = dyn_cast<DropoutOp>(operation)) {
-        if (failed(convertDropout(dropout, builder, values))) {
-          return failure();
-        }
-      } else if (auto softmax = dyn_cast<SoftmaxOp>(operation)) {
-        if (failed(convertSoftmax(softmax, builder, values))) {
-          return failure();
-        }
-      } else if (operation.getName().getDialectNamespace() == "ncnn") {
-        if (failed(bridgeResidualNCNNOp(operation, builder, values))) {
-          return failure();
-        }
-        continue;
-      } else {
-        continue;
-      }
-      erase.push_back(&operation);
-    }
-
-    auto returnOp = cast<func::ReturnOp>(block.getTerminator());
-    builder.setInsertionPoint(returnOp);
-    SmallVector<Value> returns;
-    for (Value value : returnOp.getOperands()) {
-      Value converted = values.lookup(value);
-      if (!converted) {
-        returns.push_back(value);
-        continue;
-      }
-      auto originalType = dyn_cast<RankedTensorType>(value.getType());
-      if (originalType != nullptr && originalType.getRank() == 3) {
-        converted =
-          convertNHWCToCHW(builder, returnOp.getLoc(), converted, originalType);
-      }
-      returns.push_back(converted);
-    }
-    returnOp.getOperandsMutable().assign(returns);
-    for (Operation* operation : llvm::reverse(erase)) {
-      operation->erase();
-    }
-    return success();
-  }
-
-  static LogicalResult bridgeResidualNCNNOp(Operation& operation,
-                                            OpBuilder& builder,
-                                            DenseMap<Value, Value>& values) {
-    for (OpOperand& operand : operation.getOpOperands()) {
-      Value source = operand.get();
-      Value converted = values.lookup(source);
-      if (!converted || converted == source) {
-        continue;
-      }
-      auto sourceType = dyn_cast<RankedTensorType>(source.getType());
-      auto convertedType = dyn_cast<RankedTensorType>(converted.getType());
-      if (sourceType != nullptr && convertedType != nullptr &&
-          sourceType.getRank() == 3 && convertedType.getRank() == 4) {
-        converted =
-          convertNHWCToCHW(builder, operation.getLoc(), converted, sourceType);
-      }
-      if (converted.getType() != source.getType()) {
-        return operation.emitOpError(
-          "cannot bridge a converted operand back to its source type");
-      }
-      operand.set(converted);
-    }
-
-    builder.setInsertionPointAfter(&operation);
-    for (OpResult result : operation.getResults()) {
-      auto type = dyn_cast<RankedTensorType>(result.getType());
-      if (type != nullptr && type.getRank() == 3) {
-        values[result] = convertCHWToNHWC(builder, operation.getLoc(), result);
-      } else {
-        values[result] = result;
-      }
-    }
-    return success();
-  }
-
-  static Value lookup(Operation* operation,
-                      Value source,
-                      const DenseMap<Value, Value>& values) {
-    Value converted = values.lookup(source);
-    if (!converted) {
-      operation->emitOpError("operand has no converted TOSA value");
-    }
-    return converted;
-  }
-
-  static LogicalResult convertConvolution(ConvolutionOp operation,
-                                          OpBuilder& builder,
-                                          DenseMap<Value, Value>& values) {
+  LogicalResult matchAndRewrite(
+    ConvolutionOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
     const int64_t padTop = operation.getPadTopAttr().getInt();
     const int64_t padBottom = operation.getPadBottomAttr().getInt();
     const int64_t padLeft = operation.getPadLeftAttr().getInt();
@@ -401,41 +194,38 @@ class ConvertNCNNToTosaPass final
       return operation.emitOpError(
         "requires explicit non-negative padding; run normalize-ncnn first");
     }
-    Value input = lookup(operation, operation.getInput(), values);
-    if (!input) {
-      return failure();
-    }
+    Value input = adaptor.getInput();
     auto weightType = cast<RankedTensorType>(operation.getWeight().getType());
     auto ohwiType = getOHWIType(weightType);
     Value weight =
-      builder.create<tosa::TransposeOp>(operation.getLoc(),
-                                        ohwiType,
-                                        operation.getWeight(),
-                                        ArrayRef<int32_t>{0, 2, 3, 1});
+      rewriter.create<tosa::TransposeOp>(operation.getLoc(),
+                                         ohwiType,
+                                         adaptor.getWeight(),
+                                         ArrayRef<int32_t>{0, 2, 3, 1});
     Value bias;
     if (operation.getHasBias()) {
-      bias = operation.getBiasAndScales().front();
+      bias = adaptor.getBiasAndScales().front();
     } else {
       auto output = cast<RankedTensorType>(operation.getOutput().getType());
       auto biasType =
         RankedTensorType::get({output.getShape()[0]}, output.getElementType());
-      bias = createSplat(builder, operation.getLoc(), biasType, 0.0);
+      bias = createSplat(rewriter, operation.getLoc(), biasType, 0.0);
     }
     auto outputType =
       getNHWCType(cast<RankedTensorType>(operation.getOutput().getType()));
     Value inputZero =
-      createSplat(builder,
+      createSplat(rewriter,
                   operation.getLoc(),
                   RankedTensorType::get(
                     {1}, cast<ShapedType>(input.getType()).getElementType()),
                   0.0);
     Value weightZero =
-      createSplat(builder,
+      createSplat(rewriter,
                   operation.getLoc(),
                   RankedTensorType::get(
                     {1}, cast<ShapedType>(weight.getType()).getElementType()),
                   0.0);
-    Value result = builder.create<tosa::Conv2DOp>(
+    Value result = rewriter.create<tosa::Conv2DOp>(
       operation.getLoc(),
       outputType,
       input,
@@ -448,53 +238,62 @@ class ConvertNCNNToTosaPass final
                         static_cast<int64_t>(operation.getStrideW())},
       ArrayRef<int64_t>{static_cast<int64_t>(operation.getDilationH()),
                         static_cast<int64_t>(operation.getDilationW())},
-      builder.getF32Type());
-    values[operation.getOutput()] = result;
+      rewriter.getF32Type());
+    rewriter.replaceOp(operation, result);
     return success();
   }
+};
 
-  static LogicalResult convertRelu(ReluOp operation,
-                                   OpBuilder& builder,
-                                   DenseMap<Value, Value>& values) {
-    Value input = lookup(operation, operation.getInput(), values);
-    if (!input) {
-      return failure();
-    }
+class ConvertRelu final : public OpConversionPattern<ReluOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    ReluOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    Value input = adaptor.getInput();
     auto type = cast<RankedTensorType>(input.getType());
     const double slope = operation.getNegativeSlope().convertToDouble();
     if (slope == 0.0) {
       auto element = cast<FloatType>(type.getElementType());
-      values[operation.getOutput()] = builder.create<tosa::ClampOp>(
+      Value result = rewriter.create<tosa::ClampOp>(
         operation.getLoc(),
         type,
         input,
-        builder.getFloatAttr(element, 0.0),
-        builder.getFloatAttr(element, std::numeric_limits<double>::infinity()));
+        rewriter.getFloatAttr(element, 0.0),
+        rewriter.getFloatAttr(element,
+                              std::numeric_limits<double>::infinity()));
+      rewriter.replaceOp(operation, result);
       return success();
     }
     auto scalarType = getBroadcastScalarType(type);
-    Value zero = createSplat(builder, operation.getLoc(), scalarType, 0.0);
+    Value zero = createSplat(rewriter, operation.getLoc(), scalarType, 0.0);
     Value slopeValue =
-      createSplat(builder, operation.getLoc(), scalarType, slope);
-    Value shift = createI8Zero(builder, operation.getLoc());
-    Value negative = builder.create<tosa::MulOp>(
+      createSplat(rewriter, operation.getLoc(), scalarType, slope);
+    Value shift = createI8Zero(rewriter, operation.getLoc());
+    Value negative = rewriter.create<tosa::MulOp>(
       operation.getLoc(), type, input, slopeValue, shift);
     auto conditionType =
-      RankedTensorType::get(type.getShape(), builder.getI1Type());
-    Value condition = builder.create<tosa::GreaterEqualOp>(
+      RankedTensorType::get(type.getShape(), rewriter.getI1Type());
+    Value condition = rewriter.create<tosa::GreaterEqualOp>(
       operation.getLoc(), conditionType, input, zero);
-    values[operation.getOutput()] = builder.create<tosa::SelectOp>(
+    Value result = rewriter.create<tosa::SelectOp>(
       operation.getLoc(), type, condition, input, negative);
+    rewriter.replaceOp(operation, result);
     return success();
   }
+};
 
-  static LogicalResult convertPooling(PoolingOp operation,
-                                      OpBuilder& builder,
-                                      DenseMap<Value, Value>& values) {
-    Value input = lookup(operation, operation.getInput(), values);
-    if (!input) {
-      return failure();
-    }
+class ConvertPooling final : public OpConversionPattern<PoolingOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    PoolingOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    Value input = adaptor.getInput();
     auto sourceOutput = cast<RankedTensorType>(operation.getOutput().getType());
     const bool global =
       operation.getMode() == static_cast<int64_t>(PoolMode::Global);
@@ -519,82 +318,103 @@ class ConvertNCNNToTosaPass final
     }
     Value result;
     if (operation.getKind() == static_cast<int64_t>(PoolKind::Maximum)) {
-      result = builder.create<tosa::MaxPool2dOp>(
+      result = rewriter.create<tosa::MaxPool2dOp>(
         operation.getLoc(), outputType, input, kernel, stride, *padding);
     } else {
       Value zero =
-        createSplat(builder,
+        createSplat(rewriter,
                     operation.getLoc(),
                     RankedTensorType::get({1}, inputType.getElementType()),
                     0.0);
-      result = builder.create<tosa::AvgPool2dOp>(operation.getLoc(),
-                                                 outputType,
-                                                 input,
-                                                 zero,
-                                                 zero,
-                                                 kernel,
-                                                 stride,
-                                                 *padding,
-                                                 builder.getF32Type());
+      result = rewriter.create<tosa::AvgPool2dOp>(operation.getLoc(),
+                                                  outputType,
+                                                  input,
+                                                  zero,
+                                                  zero,
+                                                  kernel,
+                                                  stride,
+                                                  *padding,
+                                                  rewriter.getF32Type());
     }
     if (global) {
       Value shape =
-        createShape(builder, operation.getLoc(), sourceOutput.getShape());
-      result = builder.create<tosa::ReshapeOp>(
+        createShape(rewriter, operation.getLoc(), sourceOutput.getShape());
+      result = rewriter.create<tosa::ReshapeOp>(
         operation.getLoc(), sourceOutput, result, shape);
     }
-    values[operation.getOutput()] = result;
+    rewriter.replaceOp(operation, result);
     return success();
   }
+};
 
-  static LogicalResult convertConcat(ConcatOp operation,
-                                     OpBuilder& builder,
-                                     DenseMap<Value, Value>& values) {
-    SmallVector<Value> inputs;
-    for (Value input : operation.getInputs()) {
-      Value converted = lookup(operation, input, values);
-      if (!converted) {
-        return failure();
-      }
-      inputs.push_back(converted);
-    }
+class ConvertSplit final : public OpConversionPattern<SplitOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    SplitOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    SmallVector<Value> replacements(operation.getNumResults(),
+                                    adaptor.getInput());
+    rewriter.replaceOp(operation, replacements);
+    return success();
+  }
+};
+
+class ConvertConcat final : public OpConversionPattern<ConcatOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    ConcatOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
     auto sourceType = cast<RankedTensorType>(operation.getOutput().getType());
     auto outputType =
       sourceType.getRank() == 3 ? getNHWCType(sourceType) : sourceType;
     uint32_t axis = convertAxis(operation.getAxis(), sourceType.getRank());
-    values[operation.getOutput()] = builder.create<tosa::ConcatOp>(
-      operation.getLoc(), outputType, inputs, axis);
+    Value result = rewriter.create<tosa::ConcatOp>(
+      operation.getLoc(), outputType, adaptor.getInputs(), axis);
+    rewriter.replaceOp(operation, result);
     return success();
   }
+};
 
-  static LogicalResult convertDropout(DropoutOp operation,
-                                      OpBuilder& builder,
-                                      DenseMap<Value, Value>& values) {
-    Value input = lookup(operation, operation.getInput(), values);
-    if (!input) {
-      return failure();
-    }
+class ConvertDropout final : public OpConversionPattern<DropoutOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    DropoutOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    Value input = adaptor.getInput();
     const double scale = operation.getScale().convertToDouble();
     if (scale == 1.0) {
-      values[operation.getOutput()] = input;
+      rewriter.replaceOp(operation, input);
       return success();
     }
     auto type = cast<RankedTensorType>(input.getType());
     Value factor = createSplat(
-      builder, operation.getLoc(), getBroadcastScalarType(type), scale);
-    Value shift = createI8Zero(builder, operation.getLoc());
-    values[operation.getOutput()] = builder.create<tosa::MulOp>(
+      rewriter, operation.getLoc(), getBroadcastScalarType(type), scale);
+    Value shift = createI8Zero(rewriter, operation.getLoc());
+    Value result = rewriter.create<tosa::MulOp>(
       operation.getLoc(), type, input, factor, shift);
+    rewriter.replaceOp(operation, result);
     return success();
   }
+};
 
-  static LogicalResult convertSoftmax(SoftmaxOp operation,
-                                      OpBuilder& builder,
-                                      DenseMap<Value, Value>& values) {
-    Value input = lookup(operation, operation.getInput(), values);
-    if (!input) {
-      return failure();
-    }
+class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    SoftmaxOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    Value input = adaptor.getInput();
     auto type = cast<RankedTensorType>(input.getType());
     auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
     const uint32_t axis =
@@ -603,20 +423,113 @@ class ConvertNCNNToTosaPass final
     reducedShape[axis] = 1;
     auto reducedType =
       RankedTensorType::get(reducedShape, type.getElementType());
-    Value maximum = builder.create<tosa::ReduceMaxOp>(
+    Value maximum = rewriter.create<tosa::ReduceMaxOp>(
       operation.getLoc(), reducedType, input, axis);
     Value shifted =
-      builder.create<tosa::SubOp>(operation.getLoc(), type, input, maximum);
+      rewriter.create<tosa::SubOp>(operation.getLoc(), type, input, maximum);
     Value exponent =
-      builder.create<tosa::ExpOp>(operation.getLoc(), type, shifted);
-    Value sum = builder.create<tosa::ReduceSumOp>(
+      rewriter.create<tosa::ExpOp>(operation.getLoc(), type, shifted);
+    Value sum = rewriter.create<tosa::ReduceSumOp>(
       operation.getLoc(), reducedType, exponent, axis);
     Value reciprocal =
-      builder.create<tosa::ReciprocalOp>(operation.getLoc(), reducedType, sum);
-    Value shift = createI8Zero(builder, operation.getLoc());
-    values[operation.getOutput()] = builder.create<tosa::MulOp>(
+      rewriter.create<tosa::ReciprocalOp>(operation.getLoc(), reducedType, sum);
+    Value shift = createI8Zero(rewriter, operation.getLoc());
+    Value result = rewriter.create<tosa::MulOp>(
       operation.getLoc(), type, exponent, reciprocal, shift);
+    rewriter.replaceOp(operation, result);
     return success();
+  }
+};
+
+class ConvertNCNNToTosaPass final
+  : public PassWrapper<ConvertNCNNToTosaPass, OperationPass<ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertNCNNToTosaPass)
+
+  StringRef getArgument() const final { return "convert-ncnn-to-tosa"; }
+  StringRef getDescription() const final {
+    return "Convert the SqueezeNet ncnn op set to TOSA";
+  }
+
+  void getDependentDialects(DialectRegistry& registry) const final {
+    registry
+      .insert<arith::ArithDialect, func::FuncDialect, tosa::TosaDialect>();
+  }
+
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+    if (!module.getOps<ModelOp>().empty()) {
+      module.emitError(
+        "convert-ncnn-to-tosa requires ncnn.model to be "
+        "converted to func.func first");
+      signalPassFailure();
+      return;
+    }
+
+    MLIRContext* context = module.getContext();
+    TypeConverter typeConverter;
+    typeConverter.addConversion([](Type type) { return type; });
+    typeConverter.addConversion([](RankedTensorType type) -> Type {
+      return type.getRank() == 3 ? getNHWCType(type) : type;
+    });
+    typeConverter.addTargetMaterialization([](OpBuilder& builder,
+                                              RankedTensorType resultType,
+                                              ValueRange inputs,
+                                              Location location,
+                                              Type) -> Value {
+      if (inputs.size() != 1 || resultType.getRank() != 4) {
+        return {};
+      }
+      auto inputType = dyn_cast<RankedTensorType>(inputs.front().getType());
+      if (!inputType || inputType.getRank() != 3 ||
+          getNHWCType(inputType) != resultType) {
+        return {};
+      }
+      return convertCHWToNHWC(builder, location, inputs.front());
+    });
+    typeConverter.addSourceMaterialization([](OpBuilder& builder,
+                                              RankedTensorType resultType,
+                                              ValueRange inputs,
+                                              Location location) -> Value {
+      if (inputs.size() != 1 || resultType.getRank() != 3) {
+        return {};
+      }
+      auto inputType = dyn_cast<RankedTensorType>(inputs.front().getType());
+      if (!inputType || inputType.getRank() != 4 ||
+          getNHWCType(resultType) != inputType) {
+        return {};
+      }
+      return convertNHWCToCHW(builder, location, inputs.front(), resultType);
+    });
+
+    RewritePatternSet patterns(context);
+    patterns.add<ConvertConvolution,
+                 ConvertRelu,
+                 ConvertPooling,
+                 ConvertSplit,
+                 ConvertConcat,
+                 ConvertDropout,
+                 ConvertSoftmax>(typeConverter, context);
+
+    ConversionTarget target(*context);
+    target.addLegalDialect<arith::ArithDialect,
+                           func::FuncDialect,
+                           tosa::TosaDialect>();
+    target.addLegalOp<ModuleOp>();
+    target.addDynamicallyLegalOp<ConvolutionOp>([](ConvolutionOp operation) {
+      return operation.getInt8ScaleTerm() != 0;
+    });
+    target.addDynamicallyLegalOp<PoolingOp>([](PoolingOp operation) {
+      return operation.getMode() == static_cast<int64_t>(PoolMode::Adaptive) ||
+             (operation.getKind() == static_cast<int64_t>(PoolKind::Average) &&
+              operation.getIncludePad());
+    });
+    target.addIllegalOp<ReluOp, SplitOp, ConcatOp, DropoutOp, SoftmaxOp>();
+
+    FrozenRewritePatternSet frozen(std::move(patterns));
+    if (failed(applyPartialConversion(module, target, frozen))) {
+      signalPassFailure();
+    }
   }
 };
 

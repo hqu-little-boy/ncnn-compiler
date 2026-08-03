@@ -1,9 +1,11 @@
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -62,8 +64,8 @@ class NormalizeNCNNPass final
       return;
     }
 
-    OwningOpRef<ModuleOp> candidate = cast<ModuleOp>(module->clone());
-    WalkResult validation = candidate->walk([&](Operation* operation) {
+    DenseMap<Operation*, std::array<int64_t, 4>> explicitPadding;
+    WalkResult validation = module.walk([&](Operation* operation) {
       if (operation->getDialect() == nullptr ||
           operation->getDialect()->getNamespace() != "ncnn") {
         return WalkResult::advance();
@@ -71,6 +73,12 @@ class NormalizeNCNNPass final
       if (operation->getParentOfType<func::FuncOp>() == nullptr) {
         operation->emitOpError("requires a func.func boundary");
         return WalkResult::interrupt();
+      }
+      if (auto convolution = dyn_cast<ConvolutionOp>(operation)) {
+        return validateConvolution(convolution, explicitPadding);
+      }
+      if (auto pooling = dyn_cast<PoolingOp>(operation)) {
+        return validatePooling(pooling, explicitPadding);
       }
       return WalkResult::advance();
     });
@@ -80,12 +88,12 @@ class NormalizeNCNNPass final
     }
 
     SmallVector<SplitOp> splits;
-    WalkResult normalization = candidate->walk([&](Operation* operation) {
+    module.walk([&](Operation* operation) {
       if (auto convolution = dyn_cast<ConvolutionOp>(operation)) {
-        return normalizeConvolution(convolution);
+        normalizeConvolution(convolution, explicitPadding);
       }
       if (auto pooling = dyn_cast<PoolingOp>(operation)) {
-        return normalizePooling(pooling);
+        normalizePooling(pooling, explicitPadding);
       }
       if (auto concat = dyn_cast<ConcatOp>(operation)) {
         normalizeAxis(concat, concat.getInputs().front().getType());
@@ -102,16 +110,10 @@ class NormalizeNCNNPass final
         }
         splits.push_back(split);
       }
-      return WalkResult::advance();
     });
-    if (normalization.wasInterrupted()) {
-      signalPassFailure();
-      return;
-    }
     for (SplitOp split : splits) {
       split.erase();
     }
-    module.getBodyRegion().takeBody(candidate->getBodyRegion());
   }
 
  private:
@@ -138,8 +140,9 @@ class NormalizeNCNNPass final
                        Builder(operation.getContext()).getF32FloatAttr(value));
   }
 
-  static WalkResult normalizeConvolution(ConvolutionOp operation) {
-    setI64(operation, "int8_scale_term", operation.getInt8ScaleTerm());
+  static WalkResult validateConvolution(
+    ConvolutionOp operation,
+    DenseMap<Operation*, std::array<int64_t, 4>>& explicitPadding) {
     const int64_t pad = operation.getPadTop();
     if (pad != -233 && pad != -234) {
       return WalkResult::advance();
@@ -163,14 +166,14 @@ class NormalizeNCNNPass final
       operation.emitOpError("cannot resolve static SAME padding");
       return WalkResult::interrupt();
     }
-    setI64(operation, "pad_top", height->before);
-    setI64(operation, "pad_bottom", height->after);
-    setI64(operation, "pad_left", width->before);
-    setI64(operation, "pad_right", width->after);
+    explicitPadding[operation] = {
+      height->before, height->after, width->before, width->after};
     return WalkResult::advance();
   }
 
-  static WalkResult normalizePooling(PoolingOp operation) {
+  static WalkResult validatePooling(
+    PoolingOp operation,
+    DenseMap<Operation*, std::array<int64_t, 4>>& explicitPadding) {
     if (operation.getMode() != static_cast<int64_t>(PoolMode::Regular) ||
         (operation.getPadMode() != 2 && operation.getPadMode() != 3)) {
       return WalkResult::advance();
@@ -194,12 +197,37 @@ class NormalizeNCNNPass final
       operation.emitOpError("cannot resolve static SAME padding");
       return WalkResult::interrupt();
     }
-    setI64(operation, "pad_top", height->before);
-    setI64(operation, "pad_bottom", height->after);
-    setI64(operation, "pad_left", width->before);
-    setI64(operation, "pad_right", width->after);
-    setI64(operation, "pad_mode", 1);
+    explicitPadding[operation] = {
+      height->before, height->after, width->before, width->after};
     return WalkResult::advance();
+  }
+
+  static void normalizeConvolution(
+    ConvolutionOp operation,
+    const DenseMap<Operation*, std::array<int64_t, 4>>& explicitPadding) {
+    setI64(operation, "int8_scale_term", operation.getInt8ScaleTerm());
+    auto padding = explicitPadding.find(operation);
+    if (padding == explicitPadding.end()) {
+      return;
+    }
+    setI64(operation, "pad_top", padding->second[0]);
+    setI64(operation, "pad_bottom", padding->second[1]);
+    setI64(operation, "pad_left", padding->second[2]);
+    setI64(operation, "pad_right", padding->second[3]);
+  }
+
+  static void normalizePooling(
+    PoolingOp operation,
+    const DenseMap<Operation*, std::array<int64_t, 4>>& explicitPadding) {
+    auto padding = explicitPadding.find(operation);
+    if (padding == explicitPadding.end()) {
+      return;
+    }
+    setI64(operation, "pad_top", padding->second[0]);
+    setI64(operation, "pad_bottom", padding->second[1]);
+    setI64(operation, "pad_left", padding->second[2]);
+    setI64(operation, "pad_right", padding->second[3]);
+    setI64(operation, "pad_mode", 1);
   }
 };
 

@@ -38,10 +38,19 @@
 `convert-ncnn-model-to-func` 是 normalize 和所有目标 conversion 的固定前置 pass，而不是
 后端 ABI 收尾步骤。
 它只消除模型边界并建立标准函数形态，不转换计算语义或 CHW/OIHW 布局；后续
-`normalize-ncnn` 保持 CHW/OIHW，收敛 axis、padding、融合属性等目标无关语义。
+`normalize-ncnn` 保持 CHW/OIHW，收敛 axis、padding、融合属性等目标无关语义。该 pass
+先只读验证所有 ncnn op 的函数边界并预计算可能失败的 SAME padding，全部成功后才原地
+提交属性更新和 Split 消除；失败不会留下部分规范化结果，也不需要 clone 整个模块。
 `convert-ncnn-to-tosa` 只处理函数体内明确属于 TOSA 支持集合的计算算子；单独运行时允许
 其他 ncnn op 留给其他 conversion。组合的 `ncnn-to-tosa-pipeline` 通过最终残留检查要求
 输入模型严格转换为纯 TOSA。
+
+`convert-ncnn-to-tosa` 基于 MLIR dialect conversion：每种受支持算子由独立 conversion
+pattern 转换，`TypeConverter` 描述 rank-3 CHW 到 rank-4 NHWC 的类型映射，source/target
+materialization 自动在函数边界、合法非 ncnn op 和残留 ncnn op 两侧插入 transpose + reshape。
+函数签名不参与类型转换，所以公共函数 ABI 始终保持 CHW。支持的 ncnn op 被标为 illegal，
+明确不支持的实例和未知 ncnn op 保持 legal；conversion driver 负责 SSA 值 remap、替换、删除
+和失败回滚，不使用手写值映射或模块 clone。
 `ncnn-linalg-to-memref-pipeline` 在 Linalg 阶段之后执行 One-Shot Bufferize，随后立即将
 memref result 提升为带 `bufferize.result` 的输出参数，再执行 deallocation。入口函数不返回
 tensor/memref，调用方拥有 input/output buffer，函数只释放内部临时分配。最终 gate 禁止
@@ -159,8 +168,8 @@ SAME padding 用 ncnn 哨兵表达：`pad_*` 全为 `-233` = SAME_UPPER，全为
 元素类型：`f32`（主路径）、`f16`、`i8`（量化权重/结果）。
 
 > **布局是隐式约定，不是显式 layout 字段**。verifier 与形状推断按此约定校验
-> （conv 要求 input rank3、weight rank4）。ncnn→tosa 下降时再按需做 CHW→NHWC 转换
-> （见开发指南的布局决策）。
+> （conv 要求 input rank3、weight rank4）。ncnn→tosa 下降通过 `TypeConverter` 和双向
+> materialization 按需完成 CHW↔NHWC 转换，函数 ABI 仍保持 CHW。
 
 ---
 

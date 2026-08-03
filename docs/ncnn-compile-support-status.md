@@ -76,8 +76,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | 解析 | `ncnn_graph::Graph::load` | 解析 `.param`（magic `7767517`）和 `.bin` 为 parsed-graph |
 | 导入 | `ncnn_importer::import_graph` | 提升为类型化 MLIR SSA DAG，执行静态形状推断 |
 | 模型→函数 | `convert-ncnn-model-to-func` | 消除模型边界，建立 `func.func` + `arith.constant` |
-| 规范化 | `normalize-ncnn` | 解析 SAME padding 哨兵值、归一化负 axis、消除 Split |
-| ncnn→TOSA | `convert-ncnn-to-tosa` | 逐 op 转换，处理 CHW→NHWC 布局转置 |
+| 规范化 | `normalize-ncnn` | 两阶段校验/提交：解析 SAME padding、归一化负 axis、消除 Split |
+| ncnn→TOSA | `convert-ncnn-to-tosa` | MLIR dialect conversion patterns + CHW/NHWC 双向 materialization |
 | TOSA→Linalg | 上游 `addTosaToLinalgPasses` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith |
 | Linalg→MemRef | `bufferize-ncnn` + `buffer-results-to-out-params` | One-Shot Bufferize，输出提升为 caller-owned 参数 |
 | C API 生成 | `generate-ncnn-c-api` | 准备 bare-pointer ABI 元数据 |
@@ -87,7 +87,14 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 ### 3.2 布局处理
 
 ncnn 原生使用 **CHW** 布局（卷积权重 `[O,I,H,W]`）。C ABI 保持 CHW，但内部
-`convert-ncnn-to-tosa` 会转置为 **NHWC/OHWI**（TOSA conv/pool 要求），计算完成后再转回。
+`convert-ncnn-to-tosa` 的 `TypeConverter` 会把 rank-3 CHW 映射为 rank-4 **NHWC**，权重
+由 convolution pattern 转为 **OHWI**。source/target materialization 在函数、合法非 ncnn op
+或残留 ncnn op 的边界按需转回 CHW，不改变函数签名。
+
+该转换采用部分转换契约：可 lowering 的 ncnn op 必须由 pattern 消除；int8 convolution、
+adaptive pooling、average include-pad 和尚未分配目标路径的 ncnn op 可以残留。单 pass 成功
+不表示已经得到纯 TOSA，严格 pipeline 最后通过 `verify-no-ncnn-ops` 拒绝任何残留。转换失败时
+由 MLIR conversion driver 回滚已执行的 pattern，不通过 clone 模块实现事务性。
 
 ---
 
@@ -156,8 +163,8 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 ### 7.1 lit / FileCheck 测试
 
 - `test/Dialect/NCNN/`：op 解析/打印/验证
-- `test/Conversion/NCNNToFunc/`、`test/Conversion/NCNNToTosa/`：转换正确性
-- `test/Transforms/`：NormalizeNCNN、GenerateCAPI、各 verify gate
+- `test/Conversion/NCNNToFunc/`、`test/Conversion/NCNNToTosa/`：转换正确性、合法 op 边界物化和失败回滚
+- `test/Transforms/`：NormalizeNCNN 两阶段提交、GenerateCAPI、各 verify gate
 - `test/Pipelines/`：完整流水线组合、SqueezeNet 端到端、严格失败路径
 
 ### 7.2 GTest 单元测试

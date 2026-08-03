@@ -142,7 +142,9 @@ alignment 和尾部空间。该问题发生在 reference 侧，不代表生成�
 
 还需注意：
 
-- 编译器在 ncnn->TOSA lowering 内部会做 CHW/NHWC 转换，但 C ABI 仍是 CHW。
+- 编译器在 ncnn->TOSA lowering 中通过 `TypeConverter` 的双向 materialization 按需完成
+  CHW/NHWC 转换；函数签名和 C ABI 仍是 CHW。合法非 ncnn op 或残留 ncnn op 与已转换
+  TOSA 数据流交界时也会自动插入布局转换。
 - Concat 的 ncnn axis 0 是 channel axis；转换到 NHWC 后目标 axis 必须相应转换。
 - Global Pooling 可能把 `[C,H,W]` 降成一维 `[C]`，reference 输出不再是三维 Mat。
 - 多输入测试的每个输入必须独立记录 shape 和 blob name，不能假设所有输入同 shape。

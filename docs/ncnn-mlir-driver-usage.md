@@ -221,6 +221,10 @@ Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把�
 转移到 `func.func` 参数/结果与 `arith.constant`，并删除模型边界算子。该 pass 是
 `--normalize-ncnn` 和各目标 conversion 的固定前置。`--convert-ncnn-to-tosa` 采用长期
 部分转换契约：只转换明确支持的算子，其他 ncnn op 可留给后续 Linalg/SCF 或 Host 路径。
+`--normalize-ncnn` 会先只读验证并预计算 SAME padding，再原地提交全部规范化修改；验证失败
+不会产生部分结果。`--convert-ncnn-to-tosa` 使用 MLIR dialect conversion patterns，借助
+`TypeConverter` 的 source/target materialization 在 CHW 和 NHWC 间转换，并由 conversion
+driver 管理 SSA remap 和失败回滚。两者均不通过 clone 整个模块换取事务性。
 
 ```bash
 ./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param 2>/dev/null \
@@ -249,7 +253,9 @@ convert-ncnn-model-to-func
 ```
 
 单独运行 `--convert-ncnn-to-tosa` 用于开发和调试某条 conversion，不表示模型已完整
-lowering。`--ncnn-to-tosa-pipeline` 以最终“无 ncnn op 残留”为成功标准。
+lowering。可转换的算子实例在 conversion target 中是 illegal，明确不支持的实例和未知 ncnn
+op 则允许残留；`--ncnn-to-tosa-pipeline` 以最终“无 ncnn op 残留”为成功标准。函数签名
+保持 CHW，布局 materialization 只出现在函数体内部和不同合法性区域的值边界。
 
 `--ncnn-linalg-to-memref-pipeline` 固定执行 function-boundary One-Shot Bufferize、
 `buffer-results-to-out-params` 和标准 deallocation pipeline。对于 SqueezeNet，入口契约为：

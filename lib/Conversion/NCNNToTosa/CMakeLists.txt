@@ -7,4 +7,5 @@ target_link_libraries(NCNNToTosa PUBLIC
     MLIRArithDialect
     MLIRFuncDialect
     MLIRPass
-    MLIRTosaDialect)
+    MLIRTosaDialect
+    MLIRTransforms)
