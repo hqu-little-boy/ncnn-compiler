@@ -379,15 +379,8 @@ FailureOr<RankedTensorType> computeConcatResult(
 // Model boundary ops
 //===----------------------------------------------------------------------===//
 
-LogicalResult ModelOp::verify() {
-  if (getBody().empty()) {
-    return emitOpError("requires one body block");
-  }
+LogicalResult ModelOp::verifyRegions() {
   Block& body = getBody().front();
-  if (body.getNumArguments() != 0) {
-    return emitOpError("body cannot have block arguments");
-  }
-
   llvm::StringSet<> inputBlobs;
   bool hasOutput = false;
   for (Operation& operation : body) {

@@ -36,7 +36,7 @@ def NCNN_ModelOp : NCNN_Op<"model", [Symbol, IsolatedFromAbove, SingleBlock,
   let arguments = (ins SymbolNameAttr:$sym_name);
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = "$sym_name attr-dict-with-keyword $body";
-  let hasVerifier = 1;
+  let hasRegionVerifier = 1;
 }
 
 def NCNN_InputOp : NCNN_Op<"input", [HasParent<"ModelOp">]> {
