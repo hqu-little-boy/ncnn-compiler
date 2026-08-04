@@ -757,7 +757,7 @@ class ImportState {
     for (std::size_t i = 0; i < result_count; ++i) {
       auto bound = bind_blob(context,
                              std::string(context.layer.get_outputs()[i]),
-                             split.getResult(i));
+                             split->getResult(i));
       if (!bound) {
         return std::unexpected(bound.error());
       }

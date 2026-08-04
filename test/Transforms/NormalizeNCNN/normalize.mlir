@@ -28,8 +28,8 @@ func.func @normalize(%arg0: tensor<3x4x5xf32>) -> tensor<16x2x3xf32> {
 // CHECK-SAME: pad_mode = 1 : i64
 // CHECK-SAME: pad_right = 1 : i64
 // CHECK-SAME: pad_top = 0 : i64
-// CHECK-NOT: ncnn.split
-// CHECK: ncnn.concat %[[UPPER]], %[[UPPER]] {axis = 0 : i64}
+// CHECK: %[[SPLIT:.*]]:2 = ncnn.split %[[UPPER]]
+// CHECK: ncnn.concat %[[SPLIT]]#0, %[[SPLIT]]#1 {axis = 0 : i64}
 // CHECK: ncnn.softmax {{.*}} {axis = 2 : i64}
 
 // CHECK-NOT: -233

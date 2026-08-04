@@ -31,6 +31,11 @@ def NCNN_RankedTensor : RankedTensorOf<
   [CPred<"!::llvm::cast<::mlir::RankedTensorType>($_self).getEncoding()">],
   "ranked tensor without encoding">;
 
+class NCNN_AtLeastNOperands<int n>
+    : ParamNativeOpTrait<"AtLeastNOperands", !cast<string>(n)>;
+class NCNN_AtLeastNResults<int n>
+    : ParamNativeOpTrait<"AtLeastNResults", !cast<string>(n)>;
+
 //===----------------------------------------------------------------------===//
 // 模型边界
 //===----------------------------------------------------------------------===//
@@ -51,12 +56,14 @@ def NCNN_InputOp : NCNN_Op<"input", [HasParent<"ModelOp">]> {
   let assemblyFormat = "attr-dict `:` type($output)";
 }
 
-def NCNN_ConstOp : NCNN_Op<"const", [Pure, HasParent<"ModelOp">]> {
+def NCNN_ConstOp : NCNN_Op<"const", [ConstantLike, Pure,
+                                      AllTypesMatch<["value", "output"]>,
+                                      HasParent<"ModelOp">]> {
   let summary = "An embedded weight tensor from the ncnn .bin file.";
   let arguments = (ins StrAttr:$name, ElementsAttr:$value);
   let results = (outs NCNN_RankedTensor:$output);
   let assemblyFormat = "attr-dict `:` type($output)";
-  let hasVerifier = 1;
+  let hasFolder = 1;
 }
 
 def NCNN_OutputOp : NCNN_Op<"output", [HasParent<"ModelOp">]> {
@@ -154,7 +161,8 @@ def NCNN_PoolingOp : NCNN_Op<"pooling", [Pure, InferTensorTypeAdaptor]> {
 // split
 //===----------------------------------------------------------------------===//
 
-def NCNN_SplitOp : NCNN_Op<"split", [Pure, SameOperandsAndResultType]> {
+def NCNN_SplitOp : NCNN_Op<"split", [Pure, SameOperandsAndResultType,
+                                      NCNN_AtLeastNResults<2>]> {
   let summary = "Fan one value out to N identical copies (ncnn Split).";
   let description = [{
     ncnn `Split` duplicates a blob into N consumers; it is pure routing. In SSA
@@ -163,14 +171,15 @@ def NCNN_SplitOp : NCNN_Op<"split", [Pure, SameOperandsAndResultType]> {
   }];
   let arguments = (ins NCNN_RankedTensor:$input);
   let results = (outs Variadic<NCNN_RankedTensor>:$results);
-  let hasVerifier = 1;
+  let hasFolder = 1;
 }
 
 //===----------------------------------------------------------------------===//
 // concat
 //===----------------------------------------------------------------------===//
 
-def NCNN_ConcatOp : NCNN_Op<"concat", [Pure, InferTensorTypeAdaptor]> {
+def NCNN_ConcatOp : NCNN_Op<"concat", [Pure, InferTensorTypeAdaptor,
+                                        NCNN_AtLeastNOperands<2>]> {
   let summary = "Concatenate along an axis (ncnn Concat).";
   let arguments = (ins
     Variadic<NCNN_RankedTensor>:$inputs,

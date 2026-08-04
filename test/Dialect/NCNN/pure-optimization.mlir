@@ -28,3 +28,12 @@ func.func @common_ops(%input: tensor<2x4x4xf32>, %weight: tensor<3x2x1x1xf32>) -
 // CSE-COUNT-1: ncnn.convolution
 // CSE-COUNT-1: ncnn.pooling
 // CSE-COUNT-1: ncnn.concat
+
+func.func @fold_split(%input: tensor<2x4x4xf32>) -> (tensor<2x4x4xf32>, tensor<2x4x4xf32>) {
+  %first, %second = ncnn.split %input : (tensor<2x4x4xf32>) -> (tensor<2x4x4xf32>, tensor<2x4x4xf32>)
+  return %first, %second : tensor<2x4x4xf32>, tensor<2x4x4xf32>
+}
+
+// CANONICALIZE-LABEL: func.func @fold_split
+// CANONICALIZE-NOT: ncnn.split
+// CANONICALIZE: return %arg0, %arg0

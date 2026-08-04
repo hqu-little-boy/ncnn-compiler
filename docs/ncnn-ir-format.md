@@ -43,7 +43,8 @@
 回滚，不 clone 整个模型 SSA 图。该 pass 不转换计算语义或 CHW/OIHW 布局；后续
 `normalize-ncnn` 保持 CHW/OIHW，收敛 axis、padding、融合属性等目标无关语义。该 pass
 先只读验证所有 ncnn op 的函数边界并预计算可能失败的 SAME padding，全部成功后才原地
-提交属性更新和 Split 消除；失败不会留下部分规范化结果，也不需要 clone 整个模块。
+提交属性更新；失败不会留下部分规范化结果，也不需要 clone 整个模块。Split 的 SSA fan-out
+语义由 op folder 表达，交给标准 canonicalize 或目标 conversion 消除。
 `convert-ncnn-to-tosa` 只处理函数体内明确属于 TOSA 支持集合的计算算子；单独运行时允许
 其他 ncnn op 留给其他 conversion。组合的 `ncnn-to-tosa-pipeline` 通过最终残留检查要求
 输入模型严格转换为纯 TOSA。

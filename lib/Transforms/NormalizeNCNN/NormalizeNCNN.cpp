@@ -86,7 +86,6 @@ class NormalizeNCNNPass final
       return;
     }
 
-    SmallVector<SplitOp> splits;
     module.walk([&](Operation* operation) {
       if (auto convolution = dyn_cast<ConvolutionOp>(operation)) {
         normalizeConvolution(convolution, explicitPadding);
@@ -103,16 +102,8 @@ class NormalizeNCNNPass final
           relu, "negative_slope", relu.getNegativeSlope().convertToDouble());
       } else if (auto dropout = dyn_cast<DropoutOp>(operation)) {
         setF32(dropout, "scale", dropout.getScale().convertToDouble());
-      } else if (auto split = dyn_cast<SplitOp>(operation)) {
-        for (OpResult result : split.getResults()) {
-          result.replaceAllUsesWith(split.getInput());
-        }
-        splits.push_back(split);
       }
     });
-    for (SplitOp split : splits) {
-      split.erase();
-    }
   }
 
  private:

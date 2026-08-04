@@ -359,7 +359,7 @@ class ConvertSplit final : public OpConversionPattern<SplitOp> {
     SplitOp operation,
     OpAdaptor adaptor,
     ConversionPatternRewriter& rewriter) const final {
-    SmallVector<Value> replacements(operation.getNumResults(),
+    SmallVector<Value> replacements(operation->getNumResults(),
                                     adaptor.getInput());
     rewriter.replaceOp(operation, replacements);
     return success();

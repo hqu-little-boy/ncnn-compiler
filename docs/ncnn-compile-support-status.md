@@ -76,7 +76,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | 解析 | `ncnn_graph::Graph::load` | 解析 `.param`（magic `7767517`）和 `.bin` 为 parsed-graph |
 | 导入 | `ncnn_importer::import_graph` | 提升为类型化 MLIR SSA DAG，通过 op 的 `InferTypeOpInterface` 执行静态形状推断 |
 | 模型→函数 | `convert-ncnn-model-to-func` | Full dialect conversion：移动模型 region，建立 `func.func` + `arith.constant`，不 clone SSA 图 |
-| 规范化 | `normalize-ncnn` | 两阶段校验/提交：解析 SAME padding、归一化负 axis、消除 Split |
+| 规范化 | `normalize-ncnn` | 两阶段校验/提交：解析 SAME padding、归一化负 axis；Split 由标准 folder/canonicalize 消除 |
 | ncnn→TOSA | `convert-ncnn-to-tosa` | MLIR dialect conversion patterns + CHW/NHWC 双向 materialization |
 | TOSA→Linalg | 上游 `addTosaToLinalgPasses` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith |
 | Linalg→MemRef | `bufferize-ncnn` + `buffer-results-to-out-params` | One-Shot Bufferize，输出提升为 caller-owned 参数 |

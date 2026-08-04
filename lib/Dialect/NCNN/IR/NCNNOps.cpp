@@ -401,13 +401,8 @@ LogicalResult ModelOp::verifyRegions() {
   return success();
 }
 
-LogicalResult ConstOp::verify() {
-  if (getValue().getType() != getOutput().getType()) {
-    return emitOpError("value type ")
-           << getValue().getType() << " does not match result type "
-           << getOutput().getType();
-  }
-  return success();
+OpFoldResult ConstOp::fold(FoldAdaptor) {
+  return getValue();
 }
 
 //===----------------------------------------------------------------------===//
@@ -512,9 +507,11 @@ LogicalResult ConcatOp::inferReturnTypeComponents(
 // SplitOp
 //===----------------------------------------------------------------------===//
 
-LogicalResult SplitOp::verify() {
-  if (getResults().size() < 2) {
-    return emitOpError("requires at least two results");
+LogicalResult SplitOp::fold(FoldAdaptor,
+                            SmallVectorImpl<OpFoldResult>& results) {
+  for (OpResult result : getResults()) {
+    (void)result;
+    results.push_back(getInput());
   }
   return success();
 }

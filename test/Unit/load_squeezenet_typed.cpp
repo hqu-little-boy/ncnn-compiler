@@ -116,7 +116,7 @@ TEST(LoadSqueezenetTyped, ImportsAndVerifies) {
 
   bool split_results = true;
   module->walk([&](mlir::ncnn::SplitOp split) {
-    split_results = split_results && split.getNumResults() == 2;
+    split_results = split_results && split->getNumResults() == 2;
   });
   EXPECT_TRUE(split_results) << "all Split operations have two results";
 }
