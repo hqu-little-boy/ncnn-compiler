@@ -39,7 +39,7 @@ def NCNN_ModelOp : NCNN_Op<"model", [Symbol, IsolatedFromAbove, SingleBlock,
   let hasVerifier = 1;
 }
 
-def NCNN_InputOp : NCNN_Op<"input", [Pure, HasParent<"ModelOp">]> {
+def NCNN_InputOp : NCNN_Op<"input", [HasParent<"ModelOp">]> {
   let summary = "A source ncnn Input layer.";
   let arguments = (ins StrAttr:$layer_name, StrAttr:$blob_name);
   let results = (outs AnyRankedTensor:$output);
