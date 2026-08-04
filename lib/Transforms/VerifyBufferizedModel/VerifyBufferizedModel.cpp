@@ -6,6 +6,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Analysis/AliasAnalysis.h"
 #include "mlir/Dialect/Bufferization/IR/AllocationOpInterface.h"
+#include "mlir/Dialect/Bufferization/Transforms/BufferViewFlowAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Transforms/AllocationOpInterfaceImpl.h"
@@ -42,9 +43,7 @@ class VerifyBufferizedModelPass final
     Operation* operation;
   };
 
-  static bool isDefiniteAlias(AliasResult result) {
-    return result.isMust() || result.isPartial();
-  }
+  static bool mayAlias(AliasResult result) { return !result.isNo(); }
 
   static bool blockHasReleaseAfter(Block* block,
                                    Operation* allocation,
@@ -134,13 +133,14 @@ class VerifyBufferizedModelPass final
     });
 
     AliasAnalysis aliases(function);
+    BufferOriginAnalysis origins(function);
     DominanceInfo dominance(function);
     SmallVector<SmallVector<Operation*>> matchingReleases(allocations.size());
     for (const Release& release : releases) {
       bool callerOwned = false;
       for (BlockArgument argument : function.getArguments()) {
         if (isa<BaseMemRefType>(argument.getType()) &&
-            isDefiniteAlias(aliases.alias(release.value, argument))) {
+            mayAlias(aliases.alias(release.value, argument))) {
           callerOwned = true;
           break;
         }
@@ -154,7 +154,7 @@ class VerifyBufferizedModelPass final
 
       SmallVector<unsigned> roots;
       for (auto [index, allocation] : llvm::enumerate(allocations)) {
-        if (isDefiniteAlias(aliases.alias(release.value, allocation.value))) {
+        if (origins.isSameAllocation(release.value, allocation.value) == true) {
           roots.push_back(index);
         }
       }
@@ -199,7 +199,7 @@ class VerifyBufferizedModelPass final
       function.walk([&](Block* block) {
         for (BlockArgument argument : block->getArguments()) {
           if (isa<BaseMemRefType>(argument.getType()) &&
-              isDefiniteAlias(aliases.alias(allocation.value, argument))) {
+              origins.isSameAllocation(allocation.value, argument) == true) {
             allocationAliases.push_back(argument);
           }
         }
@@ -207,7 +207,7 @@ class VerifyBufferizedModelPass final
       function.walk([&](Operation* operation) {
         for (Value result : operation->getResults()) {
           if (isa<BaseMemRefType>(result.getType()) &&
-              isDefiniteAlias(aliases.alias(allocation.value, result))) {
+              origins.isSameAllocation(allocation.value, result) == true) {
             allocationAliases.push_back(result);
           }
         }

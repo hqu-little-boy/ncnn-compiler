@@ -10,6 +10,7 @@ target_include_directories(VerifyBufferizedModel PUBLIC
 target_link_libraries(VerifyBufferizedModel PUBLIC
     MLIRAnalysis
     MLIRBufferizationDialect
+    MLIRBufferizationTransforms
     MLIRFuncDialect
     MLIRIR
     MLIRMemRefDialect

@@ -59,6 +59,20 @@ module {
 // -----
 
 module {
+  func.func private @may_release_argument(%condition: i1, %argument: memref<4xf32>) {
+    %allocation = memref.alloc() : memref<4xf32>
+    %selected = arith.select %condition, %argument, %allocation : memref<4xf32>
+    memref.dealloc %selected : memref<4xf32>
+    return
+  }
+}
+
+// CHECK: error: 'memref.dealloc' op must not release a caller-owned function argument or its alias
+// CHECK: error: 'memref.alloc' op has no matching deallocation
+
+// -----
+
+module {
   func.func private @identity(%input: memref<4xf32>) -> memref<4xf32> {
     return %input : memref<4xf32>
   }
