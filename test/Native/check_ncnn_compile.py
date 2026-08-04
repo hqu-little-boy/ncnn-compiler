@@ -38,6 +38,12 @@ def main():
     shutil.rmtree(work_dir, ignore_errors=True)
     work_dir.mkdir(parents=True)
 
+    native_target = run(
+        [args.clang, "-dumpmachine"], capture_output=True, text=True
+    ).stdout.strip()
+    if not native_target:
+        raise RuntimeError("clang did not report a native target triple")
+
     shutil.copy2(args.param, work_dir / "model.param")
     shutil.copy2(args.bin, work_dir / "model.bin")
     default_output = work_dir / "model"
@@ -201,13 +207,7 @@ def main():
             "llvm",
             "-O3",
             "--target-triple",
-            "x86_64-unknown-linux-gnu",
-            "--march",
-            "x86-64",
-            "--mtune",
-            "generic",
-            "--target-feature",
-            "-avx",
+            native_target,
             "--clang-arg",
             "-fno-math-errno",
             "--linker-arg",
