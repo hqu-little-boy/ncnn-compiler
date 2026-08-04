@@ -8,7 +8,12 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]   # x86_64 和 ARM64
+      fail-fast: false   # 可选：一个架构失败不影响另一个
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout compiler
