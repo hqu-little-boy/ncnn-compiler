@@ -2,9 +2,9 @@
 
 #include <memory>
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Analysis/AliasAnalysis.h"
-#include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/Bufferization/IR/AllocationOpInterface.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -46,6 +46,61 @@ class VerifyBufferizedModelPass final
     return result.isMust() || result.isPartial();
   }
 
+  static bool blockHasReleaseAfter(Block* block,
+                                   Operation* allocation,
+                                   ArrayRef<Operation*> releases,
+                                   DominanceInfo& dominance) {
+    return llvm::any_of(releases, [&](Operation* release) {
+      return release->getBlock() == block &&
+             dominance.dominates(allocation, release);
+    });
+  }
+
+  static bool releasesOnEveryPath(Operation* allocation,
+                                  ArrayRef<Operation*> releases,
+                                  DominanceInfo& dominance) {
+    SmallVector<Block*> worklist{allocation->getBlock()};
+    DenseSet<Block*> visited;
+    while (!worklist.empty()) {
+      Block* block = worklist.pop_back_val();
+      if (!visited.insert(block).second) {
+        continue;
+      }
+      if (blockHasReleaseAfter(block, allocation, releases, dominance)) {
+        continue;
+      }
+      if (block->getSuccessors().empty()) {
+        return false;
+      }
+      worklist.append(block->getSuccessors().begin(),
+                      block->getSuccessors().end());
+    }
+    return true;
+  }
+
+  static bool isReachableAfter(Operation* first, Operation* second) {
+    if (first->getBlock() == second->getBlock()) {
+      return first->isBeforeInBlock(second);
+    }
+
+    SmallVector<Block*> worklist;
+    DenseSet<Block*> visited;
+    worklist.append(first->getBlock()->getSuccessors().begin(),
+                    first->getBlock()->getSuccessors().end());
+    while (!worklist.empty()) {
+      Block* block = worklist.pop_back_val();
+      if (!visited.insert(block).second) {
+        continue;
+      }
+      if (block == second->getBlock()) {
+        return true;
+      }
+      worklist.append(block->getSuccessors().begin(),
+                      block->getSuccessors().end());
+    }
+    return false;
+  }
+
   static void verifyAllocationLifetimes(func::FuncOp function,
                                         bool& failedVerification) {
     SmallVector<Allocation> allocations;
@@ -79,8 +134,7 @@ class VerifyBufferizedModelPass final
     });
 
     AliasAnalysis aliases(function);
-    Liveness liveness(function);
-    PostDominanceInfo postDominance(function);
+    DominanceInfo dominance(function);
     SmallVector<SmallVector<Operation*>> matchingReleases(allocations.size());
     for (const Release& release : releases) {
       bool callerOwned = false;
@@ -121,20 +175,24 @@ class VerifyBufferizedModelPass final
         failedVerification = true;
         continue;
       }
-      if (count != 1) {
-        allocation.operation->emitOpError()
-          << "has " << count
-          << " matching deallocations; expected exactly one to avoid "
-             "double-free";
+      if (!releasesOnEveryPath(
+            allocation.operation, allocationReleases, dominance)) {
+        allocation.operation->emitOpError(
+          "does not have a deallocation on every path after allocation");
         failedVerification = true;
         continue;
       }
 
-      Operation* dealloc = allocationReleases.front();
-      if (!postDominance.properlyPostDominates(dealloc, allocation.operation)) {
-        allocation.operation->emitOpError(
-          "deallocation does not execute on every path after allocation");
-        failedVerification = true;
+      for (auto [index, first] : llvm::enumerate(allocationReleases)) {
+        for (Operation* second :
+             ArrayRef<Operation*>(allocationReleases).drop_front(index + 1)) {
+          if (isReachableAfter(first, second)) {
+            second->emitOpError(
+              "has a matching deallocation that may execute after it; "
+              "expected exactly one to avoid double-free");
+            failedVerification = true;
+          }
+        }
       }
 
       SmallVector<Value> allocationAliases;
@@ -155,14 +213,14 @@ class VerifyBufferizedModelPass final
         }
       });
       for (Value alias : allocationAliases) {
-        if (liveness.isDeadAfter(alias, dealloc)) {
-          continue;
-        }
         for (Operation* user : alias.getUsers()) {
-          if (user != dealloc && !postDominance.postDominates(dealloc, user)) {
-            user->emitOpError(
-              "may execute after or without the allocation deallocation");
-            failedVerification = true;
+          for (Operation* dealloc : allocationReleases) {
+            if (user != dealloc && isReachableAfter(dealloc, user)) {
+              user->emitOpError(
+                "may execute after or without the allocation deallocation");
+              failedVerification = true;
+              break;
+            }
           }
         }
       }
