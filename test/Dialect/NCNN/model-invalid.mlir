@@ -37,3 +37,19 @@ ncnn.model @malformed_input {
   %input = "ncnn.input"() <{layer_name = "input"}> : () -> tensor<1xf32>
   ncnn.output %input {blob_name = "output"} : tensor<1xf32>
 }
+
+// -----
+
+func.func @encoded_relu(%input: tensor<2x4x4xf32, "test.encoding">) {
+  // expected-error@+1 {{'ncnn.relu' op operand #0 must be ranked tensor without encoding}}
+  %result = ncnn.relu %input : (tensor<2x4x4xf32, "test.encoding">) -> tensor<2x4x4xf32, "test.encoding">
+  return
+}
+
+// -----
+
+func.func @encoded_convolution(%input: tensor<2x4x4xf32, "test.encoding">, %weight: tensor<3x2x1x1xf32>) {
+  // expected-error@+1 {{'ncnn.convolution' op operand #0 must be ranked tensor without encoding}}
+  %result = ncnn.convolution %input, %weight {dilation_h = 1 : i64, dilation_w = 1 : i64, has_bias = false, kernel_h = 1 : i64, kernel_w = 1 : i64, pad_bottom = 0 : i64, pad_left = 0 : i64, pad_right = 0 : i64, pad_top = 0 : i64, stride_h = 1 : i64, stride_w = 1 : i64} : (tensor<2x4x4xf32, "test.encoding">, tensor<3x2x1x1xf32>) -> tensor<3x4x4xf32>
+  return
+}

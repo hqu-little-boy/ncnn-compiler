@@ -26,6 +26,11 @@ class NCNN_Op<string mnemonic, list<Trait> traits = []>
     "operands attr-dict `:` functional-type(operands, results)";
 }
 
+def NCNN_RankedTensor : RankedTensorOf<
+  [AnyType],
+  [CPred<"!::llvm::cast<::mlir::RankedTensorType>($_self).getEncoding()">],
+  "ranked tensor without encoding">;
+
 //===----------------------------------------------------------------------===//
 // 模型边界
 //===----------------------------------------------------------------------===//
@@ -42,21 +47,21 @@ def NCNN_ModelOp : NCNN_Op<"model", [Symbol, IsolatedFromAbove, SingleBlock,
 def NCNN_InputOp : NCNN_Op<"input", [HasParent<"ModelOp">]> {
   let summary = "A source ncnn Input layer.";
   let arguments = (ins StrAttr:$layer_name, StrAttr:$blob_name);
-  let results = (outs AnyRankedTensor:$output);
+  let results = (outs NCNN_RankedTensor:$output);
   let assemblyFormat = "attr-dict `:` type($output)";
 }
 
 def NCNN_ConstOp : NCNN_Op<"const", [Pure, HasParent<"ModelOp">]> {
   let summary = "An embedded weight tensor from the ncnn .bin file.";
   let arguments = (ins StrAttr:$name, ElementsAttr:$value);
-  let results = (outs AnyRankedTensor:$output);
+  let results = (outs NCNN_RankedTensor:$output);
   let assemblyFormat = "attr-dict `:` type($output)";
   let hasVerifier = 1;
 }
 
 def NCNN_OutputOp : NCNN_Op<"output", [HasParent<"ModelOp">]> {
   let summary = "A blob selected as an exported model output.";
-  let arguments = (ins AnyRankedTensor:$input, StrAttr:$blob_name);
+  let arguments = (ins NCNN_RankedTensor:$input, StrAttr:$blob_name);
   let assemblyFormat = "$input attr-dict `:` type($input)";
 }
 
@@ -78,9 +83,9 @@ def NCNN_ConvolutionOp : NCNN_Op<"convolution", [Pure, InferTensorTypeAdaptor]> 
     ncnn sentinels `-233` (SAME_UPPER) / `-234` (SAME_LOWER) in the pad attrs.
   }];
   let arguments = (ins
-    AnyRankedTensor:$input,
-    AnyRankedTensor:$weight,
-    Variadic<AnyRankedTensor>:$bias_and_scales,
+    NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$weight,
+    Variadic<NCNN_RankedTensor>:$bias_and_scales,
     I64Attr:$kernel_h,
     I64Attr:$kernel_w,
     I64Attr:$stride_h,
@@ -93,7 +98,7 @@ def NCNN_ConvolutionOp : NCNN_Op<"convolution", [Pure, InferTensorTypeAdaptor]> 
     I64Attr:$pad_right,
     BoolAttr:$has_bias,
     DefaultValuedOptionalAttr<I64Attr, "0">:$int8_scale_term);
-  let results = (outs AnyRankedTensor:$output);
+  let results = (outs NCNN_RankedTensor:$output);
 }
 
 //===----------------------------------------------------------------------===//
@@ -107,9 +112,9 @@ def NCNN_ReluOp : NCNN_Op<"relu", [Pure, SameOperandsAndResultType]> {
     is the standard ReLU.
   }];
   let arguments = (ins
-    AnyRankedTensor:$input,
+    NCNN_RankedTensor:$input,
     DefaultValuedOptionalAttr<F32Attr, "0.0">:$negative_slope);
-  let results = (outs AnyRankedTensor:$output);
+  let results = (outs NCNN_RankedTensor:$output);
 }
 
 //===----------------------------------------------------------------------===//
@@ -129,7 +134,7 @@ def NCNN_PoolingOp : NCNN_Op<"pooling", [Pure, InferTensorTypeAdaptor]> {
     2=SAME_UPPER, 3=SAME_LOWER.
   }];
   let arguments = (ins
-    AnyRankedTensor:$input,
+    NCNN_RankedTensor:$input,
     I64Attr:$kind,
     I64Attr:$mode,
     I64Attr:$kernel_h,
@@ -142,7 +147,7 @@ def NCNN_PoolingOp : NCNN_Op<"pooling", [Pure, InferTensorTypeAdaptor]> {
     I64Attr:$pad_right,
     I64Attr:$pad_mode,
     BoolAttr:$include_pad);
-  let results = (outs AnyRankedTensor:$output);
+  let results = (outs NCNN_RankedTensor:$output);
 }
 
 //===----------------------------------------------------------------------===//
@@ -156,8 +161,8 @@ def NCNN_SplitOp : NCNN_Op<"split", [Pure, SameOperandsAndResultType]> {
     the fan-out is implicit, but this op preserves the ncnn layer structure.
     All results must have the same type as the input.
   }];
-  let arguments = (ins AnyRankedTensor:$input);
-  let results = (outs Variadic<AnyRankedTensor>:$results);
+  let arguments = (ins NCNN_RankedTensor:$input);
+  let results = (outs Variadic<NCNN_RankedTensor>:$results);
   let hasVerifier = 1;
 }
 
@@ -168,9 +173,9 @@ def NCNN_SplitOp : NCNN_Op<"split", [Pure, SameOperandsAndResultType]> {
 def NCNN_ConcatOp : NCNN_Op<"concat", [Pure, InferTensorTypeAdaptor]> {
   let summary = "Concatenate along an axis (ncnn Concat).";
   let arguments = (ins
-    Variadic<AnyRankedTensor>:$inputs,
+    Variadic<NCNN_RankedTensor>:$inputs,
     I64Attr:$axis);
-  let results = (outs AnyRankedTensor:$output);
+  let results = (outs NCNN_RankedTensor:$output);
 }
 
 //===----------------------------------------------------------------------===//
@@ -180,9 +185,9 @@ def NCNN_ConcatOp : NCNN_Op<"concat", [Pure, InferTensorTypeAdaptor]> {
 def NCNN_DropoutOp : NCNN_Op<"dropout", [Pure, SameOperandsAndResultType]> {
   let summary = "Inference-time dropout: identity or uniform scale.";
   let arguments = (ins
-    AnyRankedTensor:$input,
+    NCNN_RankedTensor:$input,
     DefaultValuedOptionalAttr<F32Attr, "1.0">:$scale);
-  let results = (outs AnyRankedTensor:$output);
+  let results = (outs NCNN_RankedTensor:$output);
 }
 
 //===----------------------------------------------------------------------===//
@@ -192,9 +197,9 @@ def NCNN_DropoutOp : NCNN_Op<"dropout", [Pure, SameOperandsAndResultType]> {
 def NCNN_SoftmaxOp : NCNN_Op<"softmax", [Pure, SameOperandsAndResultType]> {
   let summary = "Numerically-stable softmax along an axis (ncnn Softmax).";
   let arguments = (ins
-    AnyRankedTensor:$input,
+    NCNN_RankedTensor:$input,
     I64Attr:$axis);
-  let results = (outs AnyRankedTensor:$output);
+  let results = (outs NCNN_RankedTensor:$output);
   let hasVerifier = 1;
 }
 

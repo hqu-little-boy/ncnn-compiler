@@ -160,8 +160,9 @@ SAME padding 用 ncnn 哨兵表达：`pad_*` 全为 `-233` = SAME_UPPER，全为
 
 ## 5. 张量类型与布局约定
 
-值的类型是 MLIR `RankedTensorType`（`tensor<形状 x 元素类型>`），**布局靠维度顺序约定**
-（不是单独的属性字段）：
+值的类型是无 encoding 的 MLIR `RankedTensorType`（`tensor<形状 x 元素类型>`），
+**布局靠维度顺序约定**（不是单独的属性字段）。`ncnn` op 不接受 sparse、layout 或其他
+tensor encoding；带 encoding 的 tensor 会在方言校验阶段被明确拒绝：
 
 | 张量 | 维序约定 | 例 |
 |------|---------|----|
