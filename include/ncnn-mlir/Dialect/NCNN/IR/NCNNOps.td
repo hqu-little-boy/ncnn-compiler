@@ -64,7 +64,7 @@ def NCNN_OutputOp : NCNN_Op<"output", [HasParent<"ModelOp">]> {
 // convolution
 //===----------------------------------------------------------------------===//
 
-def NCNN_ConvolutionOp : NCNN_Op<"convolution", [InferTensorTypeAdaptor]> {
+def NCNN_ConvolutionOp : NCNN_Op<"convolution", [Pure, InferTensorTypeAdaptor]> {
   let summary = "Cross-correlation convolution (1:1 mirrors ncnn `Convolution`).";
   let description = [{
     Faithfully mirrors the ncnn `Convolution` layer; this dialect does NOT judge
@@ -116,7 +116,7 @@ def NCNN_ReluOp : NCNN_Op<"relu", [Pure, SameOperandsAndResultType]> {
 // pooling
 //===----------------------------------------------------------------------===//
 
-def NCNN_PoolingOp : NCNN_Op<"pooling", [InferTensorTypeAdaptor]> {
+def NCNN_PoolingOp : NCNN_Op<"pooling", [Pure, InferTensorTypeAdaptor]> {
   let summary = "Max/average pooling (1:1 mirrors ncnn `Pooling`).";
   let description = [{
     Faithfully mirrors the ncnn `Pooling` layer; dimensionality/layout and the
@@ -165,7 +165,7 @@ def NCNN_SplitOp : NCNN_Op<"split", [Pure, SameOperandsAndResultType]> {
 // concat
 //===----------------------------------------------------------------------===//
 
-def NCNN_ConcatOp : NCNN_Op<"concat", [InferTensorTypeAdaptor]> {
+def NCNN_ConcatOp : NCNN_Op<"concat", [Pure, InferTensorTypeAdaptor]> {
   let summary = "Concatenate along an axis (ncnn Concat).";
   let arguments = (ins
     Variadic<AnyRankedTensor>:$inputs,
