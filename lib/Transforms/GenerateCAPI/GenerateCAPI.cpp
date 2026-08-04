@@ -56,12 +56,28 @@ class GenerateCAPIPass final
   using Base::Base;
 
   void runOnOperation() final {
-    SmallVector<func::FuncOp> entries;
+    func::FuncOp nestedEntry;
     getOperation().walk([&](func::FuncOp function) {
+      if (function->hasAttr("ncnn.entry_point") &&
+          function->getParentOp() != getOperation()) {
+        nestedEntry = function;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (nestedEntry) {
+      nestedEntry.emitOpError(
+        "must be a top-level function in the pass module");
+      signalPassFailure();
+      return;
+    }
+
+    SmallVector<func::FuncOp> entries;
+    for (func::FuncOp function : getOperation().getOps<func::FuncOp>()) {
       if (function->hasAttr("ncnn.entry_point")) {
         entries.push_back(function);
       }
-    });
+    }
     if (entries.size() != 1) {
       getOperation().emitError()
         << "expected exactly one ncnn.entry_point, got " << entries.size();
