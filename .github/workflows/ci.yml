@@ -37,7 +37,7 @@ jobs:
           cmake -S compiler -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm
-          cmake --build build --parallel
+          cmake --build build
 
       - name: Check formatting
         run: cmake --build build --target format_check
@@ -57,7 +57,7 @@ jobs:
             -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
             -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
-          cmake --build build-sanitize --parallel
+          cmake --build build-sanitize
 
       - name: Test with ASan and UBSan once
         run: ctest --test-dir build-sanitize --output-on-failure -j$(nproc)
