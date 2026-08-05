@@ -26,6 +26,10 @@ class NCNN_Op<string mnemonic, list<Trait> traits = []>
     "operands attr-dict `:` functional-type(operands, results)";
 }
 
+// 无副作用的 ncnn 计算层；模型容器和输入/输出边界不属于此类。
+class NCNN_LayerOp<string mnemonic, list<Trait> traits = []>
+    : NCNN_Op<mnemonic, !listconcat([Pure], traits)>;
+
 def NCNN_RankedTensor : RankedTensorOf<
   [AnyType],
   [CPred<"!::llvm::cast<::mlir::RankedTensorType>($_self).getEncoding()">],
@@ -76,7 +80,8 @@ def NCNN_OutputOp : NCNN_Op<"output", [HasParent<"ModelOp">]> {
 // convolution
 //===----------------------------------------------------------------------===//
 
-def NCNN_ConvolutionOp : NCNN_Op<"convolution", [Pure, InferTensorTypeAdaptor]> {
+def NCNN_ConvolutionOp
+    : NCNN_LayerOp<"convolution", [InferTensorTypeAdaptor]> {
   let summary = "Cross-correlation convolution (1:1 mirrors ncnn `Convolution`).";
   let description = [{
     Faithfully mirrors the ncnn `Convolution` layer; this dialect does NOT judge
@@ -112,7 +117,7 @@ def NCNN_ConvolutionOp : NCNN_Op<"convolution", [Pure, InferTensorTypeAdaptor]> 
 // relu
 //===----------------------------------------------------------------------===//
 
-def NCNN_ReluOp : NCNN_Op<"relu", [Pure, SameOperandsAndResultType]> {
+def NCNN_ReluOp : NCNN_LayerOp<"relu", [SameOperandsAndResultType]> {
   let summary = "ReLU / LeakyReLU activation.";
   let description = [{
     `y = x` for `x >= 0`, else `y = negative_slope * x`. `negative_slope = 0`
@@ -128,7 +133,7 @@ def NCNN_ReluOp : NCNN_Op<"relu", [Pure, SameOperandsAndResultType]> {
 // pooling
 //===----------------------------------------------------------------------===//
 
-def NCNN_PoolingOp : NCNN_Op<"pooling", [Pure, InferTensorTypeAdaptor]> {
+def NCNN_PoolingOp : NCNN_LayerOp<"pooling", [InferTensorTypeAdaptor]> {
   let summary = "Max/average pooling (1:1 mirrors ncnn `Pooling`).";
   let description = [{
     Faithfully mirrors the ncnn `Pooling` layer; dimensionality/layout and the
@@ -161,8 +166,8 @@ def NCNN_PoolingOp : NCNN_Op<"pooling", [Pure, InferTensorTypeAdaptor]> {
 // split
 //===----------------------------------------------------------------------===//
 
-def NCNN_SplitOp : NCNN_Op<"split", [Pure, SameOperandsAndResultType,
-                                      NCNN_AtLeastNResults<2>]> {
+def NCNN_SplitOp : NCNN_LayerOp<"split", [SameOperandsAndResultType,
+                                           NCNN_AtLeastNResults<2>]> {
   let summary = "Fan one value out to N identical copies (ncnn Split).";
   let description = [{
     ncnn `Split` duplicates a blob into N consumers; it is pure routing. In SSA
@@ -178,8 +183,8 @@ def NCNN_SplitOp : NCNN_Op<"split", [Pure, SameOperandsAndResultType,
 // concat
 //===----------------------------------------------------------------------===//
 
-def NCNN_ConcatOp : NCNN_Op<"concat", [Pure, InferTensorTypeAdaptor,
-                                        NCNN_AtLeastNOperands<2>]> {
+def NCNN_ConcatOp : NCNN_LayerOp<"concat", [InferTensorTypeAdaptor,
+                                             NCNN_AtLeastNOperands<2>]> {
   let summary = "Concatenate along an axis (ncnn Concat).";
   let arguments = (ins
     Variadic<NCNN_RankedTensor>:$inputs,
@@ -191,7 +196,7 @@ def NCNN_ConcatOp : NCNN_Op<"concat", [Pure, InferTensorTypeAdaptor,
 // dropout
 //===----------------------------------------------------------------------===//
 
-def NCNN_DropoutOp : NCNN_Op<"dropout", [Pure, SameOperandsAndResultType]> {
+def NCNN_DropoutOp : NCNN_LayerOp<"dropout", [SameOperandsAndResultType]> {
   let summary = "Inference-time dropout: identity or uniform scale.";
   let arguments = (ins
     NCNN_RankedTensor:$input,
@@ -203,7 +208,7 @@ def NCNN_DropoutOp : NCNN_Op<"dropout", [Pure, SameOperandsAndResultType]> {
 // softmax
 //===----------------------------------------------------------------------===//
 
-def NCNN_SoftmaxOp : NCNN_Op<"softmax", [Pure, SameOperandsAndResultType]> {
+def NCNN_SoftmaxOp : NCNN_LayerOp<"softmax", [SameOperandsAndResultType]> {
   let summary = "Numerically-stable softmax along an axis (ncnn Softmax).";
   let arguments = (ins
     NCNN_RankedTensor:$input,
