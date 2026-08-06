@@ -104,6 +104,37 @@ TEST(ParserTest, DecodesConvolutionParameters) {
   EXPECT_EQ(decoded->expected_weight_tensors(), 5U);
 }
 
+TEST(ParserTest, DecodesSequentialWeightLayerParameters) {
+  ncnn_graph::ParamDict depthwise;
+  depthwise.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  depthwise.set_value(1, ncnn_graph::ParamValue::make_int(3));
+  depthwise.set_value(5, ncnn_graph::ParamValue::make_int(1));
+  depthwise.set_value(6, ncnn_graph::ParamValue::make_int(36));
+  depthwise.set_value(7, ncnn_graph::ParamValue::make_int(4));
+  auto decoded_depthwise =
+    ncnn_graph::decode_convolution_depthwise_params(depthwise);
+  ASSERT_TRUE(decoded_depthwise) << decoded_depthwise.error();
+  EXPECT_EQ(decoded_depthwise->kernel_h, 3);
+  EXPECT_EQ(decoded_depthwise->group, 4);
+  EXPECT_TRUE(decoded_depthwise->has_bias);
+  EXPECT_EQ(decoded_depthwise->expected_weight_tensors(), 2U);
+
+  ncnn_graph::ParamDict inner_product;
+  inner_product.set_value(0, ncnn_graph::ParamValue::make_int(3));
+  inner_product.set_value(1, ncnn_graph::ParamValue::make_int(1));
+  inner_product.set_value(2, ncnn_graph::ParamValue::make_int(12));
+  auto decoded_inner = ncnn_graph::decode_inner_product_params(inner_product);
+  ASSERT_TRUE(decoded_inner) << decoded_inner.error();
+  EXPECT_EQ(decoded_inner->output_channels, 3);
+  EXPECT_EQ(decoded_inner->weight_count, 12);
+  EXPECT_EQ(decoded_inner->expected_weight_tensors(), 2U);
+
+  depthwise.set_value(7, ncnn_graph::ParamValue::make_int(3));
+  EXPECT_FALSE(ncnn_graph::decode_convolution_depthwise_params(depthwise));
+  inner_product.set_value(2, ncnn_graph::ParamValue::make_int(10));
+  EXPECT_FALSE(ncnn_graph::decode_inner_product_params(inner_product));
+}
+
 namespace {
 
 void expect_failure(std::string_view text,

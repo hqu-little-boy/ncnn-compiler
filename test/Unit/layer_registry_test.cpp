@@ -29,5 +29,7 @@ TEST(LayerRegistryTest, DescriptorsMatchRuntimeRegistries) {
   EXPECT_EQ(ncnn_importer::get_layer_importer_count(), descriptors.size())
     << "importer registry contains an undeclared or duplicate entry";
   EXPECT_EQ(ncnn_graph::get_weight_loader_count(), weighted_layers)
-    << "weight loader registry contains an undeclared or duplicate entry";
+    << "weight loader registry contains an unexpected or duplicate entry";
+  EXPECT_TRUE(ncnn_graph::has_weight_loader("ConvolutionDepthWise"));
+  EXPECT_TRUE(ncnn_graph::has_weight_loader("InnerProduct"));
 }

@@ -113,6 +113,51 @@ def NCNN_ConvolutionOp
   let results = (outs NCNN_RankedTensor:$output);
 }
 
+def NCNN_ConvolutionDepthWiseOp
+    : NCNN_LayerOp<"convolution_depthwise", [InferTensorTypeAdaptor]> {
+  let summary = "Pure depthwise FP32 convolution.";
+  let arguments = (ins
+    NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$weight,
+    Variadic<NCNN_RankedTensor>:$bias,
+    I64Attr:$kernel_h, I64Attr:$kernel_w,
+    I64Attr:$stride_h, I64Attr:$stride_w,
+    I64Attr:$dilation_h, I64Attr:$dilation_w,
+    I64Attr:$pad_top, I64Attr:$pad_bottom,
+    I64Attr:$pad_left, I64Attr:$pad_right,
+    BoolAttr:$has_bias);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_HardSigmoidOp : NCNN_LayerOp<"hard_sigmoid", [SameOperandsAndResultType]> {
+  let arguments = (ins NCNN_RankedTensor:$input, F32Attr:$alpha, F32Attr:$beta);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_HardSwishOp : NCNN_LayerOp<"hard_swish", [SameOperandsAndResultType]> {
+  let arguments = (ins NCNN_RankedTensor:$input, F32Attr:$alpha, F32Attr:$beta);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_ReshapeOp : NCNN_LayerOp<"reshape", [InferTensorTypeAdaptor]> {
+  let arguments = (ins NCNN_RankedTensor:$input, DenseI64ArrayAttr:$shape);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_BinaryOp : NCNN_LayerOp<"binary", [InferTensorTypeAdaptor]> {
+  let arguments = (ins Variadic<NCNN_RankedTensor>:$inputs,
+                      F32Attr:$scalar, BoolAttr:$with_scalar, I64Attr:$op_type);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_InnerProductOp : NCNN_LayerOp<"inner_product", [InferTensorTypeAdaptor]> {
+  let arguments = (ins NCNN_RankedTensor:$input,
+                       NCNN_RankedTensor:$weight,
+                       Variadic<NCNN_RankedTensor>:$bias,
+                       BoolAttr:$has_bias);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
 //===----------------------------------------------------------------------===//
 // relu
 //===----------------------------------------------------------------------===//

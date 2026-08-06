@@ -379,3 +379,47 @@ TEST_F(MalformedGraphTest, WeightLoading) {
               dynamic_graph->get_layers()[2].get_weights().empty())
     << "dynamic convolution consumes no model-bin weights";
 }
+
+TEST_F(MalformedGraphTest, SequentialDepthwiseAndInnerProductFp32Weights) {
+  constexpr std::string_view graph_text =
+    "7767517\n"
+    "3 3\n"
+    "Input input 0 1 in\n"
+    "ConvolutionDepthWise dw 1 1 in mid 0=2 1=1 5=1 6=2 7=2\n"
+    "InnerProduct fc 1 1 mid out 0=3 1=1 2=6\n";
+
+  std::vector<std::byte> weights;
+  append_u32_le(weights, 0);
+  for (int index = 0; index < 2; ++index) {
+    append_u32_le(weights, 0x3f800000);
+  }
+  for (int index = 0; index < 2; ++index) {
+    append_u32_le(weights, 0x3f800000);
+  }
+  append_u32_le(weights, 0);
+  for (int index = 0; index < 6; ++index) {
+    append_u32_le(weights, 0x3f800000);
+  }
+  for (int index = 0; index < 3; ++index) {
+    append_u32_le(weights, 0x3f800000);
+  }
+  auto bin_path = fixture_dir / "depthwise-inner-product.bin";
+  ASSERT_TRUE(write_bytes(bin_path, weights));
+
+  auto graph =
+    load_text("depthwise-inner-product", graph_text, bin_path.string());
+  ASSERT_TRUE(graph) << graph.error();
+  ASSERT_EQ(graph->get_layers()[1].get_weights().size(), 2U);
+  ASSERT_EQ(graph->get_layers()[2].get_weights().size(), 2U);
+  EXPECT_EQ(graph->get_layers()[1].get_weights()[0].get_dtype(),
+            ncnn_graph::DataType::Float32);
+  const auto depthwise_shape =
+    graph->get_layers()[1].get_weights()[0].get_shape();
+  EXPECT_TRUE(depthwise_shape.size() == 4 && depthwise_shape[0] == 2 &&
+              depthwise_shape[1] == 1 && depthwise_shape[2] == 1 &&
+              depthwise_shape[3] == 1);
+  const auto inner_product_shape =
+    graph->get_layers()[2].get_weights()[0].get_shape();
+  EXPECT_TRUE(inner_product_shape.size() == 2 && inner_product_shape[0] == 3 &&
+              inner_product_shape[1] == 2);
+}

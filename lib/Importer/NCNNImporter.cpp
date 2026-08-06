@@ -67,6 +67,13 @@ std::span<const ImportEntry> importers() noexcept {
   static constexpr std::array kImporters{
     ImportEntry{.type = "Input", .handler = import_input},
     ImportEntry{.type = "Convolution", .handler = import_convolution},
+    ImportEntry{.type = "ConvolutionDepthWise",
+                .handler = import_convolution_depthwise},
+    ImportEntry{.type = "HardSigmoid", .handler = import_hard_sigmoid},
+    ImportEntry{.type = "HardSwish", .handler = import_hard_swish},
+    ImportEntry{.type = "Reshape", .handler = import_reshape},
+    ImportEntry{.type = "BinaryOp", .handler = import_binary_op},
+    ImportEntry{.type = "InnerProduct", .handler = import_inner_product},
     ImportEntry{.type = "ReLU", .handler = import_relu},
     ImportEntry{.type = "Pooling", .handler = import_pooling},
     ImportEntry{.type = "Split", .handler = import_split},
@@ -225,8 +232,10 @@ std::expected<void, std::string> validate_feature_mask(
   return {};
 }
 
-ImportContext::ImportContext(mlir::MLIRContext& context)
+ImportContext::ImportContext(mlir::MLIRContext& context,
+                             const ImportOptions& options)
   : context_(&context),
+    options_(options),
     builder_(&context),
     module_(mlir::ModuleOp::create(builder_.getUnknownLoc())),
     model_(),
@@ -237,6 +246,13 @@ ImportContext::ImportContext(mlir::MLIRContext& context)
 
 std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError>
 ImportContext::run(const ncnn_graph::Graph& source) {
+  if (options_.input_shape && source.layer_count_of("Input") != 1) {
+    return std::unexpected(
+      ImportError(0,
+                  "Input",
+                  "input-shape",
+                  "input shape override requires exactly one Input layer"));
+  }
   auto prepared = prepare_model();
   if (!prepared) {
     return std::unexpected(prepared.error());
@@ -253,6 +269,11 @@ ImportContext::run(const ncnn_graph::Graph& source) {
 
 mlir::OpBuilder& ImportContext::builder() noexcept {
   return builder_;
+}
+
+const std::optional<std::vector<std::int64_t>>& ImportContext::input_shape()
+  const noexcept {
+  return options_.input_shape;
 }
 
 std::expected<mlir::Value, ImportError> ImportContext::find_blob(
@@ -377,7 +398,14 @@ std::size_t get_layer_importer_count() noexcept {
 
 std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> import_graph(
   const ncnn_graph::Graph& graph, mlir::MLIRContext& context) {
-  detail::ImportContext importer(context);
+  return import_graph(graph, context, ImportOptions{});
+}
+
+std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> import_graph(
+  const ncnn_graph::Graph& graph,
+  mlir::MLIRContext& context,
+  const ImportOptions& options) {
+  detail::ImportContext importer(context, options);
   return importer.run(graph);
 }
 

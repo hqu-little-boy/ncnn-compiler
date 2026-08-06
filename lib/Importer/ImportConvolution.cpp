@@ -26,11 +26,13 @@ ImportResult import_convolution(ImportContext& importer,
     return std::unexpected(make_error(context, decoded.error()));
   }
   const ncnn_graph::ConvolutionParams& convolution = *decoded;
-  if (convolution.dynamic_weight || convolution.activation_type != 0 ||
+  if (convolution.dynamic_weight ||
+      (convolution.activation_type != 0 && convolution.activation_type != 1) ||
       convolution.has_activation_params || convolution.pad_value != 0.0F) {
     return std::unexpected(
       make_error(context,
-                 "dynamic weights, fused activation, and nonzero pad value "
+                 "dynamic weights, unsupported fused activation, activation "
+                 "parameters, and nonzero pad value "
                  "are unsupported"));
   }
   const std::size_t expected_weights = convolution.expected_weight_tensors();
@@ -67,6 +69,24 @@ ImportResult import_convolution(ImportContext& importer,
     return std::unexpected(input.error());
   }
 
+  auto& builder = importer.builder();
+  mlir::Value input_value = *input;
+  auto input_type =
+    mlir::dyn_cast<mlir::RankedTensorType>(input_value.getType());
+  if (input_type && input_type.getRank() == 1 && convolution.kernel_h == 1 &&
+      convolution.kernel_w == 1 &&
+      input_type.getShape()[0] == weight_shape[1]) {
+    auto restored_type = mlir::RankedTensorType::get(
+      {input_type.getShape()[0], 1, 1}, input_type.getElementType());
+    auto restored = builder.create<mlir::ncnn::ReshapeOp>(
+      builder.getUnknownLoc(),
+      restored_type,
+      input_value,
+      builder.getDenseI64ArrayAttr(restored_type.getShape()));
+    importer.tag_source(restored.getOperation(), context);
+    input_value = restored.getResult();
+  }
+
   llvm::SmallVector<mlir::Value> tail;
   mlir::Value weight_value;
   for (std::size_t index = 0; index < expected_weights; ++index) {
@@ -82,12 +102,11 @@ ImportResult import_convolution(ImportContext& importer,
     }
   }
 
-  auto& builder = importer.builder();
   auto i64 = [&builder](std::int64_t value) {
     return builder.getI64IntegerAttr(value);
   };
   const mlir::Location location = builder.getUnknownLoc();
-  llvm::SmallVector<mlir::Value> operands{*input, weight_value};
+  llvm::SmallVector<mlir::Value> operands{input_value, weight_value};
   operands.append(tail);
   mlir::ncnn::ConvolutionOp::Properties properties;
   properties.kernel_h = i64(convolution.kernel_h);
@@ -114,7 +133,7 @@ ImportResult import_convolution(ImportContext& importer,
   auto convolution_op = builder.create<mlir::ncnn::ConvolutionOp>(
     location,
     *result_type,
-    *input,
+    input_value,
     weight_value,
     mlir::ValueRange(tail),
     i64(convolution.kernel_h),
@@ -130,9 +149,15 @@ ImportResult import_convolution(ImportContext& importer,
     builder.getBoolAttr(convolution.has_bias),
     i64(convolution.int8_scale_term));
   importer.tag_source(convolution_op.getOperation(), context);
-  return importer.bind_blob(context,
-                            std::string(context.layer.get_outputs()[0]),
-                            convolution_op.getResult());
+  mlir::Value result = convolution_op.getResult();
+  if (convolution.activation_type == 1) {
+    auto relu = builder.create<mlir::ncnn::ReluOp>(
+      location, *result_type, result, builder.getF32FloatAttr(0.0F));
+    importer.tag_source(relu.getOperation(), context);
+    result = relu.getResult();
+  }
+  return importer.bind_blob(
+    context, std::string(context.layer.get_outputs()[0]), result);
 }
 
 }  // namespace ncnn_importer::detail

@@ -12,7 +12,7 @@
 
 ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型（`.param` + `.bin`）
 编译为具有稳定 C ABI 的 Linux 共享库（`.so`）。技术栈为 LLVM/MLIR 21、C++23，当前以
-**SqueezeNet v1.1** 的算子集作为端到端验证目标。
+**SqueezeNet v1.1** 和静态 FP32 的 `PP-LCNet_x1_0_doc_ori` 作为端到端验证目标。
 
 ---
 
@@ -38,14 +38,22 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | `Concat` | `ncnn.concat` | axis | 沿 axis 拼接 |
 | `Dropout` | `ncnn.dropout` | scale（默认 1.0） | 推理时 scale=1.0 为恒等 |
 | `Softmax` | `ncnn.softmax` | axis | |
+| `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel/stride/pad, has_bias | 仅纯 depthwise、静态 FP32 |
+| `HardSigmoid` | `ncnn.hard_sigmoid` | alpha, beta | 静态 FP32 |
+| `HardSwish` | `ncnn.hard_swish` | alpha, beta | 静态 FP32 |
+| `Reshape` | `ncnn.reshape` | static shape | 支持静态 shape 和单个 `-1` |
+| `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 仅乘法；支持标量和同 rank 广播 |
+| `InnerProduct` | `ncnn.inner_product` | has_bias | 仅静态 FP32、rank-1 输入 |
 
 导入器（`lib/Importer/NCNNImporter.cpp`）对上述以外的层类型返回 `unsupported layer type` 错误。
 
 ### 2.3 算子级限制
 
-- **Convolution**：动态权重（param 19）、融合激活（param 9/10）、非零 `pad_value`（param 18）
+- **Convolution**：动态权重（param 19）、除 ReLU 外的融合激活、非零 `pad_value`（param 18）
   在导入时拒绝。`int8_scale_term` 可解析但 **int8 量化卷积不会被 lowering**——残留 ncnn op
   被严格流水线拒绝。
+- **ConvolutionDepthWise**：当前只接受纯 depthwise FP32；通用 group convolution、动态权重、量化和
+  融合激活仍然拒绝。
 - **Pooling**：`mode=Adaptive` 和 `Average + include_pad=1` **不会被 lowering**（残留 → 拒绝）。
   `pad_mode=0`（full + tail padding）通过尾部填充计算正常支持。
 - **Softmax**：旧版 `fixbug0=0` 仅允许 `axis=0`。
@@ -209,6 +217,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
   - Split：2-way、3-way consumer topology
   - Dropout：identity
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
+- `models/pp_lcnet_test.cpp`：PP-LCNet doc ori 与 upstream ncnn 数值对齐
   - 全有限输出、softmax 求和误差 ≤1e-5、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4
 
 ### 7.4 运行时测试
@@ -218,7 +227,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 
 ### 7.5 未覆盖（明确排除）
 
-- `ConvolutionDepthWise` / 分组卷积（不导入）
+- 通用 `ConvolutionDepthWise` / 分组卷积；当前仅支持纯 depthwise 子集
 - Average pooling `include_pad=1`（严格流水线拒绝）
 - Adaptive pooling（严格流水线拒绝）
 
@@ -228,7 +237,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 
 | 类别 | 限制 |
 |---|---|
-| 算子覆盖 | 仅 SqueezeNet 级别（7 个计算 op）；无 depthwise/group conv、InnerProduct、BinaryOp、Interp、Padding、BN、RNN |
+| 算子覆盖 | SqueezeNet + PP-LCNet doc ori 所需算子子集；无通用 group conv、Interp、Padding、BN、RNN |
 | 量化 | int8 参数可解析但不被 lowering；f16 权重可解析但端到端路径仅 f32 |
 | 形状 | 仅静态形状 |
 | 数据类型 | ABI 仅 f32 |

@@ -28,6 +28,18 @@ ImportResult import_input(ImportContext& importer,
                                       : !channels ? channels.error()
                                                   : depth.error()));
   }
+  const bool dimensions_omitted =
+    *width == 0 && *height == 0 && *channels == 0 && *depth == 0;
+  if (dimensions_omitted && importer.input_shape()) {
+    const auto& shape = *importer.input_shape();
+    if (shape.size() != 3 || shape[0] <= 0 || shape[1] <= 0 || shape[2] <= 0) {
+      return std::unexpected(
+        make_error(context, "input shape override must be positive [C,H,W]"));
+    }
+    *channels = shape[0];
+    *height = shape[1];
+    *width = shape[2];
+  }
   if (*width <= 0 || *height <= 0 || *channels <= 0 || *depth != 0) {
     return std::unexpected(make_error(
       context,

@@ -94,8 +94,36 @@ struct ConvolutionParams {
   std::size_t expected_weight_tensors() const noexcept;
 };
 
+struct ConvolutionDepthWiseParams {
+  std::int64_t output_channels = 0;
+  std::int64_t kernel_w = 0;
+  std::int64_t kernel_h = 0;
+  std::int64_t group = 1;
+  bool has_bias = false;
+  std::int64_t weight_count = 0;
+  std::int64_t int8_scale_term = 0;
+  bool dynamic_weight = false;
+
+  std::size_t expected_weight_tensors() const noexcept;
+};
+
+struct InnerProductParams {
+  std::int64_t output_channels = 0;
+  bool has_bias = false;
+  std::int64_t weight_count = 0;
+  std::int64_t int8_scale_term = 0;
+
+  std::size_t expected_weight_tensors() const noexcept;
+};
+
 [[nodiscard]] std::expected<ConvolutionParams, std::string>
 decode_convolution_params(const ParamDict& params);
+
+[[nodiscard]] std::expected<ConvolutionDepthWiseParams, std::string>
+decode_convolution_depthwise_params(const ParamDict& params);
+
+[[nodiscard]] std::expected<InnerProductParams, std::string>
+decode_inner_product_params(const ParamDict& params);
 
 bool has_weight_loader(std::string_view layer_type) noexcept;
 std::size_t get_weight_loader_count() noexcept;

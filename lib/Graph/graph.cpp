@@ -300,6 +300,114 @@ std::expected<ConvolutionParams, std::string> decode_convolution_params(
   return result;
 }
 
+std::size_t ConvolutionDepthWiseParams::expected_weight_tensors()
+  const noexcept {
+  if (dynamic_weight) {
+    return 0;
+  }
+  return 1 + static_cast<std::size_t>(has_bias) +
+         (int8_scale_term == 0 ? 0 : 2) + (int8_scale_term > 100 ? 1 : 0);
+}
+
+std::expected<ConvolutionDepthWiseParams, std::string>
+decode_convolution_depthwise_params(const ParamDict& params) {
+  ConvolutionDepthWiseParams result;
+  auto dynamic_weight = decode_int_param(params, 19, 0, "dynamic_weight");
+  if (!dynamic_weight) {
+    return std::unexpected(dynamic_weight.error());
+  }
+  if (*dynamic_weight != 0 && *dynamic_weight != 1) {
+    return std::unexpected(
+      "convolution depthwise dynamic_weight must be 0 or 1");
+  }
+  result.dynamic_weight = *dynamic_weight == 1;
+  if (result.dynamic_weight) {
+    return result;
+  }
+
+  auto output_channels = decode_int_param(params, 0, 0, "num_output");
+  auto kernel_w = decode_int_param(params, 1, 0, "kernel_w");
+  if (!output_channels || !kernel_w) {
+    return std::unexpected(!output_channels ? output_channels.error()
+                                            : kernel_w.error());
+  }
+  auto kernel_h = decode_int_param(params, 11, *kernel_w, "kernel_h");
+  auto group = decode_int_param(params, 7, 1, "group");
+  auto bias_term = decode_int_param(params, 5, 0, "bias_term");
+  auto weight_count = decode_int_param(params, 6, 0, "weight_data_size");
+  auto int8_scale_term = decode_int_param(params, 8, 0, "int8_scale_term");
+  if (!kernel_h || !group || !bias_term || !weight_count || !int8_scale_term) {
+    return std::unexpected("invalid convolution depthwise parameter type");
+  }
+  if (*output_channels <= 0) {
+    return std::unexpected("convolution depthwise num_output must be positive");
+  }
+  if (*kernel_w <= 0 || *kernel_h <= 0) {
+    return std::unexpected(
+      "convolution depthwise kernel dimensions must be positive");
+  }
+  if (*weight_count <= 0) {
+    return std::unexpected(
+      "convolution depthwise weight count must be positive");
+  }
+  if (*group <= 0 || *output_channels % *group != 0) {
+    return std::unexpected(
+      "convolution depthwise group must be positive and divide num_output");
+  }
+  if (*bias_term != 0 && *bias_term != 1) {
+    return std::unexpected("convolution depthwise bias_term must be 0 or 1");
+  }
+  if (*int8_scale_term != 0 && *int8_scale_term != 1 && *int8_scale_term != 2 &&
+      *int8_scale_term != 101 && *int8_scale_term != 102) {
+    return std::unexpected(
+      "convolution depthwise int8_scale_term must be 0, 1, 2, 101, or 102");
+  }
+  result.output_channels = *output_channels;
+  result.kernel_w = *kernel_w;
+  result.kernel_h = *kernel_h;
+  result.group = *group;
+  result.has_bias = *bias_term == 1;
+  result.weight_count = *weight_count;
+  result.int8_scale_term = *int8_scale_term;
+  return result;
+}
+
+std::size_t InnerProductParams::expected_weight_tensors() const noexcept {
+  return 1 + static_cast<std::size_t>(has_bias) +
+         (int8_scale_term == 0 ? 0 : 2);
+}
+
+std::expected<InnerProductParams, std::string> decode_inner_product_params(
+  const ParamDict& params) {
+  InnerProductParams result;
+  auto output_channels = decode_int_param(params, 0, 0, "num_output");
+  auto bias_term = decode_int_param(params, 1, 0, "bias_term");
+  auto weight_count = decode_int_param(params, 2, 0, "weight_data_size");
+  auto int8_scale_term = decode_int_param(params, 8, 0, "int8_scale_term");
+  if (!output_channels || !bias_term || !weight_count || !int8_scale_term) {
+    return std::unexpected("invalid inner product parameter type");
+  }
+  if (*output_channels <= 0) {
+    return std::unexpected("inner product num_output must be positive");
+  }
+  if (*weight_count <= 0 || *weight_count % *output_channels != 0) {
+    return std::unexpected(
+      "inner product weight count must be positive and divisible by "
+      "num_output");
+  }
+  if (*bias_term != 0 && *bias_term != 1) {
+    return std::unexpected("inner product bias_term must be 0 or 1");
+  }
+  if (*int8_scale_term != 0 && *int8_scale_term != 1) {
+    return std::unexpected("inner product int8_scale_term must be 0 or 1");
+  }
+  result.output_channels = *output_channels;
+  result.has_bias = *bias_term == 1;
+  result.weight_count = *weight_count;
+  result.int8_scale_term = *int8_scale_term;
+  return result;
+}
+
 // ───────────────────────── Tensor ─────────────────────────
 Tensor::Tensor() : shape_(), dtype_(DataType::Unknown), data_() {}
 
@@ -918,6 +1026,137 @@ std::expected<void, std::string> load_convolution_weights(Layer& layer,
   return {};
 }
 
+std::expected<void, std::string> load_convolution_depthwise_weights(
+  Layer& layer, BinCursor& cursor) {
+  auto decoded = decode_convolution_depthwise_params(layer.get_params());
+  if (!decoded) {
+    return std::unexpected(decoded.error());
+  }
+  const auto& params = *decoded;
+  if (params.dynamic_weight) {
+    return {};
+  }
+  auto num_output =
+    positive_size(params.output_channels, "depthwise num_output");
+  auto kernel_h = positive_size(params.kernel_h, "depthwise kernel height");
+  auto kernel_w = positive_size(params.kernel_w, "depthwise kernel width");
+  if (!num_output || !kernel_h || !kernel_w) {
+    return std::unexpected(!num_output ? num_output.error()
+                           : !kernel_h ? kernel_h.error()
+                                       : kernel_w.error());
+  }
+  auto output_kernel =
+    checked_multiply(*num_output, *kernel_h, "depthwise output/kernel size");
+  if (!output_kernel) {
+    return std::unexpected(output_kernel.error());
+  }
+  output_kernel =
+    checked_multiply(*output_kernel, *kernel_w, "depthwise output/kernel size");
+  if (!output_kernel) {
+    return std::unexpected(output_kernel.error());
+  }
+  auto weight_count =
+    positive_size(params.weight_count, "depthwise weight count");
+  if (!weight_count) {
+    return std::unexpected(weight_count.error());
+  }
+  if (*weight_count % *output_kernel != 0) {
+    return std::unexpected(
+      "depthwise weight count is not divisible by output/kernel size");
+  }
+  const auto input_channels_per_group = *weight_count / *output_kernel;
+  if (input_channels_per_group == 0 ||
+      input_channels_per_group >
+        static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    return std::unexpected("depthwise input channels per group is invalid");
+  }
+  auto weight =
+    load_weight(cursor,
+                params.weight_count,
+                0,
+                {params.output_channels,
+                 static_cast<std::int64_t>(input_channels_per_group),
+                 params.kernel_h,
+                 params.kernel_w});
+  if (!weight) {
+    return std::unexpected(std::format("depthwise weight: {}", weight.error()));
+  }
+  layer.add_weight(std::move(*weight));
+  if (params.has_bias) {
+    auto bias =
+      load_weight(cursor, params.output_channels, 1, {params.output_channels});
+    if (!bias) {
+      return std::unexpected(std::format("depthwise bias: {}", bias.error()));
+    }
+    layer.add_weight(std::move(*bias));
+  }
+  if (params.int8_scale_term != 0) {
+    auto scales = load_weight(cursor, params.group, 1, {params.group});
+    if (!scales) {
+      return std::unexpected(
+        std::format("depthwise weight int8 scales: {}", scales.error()));
+    }
+    layer.add_weight(std::move(*scales));
+    auto bottom = load_weight(cursor, 1, 1, {1});
+    if (!bottom) {
+      return std::unexpected(
+        std::format("depthwise bottom int8 scale: {}", bottom.error()));
+    }
+    layer.add_weight(std::move(*bottom));
+  }
+  if (params.int8_scale_term > 100) {
+    auto top = load_weight(cursor, 1, 1, {1});
+    if (!top) {
+      return std::unexpected(
+        std::format("depthwise top int8 scale: {}", top.error()));
+    }
+    layer.add_weight(std::move(*top));
+  }
+  return {};
+}
+
+std::expected<void, std::string> load_inner_product_weights(Layer& layer,
+                                                            BinCursor& cursor) {
+  auto decoded = decode_inner_product_params(layer.get_params());
+  if (!decoded) {
+    return std::unexpected(decoded.error());
+  }
+  const auto& params = *decoded;
+  const auto num_input = params.weight_count / params.output_channels;
+  auto weight = load_weight(
+    cursor, params.weight_count, 0, {params.output_channels, num_input});
+  if (!weight) {
+    return std::unexpected(
+      std::format("inner product weight: {}", weight.error()));
+  }
+  layer.add_weight(std::move(*weight));
+  if (params.has_bias) {
+    auto bias =
+      load_weight(cursor, params.output_channels, 1, {params.output_channels});
+    if (!bias) {
+      return std::unexpected(
+        std::format("inner product bias: {}", bias.error()));
+    }
+    layer.add_weight(std::move(*bias));
+  }
+  if (params.int8_scale_term != 0) {
+    auto scales =
+      load_weight(cursor, params.output_channels, 1, {params.output_channels});
+    if (!scales) {
+      return std::unexpected(
+        std::format("inner product weight int8 scales: {}", scales.error()));
+    }
+    layer.add_weight(std::move(*scales));
+    auto bottom = load_weight(cursor, 1, 1, {1});
+    if (!bottom) {
+      return std::unexpected(
+        std::format("inner product bottom int8 scale: {}", bottom.error()));
+    }
+    layer.add_weight(std::move(*bottom));
+  }
+  return {};
+}
+
 using WeightLoader = std::expected<void, std::string> (*)(Layer&, BinCursor&);
 
 struct WeightLoaderEntry {
@@ -929,6 +1168,10 @@ std::span<const WeightLoaderEntry> weight_loaders() noexcept {
   static constexpr std::array kWeightLoaders{
     WeightLoaderEntry{.type = "Convolution",
                       .loader = load_convolution_weights},
+    WeightLoaderEntry{.type = "ConvolutionDepthWise",
+                      .loader = load_convolution_depthwise_weights},
+    WeightLoaderEntry{.type = "InnerProduct",
+                      .loader = load_inner_product_weights},
   };
   return kWeightLoaders;
 }

@@ -51,12 +51,13 @@ std::expected<void, std::string> validate_feature_mask(
 
 class ImportContext {
  public:
-  explicit ImportContext(mlir::MLIRContext& context);
+  ImportContext(mlir::MLIRContext& context, const ImportOptions& options);
 
   std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> run(
     const ncnn_graph::Graph& source);
 
   mlir::OpBuilder& builder() noexcept;
+  const std::optional<std::vector<std::int64_t>>& input_shape() const noexcept;
   std::expected<mlir::Value, ImportError> find_blob(const LayerContext& context,
                                                     std::string_view name);
   ImportResult bind_blob(const LayerContext& context,
@@ -107,6 +108,7 @@ class ImportContext {
     const ncnn_graph::Graph& source);
 
   mlir::MLIRContext* context_;
+  const ImportOptions& options_;
   mlir::OpBuilder builder_;
   mlir::OwningOpRef<mlir::ModuleOp> module_;
   mlir::ncnn::ModelOp model_;
@@ -117,6 +119,18 @@ class ImportContext {
 ImportResult import_input(ImportContext& importer, const LayerContext& context);
 ImportResult import_convolution(ImportContext& importer,
                                 const LayerContext& context);
+ImportResult import_convolution_depthwise(ImportContext& importer,
+                                          const LayerContext& context);
+ImportResult import_hard_sigmoid(ImportContext& importer,
+                                 const LayerContext& context);
+ImportResult import_hard_swish(ImportContext& importer,
+                               const LayerContext& context);
+ImportResult import_reshape(ImportContext& importer,
+                            const LayerContext& context);
+ImportResult import_binary_op(ImportContext& importer,
+                              const LayerContext& context);
+ImportResult import_inner_product(ImportContext& importer,
+                                  const LayerContext& context);
 ImportResult import_pooling(ImportContext& importer,
                             const LayerContext& context);
 ImportResult import_relu(ImportContext& importer, const LayerContext& context);

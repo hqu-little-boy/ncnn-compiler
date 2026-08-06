@@ -373,6 +373,123 @@ FailureOr<RankedTensorType> computeConcatResult(
   return RankedTensorType::get(shape, first.getElementType());
 }
 
+FailureOr<RankedTensorType> computeReshapeResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  ArrayRef<int64_t> shapeRef) {
+  if (!input || !input.getElementType().isF32()) {
+    return emitOptionalError(location, "Reshape input must be f32");
+  }
+  int64_t inputCount = 1;
+  for (int64_t dim : input.getShape()) {
+    inputCount *= dim;
+  }
+  SmallVector<int64_t> shape(shapeRef);
+  int unknown = -1;
+  int64_t outputCount = 1;
+  for (size_t i = 0; i < shape.size(); ++i) {
+    if (shape[i] == -1) {
+      if (unknown != -1) {
+        return emitOptionalError(location,
+                                 "Reshape has multiple -1 dimensions");
+      }
+      unknown = static_cast<int>(i);
+      continue;
+    }
+    if (shape[i] <= 0) {
+      return emitOptionalError(location,
+                               "Reshape dimensions must be positive or -1");
+    }
+    outputCount *= shape[i];
+  }
+  if (unknown != -1) {
+    if (outputCount == 0 || inputCount % outputCount != 0) {
+      return emitOptionalError(location,
+                               "Reshape element count does not match input");
+    }
+    shape[unknown] = inputCount / outputCount;
+  } else if (inputCount != outputCount) {
+    return emitOptionalError(location,
+                             "Reshape element count does not match input");
+  }
+  return RankedTensorType::get(shape, input.getElementType());
+}
+
+FailureOr<RankedTensorType> computeBinaryResult(
+  std::optional<Location> location,
+  ValueRange inputs,
+  bool withScalar,
+  llvm::APFloat scalar,
+  int64_t opType) {
+  (void)scalar;
+  if (opType != 2) {
+    return emitOptionalError(location, "BinaryOp only supports multiply");
+  }
+  if ((withScalar && inputs.size() != 1) ||
+      (!withScalar && inputs.size() != 2)) {
+    return emitOptionalError(location, "BinaryOp has invalid operand count");
+  }
+  auto first = llvm::dyn_cast<RankedTensorType>(inputs.front().getType());
+  if (!first || !first.getElementType().isF32()) {
+    return emitOptionalError(location,
+                             "BinaryOp operands must be f32 ranked tensors");
+  }
+  if (withScalar) {
+    return first;
+  }
+  auto second = llvm::dyn_cast<RankedTensorType>(inputs[1].getType());
+  if (!second || second.getElementType() != first.getElementType() ||
+      second.getRank() != first.getRank()) {
+    return emitOptionalError(
+      location, "BinaryOp inputs must have matching rank and element type");
+  }
+  for (int64_t i = 0; i < first.getRank(); ++i) {
+    if (second.getShape()[i] != 1 &&
+        second.getShape()[i] != first.getShape()[i]) {
+      return emitOptionalError(location,
+                               "BinaryOp input shapes are not broadcastable");
+    }
+  }
+  SmallVector<int64_t> shape(first.getShape().begin(), first.getShape().end());
+  for (int64_t i = 0; i < first.getRank(); ++i) {
+    shape[i] = std::max(shape[i], second.getShape()[i]);
+  }
+  return RankedTensorType::get(shape, first.getElementType());
+}
+
+FailureOr<RankedTensorType> computeInnerProductResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  RankedTensorType weight,
+  ValueRange bias,
+  bool hasBias) {
+  if (!input || !weight || !input.getElementType().isF32() ||
+      !weight.getElementType().isF32()) {
+    return emitOptionalError(location,
+                             "InnerProduct input and weight must be f32");
+  }
+  if (input.getRank() != 1 || weight.getRank() != 2 ||
+      weight.getShape()[1] != input.getShape()[0]) {
+    return emitOptionalError(location,
+                             "InnerProduct expects input [I] and weight [O,I]");
+  }
+  if (hasBias) {
+    if (bias.size() != 1) {
+      return emitOptionalError(location, "InnerProduct bias is required");
+    }
+    auto type = llvm::dyn_cast<RankedTensorType>(bias[0].getType());
+    if (!type || type.getRank() != 1 ||
+        type.getShape()[0] != weight.getShape()[0] ||
+        !type.getElementType().isF32()) {
+      return emitOptionalError(location,
+                               "InnerProduct bias must have shape [O]");
+    }
+  } else if (!bias.empty()) {
+    return emitOptionalError(location, "InnerProduct has unexpected bias");
+  }
+  return RankedTensorType::get({weight.getShape()[0]}, input.getElementType());
+}
+
 }  // namespace
 
 //===----------------------------------------------------------------------===//
@@ -438,6 +555,101 @@ LogicalResult ConvolutionOp::inferReturnTypeComponents(
                       adaptor.getPadBottom(),
                       adaptor.getPadLeft(),
                       adaptor.getPadRight());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.push_back(
+    ShapedTypeComponents(result->getShape(), result->getElementType()));
+  return success();
+}
+
+LogicalResult ConvolutionDepthWiseOp::inferReturnTypeComponents(
+  MLIRContext* context,
+  std::optional<Location> location,
+  ConvolutionDepthWiseOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  auto weight = llvm::dyn_cast<RankedTensorType>(adaptor.getWeight().getType());
+  if (!input || !weight || input.getRank() != 3 || weight.getRank() != 4 ||
+      !input.getElementType().isF32() || !weight.getElementType().isF32() ||
+      weight.getShape()[1] != 1 ||
+      weight.getShape()[0] != input.getShape()[0]) {
+    return emitOptionalError(
+      location,
+      "ConvolutionDepthWise requires FP32 pure depthwise weights [C,1,H,W]");
+  }
+  auto convolutionWeight = RankedTensorType::get({weight.getShape()[0],
+                                                  input.getShape()[0],
+                                                  weight.getShape()[2],
+                                                  weight.getShape()[3]},
+                                                 weight.getElementType());
+  FailureOr<RankedTensorType> result = computeConvResult(context,
+                                                         location,
+                                                         input,
+                                                         convolutionWeight,
+                                                         adaptor.getBias(),
+                                                         adaptor.getHasBias(),
+                                                         0,
+                                                         adaptor.getKernelH(),
+                                                         adaptor.getKernelW(),
+                                                         adaptor.getStrideH(),
+                                                         adaptor.getStrideW(),
+                                                         adaptor.getDilationH(),
+                                                         adaptor.getDilationW(),
+                                                         adaptor.getPadTop(),
+                                                         adaptor.getPadBottom(),
+                                                         adaptor.getPadLeft(),
+                                                         adaptor.getPadRight());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.push_back(
+    ShapedTypeComponents(result->getShape(), result->getElementType()));
+  return success();
+}
+
+LogicalResult ReshapeOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  ReshapeOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  auto result = computeReshapeResult(location, input, adaptor.getShape());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.push_back(
+    ShapedTypeComponents(result->getShape(), result->getElementType()));
+  return success();
+}
+
+LogicalResult BinaryOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  BinaryOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeBinaryResult(location,
+                                    adaptor.getInputs(),
+                                    adaptor.getWithScalar(),
+                                    adaptor.getScalar(),
+                                    adaptor.getOpType());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.push_back(
+    ShapedTypeComponents(result->getShape(), result->getElementType()));
+  return success();
+}
+
+LogicalResult InnerProductOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  InnerProductOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  auto weight = llvm::dyn_cast<RankedTensorType>(adaptor.getWeight().getType());
+  auto result = computeInnerProductResult(
+    location, input, weight, adaptor.getBias(), adaptor.getHasBias());
   if (failed(result)) {
     return failure();
   }

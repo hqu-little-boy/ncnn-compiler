@@ -24,6 +24,12 @@ namespace {
 
 DEFINE_NAIVE_CREATOR(Input)
 DEFINE_NAIVE_CREATOR(Convolution)
+DEFINE_NAIVE_CREATOR(ConvolutionDepthWise)
+DEFINE_NAIVE_CREATOR(HardSigmoid)
+DEFINE_NAIVE_CREATOR(HardSwish)
+DEFINE_NAIVE_CREATOR(Reshape)
+DEFINE_NAIVE_CREATOR(BinaryOp)
+DEFINE_NAIVE_CREATOR(InnerProduct)
 DEFINE_NAIVE_CREATOR(ReLU)
 DEFINE_NAIVE_CREATOR(Pooling)
 DEFINE_NAIVE_CREATOR(Split)
@@ -37,6 +43,17 @@ bool register_naive_layers(ncnn::Net& network) {
   return network.register_custom_layer("Input", create_naive_Input) == 0 &&
          network.register_custom_layer("Convolution",
                                        create_naive_Convolution) == 0 &&
+         network.register_custom_layer(
+           "ConvolutionDepthWise", create_naive_ConvolutionDepthWise) == 0 &&
+         network.register_custom_layer("HardSigmoid",
+                                       create_naive_HardSigmoid) == 0 &&
+         network.register_custom_layer("HardSwish", create_naive_HardSwish) ==
+           0 &&
+         network.register_custom_layer("Reshape", create_naive_Reshape) == 0 &&
+         network.register_custom_layer("BinaryOp", create_naive_BinaryOp) ==
+           0 &&
+         network.register_custom_layer("InnerProduct",
+                                       create_naive_InnerProduct) == 0 &&
          network.register_custom_layer("ReLU", create_naive_ReLU) == 0 &&
          network.register_custom_layer("Pooling", create_naive_Pooling) == 0 &&
          network.register_custom_layer("Split", create_naive_Split) == 0 &&
@@ -441,7 +458,7 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
 
 ::testing::AssertionResult check_softmax(std::span<const float> actual,
                                          std::span<const float> expected) {
-  if (actual.size() < 5 || actual.size() != expected.size()) {
+  if (actual.empty() || actual.size() != expected.size()) {
     return ::testing::AssertionFailure() << "invalid softmax output size";
   }
   const float sum = std::accumulate(actual.begin(), actual.end(), 0.0F);
@@ -449,8 +466,9 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
     return ::testing::AssertionFailure()
            << "softmax sum is " << sum << ", expected 1";
   }
-  const auto actual_top = top_indices(actual, 5);
-  const auto expected_top = top_indices(expected, 5);
+  const std::size_t top_count = std::min<std::size_t>(5, actual.size());
+  const auto actual_top = top_indices(actual, top_count);
+  const auto expected_top = top_indices(expected, top_count);
   if (actual_top.front() != expected_top.front()) {
     return ::testing::AssertionFailure()
            << "top-1 mismatch: actual=" << actual_top.front()

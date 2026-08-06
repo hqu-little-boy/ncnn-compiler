@@ -45,8 +45,13 @@ add_subdirectory(
     EXCLUDE_FROM_ALL)
 
 function(ncnn_add_compiled_fixture name param_file bin_file)
+    set(input_shape "${ARGV3}")
     set(output_dir ${CMAKE_CURRENT_BINARY_DIR}/generated/${name})
     set(library ${output_dir}/lib${name}.so)
+    set(input_shape_args)
+    if(NOT "${input_shape}" STREQUAL "")
+        list(APPEND input_shape_args --input-shape ${input_shape})
+    endif()
     add_custom_command(
         OUTPUT ${library} ${output_dir}/${name}.h ${output_dir}/${name}.json
         COMMAND ${CMAKE_COMMAND} -E make_directory ${output_dir}
@@ -60,6 +65,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             --param ${param_file}
             --bin ${bin_file}
             --model-name ${name}
+            ${input_shape_args}
             --output-dir ${output_dir}
             --emit-manifest
         DEPENDS
@@ -224,6 +230,11 @@ ncnn_add_compiled_fixture(
     squeezenet_v1_1
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin)
+ncnn_add_compiled_fixture(
+    pp_lcnet_x1_0_doc_ori
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin
+    3x224x224)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -267,6 +278,7 @@ foreach(index RANGE ${numerical_fixture_last_index})
     endif()
 endforeach()
 add_dependencies(compile_squeezenet_v1_1 compile_softmax_negative_width)
+add_dependencies(compile_pp_lcnet_x1_0_doc_ori compile_squeezenet_v1_1)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -276,7 +288,8 @@ target_link_libraries(numerical_test_support PUBLIC ncnn GTest::gtest)
 
 add_executable(numerical_tests
     operators/supported_ops_test.cpp
-    models/squeezenet_test.cpp)
+    models/squeezenet_test.cpp
+    models/pp_lcnet_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
     numerical_test_support
     GTest::gtest_main
@@ -324,8 +337,13 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_SAME_LOWER_LIBRARY_PATH="${convolution_same_lower_LIBRARY}"
     SQUEEZENET_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param"
     SQUEEZENET_BIN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin"
-    SQUEEZENET_LIBRARY_PATH="${squeezenet_v1_1_LIBRARY}")
+    SQUEEZENET_LIBRARY_PATH="${squeezenet_v1_1_LIBRARY}"
+    PP_LCNET_DOC_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
+    PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
+    PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
+add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
+add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 
 gtest_discover_tests(numerical_tests
     PROPERTIES LABELS "numerical;golden" TIMEOUT 900 RUN_SERIAL TRUE)

@@ -38,6 +38,10 @@ inline constexpr std::array kLayerDescriptors{
                   .capabilities = LayerCapability::HasWeights |
                                   LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "ConvolutionDepthWise",
+                  .capabilities = LayerCapability::HasWeights |
+                                  LayerCapability::NeedsNormalization |
+                                  LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "ReLU",
                   .capabilities = LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},
@@ -54,6 +58,22 @@ inline constexpr std::array kLayerDescriptors{
                                   LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "Softmax",
                   .capabilities = LayerCapability::NeedsNormalization |
+                                  LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "HardSigmoid",
+                  .capabilities = LayerCapability::NeedsNormalization |
+                                  LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "HardSwish",
+                  .capabilities = LayerCapability::NeedsNormalization |
+                                  LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "Reshape",
+                  .capabilities = LayerCapability::NeedsNormalization |
+                                  LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "BinaryOp",
+                  .capabilities = LayerCapability::NeedsNormalization |
+                                  LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "InnerProduct",
+                  .capabilities = LayerCapability::HasWeights |
+                                  LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},
 };
 

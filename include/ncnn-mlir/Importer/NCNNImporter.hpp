@@ -3,8 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
@@ -37,6 +39,11 @@ class ImportError {
 bool has_layer_importer(std::string_view layer_type) noexcept;
 std::size_t get_layer_importer_count() noexcept;
 
+struct ImportOptions {
+  // Used only when the model has one Input layer whose w/h/c are all omitted.
+  std::optional<std::vector<std::int64_t>> input_shape;
+};
+
 // 把解析好的 ncnn 计算图提升为 MLIR 模块：一个 ncnn.model，输入、权重和输出
 // 分别由 ncnn.input、ncnn.const 和 ncnn.output 表示，计算层是 ncnn 方言算子。
 // 后续先运行 convert-ncnn-model-to-func 建立 func.func，再 normalize 并由
@@ -44,5 +51,10 @@ std::size_t get_layer_importer_count() noexcept;
 // 上下文的 ImportError；形状/类型推断的诊断信息会被捕获进 message。
 [[nodiscard]] std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError>
 import_graph(const ncnn_graph::Graph& graph, mlir::MLIRContext& context);
+
+[[nodiscard]] std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError>
+import_graph(const ncnn_graph::Graph& graph,
+             mlir::MLIRContext& context,
+             const ImportOptions& options);
 
 }  // namespace ncnn_importer

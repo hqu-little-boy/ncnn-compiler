@@ -8,9 +8,12 @@
 // 参数解析用 LLVM 自带的 llvm::cl（mlir-opt 同款 CommandLine 库），后续接入
 // tosa/linalg/llvm 下降阶段时可平滑复用同一套 option 基础设施。
 
+#include <charconv>
+#include <cstdint>
 #include <fstream>
 #include <ios>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -50,6 +53,14 @@ llvm::cl::opt<std::string> g_output_path(
   llvm::cl::desc("Output file. '-' writes to stdout (default)"),
   llvm::cl::value_desc("path"),
   llvm::cl::init("-"),
+  llvm::cl::cat(g_driver_category));
+
+llvm::cl::opt<std::string> g_input_shape(
+  "input-shape",
+  llvm::cl::desc("Static input shape override as CxHxW for a model whose Input "
+                 "omits dimensions"),
+  llvm::cl::value_desc("CxHxW"),
+  llvm::cl::init(""),
   llvm::cl::cat(g_driver_category));
 
 // 产物阶段。后续 tosa/linalg/llvm/library 等阶段接入这同一个枚举即可。
@@ -105,6 +116,35 @@ bool write_output(std::string_view output_path, std::string_view content) {
   return true;
 }
 
+std::optional<std::vector<std::int64_t>> parse_input_shape(
+  std::string_view text) {
+  if (text.empty()) {
+    return std::vector<std::int64_t>{};
+  }
+  std::vector<std::int64_t> shape;
+  std::size_t begin = 0;
+  while (begin <= text.size()) {
+    std::size_t end = text.find_first_of("xX", begin);
+    std::string_view token = text.substr(begin, end - begin);
+    std::int64_t value = 0;
+    auto parsed =
+      std::from_chars(token.data(), token.data() + token.size(), value);
+    if (token.empty() || parsed.ec != std::errc{} ||
+        parsed.ptr != token.data() + token.size() || value <= 0) {
+      return std::nullopt;
+    }
+    shape.push_back(value);
+    if (end == std::string_view::npos) {
+      break;
+    }
+    begin = end + 1;
+  }
+  if (shape.size() != 3) {
+    return std::nullopt;
+  }
+  return shape;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -137,7 +177,18 @@ int main(int argc, char** argv) {
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
 
-  auto imported = ncnn_importer::import_graph(*decoded, context);
+  auto parsed_shape = parse_input_shape(g_input_shape);
+  if (!parsed_shape) {
+    llvm::errs() << "error: --input-shape must be three positive dimensions "
+                    "formatted as CxHxW\n";
+    return 1;
+  }
+  ncnn_importer::ImportOptions import_options;
+  if (!parsed_shape->empty()) {
+    import_options.input_shape = std::move(*parsed_shape);
+  }
+  auto imported =
+    ncnn_importer::import_graph(*decoded, context, import_options);
   if (!imported.has_value()) {
     llvm::errs() << "error: failed to import graph: "
                  << imported.error().to_string() << "\n";

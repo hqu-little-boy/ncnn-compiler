@@ -53,6 +53,13 @@ llvm::cl::opt<std::string> g_model_name(
   llvm::cl::value_desc("name"),
   llvm::cl::init(""),
   llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_input_shape(
+  "input-shape",
+  llvm::cl::desc("Static input shape override as CxHxW when Input dimensions "
+                 "are omitted"),
+  llvm::cl::value_desc("CxHxW"),
+  llvm::cl::init(""),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_output_dir("output-dir",
                                         llvm::cl::desc("Output directory"),
                                         llvm::cl::value_desc("path"),
@@ -952,8 +959,12 @@ int main(int argc, char** argv) {
   const fs::path exports = staging.path() / "exports.map";
   const fs::path library = staging.path() / ("lib" + model_name + ".so");
 
-  if (int status = run(
-        {driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()})) {
+  std::vector<std::string> driver_command{
+    driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()};
+  if (!g_input_shape.empty()) {
+    driver_command.push_back("--input-shape=" + g_input_shape);
+  }
+  if (int status = run(driver_command)) {
     return status;
   }
   if (int status = run({opt_path,
