@@ -74,6 +74,36 @@ TEST(ParserTest, ParamValueWrongKindReturnsNullopt) {
   EXPECT_FALSE(empty_array.get_float_array());
 }
 
+TEST(ParserTest, DecodesConvolutionParameters) {
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  params.set_value(1, ncnn_graph::ParamValue::make_int(3));
+  params.set_value(2, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(3, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(4, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(5, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(6, ncnn_graph::ParamValue::make_int(108));
+  params.set_value(8, ncnn_graph::ParamValue::make_int(101));
+
+  auto decoded = ncnn_graph::decode_convolution_params(params);
+  ASSERT_TRUE(decoded.has_value()) << decoded.error();
+  EXPECT_EQ(decoded->output_channels, 4);
+  EXPECT_EQ(decoded->kernel_w, 3);
+  EXPECT_EQ(decoded->kernel_h, 3);
+  EXPECT_EQ(decoded->dilation_w, 2);
+  EXPECT_EQ(decoded->dilation_h, 2);
+  EXPECT_EQ(decoded->stride_w, 2);
+  EXPECT_EQ(decoded->stride_h, 2);
+  EXPECT_EQ(decoded->pad_left, 1);
+  EXPECT_EQ(decoded->pad_right, 1);
+  EXPECT_EQ(decoded->pad_top, 1);
+  EXPECT_EQ(decoded->pad_bottom, 1);
+  EXPECT_TRUE(decoded->has_bias);
+  EXPECT_EQ(decoded->weight_count, 108);
+  EXPECT_EQ(decoded->int8_scale_term, 101);
+  EXPECT_EQ(decoded->expected_weight_tensors(), 5U);
+}
+
 namespace {
 
 void expect_failure(std::string_view text,

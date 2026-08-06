@@ -433,64 +433,19 @@ class ImportState {
       return std::unexpected(make_error(context, allowed.error()));
     }
     const auto& params = context.layer.get_params();
-    auto output_channels = get_int(params, 0, 0, "num_output");
-    auto kernel_width = get_int(params, 1, 0, "kernel_w");
-    if (!output_channels || !kernel_width) {
-      return std::unexpected(make_error(
-        context,
-        !output_channels ? output_channels.error() : kernel_width.error()));
+    auto decoded = ncnn_graph::decode_convolution_params(params);
+    if (!decoded) {
+      return std::unexpected(make_error(context, decoded.error()));
     }
-    auto kernel_height = get_int(params, 11, *kernel_width, "kernel_h");
-    auto dilation_width = get_int(params, 2, 1, "dilation_w");
-    auto dilation_height = get_int(params, 12, *dilation_width, "dilation_h");
-    auto stride_width = get_int(params, 3, 1, "stride_w");
-    auto stride_height = get_int(params, 13, *stride_width, "stride_h");
-    auto pad_left = get_int(params, 4, 0, "pad_left");
-    auto pad_right = get_int(params, 15, *pad_left, "pad_right");
-    auto pad_top = get_int(params, 14, *pad_left, "pad_top");
-    auto pad_bottom = get_int(params, 16, *pad_top, "pad_bottom");
-    auto bias = get_int(params, 5, 0, "bias_term");
-    auto weight_count = get_int(params, 6, 0, "weight_data_size");
-    auto int8_scale = get_int(params, 8, 0, "int8_scale_term");
-    auto activation = get_int(params, 9, 0, "activation_type");
-    auto dynamic = get_int(params, 19, 0, "dynamic_weight");
-    auto pad_value = get_float(params, 18, 0.0f, "pad_value");
-    if (!kernel_height || !dilation_width || !dilation_height ||
-        !stride_width || !stride_height || !pad_left || !pad_right ||
-        !pad_top || !pad_bottom || !bias || !weight_count || !int8_scale ||
-        !activation || !dynamic || !pad_value) {
-      return std::unexpected(
-        make_error(context, "invalid convolution parameter type"));
-    }
-    if (*output_channels <= 0 || *kernel_width <= 0 || *kernel_height <= 0 ||
-        *dilation_width <= 0 || *dilation_height <= 0 || *stride_width <= 0 ||
-        *stride_height <= 0 || *weight_count <= 0) {
-      return std::unexpected(make_error(
-        context,
-        "output channels, kernel, dilation, stride, and weight count must be "
-        "positive"));
-    }
-    auto bias_valid = expect_boolean(*bias, "bias_term");
-    auto dynamic_valid = expect_boolean(*dynamic, "dynamic_weight");
-    if (!bias_valid || !dynamic_valid) {
-      return std::unexpected(make_error(
-        context, !bias_valid ? bias_valid.error() : dynamic_valid.error()));
-    }
-    if (*dynamic != 0 || *activation != 0 ||
-        find_param(params, 10) != nullptr || *pad_value != 0.0f) {
+    const ncnn_graph::ConvolutionParams& convolution = *decoded;
+    if (convolution.dynamic_weight || convolution.activation_type != 0 ||
+        convolution.has_activation_params || convolution.pad_value != 0.0F) {
       return std::unexpected(
         make_error(context,
                    "dynamic weights, fused activation, and nonzero pad value "
                    "are unsupported"));
     }
-    if (*int8_scale != 0 && *int8_scale != 1 && *int8_scale != 2 &&
-        *int8_scale != 101 && *int8_scale != 102) {
-      return std::unexpected(
-        make_error(context, "int8_scale_term must be 0, 1, 2, 101, or 102"));
-    }
-    const std::size_t expected_weights = 1 + static_cast<std::size_t>(*bias) +
-                                         (*int8_scale == 0 ? 0 : 2) +
-                                         (*int8_scale > 100 ? 1 : 0);
+    const std::size_t expected_weights = convolution.expected_weight_tensors();
     if (context.layer.get_weights().size() != expected_weights) {
       return std::unexpected(
         make_error(context,
@@ -499,17 +454,19 @@ class ImportState {
                                context.layer.get_weights().size())));
     }
     const auto weight_dtype = context.layer.get_weights()[0].get_dtype();
-    const bool quantized = *int8_scale != 0;
+    const bool quantized = convolution.int8_scale_term != 0;
     if ((!quantized && weight_dtype == ncnn_graph::DataType::Int8) ||
         (quantized && weight_dtype == ncnn_graph::DataType::Float16)) {
       return std::unexpected(make_error(
         context, "convolution kernel element type does not match scale term"));
     }
     const auto weight_shape = context.layer.get_weights()[0].get_shape();
-    if (weight_shape.size() != 4 || weight_shape[0] != *output_channels ||
-        weight_shape[2] != *kernel_height || weight_shape[3] != *kernel_width ||
+    if (weight_shape.size() != 4 ||
+        weight_shape[0] != convolution.output_channels ||
+        weight_shape[2] != convolution.kernel_h ||
+        weight_shape[3] != convolution.kernel_w ||
         context.layer.get_weights()[0].element_count() !=
-          static_cast<std::size_t>(*weight_count)) {
+          static_cast<std::size_t>(convolution.weight_count)) {
       return std::unexpected(make_error(
         context, "kernel shape or weight_data_size is inconsistent"));
     }
@@ -542,18 +499,18 @@ class ImportState {
     llvm::SmallVector<mlir::Value> operands{*input, weight_value};
     operands.append(tail);
     mlir::ncnn::ConvolutionOp::Properties properties;
-    properties.kernel_h = i64(*kernel_height);
-    properties.kernel_w = i64(*kernel_width);
-    properties.stride_h = i64(*stride_height);
-    properties.stride_w = i64(*stride_width);
-    properties.dilation_h = i64(*dilation_height);
-    properties.dilation_w = i64(*dilation_width);
-    properties.pad_top = i64(*pad_top);
-    properties.pad_bottom = i64(*pad_bottom);
-    properties.pad_left = i64(*pad_left);
-    properties.pad_right = i64(*pad_right);
-    properties.has_bias = builder_.getBoolAttr(*bias == 1);
-    properties.int8_scale_term = i64(*int8_scale);
+    properties.kernel_h = i64(convolution.kernel_h);
+    properties.kernel_w = i64(convolution.kernel_w);
+    properties.stride_h = i64(convolution.stride_h);
+    properties.stride_w = i64(convolution.stride_w);
+    properties.dilation_h = i64(convolution.dilation_h);
+    properties.dilation_w = i64(convolution.dilation_w);
+    properties.pad_top = i64(convolution.pad_top);
+    properties.pad_bottom = i64(convolution.pad_bottom);
+    properties.pad_left = i64(convolution.pad_left);
+    properties.pad_right = i64(convolution.pad_right);
+    properties.has_bias = builder_.getBoolAttr(convolution.has_bias);
+    properties.int8_scale_term = i64(convolution.int8_scale_term);
     auto result_type = capturing([&] {
       return inferSingleTensorResult<mlir::ncnn::ConvolutionOp>(
         location, operands, properties);
@@ -570,18 +527,18 @@ class ImportState {
       *input,
       weight_value,
       mlir::ValueRange(tail),
-      i64(*kernel_height),
-      i64(*kernel_width),
-      i64(*stride_height),
-      i64(*stride_width),
-      i64(*dilation_height),
-      i64(*dilation_width),
-      i64(*pad_top),
-      i64(*pad_bottom),
-      i64(*pad_left),
-      i64(*pad_right),
-      builder_.getBoolAttr(*bias == 1),
-      i64(*int8_scale));
+      i64(convolution.kernel_h),
+      i64(convolution.kernel_w),
+      i64(convolution.stride_h),
+      i64(convolution.stride_w),
+      i64(convolution.dilation_h),
+      i64(convolution.dilation_w),
+      i64(convolution.pad_top),
+      i64(convolution.pad_bottom),
+      i64(convolution.pad_left),
+      i64(convolution.pad_right),
+      builder_.getBoolAttr(convolution.has_bias),
+      i64(convolution.int8_scale_term));
     tag_source(conv.getOperation(), context);
     return bind_blob(
       context, std::string(context.layer.get_outputs()[0]), conv.getResult());

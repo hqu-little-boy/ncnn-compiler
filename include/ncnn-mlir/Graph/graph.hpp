@@ -71,6 +71,32 @@ class ParamDict {
   std::vector<std::pair<int, ParamValue>> entries_;
 };
 
+struct ConvolutionParams {
+  std::int64_t output_channels = 0;
+  std::int64_t kernel_w = 0;
+  std::int64_t kernel_h = 0;
+  std::int64_t dilation_w = 1;
+  std::int64_t dilation_h = 1;
+  std::int64_t stride_w = 1;
+  std::int64_t stride_h = 1;
+  std::int64_t pad_left = 0;
+  std::int64_t pad_right = 0;
+  std::int64_t pad_top = 0;
+  std::int64_t pad_bottom = 0;
+  bool has_bias = false;
+  std::int64_t weight_count = 0;
+  std::int64_t int8_scale_term = 0;
+  std::int64_t activation_type = 0;
+  bool has_activation_params = false;
+  bool dynamic_weight = false;
+  float pad_value = 0.0F;
+
+  std::size_t expected_weight_tensors() const noexcept;
+};
+
+[[nodiscard]] std::expected<ConvolutionParams, std::string>
+decode_convolution_params(const ParamDict& params);
+
 enum class DataType { Unknown, Float32, Float16, Int8 };
 
 class Tensor {

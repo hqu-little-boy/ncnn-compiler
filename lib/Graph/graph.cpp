@@ -5,6 +5,7 @@
 #include <bit>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -160,6 +161,143 @@ std::span<const float> ParamDict::get_float_array(int id) const {
     return {};
   }
   return value->get().get_float_array().value_or(std::span<const float>());
+}
+
+namespace {
+
+std::expected<std::int64_t, std::string> decode_int_param(
+  const ParamDict& params,
+  int id,
+  std::int64_t default_value,
+  std::string_view name) {
+  for (const auto& [entry_id, value] : params.get_entries()) {
+    if (entry_id != id) {
+      continue;
+    }
+    auto result = value.get_int();
+    if (!result) {
+      return std::unexpected(
+        std::format("parameter {} ({}) must be integer", id, name));
+    }
+    return *result;
+  }
+  return default_value;
+}
+
+std::expected<float, std::string> decode_float_param(const ParamDict& params,
+                                                     int id,
+                                                     float default_value,
+                                                     std::string_view name) {
+  for (const auto& [entry_id, value] : params.get_entries()) {
+    if (entry_id != id) {
+      continue;
+    }
+    auto result = value.get_float();
+    if (!result) {
+      return std::unexpected(
+        std::format("parameter {} ({}) must be float", id, name));
+    }
+    if (!std::isfinite(*result)) {
+      return std::unexpected(
+        std::format("parameter {} ({}) must be finite", id, name));
+    }
+    return *result;
+  }
+  return default_value;
+}
+
+}  // namespace
+
+std::size_t ConvolutionParams::expected_weight_tensors() const noexcept {
+  if (dynamic_weight) {
+    return 0;
+  }
+  return 1 + static_cast<std::size_t>(has_bias) +
+         (int8_scale_term == 0 ? 0 : 2) + (int8_scale_term > 100 ? 1 : 0);
+}
+
+std::expected<ConvolutionParams, std::string> decode_convolution_params(
+  const ParamDict& params) {
+  ConvolutionParams result;
+  auto dynamic_weight = decode_int_param(params, 19, 0, "dynamic_weight");
+  if (!dynamic_weight) {
+    return std::unexpected(dynamic_weight.error());
+  }
+  if (*dynamic_weight != 0 && *dynamic_weight != 1) {
+    return std::unexpected("convolution dynamic_weight must be 0 or 1");
+  }
+  result.dynamic_weight = *dynamic_weight == 1;
+  if (result.dynamic_weight) {
+    return result;
+  }
+
+  auto output_channels = decode_int_param(params, 0, 0, "num_output");
+  auto kernel_w = decode_int_param(params, 1, 0, "kernel_w");
+  if (!output_channels || !kernel_w) {
+    return std::unexpected(!output_channels ? output_channels.error()
+                                            : kernel_w.error());
+  }
+  auto kernel_h = decode_int_param(params, 11, *kernel_w, "kernel_h");
+  auto dilation_w = decode_int_param(params, 2, 1, "dilation_w");
+  auto dilation_h = decode_int_param(params, 12, *dilation_w, "dilation_h");
+  auto stride_w = decode_int_param(params, 3, 1, "stride_w");
+  auto stride_h = decode_int_param(params, 13, *stride_w, "stride_h");
+  auto pad_left = decode_int_param(params, 4, 0, "pad_left");
+  auto pad_right = decode_int_param(params, 15, *pad_left, "pad_right");
+  auto pad_top = decode_int_param(params, 14, *pad_left, "pad_top");
+  auto pad_bottom = decode_int_param(params, 16, *pad_top, "pad_bottom");
+  auto bias_term = decode_int_param(params, 5, 0, "bias_term");
+  auto weight_count = decode_int_param(params, 6, 0, "weight_data_size");
+  auto int8_scale_term = decode_int_param(params, 8, 0, "int8_scale_term");
+  auto activation_type = decode_int_param(params, 9, 0, "activation_type");
+  auto pad_value = decode_float_param(params, 18, 0.0F, "pad_value");
+  if (!kernel_h || !dilation_w || !dilation_h || !stride_w || !stride_h ||
+      !pad_left || !pad_right || !pad_top || !pad_bottom || !bias_term ||
+      !weight_count || !int8_scale_term || !activation_type || !pad_value) {
+    return std::unexpected("invalid convolution parameter type");
+  }
+  if (*output_channels <= 0) {
+    return std::unexpected("convolution num_output must be positive");
+  }
+  if (*weight_count <= 0) {
+    return std::unexpected("convolution weight count must be positive");
+  }
+  if (*kernel_w <= 0 || *kernel_h <= 0) {
+    return std::unexpected("convolution kernel dimensions must be positive");
+  }
+  if (*dilation_w <= 0 || *dilation_h <= 0) {
+    return std::unexpected("convolution dilation must be positive");
+  }
+  if (*stride_w <= 0 || *stride_h <= 0) {
+    return std::unexpected("convolution stride must be positive");
+  }
+  if (*bias_term != 0 && *bias_term != 1) {
+    return std::unexpected("convolution bias_term must be 0 or 1");
+  }
+  if (*int8_scale_term != 0 && *int8_scale_term != 1 && *int8_scale_term != 2 &&
+      *int8_scale_term != 101 && *int8_scale_term != 102) {
+    return std::unexpected(
+      "convolution int8_scale_term must be 0, 1, 2, 101, or 102");
+  }
+
+  result.output_channels = *output_channels;
+  result.kernel_w = *kernel_w;
+  result.kernel_h = *kernel_h;
+  result.dilation_w = *dilation_w;
+  result.dilation_h = *dilation_h;
+  result.stride_w = *stride_w;
+  result.stride_h = *stride_h;
+  result.pad_left = *pad_left;
+  result.pad_right = *pad_right;
+  result.pad_top = *pad_top;
+  result.pad_bottom = *pad_bottom;
+  result.has_bias = *bias_term == 1;
+  result.weight_count = *weight_count;
+  result.int8_scale_term = *int8_scale_term;
+  result.activation_type = *activation_type;
+  result.has_activation_params = params.has(10);
+  result.pad_value = *pad_value;
+  return result;
 }
 
 // ───────────────────────── Tensor ─────────────────────────
@@ -681,79 +819,23 @@ std::expected<Tensor, std::string> load_weight(
   return tensor;
 }
 
-std::expected<std::int64_t, std::string> get_layer_param_int(
-  const Layer& layer,
-  int id,
-  std::int64_t default_value,
-  std::string_view name) {
-  for (const auto& [entry_id, value] : layer.get_params().get_entries()) {
-    if (entry_id != id) {
-      continue;
-    }
-    auto result = value.get_int();
-    if (!result) {
-      return std::unexpected(
-        std::format("parameter {} ({}) must be integer", id, name));
-    }
-    return *result;
-  }
-  return default_value;
-}
-
 std::expected<void, std::string> load_convolution_weights(Layer& layer,
                                                           BinCursor& cursor) {
-  auto dynamic_weight = get_layer_param_int(layer, 19, 0, "dynamic_weight");
-  if (!dynamic_weight) {
-    return std::unexpected(dynamic_weight.error());
+  auto decoded = decode_convolution_params(layer.get_params());
+  if (!decoded) {
+    return std::unexpected(decoded.error());
   }
-  if (*dynamic_weight != 0 && *dynamic_weight != 1) {
-    return std::unexpected("convolution dynamic_weight must be 0 or 1");
-  }
-  if (*dynamic_weight == 1) {
+  const ConvolutionParams& params = *decoded;
+  if (params.dynamic_weight) {
     return {};
   }
 
-  auto num_output_value = get_layer_param_int(layer, 0, 0, "num_output");
-  auto weight_count_value =
-    get_layer_param_int(layer, 6, 0, "weight_data_size");
-  auto kernel_w_value = get_layer_param_int(layer, 1, 0, "kernel_w");
-  auto bias_term = get_layer_param_int(layer, 5, 0, "bias_term");
-  auto int8_scale_term = get_layer_param_int(layer, 8, 0, "int8_scale_term");
-  if (!num_output_value || !weight_count_value || !kernel_w_value ||
-      !bias_term || !int8_scale_term) {
-    if (!num_output_value) {
-      return std::unexpected(num_output_value.error());
-    }
-    if (!weight_count_value) {
-      return std::unexpected(weight_count_value.error());
-    }
-    if (!kernel_w_value) {
-      return std::unexpected(kernel_w_value.error());
-    }
-    if (!bias_term) {
-      return std::unexpected(bias_term.error());
-    }
-    return std::unexpected(int8_scale_term.error());
-  }
-  auto kernel_h_value =
-    get_layer_param_int(layer, 11, *kernel_w_value, "kernel_h");
-  if (!kernel_h_value) {
-    return std::unexpected(kernel_h_value.error());
-  }
-  if (*bias_term != 0 && *bias_term != 1) {
-    return std::unexpected("convolution bias_term must be 0 or 1");
-  }
-  if (*int8_scale_term != 0 && *int8_scale_term != 1 && *int8_scale_term != 2 &&
-      *int8_scale_term != 101 && *int8_scale_term != 102) {
-    return std::unexpected(
-      "convolution int8_scale_term must be 0, 1, 2, 101, or 102");
-  }
-
-  auto num_output = positive_size(*num_output_value, "convolution num_output");
+  auto num_output =
+    positive_size(params.output_channels, "convolution num_output");
   auto weight_count =
-    positive_size(*weight_count_value, "convolution weight count");
-  auto kernel_w = positive_size(*kernel_w_value, "convolution kernel width");
-  auto kernel_h = positive_size(*kernel_h_value, "convolution kernel height");
+    positive_size(params.weight_count, "convolution weight count");
+  auto kernel_w = positive_size(params.kernel_w, "convolution kernel width");
+  auto kernel_h = positive_size(params.kernel_h, "convolution kernel height");
   if (!num_output) {
     return std::unexpected(num_output.error());
   }
@@ -789,28 +871,29 @@ std::expected<void, std::string> load_convolution_weights(Layer& layer,
   }
 
   auto weight = load_weight(cursor,
-                            *weight_count_value,
+                            params.weight_count,
                             0,
-                            {*num_output_value,
+                            {params.output_channels,
                              static_cast<std::int64_t>(num_input),
-                             *kernel_h_value,
-                             *kernel_w_value});
+                             params.kernel_h,
+                             params.kernel_w});
   if (!weight) {
     return std::unexpected(std::format("conv weight: {}", weight.error()));
   }
   layer.add_weight(std::move(*weight));
 
-  if (*bias_term == 1) {
-    auto bias = load_weight(cursor, *num_output_value, 1, {*num_output_value});
+  if (params.has_bias) {
+    auto bias =
+      load_weight(cursor, params.output_channels, 1, {params.output_channels});
     if (!bias) {
       return std::unexpected(std::format("conv bias: {}", bias.error()));
     }
     layer.add_weight(std::move(*bias));
   }
 
-  if (*int8_scale_term != 0) {
+  if (params.int8_scale_term != 0) {
     auto weight_scales =
-      load_weight(cursor, *num_output_value, 1, {*num_output_value});
+      load_weight(cursor, params.output_channels, 1, {params.output_channels});
     if (!weight_scales) {
       return std::unexpected(
         std::format("conv weight int8 scales: {}", weight_scales.error()));
@@ -824,7 +907,7 @@ std::expected<void, std::string> load_convolution_weights(Layer& layer,
     }
     layer.add_weight(std::move(*bottom_scale));
   }
-  if (*int8_scale_term > 100) {
+  if (params.int8_scale_term > 100) {
     auto top_scale = load_weight(cursor, 1, 1, {1});
     if (!top_scale) {
       return std::unexpected(
