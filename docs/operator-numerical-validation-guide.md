@@ -17,9 +17,9 @@
 ## 1. “支持一个层”不等于支持该层的全部参数组合
 
 应以 importer、verifier、normalize 和 lowering 共同接受的参数集合定义“当前支持”，不能只看
-`import_layer()` 中是否出现层名。例如 Pooling 至少包含 max/average、regular/global/adaptive、
-四种 `pad_mode` 和 `include_pad` 等互相影响的语义；Convolution 还包含非对称 padding、stride、
-dilation、bias、SAME sentinel 和量化相关参数。
+`ImportContext` 的 `kImporters` 注册表里是否出现层名。例如 Pooling 至少包含 max/average、
+regular/global/adaptive、四种 `pad_mode` 和 `include_pad` 等互相影响的语义；Convolution 还包含
+非对称 padding、stride、dilation、bias、SAME sentinel 和量化相关参数。
 
 新增算子时应建立支持矩阵，逐项回答：
 
