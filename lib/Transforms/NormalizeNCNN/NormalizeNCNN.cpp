@@ -6,11 +6,12 @@
 #include <memory>
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 
@@ -48,6 +49,136 @@ FailureOr<ExplicitPadding> computeSamePadding(int64_t input,
   return ExplicitPadding{.before = before, .after = total - before};
 }
 
+using PaddingMap = DenseMap<Operation*, std::array<int64_t, 4>>;
+
+template <typename Op>
+void setI64(Op operation, StringRef name, int64_t value) {
+  operation->setAttr(name,
+                     Builder(operation.getContext()).getI64IntegerAttr(value));
+}
+
+bool hasI64(Operation* operation, StringRef name, int64_t value) {
+  auto attribute = operation->getAttrOfType<IntegerAttr>(name);
+  return attribute && attribute.getInt() == value;
+}
+
+template <typename Op>
+class NormalizeAxis final : public OpRewritePattern<Op> {
+ public:
+  using OpRewritePattern<Op>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(Op operation,
+                                PatternRewriter& rewriter) const final {
+    auto ranked = cast<RankedTensorType>(operation->getOperand(0).getType());
+    int64_t axis = operation.getAxis();
+    if (axis >= 0) {
+      return failure();
+    }
+    axis += ranked.getRank();
+    rewriter.modifyOpInPlace(operation, [&] {
+      operation->setAttr("axis", rewriter.getI64IntegerAttr(axis));
+    });
+    return success();
+  }
+};
+
+template <typename Op>
+class NormalizeF32Attribute final : public OpRewritePattern<Op> {
+ public:
+  NormalizeF32Attribute(MLIRContext* context,
+                        StringRef attributeName,
+                        double defaultValue)
+    : OpRewritePattern<Op>(context),
+      attributeName_(attributeName),
+      defaultValue_(defaultValue) {}
+
+  LogicalResult matchAndRewrite(Op operation,
+                                PatternRewriter& rewriter) const final {
+    auto attribute =
+      operation->template getAttrOfType<FloatAttr>(attributeName_);
+    const double value =
+      attribute ? attribute.getValue().convertToDouble() : defaultValue_;
+    auto normalized = rewriter.getF32FloatAttr(value);
+    if (attribute == normalized) {
+      return failure();
+    }
+    rewriter.modifyOpInPlace(
+      operation, [&] { operation->setAttr(attributeName_, normalized); });
+    return success();
+  }
+
+ private:
+  StringRef attributeName_;
+  double defaultValue_;
+};
+
+class NormalizeConvolution final : public OpRewritePattern<ConvolutionOp> {
+ public:
+  NormalizeConvolution(MLIRContext* context, const PaddingMap& explicitPadding)
+    : OpRewritePattern(context), explicitPadding_(&explicitPadding) {}
+
+  LogicalResult matchAndRewrite(ConvolutionOp operation,
+                                PatternRewriter& rewriter) const final {
+    auto padding = explicitPadding_->find(operation);
+    const bool normalizeScale =
+      operation->getAttr("int8_scale_term") == nullptr;
+    const bool normalizePadding =
+      padding != explicitPadding_->end() &&
+      (!hasI64(operation, "pad_top", padding->second[0]) ||
+       !hasI64(operation, "pad_bottom", padding->second[1]) ||
+       !hasI64(operation, "pad_left", padding->second[2]) ||
+       !hasI64(operation, "pad_right", padding->second[3]));
+    if (!normalizePadding && !normalizeScale) {
+      return failure();
+    }
+    rewriter.modifyOpInPlace(operation, [&] {
+      setI64(operation, "int8_scale_term", operation.getInt8ScaleTerm());
+      if (padding != explicitPadding_->end()) {
+        setI64(operation, "pad_top", padding->second[0]);
+        setI64(operation, "pad_bottom", padding->second[1]);
+        setI64(operation, "pad_left", padding->second[2]);
+        setI64(operation, "pad_right", padding->second[3]);
+      }
+    });
+    return success();
+  }
+
+ private:
+  const PaddingMap* explicitPadding_;
+};
+
+class NormalizePooling final : public OpRewritePattern<PoolingOp> {
+ public:
+  NormalizePooling(MLIRContext* context, const PaddingMap& explicitPadding)
+    : OpRewritePattern(context), explicitPadding_(&explicitPadding) {}
+
+  LogicalResult matchAndRewrite(PoolingOp operation,
+                                PatternRewriter& rewriter) const final {
+    auto padding = explicitPadding_->find(operation);
+    if (padding == explicitPadding_->end()) {
+      return failure();
+    }
+    if (hasI64(operation, "pad_top", padding->second[0]) &&
+        hasI64(operation, "pad_bottom", padding->second[1]) &&
+        hasI64(operation, "pad_left", padding->second[2]) &&
+        hasI64(operation, "pad_right", padding->second[3]) &&
+        hasI64(operation, "pad_mode", 1)) {
+      return failure();
+    }
+    rewriter.modifyOpInPlace(operation, [&] {
+      setI64(operation, "pad_top", padding->second[0]);
+      setI64(operation, "pad_bottom", padding->second[1]);
+      setI64(operation, "pad_left", padding->second[2]);
+      setI64(operation, "pad_right", padding->second[3]);
+      setI64(operation, "pad_mode", 1);
+    });
+    return success();
+  }
+
+ private:
+  const PaddingMap* explicitPadding_;
+};
+
 class NormalizeNCNNPass final
   : public impl::NormalizeNCNNPassBase<NormalizeNCNNPass> {
  public:
@@ -63,7 +194,7 @@ class NormalizeNCNNPass final
       return;
     }
 
-    DenseMap<Operation*, std::array<int64_t, 4>> explicitPadding;
+    PaddingMap explicitPadding;
     WalkResult validation = module.walk([&](Operation* operation) {
       if (operation->getDialect() == nullptr ||
           operation->getDialect()->getNamespace() != "ncnn") {
@@ -73,66 +204,43 @@ class NormalizeNCNNPass final
         operation->emitOpError("requires a func.func boundary");
         return WalkResult::interrupt();
       }
-      if (auto convolution = dyn_cast<ConvolutionOp>(operation)) {
-        return validateConvolution(convolution, explicitPadding);
-      }
-      if (auto pooling = dyn_cast<PoolingOp>(operation)) {
-        return validatePooling(pooling, explicitPadding);
-      }
-      return WalkResult::advance();
+      return TypeSwitch<Operation*, WalkResult>(operation)
+        .Case<ConvolutionOp>([&](ConvolutionOp convolution) {
+          return validateConvolution(convolution, explicitPadding);
+        })
+        .Case<PoolingOp>([&](PoolingOp pooling) {
+          return validatePooling(pooling, explicitPadding);
+        })
+        .Default([](Operation*) { return WalkResult::advance(); });
     });
     if (validation.wasInterrupted()) {
       signalPassFailure();
       return;
     }
 
-    module.walk([&](Operation* operation) {
-      if (auto convolution = dyn_cast<ConvolutionOp>(operation)) {
-        normalizeConvolution(convolution, explicitPadding);
-      }
-      if (auto pooling = dyn_cast<PoolingOp>(operation)) {
-        normalizePooling(pooling, explicitPadding);
-      }
-      if (auto concat = dyn_cast<ConcatOp>(operation)) {
-        normalizeAxis(concat, concat.getInputs().front().getType());
-      } else if (auto softmax = dyn_cast<SoftmaxOp>(operation)) {
-        normalizeAxis(softmax, softmax.getInput().getType());
-      } else if (auto relu = dyn_cast<ReluOp>(operation)) {
-        setF32(
-          relu, "negative_slope", relu.getNegativeSlope().convertToDouble());
-      } else if (auto dropout = dyn_cast<DropoutOp>(operation)) {
-        setF32(dropout, "scale", dropout.getScale().convertToDouble());
-      }
-    });
+    applyPattern(module, NormalizeConvolution(&getContext(), explicitPadding));
+    applyPattern(module, NormalizePooling(&getContext(), explicitPadding));
+    applyPattern(module, NormalizeAxis<ConcatOp>(&getContext()));
+    applyPattern(module, NormalizeAxis<SoftmaxOp>(&getContext()));
+    applyPattern(
+      module,
+      NormalizeF32Attribute<ReluOp>(&getContext(), "negative_slope", 0.0));
+    applyPattern(module,
+                 NormalizeF32Attribute<DropoutOp>(&getContext(), "scale", 1.0));
   }
 
  private:
   template <typename Op>
-  static void normalizeAxis(Op operation, Type inputType) {
-    auto ranked = dyn_cast<RankedTensorType>(inputType);
-    int64_t axis = operation.getAxis();
-    if (axis < 0) {
-      axis += ranked.getRank();
-    }
-    operation->setAttr("axis",
-                       Builder(operation.getContext()).getI64IntegerAttr(axis));
+  static void applyPattern(ModuleOp module, OpRewritePattern<Op>&& pattern) {
+    PatternRewriter rewriter(module.getContext());
+    module.walk([&](Op operation) {
+      rewriter.setInsertionPoint(operation);
+      (void)pattern.matchAndRewrite(operation, rewriter);
+    });
   }
 
-  template <typename Op>
-  static void setI64(Op operation, StringRef name, int64_t value) {
-    operation->setAttr(
-      name, Builder(operation.getContext()).getI64IntegerAttr(value));
-  }
-
-  template <typename Op>
-  static void setF32(Op operation, StringRef name, double value) {
-    operation->setAttr(name,
-                       Builder(operation.getContext()).getF32FloatAttr(value));
-  }
-
-  static WalkResult validateConvolution(
-    ConvolutionOp operation,
-    DenseMap<Operation*, std::array<int64_t, 4>>& explicitPadding) {
+  static WalkResult validateConvolution(ConvolutionOp operation,
+                                        PaddingMap& explicitPadding) {
     const int64_t pad = operation.getPadTop();
     if (pad != -233 && pad != -234) {
       return WalkResult::advance();
@@ -161,9 +269,8 @@ class NormalizeNCNNPass final
     return WalkResult::advance();
   }
 
-  static WalkResult validatePooling(
-    PoolingOp operation,
-    DenseMap<Operation*, std::array<int64_t, 4>>& explicitPadding) {
+  static WalkResult validatePooling(PoolingOp operation,
+                                    PaddingMap& explicitPadding) {
     if (operation.getMode() != static_cast<int64_t>(PoolMode::Regular) ||
         (operation.getPadMode() != 2 && operation.getPadMode() != 3)) {
       return WalkResult::advance();
@@ -190,34 +297,6 @@ class NormalizeNCNNPass final
     explicitPadding[operation] = {
       height->before, height->after, width->before, width->after};
     return WalkResult::advance();
-  }
-
-  static void normalizeConvolution(
-    ConvolutionOp operation,
-    const DenseMap<Operation*, std::array<int64_t, 4>>& explicitPadding) {
-    setI64(operation, "int8_scale_term", operation.getInt8ScaleTerm());
-    auto padding = explicitPadding.find(operation);
-    if (padding == explicitPadding.end()) {
-      return;
-    }
-    setI64(operation, "pad_top", padding->second[0]);
-    setI64(operation, "pad_bottom", padding->second[1]);
-    setI64(operation, "pad_left", padding->second[2]);
-    setI64(operation, "pad_right", padding->second[3]);
-  }
-
-  static void normalizePooling(
-    PoolingOp operation,
-    const DenseMap<Operation*, std::array<int64_t, 4>>& explicitPadding) {
-    auto padding = explicitPadding.find(operation);
-    if (padding == explicitPadding.end()) {
-      return;
-    }
-    setI64(operation, "pad_top", padding->second[0]);
-    setI64(operation, "pad_bottom", padding->second[1]);
-    setI64(operation, "pad_left", padding->second[2]);
-    setI64(operation, "pad_right", padding->second[3]);
-    setI64(operation, "pad_mode", 1);
   }
 };
 
