@@ -127,8 +127,9 @@ kernel=3, stride=2, pad=0, global_pooling=0。`pool10` 是 `{0=1 ... 4=1}`，
 - 第二个 `[64:f32:256B]`：bias，shape `[64]`，float32，256 字节（= 64 × 4）。
 
 顺序 weight → bias 严格对应 `convolution.cpp` `load_model` 里的读取次序。
-当前 importer 的 SqueezeNet 路径只接受 `f32`（flag `0x0002C056` 或全 0）；其他
-权重 dtype 不属于该路径的输入契约。
+kernel 读取 4 字节类型 flag，`load_weight()` 支持 f32/f16/i8；bias 和 scale
+固定按无 flag 的 f32 读取。端到端数值验证路径当前以 f32 为主，但参数解析与
+权重加载已能消费 f16/i8 张量。
 
 ## 6. 完整示例：SqueezeNet v1.1
 

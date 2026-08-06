@@ -50,6 +50,24 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
   `pad_mode=0`（full + tail padding）通过尾部填充计算正常支持。
 - **Softmax**：旧版 `fixbug0=0` 仅允许 `axis=0`。
 
+### 2.4 算子扩展一致性契约
+
+新增一个 source layer 时，算子能力分散在多个阶段；以下注册表/描述符必须同步，
+否则会出现“某阶段已支持、另一阶段漏实现”的问题：
+
+| 阶段 | 位置 | 责任 |
+|---|---|---|
+| 层类型 → importer handler | `lib/Importer/NCNNImporter.cpp` 的 `kImporters` | 层类型到 `ImportContext` handler 的分派 |
+| 算子族实现 | `lib/Importer/Import{Input,Convolution,Pooling,Activation,Tensor}.cpp` | 参数校验、SSA 构造、blob 绑定 |
+| 权重字节消费 | `lib/Graph/graph.cpp` 的 `kWeightLoaders` | 带权重 layer 必须注册 loader 消费 `.bin` |
+| 共享参数解码 | `lib/Graph/graph.cpp` 的 `decode_convolution_params()` | 参数 ID/默认值/合法性的单一来源 |
+| 能力声明 | `include/ncnn-mlir/Support/LayerCapabilities.hpp` | `HasWeights`/`NeedsNormalization`/`Lowerable` |
+| 规范化 | `lib/Transforms/NormalizeNCNN/NormalizeNCNN.cpp` | 需要归一化属性的 op 增加 typed pattern |
+| Lowering | `lib/Conversion/NCNNToTosa/NCNNToTosa.cpp` | 必须提供 conversion pattern，否则严格流水线拒绝残留 |
+
+`test/Unit/layer_registry_test.cpp` 校验 descriptor 与真实 importer/weight-loader
+注册表的一致性；新增算子时应保持该测试通过。
+
 ---
 
 ## 3. 编译流水线
@@ -76,7 +94,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | 解析 | `ncnn_graph::Graph::load` | 解析 `.param`（magic `7767517`）和 `.bin` 为 parsed-graph |
 | 导入 | `ncnn_importer::import_graph` | 提升为类型化 MLIR SSA DAG，通过 op 的 `InferTypeOpInterface` 执行静态形状推断 |
 | 模型→函数 | `convert-ncnn-model-to-func` | Full dialect conversion：移动模型 region，建立 `func.func` + `arith.constant`，不 clone SSA 图 |
-| 规范化 | `normalize-ncnn` | 两阶段校验/提交：解析 SAME padding、归一化负 axis；Split 由标准 folder/canonicalize 消除 |
+| 规范化 | `normalize-ncnn` | 两阶段校验/提交：SAME padding 校验由 `TypeSwitch` 分派，提交由 typed `OpRewritePattern` 完成；Split 由标准 folder/canonicalize 消除 |
 | ncnn→TOSA | `convert-ncnn-to-tosa` | MLIR dialect conversion patterns + CHW/NHWC 双向 materialization |
 | TOSA→Linalg | 上游 `addTosaToLinalgPasses` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith |
 | Linalg→MemRef | `bufferize-ncnn` + `buffer-results-to-out-params` | One-Shot Bufferize，输出提升为 caller-owned 参数 |
@@ -228,7 +246,8 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 | Op 定义（TableGen） | `include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td` |
 | Op 形状推断/验证 | `lib/Dialect/NCNN/IR/NCNNOps.cpp` |
 | 图解析/数据模型 | `lib/Graph/graph.cpp`、`lib/Graph/parser.cpp` |
-| 导入器（层接受） | `lib/Importer/NCNNImporter.cpp` |
+| 导入器（层接受） | `lib/Importer/NCNNImporter.cpp`、`lib/Importer/ImporterInternal.hpp` |
+| 导入器（算子族实现） | `lib/Importer/Import{Input,Convolution,Pooling,Activation,Tensor}.cpp` |
 | 模型→函数转换 | `lib/Conversion/NCNNToFunc/NCNNToFunc.cpp` |
 | 规范化 | `lib/Transforms/NormalizeNCNN/NormalizeNCNN.cpp` |
 | ncnn→TOSA 转换 | `lib/Conversion/NCNNToTosa/NCNNToTosa.cpp` |
