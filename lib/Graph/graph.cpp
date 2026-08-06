@@ -700,12 +700,8 @@ std::expected<std::int64_t, std::string> get_layer_param_int(
   return default_value;
 }
 
-std::expected<void, std::string> load_layer_weights(Layer& layer,
-                                                    BinCursor& cursor) {
-  if (layer.get_type() != "Convolution") {
-    return {};
-  }
-
+std::expected<void, std::string> load_convolution_weights(Layer& layer,
+                                                          BinCursor& cursor) {
   auto dynamic_weight = get_layer_param_int(layer, 19, 0, "dynamic_weight");
   if (!dynamic_weight) {
     return std::unexpected(dynamic_weight.error());
@@ -837,6 +833,28 @@ std::expected<void, std::string> load_layer_weights(Layer& layer,
     layer.add_weight(std::move(*top_scale));
   }
   return {};
+}
+
+using WeightLoader = std::expected<void, std::string> (*)(Layer&, BinCursor&);
+
+struct WeightLoaderEntry {
+  std::string_view type;
+  WeightLoader loader;
+};
+
+std::expected<void, std::string> load_layer_weights(Layer& layer,
+                                                    BinCursor& cursor) {
+  static constexpr std::array kWeightLoaders{
+    WeightLoaderEntry{.type = "Convolution",
+                      .loader = load_convolution_weights},
+  };
+
+  const WeightLoaderEntry* const entry = std::ranges::find(
+    kWeightLoaders, layer.get_type(), &WeightLoaderEntry::type);
+  if (entry == kWeightLoaders.end()) {
+    return {};
+  }
+  return entry->loader(layer, cursor);
 }
 
 std::vector<std::string> split_ws(std::string_view text) {
