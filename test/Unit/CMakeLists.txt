@@ -6,6 +6,7 @@ add_executable(unit_tests
     load_squeezenet.cpp
     parser_test.cpp
     malformed_graph_test.cpp
+    layer_registry_test.cpp
     ncnn_importer_test.cpp
     load_squeezenet_typed.cpp
 )

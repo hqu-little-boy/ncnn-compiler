@@ -244,6 +244,14 @@ class ImportState {
     return finish(source);
   }
 
+  static bool has_importer(std::string_view layer_type) noexcept {
+    const auto entries = importers();
+    return std::ranges::find(entries, layer_type, &ImportEntry::type) !=
+           entries.end();
+  }
+
+  static std::size_t importer_count() noexcept { return importers().size(); }
+
  private:
   using ImportHandler =
     std::expected<void, ImportError> (ImportState::*)(const LayerContext&);
@@ -252,6 +260,21 @@ class ImportState {
     std::string_view type;
     ImportHandler handler;
   };
+
+  static std::span<const ImportEntry> importers() noexcept {
+    static constexpr std::array kImporters{
+      ImportEntry{.type = "Input", .handler = &ImportState::import_input},
+      ImportEntry{.type = "Convolution",
+                  .handler = &ImportState::import_convolution},
+      ImportEntry{.type = "ReLU", .handler = &ImportState::import_relu},
+      ImportEntry{.type = "Pooling", .handler = &ImportState::import_pooling},
+      ImportEntry{.type = "Split", .handler = &ImportState::import_split},
+      ImportEntry{.type = "Concat", .handler = &ImportState::import_concat},
+      ImportEntry{.type = "Dropout", .handler = &ImportState::import_dropout},
+      ImportEntry{.type = "Softmax", .handler = &ImportState::import_softmax},
+    };
+    return kImporters;
+  }
 
   std::expected<void, ImportError> prepare_model() {
     model_ = builder_.create<mlir::ncnn::ModelOp>(
@@ -298,22 +321,10 @@ class ImportState {
   }
 
   std::expected<void, ImportError> import_layer(const LayerContext& context) {
-    static constexpr std::array kImporters{
-      ImportEntry{.type = "Input", .handler = &ImportState::import_input},
-      ImportEntry{.type = "Convolution",
-                  .handler = &ImportState::import_convolution},
-      ImportEntry{.type = "ReLU", .handler = &ImportState::import_relu},
-      ImportEntry{.type = "Pooling", .handler = &ImportState::import_pooling},
-      ImportEntry{.type = "Split", .handler = &ImportState::import_split},
-      ImportEntry{.type = "Concat", .handler = &ImportState::import_concat},
-      ImportEntry{.type = "Dropout", .handler = &ImportState::import_dropout},
-      ImportEntry{.type = "Softmax", .handler = &ImportState::import_softmax},
-    };
-
     const auto type = context.layer.get_type();
-    const ImportEntry* const importer =
-      std::ranges::find(kImporters, type, &ImportEntry::type);
-    if (importer != kImporters.end()) {
+    const auto entries = importers();
+    const auto importer = std::ranges::find(entries, type, &ImportEntry::type);
+    if (importer != entries.end()) {
       return (this->*importer->handler)(context);
     }
     return std::unexpected(
@@ -886,6 +897,14 @@ class ImportState {
 };
 
 }  // namespace
+
+bool has_layer_importer(std::string_view layer_type) noexcept {
+  return ImportState::has_importer(layer_type);
+}
+
+std::size_t get_layer_importer_count() noexcept {
+  return ImportState::importer_count();
+}
 
 std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> import_graph(
   const ncnn_graph::Graph& graph, mlir::MLIRContext& context) {

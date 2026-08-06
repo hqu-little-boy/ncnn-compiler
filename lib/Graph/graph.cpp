@@ -925,16 +925,20 @@ struct WeightLoaderEntry {
   WeightLoader loader;
 };
 
-std::expected<void, std::string> load_layer_weights(Layer& layer,
-                                                    BinCursor& cursor) {
+std::span<const WeightLoaderEntry> weight_loaders() noexcept {
   static constexpr std::array kWeightLoaders{
     WeightLoaderEntry{.type = "Convolution",
                       .loader = load_convolution_weights},
   };
+  return kWeightLoaders;
+}
 
-  const WeightLoaderEntry* const entry = std::ranges::find(
-    kWeightLoaders, layer.get_type(), &WeightLoaderEntry::type);
-  if (entry == kWeightLoaders.end()) {
+std::expected<void, std::string> load_layer_weights(Layer& layer,
+                                                    BinCursor& cursor) {
+  const auto entries = weight_loaders();
+  const auto entry =
+    std::ranges::find(entries, layer.get_type(), &WeightLoaderEntry::type);
+  if (entry == entries.end()) {
     return {};
   }
   return entry->loader(layer, cursor);
@@ -977,6 +981,16 @@ std::string_view get_dtype_name(DataType dtype) {
 }
 
 }  // namespace
+
+bool has_weight_loader(std::string_view layer_type) noexcept {
+  const auto entries = weight_loaders();
+  return std::ranges::find(entries, layer_type, &WeightLoaderEntry::type) !=
+         entries.end();
+}
+
+std::size_t get_weight_loader_count() noexcept {
+  return weight_loaders().size();
+}
 
 std::expected<Graph, std::string> Graph::load(std::string_view param_path,
                                               std::string_view bin_path) {

@@ -97,6 +97,9 @@ struct ConvolutionParams {
 [[nodiscard]] std::expected<ConvolutionParams, std::string>
 decode_convolution_params(const ParamDict& params);
 
+bool has_weight_loader(std::string_view layer_type) noexcept;
+std::size_t get_weight_loader_count() noexcept;
+
 enum class DataType { Unknown, Float32, Float16, Int8 };
 
 class Tensor {
