@@ -245,6 +245,14 @@ class ImportState {
   }
 
  private:
+  using ImportHandler =
+    std::expected<void, ImportError> (ImportState::*)(const LayerContext&);
+
+  struct ImportEntry {
+    std::string_view type;
+    ImportHandler handler;
+  };
+
   std::expected<void, ImportError> prepare_model() {
     model_ = builder_.create<mlir::ncnn::ModelOp>(
       builder_.getUnknownLoc(), builder_.getStringAttr("model"));
@@ -290,30 +298,23 @@ class ImportState {
   }
 
   std::expected<void, ImportError> import_layer(const LayerContext& context) {
+    static constexpr std::array kImporters{
+      ImportEntry{.type = "Input", .handler = &ImportState::import_input},
+      ImportEntry{.type = "Convolution",
+                  .handler = &ImportState::import_convolution},
+      ImportEntry{.type = "ReLU", .handler = &ImportState::import_relu},
+      ImportEntry{.type = "Pooling", .handler = &ImportState::import_pooling},
+      ImportEntry{.type = "Split", .handler = &ImportState::import_split},
+      ImportEntry{.type = "Concat", .handler = &ImportState::import_concat},
+      ImportEntry{.type = "Dropout", .handler = &ImportState::import_dropout},
+      ImportEntry{.type = "Softmax", .handler = &ImportState::import_softmax},
+    };
+
     const auto type = context.layer.get_type();
-    if (type == "Input") {
-      return import_input(context);
-    }
-    if (type == "Convolution") {
-      return import_convolution(context);
-    }
-    if (type == "ReLU") {
-      return import_relu(context);
-    }
-    if (type == "Pooling") {
-      return import_pooling(context);
-    }
-    if (type == "Split") {
-      return import_split(context);
-    }
-    if (type == "Concat") {
-      return import_concat(context);
-    }
-    if (type == "Dropout") {
-      return import_dropout(context);
-    }
-    if (type == "Softmax") {
-      return import_softmax(context);
+    const ImportEntry* const importer =
+      std::ranges::find(kImporters, type, &ImportEntry::type);
+    if (importer != kImporters.end()) {
+      return (this->*importer->handler)(context);
     }
     return std::unexpected(
       make_error(context, std::format("unsupported layer type {}", type)));
