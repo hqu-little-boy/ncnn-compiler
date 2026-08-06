@@ -88,6 +88,8 @@ set(convolution_dilated_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_dil
 set(convolution_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_asymmetric.bin)
 set(convolution_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_upper.bin)
 set(convolution_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_lower.bin)
+set(convolution_depthwise_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise.bin)
+set(inner_product_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product.bin)
 file(WRITE ${empty_bin} "")
 foreach(convolution_case IN ITEMS
         convolution
@@ -100,6 +102,13 @@ foreach(convolution_case IN ITEMS
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
                 ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${convolution_case}.bin
                 ${convolution_case}
+        COMMAND_ERROR_IS_FATAL ANY)
+endforeach()
+foreach(weighted_case IN ITEMS convolution_depthwise inner_product)
+    execute_process(
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
+                ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${weighted_case}.bin
+                ${weighted_case}
         COMMAND_ERROR_IS_FATAL ANY)
 endforeach()
 ncnn_add_compiled_fixture(
@@ -127,9 +136,37 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_same_lower.param
     ${convolution_same_lower_bin})
 ncnn_add_compiled_fixture(
+    convolution_depthwise
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise.param
+    ${convolution_depthwise_bin})
+ncnn_add_compiled_fixture(
     relu_scalar
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/relu.param
     ${empty_bin})
+ncnn_add_compiled_fixture(
+    hard_sigmoid
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hard_sigmoid.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    hard_swish
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hard_swish.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    reshape
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reshape.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    binary_mul_scalar
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/binary_mul_scalar.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    binary_mul_channel
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/binary_mul_channel.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    inner_product
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/inner_product.param
+    ${inner_product_bin})
 ncnn_add_compiled_fixture(
     relu_leaky
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/relu_leaky.param
@@ -242,6 +279,13 @@ set(numerical_fixture_targets
     compile_convolution_asymmetric
     compile_convolution_same_upper
     compile_convolution_same_lower
+    compile_convolution_depthwise
+    compile_hard_sigmoid
+    compile_hard_swish
+    compile_reshape
+    compile_binary_mul_scalar
+    compile_binary_mul_channel
+    compile_inner_product
     compile_relu_scalar
     compile_relu_leaky
     compile_pooling_scalar
@@ -304,6 +348,15 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_ASYMMETRIC_BIN_PATH="${convolution_asymmetric_bin}"
     CONVOLUTION_SAME_UPPER_BIN_PATH="${convolution_same_upper_bin}"
     CONVOLUTION_SAME_LOWER_BIN_PATH="${convolution_same_lower_bin}"
+    CONVOLUTION_DEPTHWISE_BIN_PATH="${convolution_depthwise_bin}"
+    INNER_PRODUCT_BIN_PATH="${inner_product_bin}"
+    CONVOLUTION_DEPTHWISE_LIBRARY_PATH="${convolution_depthwise_LIBRARY}"
+    HARD_SIGMOID_LIBRARY_PATH="${hard_sigmoid_LIBRARY}"
+    HARD_SWISH_LIBRARY_PATH="${hard_swish_LIBRARY}"
+    RESHAPE_LIBRARY_PATH="${reshape_LIBRARY}"
+    BINARY_MUL_SCALAR_LIBRARY_PATH="${binary_mul_scalar_LIBRARY}"
+    BINARY_MUL_CHANNEL_LIBRARY_PATH="${binary_mul_channel_LIBRARY}"
+    INNER_PRODUCT_LIBRARY_PATH="${inner_product_LIBRARY}"
     CONVOLUTION_LIBRARY_PATH="${convolution_scalar_LIBRARY}"
     RELU_LIBRARY_PATH="${relu_scalar_LIBRARY}"
     RELU_LEAKY_LIBRARY_PATH="${relu_leaky_LIBRARY}"
@@ -342,7 +395,6 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
     PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
-add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 
 gtest_discover_tests(numerical_tests

@@ -1,0 +1,5 @@
+7767517
+3 3
+Input input 0 1 data 0=8 1=1 2=1
+Reshape flatten 1 1 data flat 0=8
+InnerProduct inner_product 1 1 flat output 0=3 1=1 2=24

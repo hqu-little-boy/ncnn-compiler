@@ -1,0 +1,4 @@
+7767517
+2 2
+Input input 0 1 data 0=2 1=2 2=2
+Reshape reshape 1 1 data output 0=1 1=1 2=-1

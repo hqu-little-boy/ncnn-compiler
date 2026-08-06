@@ -143,6 +143,93 @@ TEST(NumericalOperator, ConvolutionSameLowerMatchesNcnn) {
                                0x43534C4FU);
 }
 
+TEST(NumericalOperator, DepthwiseConvolutionMatchesNcnn) {
+  expect_single_input_operator("convolution_depthwise",
+                               CONVOLUTION_DEPTHWISE_LIBRARY_PATH,
+                               CONVOLUTION_DEPTHWISE_BIN_PATH,
+                               TensorShape(5, 5, 2),
+                               50,
+                               1.0e-5F,
+                               0x44574356U);
+}
+
+TEST(NumericalOperator, HardSigmoidMatchesNcnn) {
+  expect_single_input_operator("hard_sigmoid",
+                               HARD_SIGMOID_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(5, 4, 3),
+                               60,
+                               1.0e-6F,
+                               0x48534947U);
+}
+
+TEST(NumericalOperator, HardSwishMatchesNcnn) {
+  expect_single_input_operator("hard_swish",
+                               HARD_SWISH_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(5, 4, 3),
+                               60,
+                               1.0e-6F,
+                               0x48535749U);
+}
+
+TEST(NumericalOperator, ReshapeMatchesNcnn) {
+  expect_single_input_operator("reshape",
+                               RESHAPE_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(2, 2, 2),
+                               8,
+                               0.0F,
+                               0x52455348U);
+}
+
+TEST(NumericalOperator, BinaryMultiplyScalarMatchesNcnn) {
+  expect_single_input_operator("binary_mul_scalar",
+                               BINARY_MUL_SCALAR_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(5, 4, 3),
+                               60,
+                               0.0F,
+                               0x424D5343U);
+}
+
+TEST(NumericalOperator, BinaryMultiplyChannelBroadcastMatchesNcnn) {
+  const TensorShape first_shape(4, 3, 2);
+  const TensorShape second_shape(1, 1, 2);
+  const auto first_elements = first_shape.element_count();
+  const auto second_elements = second_shape.element_count();
+  ASSERT_TRUE(first_elements.has_value()) << first_elements.error();
+  ASSERT_TRUE(second_elements.has_value()) << second_elements.error();
+  const std::vector<float> first =
+    make_random_input(*first_elements, 0x424D4331U, -2.0F, 2.0F);
+  const std::vector<float> second =
+    make_random_input(*second_elements, 0x424D4332U, -2.0F, 2.0F);
+  const std::array<ReferenceInput, 2> inputs{
+    ReferenceInput("first", first_shape, first),
+    ReferenceInput("second", second_shape, second)};
+  constexpr std::array<std::string_view, 1> outputs{"output"};
+  const auto expected = run_ncnn_reference(fixture_path("binary_mul_channel"),
+                                           NUMERICAL_EMPTY_BIN_PATH,
+                                           inputs,
+                                           outputs);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  CompiledModel compiled(BINARY_MUL_CHANNEL_LIBRARY_PATH, "binary_mul_channel");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(*first_elements);
+  ASSERT_EQ(compiled.run_two_inputs(first, second, actual), 0);
+  EXPECT_TRUE(compare_values(actual, expected->front(), 0.0F));
+}
+
+TEST(NumericalOperator, InnerProductMatchesNcnn) {
+  expect_single_input_operator("inner_product",
+                               INNER_PRODUCT_LIBRARY_PATH,
+                               INNER_PRODUCT_BIN_PATH,
+                               TensorShape(8, 1, 1),
+                               3,
+                               1.0e-6F,
+                               0x49505054U);
+}
+
 TEST(NumericalOperator, ReluMatchesNcnn) {
   expect_single_input_operator("relu",
                                RELU_LIBRARY_PATH,
