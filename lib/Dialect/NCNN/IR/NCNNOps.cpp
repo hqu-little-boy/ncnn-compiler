@@ -206,6 +206,165 @@ FailureOr<RankedTensorType> computeConvResult(MLIRContext* context,
   return RankedTensorType::get(shape, resultElem);
 }
 
+FailureOr<RankedTensorType> computeDeconvResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  RankedTensorType weight,
+  ValueRange bias,
+  bool hasBias,
+  int64_t kernelH,
+  int64_t kernelW,
+  int64_t strideH,
+  int64_t strideW,
+  int64_t dilationH,
+  int64_t dilationW,
+  int64_t padTop,
+  int64_t padBottom,
+  int64_t padLeft,
+  int64_t padRight,
+  int64_t outputPadBottom,
+  int64_t outputPadRight) {
+  auto fail = [&](const Twine& message) -> FailureOr<RankedTensorType> {
+    return emitOptionalError(location, message);
+  };
+  if (!input || !weight || !input.getElementType().isF32() ||
+      !weight.getElementType().isF32() || !input.hasStaticShape() ||
+      !weight.hasStaticShape() || input.getRank() != 3 ||
+      weight.getRank() != 4) {
+    return fail(
+      "Deconvolution requires static FP32 input [I,H,W] and weight "
+      "[O,I,K_h,K_w]");
+  }
+  if (weight.getShape()[1] != input.getShape()[0] ||
+      weight.getShape()[2] != kernelH || weight.getShape()[3] != kernelW) {
+    return fail(
+      "Deconvolution input channels or kernel attributes do not "
+      "match weight");
+  }
+  for (int64_t dimension : input.getShape()) {
+    if (dimension <= 0) {
+      return fail("Deconvolution input dimensions must be positive");
+    }
+  }
+  if (kernelH <= 0 || kernelW <= 0 || strideH <= 0 || strideW <= 0 ||
+      dilationH <= 0 || dilationW <= 0 || padTop < 0 || padBottom < 0 ||
+      padLeft < 0 || padRight < 0 || outputPadBottom < 0 ||
+      outputPadRight < 0) {
+    return fail(
+      "Deconvolution kernel, stride, dilation, or padding is invalid");
+  }
+  if (hasBias) {
+    if (bias.size() != 1) {
+      return fail("Deconvolution bias is required");
+    }
+    auto type = dyn_cast<RankedTensorType>(bias.front().getType());
+    if (!type || !type.getElementType().isF32() || type.getRank() != 1 ||
+        type.getShape()[0] != weight.getShape()[0]) {
+      return fail("Deconvolution bias must be FP32 [O]");
+    }
+  } else if (!bias.empty()) {
+    return fail("Deconvolution has unexpected bias");
+  }
+  auto inferDimension = [&](int64_t inputSize,
+                            int64_t kernel,
+                            int64_t stride,
+                            int64_t dilation,
+                            int64_t padBefore,
+                            int64_t padAfter,
+                            int64_t outputPad) -> FailureOr<int64_t> {
+    auto result = checkedMultiply(inputSize - 1, stride);
+    auto extent = checkedMultiply(kernel - 1, dilation);
+    if (failed(result) || failed(extent)) {
+      return failure();
+    }
+    result = checkedAdd(*result, *extent);
+    if (succeeded(result)) {
+      result = checkedAdd(*result, 1);
+    }
+    if (succeeded(result)) {
+      result = checkedAdd(*result, outputPad);
+    }
+    if (succeeded(result)) {
+      result = checkedAdd(*result, -padBefore);
+    }
+    if (succeeded(result)) {
+      result = checkedAdd(*result, -padAfter);
+    }
+    if (failed(result) || *result <= 0) {
+      return failure();
+    }
+    return result;
+  };
+  auto outputH = inferDimension(input.getShape()[1],
+                                kernelH,
+                                strideH,
+                                dilationH,
+                                padTop,
+                                padBottom,
+                                outputPadBottom);
+  auto outputW = inferDimension(input.getShape()[2],
+                                kernelW,
+                                strideW,
+                                dilationW,
+                                padLeft,
+                                padRight,
+                                outputPadRight);
+  if (failed(outputH) || failed(outputW)) {
+    return fail("Deconvolution output dimension is invalid or overflows");
+  }
+  return RankedTensorType::get({weight.getShape()[0], *outputH, *outputW},
+                               input.getElementType());
+}
+
+FailureOr<RankedTensorType> computePaddingResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  int64_t top,
+  int64_t bottom,
+  int64_t left,
+  int64_t right) {
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
+      input.getRank() != 3) {
+    return emitOptionalError(location,
+                             "Padding input must be a static FP32 CHW tensor");
+  }
+  if (top < 0 || bottom < 0 || left < 0 || right < 0) {
+    return emitOptionalError(location, "Padding extents must be non-negative");
+  }
+  auto height = checkedAdd(input.getShape()[1], top);
+  auto width = checkedAdd(input.getShape()[2], left);
+  if (succeeded(height)) {
+    height = checkedAdd(*height, bottom);
+  }
+  if (succeeded(width)) {
+    width = checkedAdd(*width, right);
+  }
+  if (failed(height) || failed(width) || *height <= 0 || *width <= 0) {
+    return emitOptionalError(location, "Padding output dimension overflows");
+  }
+  return RankedTensorType::get({input.getShape()[0], *height, *width},
+                               input.getElementType());
+}
+
+FailureOr<RankedTensorType> computeInterpResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  int64_t heightScale,
+  int64_t widthScale) {
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
+      input.getRank() != 3 || heightScale <= 0 || widthScale <= 0) {
+    return emitOptionalError(
+      location, "Interp requires a static FP32 CHW input and positive scales");
+  }
+  auto height = checkedMultiply(input.getShape()[1], heightScale);
+  auto width = checkedMultiply(input.getShape()[2], widthScale);
+  if (failed(height) || failed(width)) {
+    return emitOptionalError(location, "Interp output dimension overflows");
+  }
+  return RankedTensorType::get({input.getShape()[0], *height, *width},
+                               input.getElementType());
+}
+
 // Pooling 单个空间维的输出尺寸（regular 模式）。
 FailureOr<int64_t> inferRegularDimension(int64_t input,
                                          int64_t kernel,
@@ -815,6 +974,84 @@ LogicalResult ConvolutionDepthWiseOp::inferReturnTypeComponents(
   }
   inferredReturnShapes.push_back(
     ShapedTypeComponents(result->getShape(), result->getElementType()));
+  return success();
+}
+
+LogicalResult DeconvolutionOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  DeconvolutionOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeDeconvResult(
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    dyn_cast<RankedTensorType>(adaptor.getWeight().getType()),
+    adaptor.getBias(),
+    adaptor.getHasBias(),
+    adaptor.getKernelH(),
+    adaptor.getKernelW(),
+    adaptor.getStrideH(),
+    adaptor.getStrideW(),
+    adaptor.getDilationH(),
+    adaptor.getDilationW(),
+    adaptor.getPadTop(),
+    adaptor.getPadBottom(),
+    adaptor.getPadLeft(),
+    adaptor.getPadRight(),
+    adaptor.getOutputPadBottom(),
+    adaptor.getOutputPadRight());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult PaddingOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  PaddingOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computePaddingResult(
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    adaptor.getTop(),
+    adaptor.getBottom(),
+    adaptor.getLeft(),
+    adaptor.getRight());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult InterpOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  InterpOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeInterpResult(
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    adaptor.getHeightScale(),
+    adaptor.getWidthScale());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult SigmoidOp::verify() {
+  auto input = dyn_cast<RankedTensorType>(getInput().getType());
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
+      input.getRank() != 3) {
+    return emitOpError("input must be a static FP32 CHW tensor");
+  }
   return success();
 }
 

@@ -97,6 +97,7 @@ set(inner_product_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product.bin)
 set(inner_product_fused_relu_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product_fused_relu.bin)
 set(batch_norm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/batch_norm.bin)
 set(gemm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/gemm.bin)
+set(deconvolution_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/deconvolution.bin)
 file(WRITE ${empty_bin} "")
 foreach(convolution_case IN ITEMS
         convolution
@@ -120,7 +121,8 @@ foreach(weighted_case IN ITEMS
         inner_product
         inner_product_fused_relu
         batch_norm
-        gemm)
+        gemm
+        deconvolution)
     execute_process(
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
                 ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${weighted_case}.bin
@@ -368,6 +370,22 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/split_three.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    padding
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/padding.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    interp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    deconvolution
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/deconvolution.param
+    ${deconvolution_bin})
+ncnn_add_compiled_fixture(
+    sigmoid
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     squeezenet_v1_1
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin)
@@ -391,6 +409,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin
     3x48x320)
+ncnn_add_compiled_fixture(
+    pp_ocrv6_tiny_det
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin
+    3x640x640)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -451,7 +474,11 @@ set(numerical_fixture_targets
     compile_softmax_width
     compile_softmax_negative_channel
     compile_softmax_negative_height
-    compile_softmax_negative_width)
+    compile_softmax_negative_width
+    compile_padding
+    compile_interp
+    compile_deconvolution
+    compile_sigmoid)
 list(LENGTH numerical_fixture_targets numerical_fixture_target_count)
 math(EXPR numerical_fixture_last_index "${numerical_fixture_target_count} - 1")
 foreach(index RANGE ${numerical_fixture_last_index})
@@ -462,7 +489,7 @@ foreach(index RANGE ${numerical_fixture_last_index})
         add_dependencies(${next_target} ${current_target})
     endif()
 endforeach()
-add_dependencies(compile_squeezenet_v1_1 compile_softmax_negative_width)
+add_dependencies(compile_squeezenet_v1_1 compile_sigmoid)
 add_dependencies(compile_pp_lcnet_x1_0_doc_ori compile_squeezenet_v1_1)
 add_dependencies(compile_pp_lcnet_x1_0_textline_ori
                   compile_pp_lcnet_x1_0_doc_ori)
@@ -470,6 +497,7 @@ add_dependencies(compile_chineseocr_lite_anglenet
                   compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(compile_pp_ocrv6_tiny_rec
                  compile_chineseocr_lite_anglenet)
+add_dependencies(compile_pp_ocrv6_tiny_det compile_pp_ocrv6_tiny_rec)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -504,6 +532,7 @@ target_compile_definitions(numerical_tests PRIVATE
     INNER_PRODUCT_FUSED_RELU_BIN_PATH="${inner_product_fused_relu_bin}"
     BATCH_NORM_BIN_PATH="${batch_norm_bin}"
     GEMM_BIN_PATH="${gemm_bin}"
+    DECONVOLUTION_BIN_PATH="${deconvolution_bin}"
     CONVOLUTION_DEPTHWISE_LIBRARY_PATH="${convolution_depthwise_LIBRARY}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_LIBRARY_PATH="${convolution_depthwise_asymmetric_LIBRARY}"
     CONVOLUTION_DEPTHWISE_SAME_UPPER_LIBRARY_PATH="${convolution_depthwise_same_upper_LIBRARY}"
@@ -564,6 +593,10 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_ASYMMETRIC_STRIDE_LIBRARY_PATH="${convolution_asymmetric_stride_LIBRARY}"
     CONVOLUTION_SAME_UPPER_LIBRARY_PATH="${convolution_same_upper_LIBRARY}"
     CONVOLUTION_SAME_LOWER_LIBRARY_PATH="${convolution_same_lower_LIBRARY}"
+    PADDING_LIBRARY_PATH="${padding_LIBRARY}"
+    INTERP_LIBRARY_PATH="${interp_LIBRARY}"
+    DECONVOLUTION_LIBRARY_PATH="${deconvolution_LIBRARY}"
+    SIGMOID_LIBRARY_PATH="${sigmoid_LIBRARY}"
     SQUEEZENET_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param"
     SQUEEZENET_BIN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin"
     SQUEEZENET_LIBRARY_PATH="${squeezenet_v1_1_LIBRARY}"
@@ -578,12 +611,16 @@ target_compile_definitions(numerical_tests PRIVATE
     CHINESEOCR_LITE_ANGLENET_LIBRARY_PATH="${chineseocr_lite_anglenet_LIBRARY}"
     PP_OCRV6_TINY_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param"
     PP_OCRV6_TINY_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin"
-    PP_OCRV6_TINY_REC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_LIBRARY}")
+    PP_OCRV6_TINY_REC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_LIBRARY}"
+    PP_OCRV6_TINY_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param"
+    PP_OCRV6_TINY_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin"
+    PP_OCRV6_TINY_DET_LIBRARY_PATH="${pp_ocrv6_tiny_det_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(numerical_tests compile_chineseocr_lite_anglenet)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_rec)
+add_dependencies(numerical_tests compile_pp_ocrv6_tiny_det)
 
 gtest_discover_tests(numerical_tests
     PROPERTIES LABELS "numerical;golden" TIMEOUT 900 RUN_SERIAL TRUE)

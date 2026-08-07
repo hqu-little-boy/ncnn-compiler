@@ -142,6 +142,14 @@ ImportResult import_convolution(ImportContext& importer,
                                 const LayerContext& context);
 ImportResult import_convolution_depthwise(ImportContext& importer,
                                           const LayerContext& context);
+ImportResult import_deconvolution(ImportContext& importer,
+                                  const LayerContext& context);
+ImportResult import_padding(ImportContext& importer,
+                            const LayerContext& context);
+ImportResult import_interp(ImportContext& importer,
+                           const LayerContext& context);
+ImportResult import_sigmoid(ImportContext& importer,
+                            const LayerContext& context);
 ImportResult import_hard_sigmoid(ImportContext& importer,
                                  const LayerContext& context);
 ImportResult import_hard_swish(ImportContext& importer,

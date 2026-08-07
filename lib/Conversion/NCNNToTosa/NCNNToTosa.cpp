@@ -657,6 +657,297 @@ class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
   }
 };
 
+class ConvertPadding final : public ConversionPattern {
+ public:
+  ConvertPadding(const TypeConverter& typeConverter, MLIRContext* context)
+    : ConversionPattern(typeConverter, "ncnn.padding", 1, context) {}
+
+  LogicalResult matchAndRewrite(
+    Operation* operation,
+    ArrayRef<Value> operands,
+    ConversionPatternRewriter& rewriter) const final {
+    if (operands.size() != 1 || operation->getNumResults() != 1 ||
+        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
+        !isStaticF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("supports one static CHW f32 tensor only");
+    }
+    auto sourceInput =
+      cast<RankedTensorType>(operation->getOperand(0).getType());
+    auto sourceOutput =
+      cast<RankedTensorType>(operation->getResult(0).getType());
+    if (sourceInput.getRank() != 3 || sourceOutput.getRank() != 3) {
+      return operation->emitOpError("requires CHW input and output");
+    }
+    SmallVector<int64_t> pad;
+    for (StringRef name : {"top", "bottom", "left", "right"}) {
+      FailureOr<int64_t> value = getRequiredIntegerAttr(operation, name);
+      if (failed(value)) {
+        return failure();
+      }
+      if (*value < 0) {
+        return operation->emitOpError("padding must be non-negative");
+      }
+      pad.push_back(*value);
+    }
+    if (sourceOutput.getShape()[0] != sourceInput.getShape()[0] ||
+        sourceOutput.getShape()[1] !=
+          sourceInput.getShape()[1] + pad[0] + pad[1] ||
+        sourceOutput.getShape()[2] !=
+          sourceInput.getShape()[2] + pad[2] + pad[3]) {
+      return operation->emitOpError("padding does not match result shape");
+    }
+    auto value = operation->getAttrOfType<FloatAttr>("value");
+    if (!value) {
+      return operation->emitOpError("requires 'value' float attribute");
+    }
+    auto inputType = cast<RankedTensorType>(operands.front().getType());
+    Value padding = createShape(rewriter,
+                                operation->getLoc(),
+                                {0, 0, pad[0], pad[1], pad[2], pad[3], 0, 0});
+    Value padValue =
+      createSplat(rewriter,
+                  operation->getLoc(),
+                  RankedTensorType::get({1}, inputType.getElementType()),
+                  value.getValueAsDouble());
+    rewriter.replaceOp(operation,
+                       rewriter.create<tosa::PadOp>(operation->getLoc(),
+                                                    getNHWCType(sourceOutput),
+                                                    operands.front(),
+                                                    padding,
+                                                    padValue));
+    return success();
+  }
+};
+
+class ConvertInterp final : public ConversionPattern {
+ public:
+  ConvertInterp(const TypeConverter& typeConverter, MLIRContext* context)
+    : ConversionPattern(typeConverter, "ncnn.interp", 1, context) {}
+
+  LogicalResult matchAndRewrite(
+    Operation* operation,
+    ArrayRef<Value> operands,
+    ConversionPatternRewriter& rewriter) const final {
+    if (operands.size() != 1 || operation->getNumResults() != 1 ||
+        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
+        !isStaticF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("supports one static CHW f32 tensor only");
+    }
+    auto sourceInput =
+      cast<RankedTensorType>(operation->getOperand(0).getType());
+    auto sourceOutput =
+      cast<RankedTensorType>(operation->getResult(0).getType());
+    if (sourceInput.getRank() != 3 || sourceOutput.getRank() != 3 ||
+        sourceInput.getShape()[0] != sourceOutput.getShape()[0]) {
+      return operation->emitOpError(
+        "requires CHW input/output with unchanged channels");
+    }
+    FailureOr<int64_t> scaleH =
+      getRequiredIntegerAttr(operation, "height_scale");
+    FailureOr<int64_t> scaleW =
+      getRequiredIntegerAttr(operation, "width_scale");
+    if (failed(scaleH) || failed(scaleW)) {
+      return failure();
+    }
+    if (*scaleH <= 0 || *scaleW <= 0) {
+      return operation->emitOpError("resize scales must be positive");
+    }
+    const int64_t inputH = sourceInput.getShape()[1];
+    const int64_t inputW = sourceInput.getShape()[2];
+    if (sourceOutput.getShape()[1] != inputH * *scaleH ||
+        sourceOutput.getShape()[2] != inputW * *scaleW) {
+      return operation->emitOpError(
+        "height_scale/width_scale do not match result shape");
+    }
+
+    // ncnn nearest uses floor(out / scale). TOSA nearest rounds to the closest
+    // sample, so shift by half a scale and extend the border to preserve floor.
+    Value scale =
+      createShape(rewriter, operation->getLoc(), {*scaleH, 1, *scaleW, 1});
+    Value offset = createShape(
+      rewriter, operation->getLoc(), {-(*scaleH / 2), -(*scaleW / 2)});
+    Value border =
+      createShape(rewriter,
+                  operation->getLoc(),
+                  {*scaleH - 1 - (*scaleH / 2), *scaleW - 1 - (*scaleW / 2)});
+    rewriter.replaceOp(
+      operation,
+      rewriter.create<tosa::ResizeOp>(operation->getLoc(),
+                                      getNHWCType(sourceOutput),
+                                      operands.front(),
+                                      scale,
+                                      offset,
+                                      border,
+                                      "NEAREST_NEIGHBOR"));
+    return success();
+  }
+};
+
+class ConvertDeconvolution final : public ConversionPattern {
+ public:
+  ConvertDeconvolution(const TypeConverter& typeConverter, MLIRContext* context)
+    : ConversionPattern(typeConverter, "ncnn.deconvolution", 1, context) {}
+
+  LogicalResult matchAndRewrite(
+    Operation* operation,
+    ArrayRef<Value> operands,
+    ConversionPatternRewriter& rewriter) const final {
+    if (operands.size() < 2 || operation->getNumResults() != 1 ||
+        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
+        !isStaticF32Tensor(operation->getOperand(1).getType()) ||
+        !isStaticF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError(
+        "supports static f32 input, weight, and result tensors only");
+    }
+    auto sourceInput =
+      cast<RankedTensorType>(operation->getOperand(0).getType());
+    auto weightType =
+      cast<RankedTensorType>(operation->getOperand(1).getType());
+    auto sourceOutput =
+      cast<RankedTensorType>(operation->getResult(0).getType());
+    if (sourceInput.getRank() != 3 || weightType.getRank() != 4 ||
+        sourceOutput.getRank() != 3 ||
+        weightType.getShape()[0] != sourceOutput.getShape()[0] ||
+        weightType.getShape()[1] != sourceInput.getShape()[0]) {
+      return operation->emitOpError(
+        "requires CHW input/output and ncnn [O,I,KH,KW] weights");
+    }
+    const int64_t kernelH = weightType.getShape()[2];
+    const int64_t kernelW = weightType.getShape()[3];
+    if (getIntegerAttrOr(operation, "kernel_h", kernelH) != kernelH ||
+        getIntegerAttrOr(operation, "kernel_w", kernelW) != kernelW) {
+      return operation->emitOpError(
+        "kernel_h/kernel_w do not match the weight shape");
+    }
+    if (getIntegerAttrOr(operation, "dilation_h", 1) != 1 ||
+        getIntegerAttrOr(operation, "dilation_w", 1) != 1) {
+      return operation->emitOpError(
+        "TOSA transpose_conv2d does not support dilation");
+    }
+    FailureOr<int64_t> strideH = getRequiredIntegerAttr(operation, "stride_h");
+    FailureOr<int64_t> strideW = getRequiredIntegerAttr(operation, "stride_w");
+    if (failed(strideH) || failed(strideW) || *strideH <= 0 || *strideW <= 0) {
+      return operation->emitOpError("stride must be positive");
+    }
+    SmallVector<int64_t> crop;
+    for (StringRef name : {"pad_top", "pad_bottom", "pad_left", "pad_right"}) {
+      FailureOr<int64_t> value = getRequiredIntegerAttr(operation, name);
+      if (failed(value)) {
+        return failure();
+      }
+      if (*value < 0) {
+        return operation->emitOpError("padding must be non-negative");
+      }
+      crop.push_back(*value);
+    }
+    const int64_t outputPadH =
+      getIntegerAttrOr(operation, "output_pad_bottom", 0);
+    const int64_t outputPadW =
+      getIntegerAttrOr(operation, "output_pad_right", 0);
+    if (outputPadH < 0 || outputPadW < 0) {
+      return operation->emitOpError("output padding must be non-negative");
+    }
+    SmallVector<int64_t> outPad{
+      -crop[0], outputPadH - crop[1], -crop[2], outputPadW - crop[3]};
+    const int64_t expectedH = ((sourceInput.getShape()[1] - 1) * *strideH) +
+                              kernelH + outPad[0] + outPad[1];
+    const int64_t expectedW = ((sourceInput.getShape()[2] - 1) * *strideW) +
+                              kernelW + outPad[2] + outPad[3];
+    if (expectedH != sourceOutput.getShape()[1] ||
+        expectedW != sourceOutput.getShape()[2]) {
+      return operation->emitOpError(
+        "stride, padding, and output padding do not match result shape");
+    }
+
+    const bool hasBias = getIntegerAttrOr(operation, "has_bias", 0) != 0;
+    if ((hasBias && operands.size() != 3) ||
+        (!hasBias && operands.size() != 2)) {
+      return operation->emitOpError("operand count does not match has_bias");
+    }
+    Value bias;
+    if (hasBias) {
+      auto biasType = dyn_cast<RankedTensorType>(operands[2].getType());
+      if (!biasType || !biasType.getElementType().isF32() ||
+          biasType.getRank() != 1 ||
+          biasType.getShape()[0] != sourceOutput.getShape()[0]) {
+        return operation->emitOpError("requires [O] f32 bias");
+      }
+      bias = operands[2];
+    } else {
+      bias = createSplat(rewriter,
+                         operation->getLoc(),
+                         RankedTensorType::get({sourceOutput.getShape()[0]},
+                                               sourceOutput.getElementType()),
+                         0.0);
+    }
+    auto ohwiType = getOHWIType(weightType);
+    Value weight =
+      rewriter.create<tosa::TransposeOp>(operation->getLoc(),
+                                         ohwiType,
+                                         operands[1],
+                                         ArrayRef<int32_t>{0, 2, 3, 1});
+    Value inputZero =
+      createSplat(rewriter,
+                  operation->getLoc(),
+                  RankedTensorType::get({1}, sourceInput.getElementType()),
+                  0.0);
+    Value weightZero =
+      createSplat(rewriter,
+                  operation->getLoc(),
+                  RankedTensorType::get({1}, weightType.getElementType()),
+                  0.0);
+    auto outputType = getNHWCType(sourceOutput);
+    Value result = rewriter.create<tosa::TransposeConv2DOp>(
+      operation->getLoc(),
+      outputType,
+      operands[0],
+      weight,
+      bias,
+      inputZero,
+      weightZero,
+      outPad,
+      ArrayRef<int64_t>{*strideH, *strideW},
+      rewriter.getF32Type());
+    const int64_t activationType =
+      getIntegerAttrOr(operation, "activation_type", 0);
+    if (activationType == 1) {
+      result = rewriter.create<tosa::ClampOp>(
+        operation->getLoc(),
+        outputType,
+        result,
+        rewriter.getF32FloatAttr(0.0),
+        rewriter.getF32FloatAttr(std::numeric_limits<float>::infinity()));
+    } else if (activationType != 0) {
+      return operation->emitOpError(
+        "only no activation and ReLU activation_type=1 are supported");
+    }
+    rewriter.replaceOp(operation, result);
+    return success();
+  }
+};
+
+class ConvertSigmoid final : public ConversionPattern {
+ public:
+  ConvertSigmoid(const TypeConverter& typeConverter, MLIRContext* context)
+    : ConversionPattern(typeConverter, "ncnn.sigmoid", 1, context) {}
+
+  LogicalResult matchAndRewrite(
+    Operation* operation,
+    ArrayRef<Value> operands,
+    ConversionPatternRewriter& rewriter) const final {
+    if (operands.size() != 1 || operation->getNumResults() != 1 ||
+        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
+        !isStaticF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("supports one static f32 tensor only");
+    }
+    auto type = cast<RankedTensorType>(operands.front().getType());
+    rewriter.replaceOp(operation,
+                       rewriter.create<tosa::SigmoidOp>(
+                         operation->getLoc(), type, operands.front()));
+    return success();
+  }
+};
+
 class ConvertHardActivation final : public ConversionPattern {
  public:
   ConvertHardActivation(const TypeConverter& typeConverter,
@@ -1534,6 +1825,9 @@ class ConvertNCNNToTosaPass final
     patterns.add<ConvertBinary>(typeConverter, context, "ncnn.binary");
     patterns.add<ConvertInnerProduct>(
       typeConverter, context, "ncnn.inner_product");
+    patterns
+      .add<ConvertPadding, ConvertInterp, ConvertDeconvolution, ConvertSigmoid>(
+        typeConverter, context);
 
     ConversionTarget target(*context);
     target.addLegalDialect<arith::ArithDialect,
@@ -1570,7 +1864,11 @@ class ConvertNCNNToTosaPass final
                            "ncnn.squeeze",
                            "ncnn.expand_dims",
                            "ncnn.binary",
-                           "ncnn.inner_product"}) {
+                           "ncnn.inner_product",
+                           "ncnn.padding",
+                           "ncnn.interp",
+                           "ncnn.deconvolution",
+                           "ncnn.sigmoid"}) {
       target.addIllegalOp(OperationName(name, context));
     }
 

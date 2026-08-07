@@ -115,6 +115,31 @@ struct ConvolutionDepthWiseParams {
   std::size_t expected_weight_tensors() const noexcept;
 };
 
+struct DeconvolutionParams {
+  std::int64_t output_channels = 0;
+  std::int64_t kernel_w = 0;
+  std::int64_t kernel_h = 0;
+  std::int64_t dilation_w = 1;
+  std::int64_t dilation_h = 1;
+  std::int64_t stride_w = 1;
+  std::int64_t stride_h = 1;
+  std::int64_t pad_left = 0;
+  std::int64_t pad_right = 0;
+  std::int64_t pad_top = 0;
+  std::int64_t pad_bottom = 0;
+  std::int64_t output_pad_right = 0;
+  std::int64_t output_pad_bottom = 0;
+  std::int64_t output_w = 0;
+  std::int64_t output_h = 0;
+  bool has_bias = false;
+  std::int64_t weight_count = 0;
+  std::int64_t activation_type = 0;
+  bool has_activation_params = false;
+  bool dynamic_weight = false;
+
+  std::size_t expected_weight_tensors() const noexcept;
+};
+
 struct InnerProductParams {
   std::int64_t output_channels = 0;
   bool has_bias = false;
@@ -153,6 +178,9 @@ decode_convolution_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<ConvolutionDepthWiseParams, std::string>
 decode_convolution_depthwise_params(const ParamDict& params);
+
+[[nodiscard]] std::expected<DeconvolutionParams, std::string>
+decode_deconvolution_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<InnerProductParams, std::string>
 decode_inner_product_params(const ParamDict& params);

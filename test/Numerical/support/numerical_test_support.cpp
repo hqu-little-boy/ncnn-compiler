@@ -45,6 +45,10 @@ DEFINE_NAIVE_CREATOR(BatchNorm)
 DEFINE_NAIVE_CREATOR(ExpandDims)
 DEFINE_NAIVE_CREATOR(Permute)
 DEFINE_NAIVE_CREATOR(Gemm)
+DEFINE_NAIVE_CREATOR(Padding)
+DEFINE_NAIVE_CREATOR(Interp)
+DEFINE_NAIVE_CREATOR(Deconvolution)
+DEFINE_NAIVE_CREATOR(Sigmoid)
 
 #undef DEFINE_NAIVE_CREATOR
 
@@ -81,7 +85,12 @@ bool register_naive_layers(ncnn::Net& network) {
          network.register_custom_layer("ExpandDims", create_naive_ExpandDims) ==
            0 &&
          network.register_custom_layer("Permute", create_naive_Permute) == 0 &&
-         network.register_custom_layer("Gemm", create_naive_Gemm) == 0;
+         network.register_custom_layer("Gemm", create_naive_Gemm) == 0 &&
+         network.register_custom_layer("Padding", create_naive_Padding) == 0 &&
+         network.register_custom_layer("Interp", create_naive_Interp) == 0 &&
+         network.register_custom_layer("Deconvolution",
+                                       create_naive_Deconvolution) == 0 &&
+         network.register_custom_layer("Sigmoid", create_naive_Sigmoid) == 0;
 }
 
 std::vector<std::size_t> top_indices(std::span<const float> values,

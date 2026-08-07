@@ -34,4 +34,5 @@ TEST(LayerRegistryTest, DescriptorsMatchRuntimeRegistries) {
   EXPECT_TRUE(ncnn_graph::has_weight_loader("InnerProduct"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("BatchNorm"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("Gemm"));
+  EXPECT_TRUE(ncnn_graph::has_weight_loader("Deconvolution"));
 }

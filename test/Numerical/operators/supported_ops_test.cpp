@@ -1,5 +1,6 @@
 #include "numerical_test_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <format>
@@ -124,6 +125,80 @@ TEST(NumericalOperator, ConvolutionMatchesNcnn) {
                                32,
                                1.0e-5F,
                                0x434F4E56U);
+}
+
+TEST(NumericalOperator, PaddingAsymmetricNegativeMaxMatchesNcnn) {
+  expect_single_input_operator("padding",
+                               PADDING_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(3, 2, 2),
+                               24,
+                               0.0F,
+                               0x50414444U);
+}
+
+TEST(NumericalOperator, InterpNearestTwofoldMatchesNcnn) {
+  expect_single_input_operator("interp",
+                               INTERP_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(3, 2, 2),
+                               48,
+                               0.0F,
+                               0x494E5450U);
+}
+
+TEST(NumericalOperator, DeconvolutionLayoutAndFusedReluMatchNcnn) {
+  const TensorShape shape(3, 2, 2);
+  const auto elements = shape.element_count();
+  ASSERT_TRUE(elements.has_value()) << elements.error();
+  std::vector<float> input(*elements);
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    input[index] =
+      static_cast<float>(index + 1) * (index % 2 == 0 ? 0.25F : -0.20F);
+  }
+  const ReferenceModel reference(fixture_path("deconvolution"),
+                                 DECONVOLUTION_BIN_PATH,
+                                 "data",
+                                 "output",
+                                 shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), 48U);
+
+  CompiledModel compiled(DECONVOLUTION_LIBRARY_PATH, "deconvolution");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(expected->size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
+  EXPECT_TRUE(std::all_of(
+    actual.begin(), actual.end(), [](float value) { return value >= 0.0F; }));
+  EXPECT_TRUE(std::any_of(
+    actual.begin(), actual.end(), [](float value) { return value == 0.0F; }));
+  EXPECT_TRUE(std::any_of(
+    actual.begin(), actual.end(), [](float value) { return value > 0.0F; }));
+}
+
+TEST(NumericalOperator, SigmoidMatchesNcnnAndProducesProbabilities) {
+  const TensorShape shape(5, 2, 2);
+  constexpr std::array<float, 20> input{
+    -20.0F, -10.0F, -6.0F, -3.0F, -1.0F, -0.5F, -0.1F, 0.0F,  0.1F,  0.5F,
+    1.0F,   2.0F,   3.0F,  4.0F,  5.0F,  6.0F,  8.0F,  10.0F, 15.0F, 20.0F};
+  const ReferenceModel reference(
+    fixture_path("sigmoid"), NUMERICAL_EMPTY_BIN_PATH, "data", "output", shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel compiled(SIGMOID_LIBRARY_PATH, "sigmoid");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(input.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
+  EXPECT_TRUE(std::all_of(actual.begin(), actual.end(), [](float value) {
+    return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+  }));
+  EXPECT_NEAR(actual[7], 0.5F, 1.0e-7F);
+  EXPECT_LT(actual.front(), 1.0e-8F);
+  EXPECT_GT(actual.back(), 1.0F - 1.0e-7F);
 }
 
 TEST(NumericalOperator, ConvolutionWithoutBiasMatchesNcnn) {

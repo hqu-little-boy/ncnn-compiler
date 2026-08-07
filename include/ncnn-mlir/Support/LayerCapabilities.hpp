@@ -42,6 +42,15 @@ inline constexpr std::array kLayerDescriptors{
                   .capabilities = LayerCapability::HasWeights |
                                   LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},
+  LayerDescriptor{
+    .source_type = "Deconvolution",
+    .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "Padding",
+                  .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "Interp",
+                  .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "Sigmoid",
+                  .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "ReLU",
                   .capabilities = LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},

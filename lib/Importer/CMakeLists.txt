@@ -2,6 +2,7 @@
 add_library(NCNNImporter STATIC
     ImportActivation.cpp
     ImportConvolution.cpp
+    ImportDetection.cpp
     ImportOps.cpp
     ImportInput.cpp
     ImportPooling.cpp

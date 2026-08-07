@@ -20,6 +20,7 @@ sizes = {
     "convolution_depthwise_same_lower": (18, 0),
     "inner_product": (24, 3),
     "inner_product_fused_relu": (24, 4),
+    "deconvolution": (16, 2),
 }
 if case == "batch_norm":
     slope = [0.0001, -0.75, 0.5]
@@ -39,7 +40,17 @@ if case not in sizes:
     output.write_bytes(b"")
     raise SystemExit(0)
 kernel_count, bias_count = sizes[case]
-if case.startswith("convolution_depthwise") or case.startswith("inner_product"):
+if case == "deconvolution":
+    # ncnn stores deconvolution weights as [output][input][kh][kw]. Distinct
+    # values make an accidental input/output transpose visible in the golden.
+    weights = [
+        0.10, 0.20, 0.30, 0.40,
+        -0.50, -0.60, -0.70, -0.80,
+        -0.15, 0.25, -0.35, 0.45,
+        0.55, -0.65, 0.75, -0.85,
+    ]
+    bias = [-0.05, 0.10]
+elif case.startswith("convolution_depthwise") or case.startswith("inner_product"):
     rng = random.Random(0x4E434E4E if case.startswith("convolution_depthwise") else 0x49505052)
     weights = [rng.uniform(-0.25, 0.25) for _ in range(kernel_count)]
     bias = [rng.uniform(-0.1, 0.1) for _ in range(bias_count)]

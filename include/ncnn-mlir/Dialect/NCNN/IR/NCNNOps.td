@@ -140,6 +140,57 @@ def NCNN_ConvolutionDepthWiseOp
   let results = (outs NCNN_RankedTensor:$output);
 }
 
+def NCNN_DeconvolutionOp
+  : NCNN_LayerOp<"deconvolution", [InferTensorTypeAdaptor]> {
+  let summary = "Static FP32 ncnn transposed convolution.";
+  let description =
+    [{
+    Operands use ncnn's static model layout: input `[I,H,W]`, weight
+    `[O,I,K_h,K_w]`, and optional bias `[O]`. The result is `[O,H_out,W_out]`.
+  }];
+  let arguments = (ins NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$weight,
+    Variadic<NCNN_RankedTensor>:$bias,
+    I64Attr:$kernel_h,
+    I64Attr:$kernel_w,
+    I64Attr:$stride_h,
+    I64Attr:$stride_w,
+    I64Attr:$dilation_h,
+    I64Attr:$dilation_w,
+    I64Attr:$pad_top,
+    I64Attr:$pad_bottom,
+    I64Attr:$pad_left,
+    I64Attr:$pad_right,
+    I64Attr:$output_pad_bottom,
+    I64Attr:$output_pad_right,
+    BoolAttr:$has_bias);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_PaddingOp : NCNN_LayerOp<"padding", [InferTensorTypeAdaptor]> {
+  let summary = "Constant spatial padding of a CHW tensor.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    I64Attr:$top,
+    I64Attr:$bottom,
+    I64Attr:$left,
+    I64Attr:$right,
+    F32Attr:$value);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_InterpOp : NCNN_LayerOp<"interp", [InferTensorTypeAdaptor]> {
+  let summary = "Nearest-neighbor integer-factor resize of a CHW tensor.";
+  let arguments =
+    (ins NCNN_RankedTensor:$input, I64Attr:$height_scale, I64Attr:$width_scale);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_SigmoidOp : NCNN_LayerOp<"sigmoid", [SameOperandsAndResultType]> {
+  let arguments = (ins NCNN_RankedTensor:$input);
+  let results = (outs NCNN_RankedTensor:$output);
+  let hasVerifier = 1;
+}
+
 def NCNN_HardSigmoidOp
   : NCNN_LayerOp<"hard_sigmoid", [SameOperandsAndResultType]> {
   let arguments = (ins NCNN_RankedTensor:$input, F32Attr:$alpha, F32Attr:$beta);
@@ -157,8 +208,7 @@ def NCNN_GELUOp : NCNN_LayerOp<"gelu", [SameOperandsAndResultType]> {
   let results = (outs NCNN_RankedTensor:$output);
 }
 
-def NCNN_BatchNormOp
-  : NCNN_LayerOp<"batch_norm", [InferTensorTypeAdaptor]> {
+def NCNN_BatchNormOp : NCNN_LayerOp<"batch_norm", [InferTensorTypeAdaptor]> {
   let arguments = (ins NCNN_RankedTensor:$input,
     NCNN_RankedTensor:$slope,
     NCNN_RankedTensor:$mean,
@@ -178,8 +228,7 @@ def NCNN_SqueezeOp : NCNN_LayerOp<"squeeze", [InferTensorTypeAdaptor]> {
   let results = (outs NCNN_RankedTensor:$output);
 }
 
-def NCNN_ExpandDimsOp
-  : NCNN_LayerOp<"expand_dims", [InferTensorTypeAdaptor]> {
+def NCNN_ExpandDimsOp : NCNN_LayerOp<"expand_dims", [InferTensorTypeAdaptor]> {
   let arguments = (ins NCNN_RankedTensor:$input, DenseI64ArrayAttr:$axes);
   let results = (outs NCNN_RankedTensor:$output);
 }

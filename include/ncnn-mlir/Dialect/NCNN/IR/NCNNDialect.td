@@ -14,11 +14,13 @@ def NCNN_Dialect : Dialect {
   let name = "ncnn";
   let cppNamespace = "::mlir::ncnn";
   let summary = "High-level dialect mirroring ncnn layers.";
-  let description = [{
+  let description =
+    [{
     The `ncnn` dialect represents ncnn network layers as a typed SSA graph.
     Feature tensors use the ncnn-native `[C, H, W]` dimension order (the
     conversion to NHWC happens later, at the ncnn -> tosa boundary). Convolution
-    weights are `[O, I, H, W]`; biases and other 1-D constants are `[N]`.
+    convolution and static deconvolution weights are `[O, I, H, W]`; biases
+    and other 1-D constants are `[N]`.
   }];
 }
 

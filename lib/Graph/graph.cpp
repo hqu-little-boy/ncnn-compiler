@@ -396,6 +396,88 @@ decode_convolution_depthwise_params(const ParamDict& params) {
   return result;
 }
 
+std::size_t DeconvolutionParams::expected_weight_tensors() const noexcept {
+  return dynamic_weight ? 0 : 1 + static_cast<std::size_t>(has_bias);
+}
+
+std::expected<DeconvolutionParams, std::string> decode_deconvolution_params(
+  const ParamDict& params) {
+  DeconvolutionParams result;
+  auto outputChannels = decode_int_param(params, 0, 0, "num_output");
+  auto kernelW = decode_int_param(params, 1, 0, "kernel_w");
+  if (!outputChannels || !kernelW) {
+    return std::unexpected(!outputChannels ? outputChannels.error()
+                                           : kernelW.error());
+  }
+  auto kernelH = decode_int_param(params, 11, *kernelW, "kernel_h");
+  auto dilationW = decode_int_param(params, 2, 1, "dilation_w");
+  auto dilationH = decode_int_param(params, 12, *dilationW, "dilation_h");
+  auto strideW = decode_int_param(params, 3, 1, "stride_w");
+  auto strideH = decode_int_param(params, 13, *strideW, "stride_h");
+  auto padLeft = decode_int_param(params, 4, 0, "pad_left");
+  auto padRight = decode_int_param(params, 15, *padLeft, "pad_right");
+  auto padTop = decode_int_param(params, 14, *padLeft, "pad_top");
+  auto padBottom = decode_int_param(params, 16, *padTop, "pad_bottom");
+  auto outputPadRight = decode_int_param(params, 18, 0, "output_pad_right");
+  auto outputPadBottom =
+    decode_int_param(params, 19, *outputPadRight, "output_pad_bottom");
+  auto outputW = decode_int_param(params, 20, 0, "output_w");
+  auto outputH = decode_int_param(params, 21, *outputW, "output_h");
+  auto biasTerm = decode_int_param(params, 5, 0, "bias_term");
+  auto weightCount = decode_int_param(params, 6, 0, "weight_data_size");
+  auto activationType = decode_int_param(params, 9, 0, "activation_type");
+  auto dynamicWeight = decode_int_param(params, 28, 0, "dynamic_weight");
+  if (!kernelH || !dilationW || !dilationH || !strideW || !strideH ||
+      !padLeft || !padRight || !padTop || !padBottom || !outputPadRight ||
+      !outputPadBottom || !outputW || !outputH || !biasTerm || !weightCount ||
+      !activationType || !dynamicWeight) {
+    return std::unexpected("invalid deconvolution parameter type");
+  }
+  if (*dynamicWeight != 0 && *dynamicWeight != 1) {
+    return std::unexpected("deconvolution dynamic_weight must be 0 or 1");
+  }
+  result.dynamic_weight = *dynamicWeight == 1;
+  if (result.dynamic_weight) {
+    return result;
+  }
+  if (*outputChannels <= 0 || *kernelW <= 0 || *kernelH <= 0 ||
+      *dilationW <= 0 || *dilationH <= 0 || *strideW <= 0 || *strideH <= 0 ||
+      *weightCount <= 0) {
+    return std::unexpected(
+      "deconvolution channels, kernel, stride, dilation, and weight count "
+      "must be positive");
+  }
+  if (*padLeft < 0 || *padRight < 0 || *padTop < 0 || *padBottom < 0 ||
+      *outputPadRight < 0 || *outputPadBottom < 0 || *outputW < 0 ||
+      *outputH < 0) {
+    return std::unexpected(
+      "deconvolution padding and output dimensions must be non-negative");
+  }
+  if (*biasTerm != 0 && *biasTerm != 1) {
+    return std::unexpected("deconvolution bias_term must be 0 or 1");
+  }
+  result.output_channels = *outputChannels;
+  result.kernel_w = *kernelW;
+  result.kernel_h = *kernelH;
+  result.dilation_w = *dilationW;
+  result.dilation_h = *dilationH;
+  result.stride_w = *strideW;
+  result.stride_h = *strideH;
+  result.pad_left = *padLeft;
+  result.pad_right = *padRight;
+  result.pad_top = *padTop;
+  result.pad_bottom = *padBottom;
+  result.output_pad_right = *outputPadRight;
+  result.output_pad_bottom = *outputPadBottom;
+  result.output_w = *outputW;
+  result.output_h = *outputH;
+  result.has_bias = *biasTerm == 1;
+  result.weight_count = *weightCount;
+  result.activation_type = *activationType;
+  result.has_activation_params = params.has(10);
+  return result;
+}
+
 std::size_t InnerProductParams::expected_weight_tensors() const noexcept {
   return 1 + static_cast<std::size_t>(has_bias) +
          (int8_scale_term == 0 ? 0 : 2);
@@ -1209,6 +1291,71 @@ std::expected<void, std::string> load_convolution_depthwise_weights(
   return {};
 }
 
+std::expected<void, std::string> load_deconvolution_weights(Layer& layer,
+                                                            BinCursor& cursor) {
+  auto decoded = decode_deconvolution_params(layer.get_params());
+  if (!decoded) {
+    return std::unexpected(decoded.error());
+  }
+  const auto& params = *decoded;
+  if (params.dynamic_weight) {
+    return {};
+  }
+  auto outputChannels =
+    positive_size(params.output_channels, "deconvolution num_output");
+  auto kernelH = positive_size(params.kernel_h, "deconvolution kernel height");
+  auto kernelW = positive_size(params.kernel_w, "deconvolution kernel width");
+  auto weightCount =
+    positive_size(params.weight_count, "deconvolution weight count");
+  if (!outputChannels || !kernelH || !kernelW || !weightCount) {
+    return std::unexpected(!outputChannels ? outputChannels.error()
+                           : !kernelH      ? kernelH.error()
+                           : !kernelW      ? kernelW.error()
+                                           : weightCount.error());
+  }
+  auto outputKernel = checked_multiply(
+    *outputChannels, *kernelH, "deconvolution output/kernel size");
+  if (outputKernel) {
+    outputKernel = checked_multiply(
+      *outputKernel, *kernelW, "deconvolution output/kernel size");
+  }
+  if (!outputKernel) {
+    return std::unexpected(outputKernel.error());
+  }
+  if (*weightCount % *outputKernel != 0) {
+    return std::unexpected(
+      "deconvolution weight count is not divisible by output/kernel size");
+  }
+  const std::size_t inputChannels = *weightCount / *outputKernel;
+  if (inputChannels == 0 ||
+      inputChannels >
+        static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    return std::unexpected("deconvolution input channel count is invalid");
+  }
+  auto weight = load_weight(cursor,
+                            params.weight_count,
+                            0,
+                            {params.output_channels,
+                             static_cast<std::int64_t>(inputChannels),
+                             params.kernel_h,
+                             params.kernel_w});
+  if (!weight) {
+    return std::unexpected(
+      std::format("deconvolution weight: {}", weight.error()));
+  }
+  layer.add_weight(std::move(*weight));
+  if (params.has_bias) {
+    auto bias =
+      load_weight(cursor, params.output_channels, 1, {params.output_channels});
+    if (!bias) {
+      return std::unexpected(
+        std::format("deconvolution bias: {}", bias.error()));
+    }
+    layer.add_weight(std::move(*bias));
+  }
+  return {};
+}
+
 std::expected<void, std::string> load_inner_product_weights(Layer& layer,
                                                             BinCursor& cursor) {
   auto decoded = decode_inner_product_params(layer.get_params());
@@ -1326,6 +1473,8 @@ std::span<const WeightLoaderEntry> weight_loaders() noexcept {
                       .loader = load_convolution_weights},
     WeightLoaderEntry{.type = "ConvolutionDepthWise",
                       .loader = load_convolution_depthwise_weights},
+    WeightLoaderEntry{.type = "Deconvolution",
+                      .loader = load_deconvolution_weights},
     WeightLoaderEntry{.type = "InnerProduct",
                       .loader = load_inner_product_weights},
     WeightLoaderEntry{.type = "BatchNorm", .loader = load_batch_norm_weights},

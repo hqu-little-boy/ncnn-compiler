@@ -1,5 +1,7 @@
 #include "numerical_test_support.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <numeric>
 #include <vector>
 
@@ -121,6 +123,36 @@ TEST(NumericalModel, PPOCRv6TinyRecMatchesNcnn) {
     EXPECT_TRUE(check_softmax(actualRow, expectedRow, 2.0e-5))
       << "row " << index;
   }
+}
+
+TEST(NumericalModel, PPOCRv6TinyDetMatchesNcnn) {
+  const TensorShape inputShape(640, 640, 3);
+  constexpr std::size_t kOutputElements = 640 * 640;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x44455436U, -0.01F, 0.01F);
+  const ReferenceModel reference(PP_OCRV6_TINY_DET_PARAM_PATH,
+                                 PP_OCRV6_TINY_DET_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 inputShape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), kOutputElements);
+
+  CompiledModel compiled(PP_OCRV6_TINY_DET_LIBRARY_PATH, "pp_ocrv6_tiny_det");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kOutputElements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F));
+  EXPECT_TRUE(std::all_of(actual.begin(), actual.end(), [](float value) {
+    return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+  }));
+
+  std::vector<float> repeated(kOutputElements);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
 }
 
 }  // namespace
