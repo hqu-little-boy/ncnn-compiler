@@ -13,7 +13,8 @@
 ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型（`.param` + `.bin`）
 编译为具有稳定 C ABI 的 Linux 共享库（`.so`）。技术栈为 LLVM/MLIR 21、C++23，当前以
 **SqueezeNet v1.1** 以及静态 FP32 的 `PP-LCNet_x1_0_doc_ori`、
-`PP-LCNet_x1_0_textline_ori`、`Chineseocr_Lite_AngleNet` 作为端到端验证目标。
+`PP-LCNet_x1_0_textline_ori`、`Chineseocr_Lite_AngleNet`、
+`PP-OCRv6_tiny_rec` 作为端到端验证目标。
 
 ---
 
@@ -43,11 +44,17 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | `HardSigmoid` | `ncnn.hard_sigmoid` | alpha, beta | 静态 FP32 |
 | `HardSwish` | `ncnn.hard_swish` | alpha, beta | 静态 FP32 |
 | `Reshape` | `ncnn.reshape` | static shape | 支持静态 shape、单个 `-1` 和 `0` 复制对应输入维度 |
-| `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 仅乘法；支持标量和同 rank 双向广播 |
-| `InnerProduct` | `ncnn.inner_product` | has_bias | 仅静态 FP32、rank-1 输入 |
+| `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 加法/乘法；支持标量和同 rank 双向广播 |
+| `InnerProduct` | `ncnn.inner_product` | has_bias | 仅静态 FP32，输入按元素展平 |
 | `ShuffleChannel` | `ncnn.shuffle_channel` | group, reverse | 静态 FP32；group 必须整除通道数 |
 | `Slice` | `ncnn.slice` | slices, axis | 静态 FP32；支持显式 sizes 和 `-233` 等分 |
 | `Reduction` | `ncnn.reduction` | kind, reduce_all, coeff, axes, keepdims | 静态 FP32 mean 子集 |
+| `GELU` | `ncnn.gelu` | fast | 当前支持标准 erf 形式（`fast=0`） |
+| `Squeeze` | `ncnn.squeeze` | axes | 显式静态 axes |
+| `BatchNorm` | `ncnn.batch_norm` | epsilon | 静态 FP32，按首维归一化 |
+| `ExpandDims` | `ncnn.expand_dims` | axes | 显式静态 axes |
+| `Permute` | `ncnn.permute` | permutation | 当前 importer 支持 rank-2 |
+| `Gemm` | `ncnn.gemm` | alpha, beta | 动态 A、转置常量 B、行偏置 FP32 子集 |
 
 导入器（`lib/Importer/NCNNImporter.cpp`）对上述以外的层类型返回 `unsupported layer type` 错误。
 
@@ -64,6 +71,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 - **Softmax**：旧版 `fixbug0=0` 仅允许 `axis=0`。
 - **Slice**：当前支持 `slices` 参数，不支持 `indices` 参数形式。
 - **Reduction**：当前只支持 `operation=3`（mean）；显式 axes 要求新版 `fixbug0=1`。
+- **Gemm**：仅支持 `constantA=0, constantB=1, constantC=1, transA=0, transB=1`、
+  `broadcast_type_C=4` 的 FP32 子集；不支持量化、packing 和输出转置。
 
 ### 2.4 算子扩展一致性契约
 
@@ -175,7 +184,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 ### 5.3 链接约束
 
 - 使用 `-nostdlib`、`-Wl,-z,defs`、`--no-undefined`、版本脚本。
-- 允许的未定义符号仅限：`expf`、`free`、`malloc`、`memcpy`、`memset`。
+- 允许的未定义符号仅限：`erff`、`expf`、`powf`、`free`、`malloc`、`memcpy`、`memset`。
 - 仅导出模型入口函数符号。
 - 禁止出现：`memrefCopy`、`runner_utils`、`RunnerUtils`、`ncnn_runtime`。
 
@@ -227,8 +236,8 @@ int <model_name>(const float *input1, ..., float *output1, ...);
   - Reshape：静态 shape、`-1` 推断、`0` 复制输入维度
   - BinaryOp：标量、channel broadcast、反向 broadcast
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
-- `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori 和 ChineseOCR Lite AngleNet 与 upstream ncnn 数值对齐
-  - 全有限输出、softmax 求和误差 ≤1e-5、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4
+- `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet 和 PP-OCRv6 tiny rec 与 upstream ncnn 数值对齐
+  - 全有限输出、softmax 求和误差 ≤1e-5（PP-OCRv6 的 6906 类输出为 ≤2e-5）、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4
 
 ### 7.4 运行时测试
 
@@ -247,7 +256,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 
 | 类别 | 限制 |
 |---|---|
-| 算子覆盖 | SqueezeNet + PP-LCNet doc/textline ori 所需算子子集；无通用 group conv、Interp、Padding、BN、RNN |
+| 算子覆盖 | SqueezeNet、PP-LCNet、AngleNet、PP-OCRv6 tiny rec 所需子集；无通用 group conv、Interp、Padding、RNN |
 | 量化 | int8 参数可解析但不被 lowering；f16 权重可解析但端到端路径仅 f32 |
 | 形状 | 仅静态形状 |
 | 数据类型 | ABI 仅 f32 |

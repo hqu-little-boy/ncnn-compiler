@@ -32,4 +32,6 @@ TEST(LayerRegistryTest, DescriptorsMatchRuntimeRegistries) {
     << "weight loader registry contains an unexpected or duplicate entry";
   EXPECT_TRUE(ncnn_graph::has_weight_loader("ConvolutionDepthWise"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("InnerProduct"));
+  EXPECT_TRUE(ncnn_graph::has_weight_loader("BatchNorm"));
+  EXPECT_TRUE(ncnn_graph::has_weight_loader("Gemm"));
 }

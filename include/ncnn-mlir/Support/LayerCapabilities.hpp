@@ -81,6 +81,20 @@ inline constexpr std::array kLayerDescriptors{
                   .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "Reduction",
                   .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "GELU",
+                  .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "Squeeze",
+                  .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{
+    .source_type = "BatchNorm",
+    .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "ExpandDims",
+                  .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "Permute",
+                  .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{
+    .source_type = "Gemm",
+    .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
 };
 
 constexpr std::span<const LayerDescriptor> get_layer_descriptors() noexcept {

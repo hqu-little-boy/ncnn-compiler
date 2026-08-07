@@ -167,5 +167,15 @@ ImportResult import_softmax(ImportContext& importer,
 ImportResult import_split(ImportContext& importer, const LayerContext& context);
 ImportResult import_concat(ImportContext& importer,
                            const LayerContext& context);
+ImportResult import_gelu(ImportContext& importer, const LayerContext& context);
+ImportResult import_squeeze(ImportContext& importer,
+                            const LayerContext& context);
+ImportResult import_batch_norm(ImportContext& importer,
+                               const LayerContext& context);
+ImportResult import_expand_dims(ImportContext& importer,
+                                const LayerContext& context);
+ImportResult import_permute(ImportContext& importer,
+                            const LayerContext& context);
+ImportResult import_gemm(ImportContext& importer, const LayerContext& context);
 
 }  // namespace ncnn_importer::detail

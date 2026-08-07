@@ -151,8 +151,42 @@ def NCNN_HardSwishOp : NCNN_LayerOp<"hard_swish", [SameOperandsAndResultType]> {
   let results = (outs NCNN_RankedTensor:$output);
 }
 
+def NCNN_GELUOp : NCNN_LayerOp<"gelu", [SameOperandsAndResultType]> {
+  let summary = "Gaussian error linear unit.";
+  let arguments = (ins NCNN_RankedTensor:$input, BoolAttr:$fast);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_BatchNormOp
+  : NCNN_LayerOp<"batch_norm", [InferTensorTypeAdaptor]> {
+  let arguments = (ins NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$slope,
+    NCNN_RankedTensor:$mean,
+    NCNN_RankedTensor:$variance,
+    NCNN_RankedTensor:$bias,
+    F32Attr:$epsilon);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
 def NCNN_ReshapeOp : NCNN_LayerOp<"reshape", [InferTensorTypeAdaptor]> {
   let arguments = (ins NCNN_RankedTensor:$input, DenseI64ArrayAttr:$shape);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_SqueezeOp : NCNN_LayerOp<"squeeze", [InferTensorTypeAdaptor]> {
+  let arguments = (ins NCNN_RankedTensor:$input, DenseI64ArrayAttr:$axes);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_ExpandDimsOp
+  : NCNN_LayerOp<"expand_dims", [InferTensorTypeAdaptor]> {
+  let arguments = (ins NCNN_RankedTensor:$input, DenseI64ArrayAttr:$axes);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_PermuteOp : NCNN_LayerOp<"permute", [InferTensorTypeAdaptor]> {
+  let arguments = (ins NCNN_RankedTensor:$input,
+    DenseI64ArrayAttr:$permutation);
   let results = (outs NCNN_RankedTensor:$output);
 }
 
@@ -170,6 +204,16 @@ def NCNN_InnerProductOp
     NCNN_RankedTensor:$weight,
     Variadic<NCNN_RankedTensor>:$bias,
     BoolAttr:$has_bias);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_GemmOp : NCNN_LayerOp<"gemm", [InferTensorTypeAdaptor]> {
+  let summary = "FP32 dynamic-A Gemm with transposed constant B and row bias.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$weight,
+    NCNN_RankedTensor:$bias,
+    F32Attr:$alpha,
+    F32Attr:$beta);
   let results = (outs NCNN_RankedTensor:$output);
 }
 

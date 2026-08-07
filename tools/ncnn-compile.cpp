@@ -1096,7 +1096,7 @@ int main(int argc, char** argv) {
   }
   const std::set<std::string> undefined = symbols(*text);
   const std::set<std::string> allowed = {
-    "expf", "free", "malloc", "memcpy", "memset"};
+    "erff", "expf", "free", "malloc", "memcpy", "memset", "powf"};
   if (!std::ranges::includes(allowed, undefined)) {
     return fail("shared library contains unexpected undefined symbols");
   }

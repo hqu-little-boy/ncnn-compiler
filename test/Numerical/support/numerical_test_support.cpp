@@ -39,6 +39,12 @@ DEFINE_NAIVE_CREATOR(Split)
 DEFINE_NAIVE_CREATOR(Concat)
 DEFINE_NAIVE_CREATOR(Dropout)
 DEFINE_NAIVE_CREATOR(Softmax)
+DEFINE_NAIVE_CREATOR(GELU)
+DEFINE_NAIVE_CREATOR(Squeeze)
+DEFINE_NAIVE_CREATOR(BatchNorm)
+DEFINE_NAIVE_CREATOR(ExpandDims)
+DEFINE_NAIVE_CREATOR(Permute)
+DEFINE_NAIVE_CREATOR(Gemm)
 
 #undef DEFINE_NAIVE_CREATOR
 
@@ -67,7 +73,15 @@ bool register_naive_layers(ncnn::Net& network) {
          network.register_custom_layer("Split", create_naive_Split) == 0 &&
          network.register_custom_layer("Concat", create_naive_Concat) == 0 &&
          network.register_custom_layer("Dropout", create_naive_Dropout) == 0 &&
-         network.register_custom_layer("Softmax", create_naive_Softmax) == 0;
+         network.register_custom_layer("Softmax", create_naive_Softmax) == 0 &&
+         network.register_custom_layer("GELU", create_naive_GELU) == 0 &&
+         network.register_custom_layer("Squeeze", create_naive_Squeeze) == 0 &&
+         network.register_custom_layer("BatchNorm", create_naive_BatchNorm) ==
+           0 &&
+         network.register_custom_layer("ExpandDims", create_naive_ExpandDims) ==
+           0 &&
+         network.register_custom_layer("Permute", create_naive_Permute) == 0 &&
+         network.register_custom_layer("Gemm", create_naive_Gemm) == 0;
 }
 
 std::vector<std::size_t> top_indices(std::span<const float> values,
@@ -465,12 +479,13 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
 }
 
 ::testing::AssertionResult check_softmax(std::span<const float> actual,
-                                         std::span<const float> expected) {
+                                         std::span<const float> expected,
+                                         double sum_tolerance) {
   if (actual.empty() || actual.size() != expected.size()) {
     return ::testing::AssertionFailure() << "invalid softmax output size";
   }
-  const float sum = std::accumulate(actual.begin(), actual.end(), 0.0F);
-  if (std::abs(sum - 1.0F) > 1.0e-5F) {
+  const double sum = std::accumulate(actual.begin(), actual.end(), 0.0);
+  if (std::abs(sum - 1.0) > sum_tolerance) {
     return ::testing::AssertionFailure()
            << "softmax sum is " << sum << ", expected 1";
   }

@@ -89,6 +89,32 @@ func.func @leaky_relu(%arg0: tensor<4xf32>) -> tensor<4xf32> {
 // CHECK: %[[LEAKY:.*]] = tosa.select %[[CONDITION]], %arg0, %[[NEGATIVE]]
 // CHECK: return %[[LEAKY]] : tensor<4xf32>
 
+func.func @ppocr_rec_ops(%arg0: tensor<2x1x3xf32>) -> tensor<3x4xf32> {
+  %slope = arith.constant dense<1.000000e+00> : tensor<2xf32>
+  %mean = arith.constant dense<0.000000e+00> : tensor<2xf32>
+  %variance = arith.constant dense<1.000000e+00> : tensor<2xf32>
+  %bias = arith.constant dense<0.000000e+00> : tensor<2xf32>
+  %weight = arith.constant dense<0.000000e+00> : tensor<4x2xf32>
+  %gemm_bias = arith.constant dense<0.000000e+00> : tensor<4xf32>
+  %gelu = ncnn.gelu %arg0 {fast = false} : (tensor<2x1x3xf32>) -> tensor<2x1x3xf32>
+  %squeezed = ncnn.squeeze %gelu {axes = array<i64: 1>} : (tensor<2x1x3xf32>) -> tensor<2x3xf32>
+  %normalized = ncnn.batch_norm %squeezed, %slope, %mean, %variance, %bias {epsilon = 1.000000e-05 : f32} : (tensor<2x3xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>) -> tensor<2x3xf32>
+  %expanded = ncnn.expand_dims %normalized {axes = array<i64: 1>} : (tensor<2x3xf32>) -> tensor<2x1x3xf32>
+  %again = ncnn.squeeze %expanded {axes = array<i64: 1>} : (tensor<2x1x3xf32>) -> tensor<2x3xf32>
+  %transposed = ncnn.permute %again {permutation = array<i64: 1, 0>} : (tensor<2x3xf32>) -> tensor<3x2xf32>
+  %output = ncnn.gemm %transposed, %weight, %gemm_bias {alpha = 1.000000e+00 : f32, beta = 1.000000e+00 : f32} : (tensor<3x2xf32>, tensor<4x2xf32>, tensor<4xf32>) -> tensor<3x4xf32>
+  return %output : tensor<3x4xf32>
+}
+
+// CHECK-LABEL: func.func @ppocr_rec_ops
+// CHECK: tosa.erf
+// CHECK: tosa.reshape {{.*}} -> tensor<2x3xf32>
+// CHECK: tosa.pow
+// CHECK: tosa.transpose {{.*}}perms = array<i32: 1, 0>
+// CHECK: tosa.matmul
+// CHECK: tosa.add
+// CHECK: return
+
 // CHECK-NOT: ncnn.convolution
 // CHECK-NOT: ncnn.relu
 // CHECK-NOT: ncnn.pooling
@@ -99,3 +125,9 @@ func.func @leaky_relu(%arg0: tensor<4xf32>) -> tensor<4xf32> {
 // CHECK-NOT: ncnn.shuffle_channel
 // CHECK-NOT: ncnn.slice
 // CHECK-NOT: ncnn.reduction
+// CHECK-NOT: ncnn.gelu
+// CHECK-NOT: ncnn.squeeze
+// CHECK-NOT: ncnn.batch_norm
+// CHECK-NOT: ncnn.expand_dims
+// CHECK-NOT: ncnn.permute
+// CHECK-NOT: ncnn.gemm

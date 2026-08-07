@@ -88,5 +88,40 @@ TEST(NumericalModel, ChineseOCRLiteAngleNetMatchesNcnn) {
   EXPECT_TRUE(check_softmax(actual, *expected));
 }
 
+TEST(NumericalModel, PPOCRv6TinyRecMatchesNcnn) {
+  const TensorShape inputShape(320, 48, 3);
+  constexpr std::size_t kSequenceLength = 40;
+  constexpr std::size_t kClasses = 6906;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x4F435236U, -1.0F, 1.0F);
+  const ReferenceModel reference(PP_OCRV6_TINY_REC_PARAM_PATH,
+                                 PP_OCRV6_TINY_REC_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 inputShape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), kSequenceLength * kClasses);
+
+  CompiledModel compiled(PP_OCRV6_TINY_REC_LIBRARY_PATH, "pp_ocrv6_tiny_rec");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(expected->size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F));
+  std::vector<float> repeated(actual.size());
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+  for (std::size_t index = 0; index < kSequenceLength; ++index) {
+    const std::span<const float> actualRow(actual.data() + index * kClasses,
+                                           kClasses);
+    const std::span<const float> expectedRow(
+      expected->data() + index * kClasses, kClasses);
+    EXPECT_TRUE(check_softmax(actualRow, expectedRow, 2.0e-5))
+      << "row " << index;
+  }
+}
+
 }  // namespace
 }  // namespace ncnn_compiler::test

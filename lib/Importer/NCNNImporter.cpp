@@ -83,6 +83,12 @@ std::span<const ImportEntry> importers() noexcept {
     ImportEntry{.type = "Concat", .handler = import_concat},
     ImportEntry{.type = "Dropout", .handler = import_dropout},
     ImportEntry{.type = "Softmax", .handler = import_softmax},
+    ImportEntry{.type = "GELU", .handler = import_gelu},
+    ImportEntry{.type = "Squeeze", .handler = import_squeeze},
+    ImportEntry{.type = "BatchNorm", .handler = import_batch_norm},
+    ImportEntry{.type = "ExpandDims", .handler = import_expand_dims},
+    ImportEntry{.type = "Permute", .handler = import_permute},
+    ImportEntry{.type = "Gemm", .handler = import_gemm},
   };
   return kImporters;
 }

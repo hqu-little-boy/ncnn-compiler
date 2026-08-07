@@ -42,3 +42,27 @@ func.func @anglenet_ops(%arg0: tensor<4x3x4xf32>) -> tensor<4xf32> {
   %mean = ncnn.reduction %joined {axes = array<i64: 1, 2>, coeff = 1.000000e+00 : f32, keepdims = false, kind = 3 : i64, reduce_all = false} : (tensor<4x3x4xf32>) -> tensor<4xf32>
   return %mean : tensor<4xf32>
 }
+
+// CHECK-LABEL: func.func @ppocr_rec_ops
+func.func @ppocr_rec_ops(%arg0: tensor<2x1x3xf32>) -> tensor<3x4xf32> {
+  %slope = arith.constant dense<1.000000e+00> : tensor<2xf32>
+  %mean = arith.constant dense<0.000000e+00> : tensor<2xf32>
+  %variance = arith.constant dense<1.000000e+00> : tensor<2xf32>
+  %bias = arith.constant dense<0.000000e+00> : tensor<2xf32>
+  %weight = arith.constant dense<0.000000e+00> : tensor<4x2xf32>
+  %gemm_bias = arith.constant dense<0.000000e+00> : tensor<4xf32>
+  // CHECK: ncnn.gelu
+  %gelu = ncnn.gelu %arg0 {fast = false} : (tensor<2x1x3xf32>) -> tensor<2x1x3xf32>
+  // CHECK: ncnn.squeeze
+  %squeezed = ncnn.squeeze %gelu {axes = array<i64: 1>} : (tensor<2x1x3xf32>) -> tensor<2x3xf32>
+  // CHECK: ncnn.batch_norm
+  %normalized = ncnn.batch_norm %squeezed, %slope, %mean, %variance, %bias {epsilon = 1.000000e-05 : f32} : (tensor<2x3xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>, tensor<2xf32>) -> tensor<2x3xf32>
+  // CHECK: ncnn.expand_dims
+  %expanded = ncnn.expand_dims %normalized {axes = array<i64: 1>} : (tensor<2x3xf32>) -> tensor<2x1x3xf32>
+  %again = ncnn.squeeze %expanded {axes = array<i64: 1>} : (tensor<2x1x3xf32>) -> tensor<2x3xf32>
+  // CHECK: ncnn.permute
+  %transposed = ncnn.permute %again {permutation = array<i64: 1, 0>} : (tensor<2x3xf32>) -> tensor<3x2xf32>
+  // CHECK: ncnn.gemm
+  %output = ncnn.gemm %transposed, %weight, %gemm_bias {alpha = 1.000000e+00 : f32, beta = 1.000000e+00 : f32} : (tensor<3x2xf32>, tensor<4x2xf32>, tensor<4xf32>) -> tensor<3x4xf32>
+  return %output : tensor<3x4xf32>
+}

@@ -432,6 +432,76 @@ std::expected<InnerProductParams, std::string> decode_inner_product_params(
   return result;
 }
 
+std::expected<BatchNormParams, std::string> decode_batch_norm_params(
+  const ParamDict& params) {
+  auto channels = decode_int_param(params, 0, 0, "channels");
+  auto epsilon = decode_float_param(params, 1, 0.0F, "eps");
+  if (!channels || !epsilon) {
+    return std::unexpected(!channels ? channels.error() : epsilon.error());
+  }
+  if (*channels <= 0 || *epsilon < 0.0F) {
+    return std::unexpected(
+      "BatchNorm channels must be positive and eps must be non-negative");
+  }
+  return BatchNormParams{.channels = *channels, .epsilon = *epsilon};
+}
+
+std::expected<GemmParams, std::string> decode_gemm_params(
+  const ParamDict& params) {
+  GemmParams result;
+  auto alpha = decode_float_param(params, 0, 1.0F, "alpha");
+  auto beta = decode_float_param(params, 1, 1.0F, "beta");
+  auto trans_a = decode_int_param(params, 2, 0, "transA");
+  auto trans_b = decode_int_param(params, 3, 0, "transB");
+  auto constant_a = decode_int_param(params, 4, 0, "constantA");
+  auto constant_b = decode_int_param(params, 5, 0, "constantB");
+  auto constant_c = decode_int_param(params, 6, 0, "constantC");
+  auto m = decode_int_param(params, 7, 0, "constantM");
+  auto n = decode_int_param(params, 8, 0, "constantN");
+  auto k = decode_int_param(params, 9, 0, "constantK");
+  auto broadcast = decode_int_param(params, 10, 0, "broadcast_type_C");
+  auto n1m = decode_int_param(params, 11, 0, "output_N1M");
+  auto elempack = decode_int_param(params, 12, 0, "output_elempack");
+  auto elemtype = decode_int_param(params, 13, 0, "output_elemtype");
+  auto transpose = decode_int_param(params, 14, 0, "output_transpose");
+  auto quantize = decode_int_param(params, 18, 0, "quantize_term");
+  if (!alpha || !beta || !trans_a || !trans_b || !constant_a || !constant_b ||
+      !constant_c || !m || !n || !k || !broadcast || !n1m || !elempack ||
+      !elemtype || !transpose || !quantize) {
+    return std::unexpected("invalid Gemm parameter type");
+  }
+  for (const auto value :
+       {*trans_a, *trans_b, *constant_a, *constant_b, *constant_c}) {
+    if (value != 0 && value != 1) {
+      return std::unexpected("Gemm boolean parameter must be 0 or 1");
+    }
+  }
+  if (*constant_b == 1 && (*n <= 0 || *k <= 0)) {
+    return std::unexpected(
+      "Gemm constantN and constantK must be positive for constant B");
+  }
+  if (*constant_c == 1 && (*broadcast < -1 || *broadcast > 4)) {
+    return std::unexpected("Gemm C broadcast type must be -1 through 4");
+  }
+  result = GemmParams{.alpha = *alpha,
+                      .beta = *beta,
+                      .transpose_a = *trans_a == 1,
+                      .transpose_b = *trans_b == 1,
+                      .constant_a = *constant_a == 1,
+                      .constant_b = *constant_b == 1,
+                      .constant_c = *constant_c == 1,
+                      .constant_m = *m,
+                      .constant_n = *n,
+                      .constant_k = *k,
+                      .broadcast_c = *broadcast,
+                      .output_n1m = *n1m,
+                      .output_elempack = *elempack,
+                      .output_elemtype = *elemtype,
+                      .output_transpose = *transpose,
+                      .quantize_term = *quantize};
+  return result;
+}
+
 // ───────────────────────── Tensor ─────────────────────────
 Tensor::Tensor() : shape_(), dtype_(DataType::Unknown), data_() {}
 
@@ -1181,6 +1251,68 @@ std::expected<void, std::string> load_inner_product_weights(Layer& layer,
   return {};
 }
 
+std::expected<void, std::string> load_batch_norm_weights(Layer& layer,
+                                                         BinCursor& cursor) {
+  auto params = decode_batch_norm_params(layer.get_params());
+  if (!params) {
+    return std::unexpected(params.error());
+  }
+  for (std::string_view name : {"slope", "mean", "variance", "bias"}) {
+    auto weight = load_weight(cursor, params->channels, 1, {params->channels});
+    if (!weight) {
+      return std::unexpected(
+        std::format("BatchNorm {}: {}", name, weight.error()));
+    }
+    layer.add_weight(std::move(*weight));
+  }
+  return {};
+}
+
+std::expected<void, std::string> load_gemm_weights(Layer& layer,
+                                                   BinCursor& cursor) {
+  auto params = decode_gemm_params(layer.get_params());
+  if (!params) {
+    return std::unexpected(params.error());
+  }
+  if (params->constant_a || !params->constant_b || !params->constant_c ||
+      params->transpose_a || !params->transpose_b || params->broadcast_c != 4 ||
+      params->output_n1m != 0 || params->output_elempack != 0 ||
+      params->output_elemtype != 0 || params->output_transpose != 0 ||
+      params->quantize_term != 0) {
+    return std::unexpected(
+      "only FP32 dynamic-A, transposed constant-B Gemm with row bias is "
+      "supported");
+  }
+  auto outputSize = positive_size(params->constant_n, "Gemm constantN");
+  auto inputSize = positive_size(params->constant_k, "Gemm constantK");
+  if (!outputSize || !inputSize) {
+    return std::unexpected(!outputSize ? outputSize.error()
+                                       : inputSize.error());
+  }
+  auto weightCount =
+    checked_multiply(*outputSize, *inputSize, "Gemm B element count");
+  if (!weightCount ||
+      *weightCount >
+        static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
+    return std::unexpected(weightCount ? "Gemm B element count is too large"
+                                       : weightCount.error());
+  }
+  auto weight = load_weight(cursor,
+                            static_cast<std::int64_t>(*weightCount),
+                            0,
+                            {params->constant_n, params->constant_k});
+  if (!weight) {
+    return std::unexpected(std::format("Gemm B: {}", weight.error()));
+  }
+  layer.add_weight(std::move(*weight));
+  auto bias = load_weight(cursor, params->constant_n, 0, {params->constant_n});
+  if (!bias) {
+    return std::unexpected(std::format("Gemm C: {}", bias.error()));
+  }
+  layer.add_weight(std::move(*bias));
+  return {};
+}
+
 using WeightLoader = std::expected<void, std::string> (*)(Layer&, BinCursor&);
 
 struct WeightLoaderEntry {
@@ -1196,6 +1328,8 @@ std::span<const WeightLoaderEntry> weight_loaders() noexcept {
                       .loader = load_convolution_depthwise_weights},
     WeightLoaderEntry{.type = "InnerProduct",
                       .loader = load_inner_product_weights},
+    WeightLoaderEntry{.type = "BatchNorm", .loader = load_batch_norm_weights},
+    WeightLoaderEntry{.type = "Gemm", .loader = load_gemm_weights},
   };
   return kWeightLoaders;
 }

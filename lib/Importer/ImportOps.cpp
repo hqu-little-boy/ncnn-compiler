@@ -153,10 +153,12 @@ ImportResult import_binary_op(ImportContext& importer,
   auto type = get_int(context.layer.get_params(), 0, 0, "op_type");
   auto scalar = get_float(context.layer.get_params(), 2, 0.0F, "scalar");
   auto ws = get_int(context.layer.get_params(), 1, 0, "with_scalar");
-  if (!type || !scalar || !ws || (*type != 2) || (*ws != 0 && *ws != 1) ||
+  if (!type || !scalar || !ws || (*type != 0 && *type != 2) ||
+      (*ws != 0 && *ws != 1) ||
       ((*ws == 1) != (context.layer.get_inputs().size() == 1))) {
     return std::unexpected(make_error(
-      context, "BinaryOp supports multiply with scalar or two inputs only"));
+      context,
+      "BinaryOp supports add/multiply with scalar or two inputs only"));
   }
   llvm::SmallVector<mlir::Value> inputs;
   for (const auto& n : context.layer.get_inputs()) {
@@ -187,6 +189,60 @@ ImportResult import_binary_op(ImportContext& importer,
     context, std::string(context.layer.get_outputs()[0]), op.getResult());
 }
 
+ImportResult import_gemm(ImportContext& importer, const LayerContext& context) {
+  constexpr int kAllowed[] = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 18, 20, 21, 22};
+  auto valid = arity_params(context, 1, 1, kAllowed);
+  auto params = ncnn_graph::decode_gemm_params(context.layer.get_params());
+  if (!valid || !params || context.layer.get_weights().size() != 2 ||
+      params->constant_a || !params->constant_b || !params->constant_c ||
+      params->transpose_a || !params->transpose_b || params->broadcast_c != 4 ||
+      params->output_n1m != 0 || params->output_elempack != 0 ||
+      params->output_elemtype != 0 || params->output_transpose != 0 ||
+      params->quantize_term != 0) {
+    return std::unexpected(
+      make_error(context,
+                 "only FP32 dynamic-A, transposed constant-B Gemm with row "
+                 "bias is supported"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  llvm::SmallVector<mlir::Value> values{*input};
+  for (std::size_t index = 0; index < 2; ++index) {
+    if (context.layer.get_weights()[index].get_dtype() !=
+        ncnn_graph::DataType::Float32) {
+      return std::unexpected(make_error(context, "Gemm weights must be FP32"));
+    }
+    auto value = importer.make_constant(
+      context, context.layer.get_weights()[index], index);
+    if (!value) {
+      return std::unexpected(value.error());
+    }
+    values.push_back(*value);
+  }
+  auto& builder = importer.builder();
+  mlir::ncnn::GemmOp::Properties properties;
+  properties.alpha = builder.getF32FloatAttr(params->alpha);
+  properties.beta = builder.getF32FloatAttr(params->beta);
+  auto type = importer.infer_single_tensor_result<mlir::ncnn::GemmOp>(
+    builder.getUnknownLoc(), values, properties);
+  if (mlir::failed(type)) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto op = builder.create<mlir::ncnn::GemmOp>(builder.getUnknownLoc(),
+                                               *type,
+                                               values[0],
+                                               values[1],
+                                               values[2],
+                                               properties.alpha,
+                                               properties.beta);
+  importer.tag_source(op, context);
+  return importer.bind_blob(
+    context, context.layer.get_outputs()[0], op.getOutput());
+}
+
 ImportResult import_inner_product(ImportContext& importer,
                                   const LayerContext& context) {
   constexpr int ids[] = {0, 1, 2, 8, 9, 10};
@@ -200,7 +256,8 @@ ImportResult import_inner_product(ImportContext& importer,
   auto term = get_int(context.layer.get_params(), 8, 0, "int8_scale_term");
   auto act = get_int(context.layer.get_params(), 9, 0, "activation_type");
   if (!out || !bias || !count || !term || !act || *out <= 0 || *count <= 0 ||
-      *bias < 0 || *bias > 1 || *term != 0 || *act != 0 ||
+      *bias < 0 || *bias > 1 || *term != 0 || (*act != 0 && *act != 1) ||
+      (*act == 1 && context.layer.get_params().has(10)) ||
       context.layer.get_weights().size() != static_cast<size_t>(1 + *bias)) {
     return std::unexpected(
       make_error(context, "only static FP32 InnerProduct is supported"));
@@ -241,8 +298,14 @@ ImportResult import_inner_product(ImportContext& importer,
   auto op = b.create<mlir::ncnn::InnerProductOp>(
     b.getUnknownLoc(), *result, *input, *weight, tail, props.has_bias);
   importer.tag_source(op.getOperation(), context);
+  mlir::Value output = op.getResult();
+  if (*act == 1) {
+    auto relu = b.create<mlir::ncnn::ReluOp>(
+      b.getUnknownLoc(), *result, output, b.getF32FloatAttr(0.0F));
+    output = relu.getResult();
+  }
   return importer.bind_blob(
-    context, std::string(context.layer.get_outputs()[0]), op.getResult());
+    context, std::string(context.layer.get_outputs()[0]), output);
 }
 
 ImportResult import_convolution_depthwise(ImportContext& importer,

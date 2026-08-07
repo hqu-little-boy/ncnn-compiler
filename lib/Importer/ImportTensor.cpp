@@ -254,4 +254,116 @@ ImportResult import_reduction(ImportContext& importer,
     context, std::string(context.layer.get_outputs()[0]), op.getResult());
 }
 
+namespace {
+std::expected<std::span<const std::int64_t>, ImportError> get_axes(
+  const LayerContext& context) {
+  const auto* value = find_param(context.layer.get_params(), 3);
+  if (value == nullptr ||
+      value->get_kind() != ncnn_graph::ParamValue::Kind::IntArray) {
+    return std::unexpected(
+      make_error(context, "parameter 3 (axes) must be an integer array"));
+  }
+  return *value->get_int_array();
+}
+}  // namespace
+
+ImportResult import_squeeze(ImportContext& importer,
+                            const LayerContext& context) {
+  constexpr int kAllowed[] = {0, 1, 2, 3, 11};
+  auto arity = expect_source_arity(context.layer, 1, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto axes = get_axes(context);
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!arity || !allowed || !axes || !mask ||
+      context.layer.get_params().has(0) || context.layer.get_params().has(1) ||
+      context.layer.get_params().has(2) || context.layer.get_params().has(11)) {
+    return std::unexpected(
+      make_error(context, "Squeeze requires explicit axes only"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto& builder = importer.builder();
+  mlir::ncnn::SqueezeOp::Properties properties;
+  properties.axes = builder.getDenseI64ArrayAttr(*axes);
+  auto type = importer.infer_single_tensor_result<mlir::ncnn::SqueezeOp>(
+    builder.getUnknownLoc(), *input, properties);
+  if (mlir::failed(type)) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto op = builder.create<mlir::ncnn::SqueezeOp>(
+    builder.getUnknownLoc(), *type, *input, properties.axes);
+  importer.tag_source(op, context);
+  return importer.bind_blob(
+    context, context.layer.get_outputs()[0], op.getOutput());
+}
+
+ImportResult import_expand_dims(ImportContext& importer,
+                                const LayerContext& context) {
+  constexpr int kAllowed[] = {3};
+  auto arity = expect_source_arity(context.layer, 1, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto axes = get_axes(context);
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!arity || !allowed || !axes || !mask) {
+    return std::unexpected(
+      make_error(context, "invalid ExpandDims parameters"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto& builder = importer.builder();
+  mlir::ncnn::ExpandDimsOp::Properties properties;
+  properties.axes = builder.getDenseI64ArrayAttr(*axes);
+  auto type = importer.infer_single_tensor_result<mlir::ncnn::ExpandDimsOp>(
+    builder.getUnknownLoc(), *input, properties);
+  if (mlir::failed(type)) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto op = builder.create<mlir::ncnn::ExpandDimsOp>(
+    builder.getUnknownLoc(), *type, *input, properties.axes);
+  importer.tag_source(op, context);
+  return importer.bind_blob(
+    context, context.layer.get_outputs()[0], op.getOutput());
+}
+
+ImportResult import_permute(ImportContext& importer,
+                            const LayerContext& context) {
+  constexpr int kAllowed[] = {0};
+  auto arity = expect_source_arity(context.layer, 1, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto order = get_int(context.layer.get_params(), 0, 0, "order_type");
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!arity || !allowed || !order || !mask) {
+    return std::unexpected(make_error(context, "invalid Permute parameters"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
+  if (!inputType || inputType.getRank() != 2 || (*order != 0 && *order != 1)) {
+    return std::unexpected(
+      make_error(context, "only rank-2 Permute is supported"));
+  }
+  const std::array<int64_t, 2> identity{0, 1};
+  const std::array<int64_t, 2> transpose{1, 0};
+  auto permutation = *order == 0 ? std::span(identity) : std::span(transpose);
+  auto& builder = importer.builder();
+  mlir::ncnn::PermuteOp::Properties properties;
+  properties.permutation = builder.getDenseI64ArrayAttr(permutation);
+  auto type = importer.infer_single_tensor_result<mlir::ncnn::PermuteOp>(
+    builder.getUnknownLoc(), *input, properties);
+  if (mlir::failed(type)) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto op = builder.create<mlir::ncnn::PermuteOp>(
+    builder.getUnknownLoc(), *type, *input, properties.permutation);
+  importer.tag_source(op, context);
+  return importer.bind_blob(
+    context, context.layer.get_outputs()[0], op.getOutput());
+}
+
 }  // namespace ncnn_importer::detail

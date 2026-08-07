@@ -124,6 +124,30 @@ struct InnerProductParams {
   std::size_t expected_weight_tensors() const noexcept;
 };
 
+struct BatchNormParams {
+  std::int64_t channels = 0;
+  float epsilon = 0.0F;
+};
+
+struct GemmParams {
+  float alpha = 1.0F;
+  float beta = 1.0F;
+  bool transpose_a = false;
+  bool transpose_b = false;
+  bool constant_a = false;
+  bool constant_b = false;
+  bool constant_c = false;
+  std::int64_t constant_m = 0;
+  std::int64_t constant_n = 0;
+  std::int64_t constant_k = 0;
+  std::int64_t broadcast_c = 0;
+  std::int64_t output_n1m = 0;
+  std::int64_t output_elempack = 0;
+  std::int64_t output_elemtype = 0;
+  std::int64_t output_transpose = 0;
+  std::int64_t quantize_term = 0;
+};
+
 [[nodiscard]] std::expected<ConvolutionParams, std::string>
 decode_convolution_params(const ParamDict& params);
 
@@ -132,6 +156,12 @@ decode_convolution_depthwise_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<InnerProductParams, std::string>
 decode_inner_product_params(const ParamDict& params);
+
+[[nodiscard]] std::expected<BatchNormParams, std::string>
+decode_batch_norm_params(const ParamDict& params);
+
+[[nodiscard]] std::expected<GemmParams, std::string> decode_gemm_params(
+  const ParamDict& params);
 
 bool has_weight_loader(std::string_view layer_type) noexcept;
 std::size_t get_weight_loader_count() noexcept;

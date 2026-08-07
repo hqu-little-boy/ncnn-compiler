@@ -277,7 +277,7 @@ func.func @model(%input: memref<3x227x227xf32>,
 `--ncnn-memref-to-llvm-pipeline` 消除 Linalg/Affine/SCF/Math/Arith/MemRef/Func/CF，并将
 `math.exp` 映射到系统 `expf`。C++ `ncnn-compile` driver 直接调用
 `mlir-translate-21`、`clang-21 -fPIC` 和严格共享库链接；最终 `.so` 只依赖 libc/libm，
-未定义符号只允许 `malloc`、`free`、`expf`、`memcpy`、`memset`，且禁止 `memrefCopy` 和
+未定义符号只允许 `malloc`、`free`、`erff`、`expf`、`powf`、`memcpy`、`memset`，且禁止 `memrefCopy` 和
 runner/project runtime。
 
 `ncnn-compile model.param` 默认从文件名推导模型名和同名输出目录，并自动使用同目录的

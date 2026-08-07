@@ -894,6 +894,239 @@ class ConvertReshape final : public ConversionPattern {
   }
 };
 
+class ConvertShapeChange final : public ConversionPattern {
+ public:
+  ConvertShapeChange(const TypeConverter& typeConverter,
+                     MLIRContext* context,
+                     StringRef operationName)
+    : ConversionPattern(typeConverter, operationName, 1, context) {}
+
+  LogicalResult matchAndRewrite(
+    Operation* operation,
+    ArrayRef<Value> operands,
+    ConversionPatternRewriter& rewriter) const final {
+    if (operands.size() != 1 || operation->getNumResults() != 1 ||
+        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
+        !isStaticF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("supports one static f32 tensor only");
+    }
+    auto inputType = cast<RankedTensorType>(operation->getOperand(0).getType());
+    auto outputType = cast<RankedTensorType>(operation->getResult(0).getType());
+    Value input = restoreNCNNLayout(
+      rewriter, operation->getLoc(), operands.front(), inputType);
+    Value reshaped =
+      reshapeValue(rewriter, operation->getLoc(), input, outputType);
+    rewriter.replaceOp(
+      operation,
+      convertNCNNLayout(rewriter, operation->getLoc(), reshaped, outputType));
+    return success();
+  }
+};
+
+class ConvertPermute final : public OpConversionPattern<PermuteOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    PermuteOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto inputType = cast<RankedTensorType>(operation.getInput().getType());
+    auto outputType = cast<RankedTensorType>(operation.getOutput().getType());
+    Value input = restoreNCNNLayout(
+      rewriter, operation.getLoc(), adaptor.getInput(), inputType);
+    SmallVector<int32_t> permutation;
+    for (int64_t axis : operation.getPermutation()) {
+      permutation.push_back(static_cast<int32_t>(axis));
+    }
+    Value result = rewriter.create<tosa::TransposeOp>(
+      operation.getLoc(), outputType, input, permutation);
+    rewriter.replaceOp(
+      operation,
+      convertNCNNLayout(rewriter, operation.getLoc(), result, outputType));
+    return success();
+  }
+};
+
+class ConvertGELU final : public OpConversionPattern<GELUOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    GELUOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto type = cast<RankedTensorType>(adaptor.getInput().getType());
+    Value half = createSplat(
+      rewriter, operation.getLoc(), getBroadcastScalarType(type), 0.5);
+    Value one = createSplat(
+      rewriter, operation.getLoc(), getBroadcastScalarType(type), 1.0);
+    Value shift = createI8Zero(rewriter, operation.getLoc());
+    Value activation;
+    if (!operation.getFast()) {
+      Value inverseSqrtTwo = createSplat(rewriter,
+                                         operation.getLoc(),
+                                         getBroadcastScalarType(type),
+                                         0.7071067811865476);
+      Value scaled = rewriter.create<tosa::MulOp>(
+        operation.getLoc(), type, adaptor.getInput(), inverseSqrtTwo, shift);
+      Value erf =
+        rewriter.create<tosa::ErfOp>(operation.getLoc(), type, scaled);
+      activation =
+        rewriter.create<tosa::AddOp>(operation.getLoc(), type, one, erf);
+    } else {
+      Value cubic = rewriter.create<tosa::MulOp>(operation.getLoc(),
+                                                 type,
+                                                 adaptor.getInput(),
+                                                 adaptor.getInput(),
+                                                 shift);
+      cubic = rewriter.create<tosa::MulOp>(
+        operation.getLoc(), type, cubic, adaptor.getInput(), shift);
+      Value cubicScale = createSplat(
+        rewriter, operation.getLoc(), getBroadcastScalarType(type), 0.044715);
+      cubic = rewriter.create<tosa::MulOp>(
+        operation.getLoc(), type, cubic, cubicScale, shift);
+      Value sum = rewriter.create<tosa::AddOp>(
+        operation.getLoc(), type, adaptor.getInput(), cubic);
+      Value tanhScale = createSplat(rewriter,
+                                    operation.getLoc(),
+                                    getBroadcastScalarType(type),
+                                    0.7978845608028654);
+      sum = rewriter.create<tosa::MulOp>(
+        operation.getLoc(), type, sum, tanhScale, shift);
+      Value tanh = rewriter.create<tosa::TanhOp>(operation.getLoc(), type, sum);
+      activation =
+        rewriter.create<tosa::AddOp>(operation.getLoc(), type, one, tanh);
+    }
+    Value result = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), type, adaptor.getInput(), activation, shift);
+    result = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), type, result, half, shift);
+    rewriter.replaceOp(operation, result);
+    return success();
+  }
+};
+
+class ConvertBatchNorm final : public OpConversionPattern<BatchNormOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    BatchNormOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
+    auto outputType = cast<RankedTensorType>(adaptor.getInput().getType());
+    SmallVector<int64_t> parameterShape(outputType.getRank(), 1);
+    const int64_t channelAxis =
+      sourceType.getRank() == 3 ? outputType.getRank() - 1 : 0;
+    parameterShape[channelAxis] = sourceType.getShape()[0];
+    auto parameterType =
+      RankedTensorType::get(parameterShape, outputType.getElementType());
+    auto reshapeParameter = [&](Value value) {
+      return reshapeValue(rewriter, operation.getLoc(), value, parameterType);
+    };
+    Value slope = reshapeParameter(adaptor.getSlope());
+    Value mean = reshapeParameter(adaptor.getMean());
+    Value variance = reshapeParameter(adaptor.getVariance());
+    Value bias = reshapeParameter(adaptor.getBias());
+    Value epsilon = createSplat(rewriter,
+                                operation.getLoc(),
+                                getBroadcastScalarType(outputType),
+                                operation.getEpsilon().convertToDouble());
+    Value varianceWithEpsilon = rewriter.create<tosa::AddOp>(
+      operation.getLoc(), parameterType, variance, epsilon);
+    Value exponent =
+      createSplat(rewriter, operation.getLoc(), parameterType, -0.5);
+    Value inverseStd = rewriter.create<tosa::PowOp>(
+      operation.getLoc(), parameterType, varianceWithEpsilon, exponent);
+    Value zero = createSplat(rewriter, operation.getLoc(), parameterType, 0.0);
+    Value fallback =
+      createSplat(rewriter, operation.getLoc(), parameterType, 10000.0);
+    auto conditionType =
+      RankedTensorType::get(parameterShape, rewriter.getI1Type());
+    Value isZero = rewriter.create<tosa::EqualOp>(
+      operation.getLoc(), conditionType, varianceWithEpsilon, zero);
+    inverseStd = rewriter.create<tosa::SelectOp>(
+      operation.getLoc(), parameterType, isZero, fallback, inverseStd);
+    Value shift = createI8Zero(rewriter, operation.getLoc());
+    Value scale = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), parameterType, slope, inverseStd, shift);
+    Value scaledMean = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), parameterType, scale, mean, shift);
+    Value offset = rewriter.create<tosa::SubOp>(
+      operation.getLoc(), parameterType, bias, scaledMean);
+    Value result = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), outputType, adaptor.getInput(), scale, shift);
+    result = rewriter.create<tosa::AddOp>(
+      operation.getLoc(), outputType, result, offset);
+    rewriter.replaceOp(operation, result);
+    return success();
+  }
+};
+
+class ConvertGemm final : public OpConversionPattern<GemmOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    GemmOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
+    auto weightType = cast<RankedTensorType>(adaptor.getWeight().getType());
+    auto outputType = cast<RankedTensorType>(operation.getOutput().getType());
+    const int64_t m = inputType.getShape()[0];
+    const int64_t k = inputType.getShape()[1];
+    const int64_t n = weightType.getShape()[0];
+    auto matrixInputType =
+      RankedTensorType::get({1, m, k}, inputType.getElementType());
+    Value input = reshapeValue(
+      rewriter, operation.getLoc(), adaptor.getInput(), matrixInputType);
+    auto matrixWeightType =
+      RankedTensorType::get({1, n, k}, weightType.getElementType());
+    Value weight = reshapeValue(
+      rewriter, operation.getLoc(), adaptor.getWeight(), matrixWeightType);
+    auto transposedWeightType =
+      RankedTensorType::get({1, k, n}, weightType.getElementType());
+    weight = rewriter.create<tosa::TransposeOp>(operation.getLoc(),
+                                                transposedWeightType,
+                                                weight,
+                                                ArrayRef<int32_t>{0, 2, 1});
+    auto matrixOutputType =
+      RankedTensorType::get({1, m, n}, outputType.getElementType());
+    Value result = rewriter.create<tosa::MatMulOp>(
+      operation.getLoc(), matrixOutputType, input, weight);
+    Value shift = createI8Zero(rewriter, operation.getLoc());
+    auto biasType =
+      RankedTensorType::get({1, 1, n}, outputType.getElementType());
+    Value bias =
+      reshapeValue(rewriter, operation.getLoc(), adaptor.getBias(), biasType);
+    if (operation.getBeta().convertToDouble() != 1.0) {
+      Value beta = createSplat(rewriter,
+                               operation.getLoc(),
+                               getBroadcastScalarType(matrixOutputType),
+                               operation.getBeta().convertToDouble());
+      bias = rewriter.create<tosa::MulOp>(
+        operation.getLoc(), biasType, bias, beta, shift);
+    }
+    result = rewriter.create<tosa::AddOp>(
+      operation.getLoc(), matrixOutputType, result, bias);
+    if (operation.getAlpha().convertToDouble() != 1.0) {
+      Value alpha = createSplat(rewriter,
+                                operation.getLoc(),
+                                getBroadcastScalarType(matrixOutputType),
+                                operation.getAlpha().convertToDouble());
+      result = rewriter.create<tosa::MulOp>(
+        operation.getLoc(), matrixOutputType, result, alpha, shift);
+    }
+    rewriter.replaceOp(
+      operation,
+      reshapeValue(rewriter, operation.getLoc(), result, outputType));
+    return success();
+  }
+};
+
 class ConvertBinary final : public ConversionPattern {
  public:
   ConvertBinary(const TypeConverter& typeConverter,
@@ -1273,7 +1506,11 @@ class ConvertNCNNToTosaPass final
                  ConvertSoftmax,
                  ConvertShuffleChannel,
                  ConvertSlice,
-                 ConvertReduction>(typeConverter, context);
+                 ConvertReduction,
+                 ConvertGELU,
+                 ConvertBatchNorm,
+                 ConvertPermute,
+                 ConvertGemm>(typeConverter, context);
     patterns.add<ConvertHardActivation>(
       typeConverter, context, "ncnn.hard_sigmoid", false);
     patterns.add<ConvertHardActivation>(
@@ -1281,6 +1518,9 @@ class ConvertNCNNToTosaPass final
     patterns.add<ConvertDepthwiseConvolution>(
       typeConverter, context, "ncnn.convolution_depthwise");
     patterns.add<ConvertReshape>(typeConverter, context, "ncnn.reshape");
+    patterns.add<ConvertShapeChange>(typeConverter, context, "ncnn.squeeze");
+    patterns.add<ConvertShapeChange>(
+      typeConverter, context, "ncnn.expand_dims");
     patterns.add<ConvertBinary>(typeConverter, context, "ncnn.binary");
     patterns.add<ConvertInnerProduct>(
       typeConverter, context, "ncnn.inner_product");
@@ -1305,11 +1545,17 @@ class ConvertNCNNToTosaPass final
                         SoftmaxOp,
                         ShuffleChannelOp,
                         SliceOp,
-                        ReductionOp>();
+                        ReductionOp,
+                        GELUOp,
+                        BatchNormOp,
+                        PermuteOp,
+                        GemmOp>();
     for (StringRef name : {"ncnn.hard_sigmoid",
                            "ncnn.hard_swish",
                            "ncnn.convolution_depthwise",
                            "ncnn.reshape",
+                           "ncnn.squeeze",
+                           "ncnn.expand_dims",
                            "ncnn.binary",
                            "ncnn.inner_product"}) {
       target.addIllegalOp(OperationName(name, context));

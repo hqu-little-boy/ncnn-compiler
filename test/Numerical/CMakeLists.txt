@@ -348,6 +348,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin
     3x32x192)
+ncnn_add_compiled_fixture(
+    pp_ocrv6_tiny_rec
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin
+    3x48x320)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -416,7 +421,9 @@ add_dependencies(compile_pp_lcnet_x1_0_doc_ori compile_squeezenet_v1_1)
 add_dependencies(compile_pp_lcnet_x1_0_textline_ori
                   compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(compile_chineseocr_lite_anglenet
-                 compile_pp_lcnet_x1_0_textline_ori)
+                  compile_pp_lcnet_x1_0_textline_ori)
+add_dependencies(compile_pp_ocrv6_tiny_rec
+                 compile_chineseocr_lite_anglenet)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -511,11 +518,15 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_LCNET_TEXTLINE_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_LIBRARY}"
     CHINESEOCR_LITE_ANGLENET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param"
     CHINESEOCR_LITE_ANGLENET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin"
-    CHINESEOCR_LITE_ANGLENET_LIBRARY_PATH="${chineseocr_lite_anglenet_LIBRARY}")
+    CHINESEOCR_LITE_ANGLENET_LIBRARY_PATH="${chineseocr_lite_anglenet_LIBRARY}"
+    PP_OCRV6_TINY_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param"
+    PP_OCRV6_TINY_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin"
+    PP_OCRV6_TINY_REC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(numerical_tests compile_chineseocr_lite_anglenet)
+add_dependencies(numerical_tests compile_pp_ocrv6_tiny_rec)
 
 gtest_discover_tests(numerical_tests
     PROPERTIES LABELS "numerical;golden" TIMEOUT 900 RUN_SERIAL TRUE)

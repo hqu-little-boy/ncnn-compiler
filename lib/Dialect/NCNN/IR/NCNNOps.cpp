@@ -416,6 +416,85 @@ FailureOr<RankedTensorType> computeReshapeResult(
   return RankedTensorType::get(shape, input.getElementType());
 }
 
+FailureOr<RankedTensorType> computeSqueezeResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  ArrayRef<int64_t> requestedAxes) {
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape()) {
+    return emitOptionalError(location, "Squeeze input must be static f32");
+  }
+  std::set<int64_t> axes;
+  for (int64_t axis : requestedAxes) {
+    if (axis < 0) {
+      axis += input.getRank();
+    }
+    if (axis < 0 || axis >= input.getRank() || !axes.insert(axis).second) {
+      return emitOptionalError(location,
+                               "Squeeze axes must be unique and in range");
+    }
+    if (input.getShape()[axis] != 1) {
+      return emitOptionalError(location, "Squeeze axis must have unit extent");
+    }
+  }
+  SmallVector<int64_t> shape;
+  for (int64_t axis = 0; axis < input.getRank(); ++axis) {
+    if (!axes.contains(axis)) {
+      shape.push_back(input.getShape()[axis]);
+    }
+  }
+  if (shape.empty()) {
+    shape.push_back(1);
+  }
+  return RankedTensorType::get(shape, input.getElementType());
+}
+
+FailureOr<RankedTensorType> computeExpandDimsResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  ArrayRef<int64_t> requestedAxes) {
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape()) {
+    return emitOptionalError(location, "ExpandDims input must be static f32");
+  }
+  const int64_t outputRank = input.getRank() + requestedAxes.size();
+  std::set<int64_t> axes;
+  for (int64_t axis : requestedAxes) {
+    if (axis < 0) {
+      axis += outputRank;
+    }
+    if (axis < 0 || axis >= outputRank || !axes.insert(axis).second) {
+      return emitOptionalError(
+        location, "ExpandDims axes must be unique and in output rank");
+    }
+  }
+  SmallVector<int64_t> shape;
+  auto inputDimension = input.getShape().begin();
+  for (int64_t axis = 0; axis < outputRank; ++axis) {
+    shape.push_back(axes.contains(axis) ? 1 : *inputDimension++);
+  }
+  return RankedTensorType::get(shape, input.getElementType());
+}
+
+FailureOr<RankedTensorType> computePermuteResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  ArrayRef<int64_t> permutation) {
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
+      static_cast<int64_t>(permutation.size()) != input.getRank()) {
+    return emitOptionalError(
+      location, "Permute requires a static f32 input and one axis per rank");
+  }
+  std::set<int64_t> axes;
+  SmallVector<int64_t> shape;
+  for (int64_t axis : permutation) {
+    if (axis < 0 || axis >= input.getRank() || !axes.insert(axis).second) {
+      return emitOptionalError(location,
+                               "Permute axes must form a permutation");
+    }
+    shape.push_back(input.getShape()[axis]);
+  }
+  return RankedTensorType::get(shape, input.getElementType());
+}
+
 FailureOr<RankedTensorType> computeBinaryResult(
   std::optional<Location> location,
   ValueRange inputs,
@@ -423,8 +502,9 @@ FailureOr<RankedTensorType> computeBinaryResult(
   llvm::APFloat scalar,
   int64_t opType) {
   (void)scalar;
-  if (opType != 2) {
-    return emitOptionalError(location, "BinaryOp only supports multiply");
+  if (opType != 0 && opType != 2) {
+    return emitOptionalError(location,
+                             "BinaryOp only supports add and multiply");
   }
   if ((withScalar && inputs.size() != 1) ||
       (!withScalar && inputs.size() != 2)) {
@@ -469,10 +549,10 @@ FailureOr<RankedTensorType> computeInnerProductResult(
     return emitOptionalError(location,
                              "InnerProduct input and weight must be f32");
   }
-  if (input.getRank() != 1 || weight.getRank() != 2 ||
-      weight.getShape()[1] != input.getShape()[0]) {
-    return emitOptionalError(location,
-                             "InnerProduct expects input [I] and weight [O,I]");
+  if (!input.hasStaticShape() || input.getRank() < 1 || weight.getRank() != 2 ||
+      weight.getShape()[1] != input.getNumElements()) {
+    return emitOptionalError(
+      location, "InnerProduct input elements must match weight [O,I]");
   }
   if (hasBias) {
     if (bias.size() != 1) {
@@ -489,6 +569,43 @@ FailureOr<RankedTensorType> computeInnerProductResult(
     return emitOptionalError(location, "InnerProduct has unexpected bias");
   }
   return RankedTensorType::get({weight.getShape()[0]}, input.getElementType());
+}
+
+FailureOr<RankedTensorType> computeBatchNormResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  ValueRange parameters) {
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
+      input.getRank() < 1 || parameters.size() != 4) {
+    return emitOptionalError(location,
+                             "BatchNorm requires a static ranked f32 input");
+  }
+  const int64_t channels = input.getShape()[0];
+  for (Value parameter : parameters) {
+    auto type = dyn_cast<RankedTensorType>(parameter.getType());
+    if (!type || !type.getElementType().isF32() || type.getRank() != 1 ||
+        type.getShape()[0] != channels) {
+      return emitOptionalError(
+        location, "BatchNorm parameters must have input leading dimension");
+    }
+  }
+  return input;
+}
+
+FailureOr<RankedTensorType> computeGemmResult(std::optional<Location> location,
+                                              RankedTensorType input,
+                                              RankedTensorType weight,
+                                              RankedTensorType bias) {
+  if (!input || !weight || !bias || !input.getElementType().isF32() ||
+      !weight.getElementType().isF32() || !bias.getElementType().isF32() ||
+      input.getRank() != 2 || weight.getRank() != 2 || bias.getRank() != 1 ||
+      input.getShape()[1] != weight.getShape()[1] ||
+      bias.getShape()[0] != weight.getShape()[0]) {
+    return emitOptionalError(
+      location, "Gemm expects input [M,K], weight [N,K], and bias [N]");
+  }
+  return RankedTensorType::get({input.getShape()[0], weight.getShape()[0]},
+                               input.getElementType());
 }
 
 LogicalResult inferSliceResults(
@@ -716,6 +833,51 @@ LogicalResult ReshapeOp::inferReturnTypeComponents(
   return success();
 }
 
+LogicalResult SqueezeOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  SqueezeOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto input = dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  auto result = computeSqueezeResult(location, input, adaptor.getAxes());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult ExpandDimsOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  ExpandDimsOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto input = dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  auto result = computeExpandDimsResult(location, input, adaptor.getAxes());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult PermuteOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  PermuteOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto input = dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  auto result = computePermuteResult(location, input, adaptor.getPermutation());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
 LogicalResult BinaryOp::inferReturnTypeComponents(
   MLIRContext*,
   std::optional<Location> location,
@@ -748,6 +910,43 @@ LogicalResult InnerProductOp::inferReturnTypeComponents(
   }
   inferredReturnShapes.push_back(
     ShapedTypeComponents(result->getShape(), result->getElementType()));
+  return success();
+}
+
+LogicalResult BatchNormOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  BatchNormOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto input = dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  SmallVector<Value> parameters{adaptor.getSlope(),
+                                adaptor.getMean(),
+                                adaptor.getVariance(),
+                                adaptor.getBias()};
+  auto result = computeBatchNormResult(location, input, parameters);
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult GemmOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  GemmOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result =
+    computeGemmResult(location,
+                      dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+                      dyn_cast<RankedTensorType>(adaptor.getWeight().getType()),
+                      dyn_cast<RankedTensorType>(adaptor.getBias().getType()));
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
   return success();
 }
 

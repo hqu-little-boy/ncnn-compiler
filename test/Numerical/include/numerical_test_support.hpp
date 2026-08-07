@@ -107,6 +107,7 @@ run_ncnn_reference(std::string_view param_path,
                                           std::span<const float> expected,
                                           float maximum_absolute_error);
 ::testing::AssertionResult check_softmax(std::span<const float> actual,
-                                         std::span<const float> expected);
+                                         std::span<const float> expected,
+                                         double sum_tolerance = 1.0e-5);
 
 }  // namespace ncnn_compiler::test
