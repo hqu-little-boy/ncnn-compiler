@@ -1,0 +1,4 @@
+7767517
+2 2
+Input input 0 1 data 0=3 1=1 2=2
+InnerProduct inner_product_fused_relu 1 1 data output 0=4 1=1 2=24 9=1

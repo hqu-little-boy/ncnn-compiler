@@ -1,0 +1,6 @@
+7767517
+4 4
+Input input 0 1 data 0=3 1=1 2=2
+Squeeze squeeze 1 1 data matrix -23303=1,1
+Permute transpose 1 1 matrix rows 0=1
+Gemm gemm 1 1 rows output 0=0.5 1=-1.25 3=1 5=1 6=1 8=4 9=2 10=4

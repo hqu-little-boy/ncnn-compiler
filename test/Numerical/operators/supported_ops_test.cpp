@@ -1,6 +1,7 @@
 #include "numerical_test_support.hpp"
 
 #include <array>
+#include <cmath>
 #include <format>
 #include <limits>
 #include <string>
@@ -245,6 +246,32 @@ TEST(NumericalOperator, HardSwishMatchesNcnn) {
                                0x48535749U);
 }
 
+TEST(NumericalOperator, GELUMatchesNcnn) {
+  expect_single_input_operator("gelu",
+                               GELU_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(5, 2, 2),
+                               20,
+                               1.0e-6F,
+                               0x47454C55U);
+}
+
+TEST(NumericalOperator, GELUNegativeTailMatchesNcnn) {
+  const TensorShape shape(5, 2, 2);
+  const std::array<float, 20> input{
+    -10.0F, -8.0F, -6.0F, -5.0F, -4.0F, -3.0F, -2.0F, -1.0F, 0.0F,  1.0F,
+    2.0F,   3.0F,  4.0F,  5.0F,  6.0F,  7.0F,  8.0F,  9.0F,  10.0F, 0.5F};
+  const ReferenceModel reference(
+    fixture_path("gelu"), NUMERICAL_EMPTY_BIN_PATH, "data", "output", shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  CompiledModel compiled(GELU_LIBRARY_PATH, "gelu");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(input.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-12F));
+}
+
 TEST(NumericalOperator, ReshapeMatchesNcnn) {
   expect_single_input_operator("reshape",
                                RESHAPE_LIBRARY_PATH,
@@ -263,6 +290,66 @@ TEST(NumericalOperator, ReshapeCopyDimensionMatchesNcnn) {
                                24,
                                0.0F,
                                0x52435059U);
+}
+
+TEST(NumericalOperator, SqueezeMatchesNcnn) {
+  expect_single_input_operator("squeeze",
+                               SQUEEZE_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(4, 1, 3),
+                               12,
+                               0.0F,
+                               0x5351555AU);
+}
+
+TEST(NumericalOperator, BatchNormZeroVarianceMatchesNcnn) {
+  const TensorShape shape(4, 1, 3);
+  const auto elements = shape.element_count();
+  ASSERT_TRUE(elements.has_value()) << elements.error();
+  const std::vector<float> input =
+    make_random_input(*elements, 0x424E4F52U, -2.0F, 2.0F);
+  const ReferenceModel reference(
+    fixture_path("batch_norm"), BATCH_NORM_BIN_PATH, "data", "output", shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  CompiledModel compiled(BATCH_NORM_LIBRARY_PATH, "batch_norm");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(*elements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
+  EXPECT_TRUE(std::all_of(actual.begin(), actual.end(), [](float value) {
+    return std::isfinite(value);
+  }));
+}
+
+TEST(NumericalOperator, ExpandDimsNegativeAxisMatchesNcnn) {
+  expect_single_input_operator("expand_dims",
+                               EXPAND_DIMS_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(4, 1, 3),
+                               12,
+                               0.0F,
+                               0x45585044U);
+}
+
+TEST(NumericalOperator, PermuteRankTwoMatchesNcnn) {
+  expect_single_input_operator("permute",
+                               PERMUTE_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(4, 1, 3),
+                               12,
+                               0.0F,
+                               0x5045524DU);
+}
+
+TEST(NumericalOperator, GemmScaledBiasMatchesNcnn) {
+  expect_single_input_operator("gemm",
+                               GEMM_LIBRARY_PATH,
+                               GEMM_BIN_PATH,
+                               TensorShape(3, 1, 2),
+                               12,
+                               1.0e-6F,
+                               0x47454D4DU);
 }
 
 TEST(NumericalOperator, BinaryMultiplyScalarMatchesNcnn) {
@@ -331,6 +418,28 @@ TEST(NumericalOperator, BinaryMultiplyReverseBroadcastMatchesNcnn) {
   EXPECT_TRUE(compare_values(actual, expected->front(), 0.0F));
 }
 
+TEST(NumericalOperator, BinaryAddMatchesNcnn) {
+  const TensorShape shape(4, 3, 2);
+  const auto elements = shape.element_count();
+  ASSERT_TRUE(elements.has_value()) << elements.error();
+  const std::vector<float> first =
+    make_random_input(*elements, 0x42414431U, -2.0F, 2.0F);
+  const std::vector<float> second =
+    make_random_input(*elements, 0x42414432U, -2.0F, 2.0F);
+  const std::array<ReferenceInput, 2> inputs{
+    ReferenceInput("first", shape, first),
+    ReferenceInput("second", shape, second)};
+  constexpr std::array<std::string_view, 1> outputs{"output"};
+  const auto expected = run_ncnn_reference(
+    fixture_path("binary_add"), NUMERICAL_EMPTY_BIN_PATH, inputs, outputs);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  CompiledModel compiled(BINARY_ADD_LIBRARY_PATH, "binary_add");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(*elements);
+  ASSERT_EQ(compiled.run_two_inputs(first, second, actual), 0);
+  EXPECT_TRUE(compare_values(actual, expected->front(), 0.0F));
+}
+
 TEST(NumericalOperator, InnerProductMatchesNcnn) {
   expect_single_input_operator("inner_product",
                                INNER_PRODUCT_LIBRARY_PATH,
@@ -339,6 +448,28 @@ TEST(NumericalOperator, InnerProductMatchesNcnn) {
                                3,
                                1.0e-6F,
                                0x49505054U);
+}
+
+TEST(NumericalOperator, InnerProductRankThreeFusedReluMatchesNcnn) {
+  const TensorShape shape(3, 1, 2);
+  const auto elements = shape.element_count();
+  ASSERT_TRUE(elements.has_value()) << elements.error();
+  std::vector<float> input(*elements, -1.0F);
+  const ReferenceModel reference(fixture_path("inner_product_fused_relu"),
+                                 INNER_PRODUCT_FUSED_RELU_BIN_PATH,
+                                 "data",
+                                 "output",
+                                 shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  CompiledModel compiled(INNER_PRODUCT_FUSED_RELU_LIBRARY_PATH,
+                         "inner_product_fused_relu");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(4);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
+  EXPECT_TRUE(std::all_of(
+    actual.begin(), actual.end(), [](float value) { return value >= 0.0F; }));
 }
 
 TEST(NumericalOperator, ReluMatchesNcnn) {

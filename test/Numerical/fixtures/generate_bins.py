@@ -19,12 +19,27 @@ sizes = {
     "convolution_depthwise_same_upper": (18, 0),
     "convolution_depthwise_same_lower": (18, 0),
     "inner_product": (24, 3),
+    "inner_product_fused_relu": (24, 4),
 }
+if case == "batch_norm":
+    slope = [0.0001, -0.75, 0.5]
+    mean = [0.25, -0.5, 1.0]
+    variance = [0.0, 0.25, 4.0]
+    bias = [0.125, 0.5, -0.25]
+    output.write_bytes(struct.pack("<12f", *(slope + mean + variance + bias)))
+    raise SystemExit(0)
+if case == "gemm":
+    weight = [0.5, -0.25, 1.0, 0.75, -0.5, 0.125, 0.25, -1.0]
+    bias = [0.2, -0.4, 0.6, -0.8]
+    output.write_bytes(
+        struct.pack("<I8f", 0, *weight) + struct.pack("<I4f", 0, *bias)
+    )
+    raise SystemExit(0)
 if case not in sizes:
     output.write_bytes(b"")
     raise SystemExit(0)
 kernel_count, bias_count = sizes[case]
-if case.startswith("convolution_depthwise") or case == "inner_product":
+if case.startswith("convolution_depthwise") or case.startswith("inner_product"):
     rng = random.Random(0x4E434E4E if case.startswith("convolution_depthwise") else 0x49505052)
     weights = [rng.uniform(-0.25, 0.25) for _ in range(kernel_count)]
     bias = [rng.uniform(-0.1, 0.1) for _ in range(bias_count)]

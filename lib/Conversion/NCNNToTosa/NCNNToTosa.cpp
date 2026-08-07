@@ -9,6 +9,9 @@
 #include "llvm/Support/MathExtras.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -959,22 +962,29 @@ class ConvertGELU final : public OpConversionPattern<GELUOp> {
     auto type = cast<RankedTensorType>(adaptor.getInput().getType());
     Value half = createSplat(
       rewriter, operation.getLoc(), getBroadcastScalarType(type), 0.5);
-    Value one = createSplat(
-      rewriter, operation.getLoc(), getBroadcastScalarType(type), 1.0);
     Value shift = createI8Zero(rewriter, operation.getLoc());
     Value activation;
     if (!operation.getFast()) {
       Value inverseSqrtTwo = createSplat(rewriter,
                                          operation.getLoc(),
                                          getBroadcastScalarType(type),
-                                         0.7071067811865476);
+                                         -0.7071067811865476);
       Value scaled = rewriter.create<tosa::MulOp>(
         operation.getLoc(), type, adaptor.getInput(), inverseSqrtTwo, shift);
-      Value erf =
-        rewriter.create<tosa::ErfOp>(operation.getLoc(), type, scaled);
-      activation =
-        rewriter.create<tosa::AddOp>(operation.getLoc(), type, one, erf);
+      Value init = rewriter.create<tensor::EmptyOp>(
+        operation.getLoc(), type.getShape(), type.getElementType());
+      auto erfc = rewriter.create<linalg::MapOp>(
+        operation.getLoc(),
+        ValueRange{scaled},
+        init,
+        [](OpBuilder& builder, Location location, ValueRange values) {
+          Value value = builder.create<math::ErfcOp>(location, values.front());
+          builder.create<linalg::YieldOp>(location, value);
+        });
+      activation = erfc->getResult(0);
     } else {
+      Value one = createSplat(
+        rewriter, operation.getLoc(), getBroadcastScalarType(type), 1.0);
       Value cubic = rewriter.create<tosa::MulOp>(operation.getLoc(),
                                                  type,
                                                  adaptor.getInput(),
@@ -1528,6 +1538,9 @@ class ConvertNCNNToTosaPass final
     ConversionTarget target(*context);
     target.addLegalDialect<arith::ArithDialect,
                            func::FuncDialect,
+                           linalg::LinalgDialect,
+                           math::MathDialect,
+                           tensor::TensorDialect,
                            tosa::TosaDialect>();
     target.addLegalOp<ModuleOp>();
     target.addDynamicallyLegalOp<ConvolutionOp>([](ConvolutionOp operation) {

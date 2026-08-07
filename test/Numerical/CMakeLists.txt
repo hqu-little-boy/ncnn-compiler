@@ -94,6 +94,9 @@ set(convolution_depthwise_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/co
 set(convolution_depthwise_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_same_upper.bin)
 set(convolution_depthwise_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_same_lower.bin)
 set(inner_product_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product.bin)
+set(inner_product_fused_relu_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product_fused_relu.bin)
+set(batch_norm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/batch_norm.bin)
+set(gemm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/gemm.bin)
 file(WRITE ${empty_bin} "")
 foreach(convolution_case IN ITEMS
         convolution
@@ -114,7 +117,10 @@ foreach(weighted_case IN ITEMS
         convolution_depthwise_asymmetric
         convolution_depthwise_same_upper
         convolution_depthwise_same_lower
-        inner_product)
+        inner_product
+        inner_product_fused_relu
+        batch_norm
+        gemm)
     execute_process(
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
                 ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${weighted_case}.bin
@@ -178,6 +184,10 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hard_swish.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    gelu
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gelu.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     reshape
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reshape.param
     ${empty_bin})
@@ -185,6 +195,26 @@ ncnn_add_compiled_fixture(
     reshape_copy_dimension
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reshape_copy_dimension.param
     ${empty_bin})
+ncnn_add_compiled_fixture(
+    squeeze
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/squeeze.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    batch_norm
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/batch_norm.param
+    ${batch_norm_bin})
+ncnn_add_compiled_fixture(
+    expand_dims
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/expand_dims.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    permute
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/permute.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    gemm
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gemm.param
+    ${gemm_bin})
 ncnn_add_compiled_fixture(
     binary_mul_scalar
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/binary_mul_scalar.param
@@ -198,9 +228,17 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/binary_mul_reverse_broadcast.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    binary_add
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/binary_add.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     inner_product
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/inner_product.param
     ${inner_product_bin})
+ncnn_add_compiled_fixture(
+    inner_product_fused_relu
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/inner_product_fused_relu.param
+    ${inner_product_fused_relu_bin})
 ncnn_add_compiled_fixture(
     shuffle_channel
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/shuffle_channel.param
@@ -367,12 +405,20 @@ set(numerical_fixture_targets
     compile_convolution_depthwise_same_lower
     compile_hard_sigmoid
     compile_hard_swish
+    compile_gelu
     compile_reshape
     compile_reshape_copy_dimension
+    compile_squeeze
+    compile_batch_norm
+    compile_expand_dims
+    compile_permute
+    compile_gemm
     compile_binary_mul_scalar
     compile_binary_mul_channel
     compile_binary_mul_reverse_broadcast
+    compile_binary_add
     compile_inner_product
+    compile_inner_product_fused_relu
     compile_shuffle_channel
     compile_shuffle_channel_reverse
     compile_slice
@@ -455,18 +501,29 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_DEPTHWISE_SAME_UPPER_BIN_PATH="${convolution_depthwise_same_upper_bin}"
     CONVOLUTION_DEPTHWISE_SAME_LOWER_BIN_PATH="${convolution_depthwise_same_lower_bin}"
     INNER_PRODUCT_BIN_PATH="${inner_product_bin}"
+    INNER_PRODUCT_FUSED_RELU_BIN_PATH="${inner_product_fused_relu_bin}"
+    BATCH_NORM_BIN_PATH="${batch_norm_bin}"
+    GEMM_BIN_PATH="${gemm_bin}"
     CONVOLUTION_DEPTHWISE_LIBRARY_PATH="${convolution_depthwise_LIBRARY}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_LIBRARY_PATH="${convolution_depthwise_asymmetric_LIBRARY}"
     CONVOLUTION_DEPTHWISE_SAME_UPPER_LIBRARY_PATH="${convolution_depthwise_same_upper_LIBRARY}"
     CONVOLUTION_DEPTHWISE_SAME_LOWER_LIBRARY_PATH="${convolution_depthwise_same_lower_LIBRARY}"
     HARD_SIGMOID_LIBRARY_PATH="${hard_sigmoid_LIBRARY}"
     HARD_SWISH_LIBRARY_PATH="${hard_swish_LIBRARY}"
+    GELU_LIBRARY_PATH="${gelu_LIBRARY}"
     RESHAPE_LIBRARY_PATH="${reshape_LIBRARY}"
     RESHAPE_COPY_DIMENSION_LIBRARY_PATH="${reshape_copy_dimension_LIBRARY}"
+    SQUEEZE_LIBRARY_PATH="${squeeze_LIBRARY}"
+    BATCH_NORM_LIBRARY_PATH="${batch_norm_LIBRARY}"
+    EXPAND_DIMS_LIBRARY_PATH="${expand_dims_LIBRARY}"
+    PERMUTE_LIBRARY_PATH="${permute_LIBRARY}"
+    GEMM_LIBRARY_PATH="${gemm_LIBRARY}"
     BINARY_MUL_SCALAR_LIBRARY_PATH="${binary_mul_scalar_LIBRARY}"
     BINARY_MUL_CHANNEL_LIBRARY_PATH="${binary_mul_channel_LIBRARY}"
     BINARY_MUL_REVERSE_BROADCAST_LIBRARY_PATH="${binary_mul_reverse_broadcast_LIBRARY}"
+    BINARY_ADD_LIBRARY_PATH="${binary_add_LIBRARY}"
     INNER_PRODUCT_LIBRARY_PATH="${inner_product_LIBRARY}"
+    INNER_PRODUCT_FUSED_RELU_LIBRARY_PATH="${inner_product_fused_relu_LIBRARY}"
     SHUFFLE_CHANNEL_LIBRARY_PATH="${shuffle_channel_LIBRARY}"
     SHUFFLE_CHANNEL_REVERSE_LIBRARY_PATH="${shuffle_channel_reverse_LIBRARY}"
     SLICE_LIBRARY_PATH="${slice_LIBRARY}"

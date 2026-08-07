@@ -1096,9 +1096,16 @@ int main(int argc, char** argv) {
   }
   const std::set<std::string> undefined = symbols(*text);
   const std::set<std::string> allowed = {
-    "erff", "expf", "free", "malloc", "memcpy", "memset", "powf"};
+    "erfcf", "erff", "expf", "free", "malloc", "memcpy", "memset", "powf"};
   if (!std::ranges::includes(allowed, undefined)) {
-    return fail("shared library contains unexpected undefined symbols");
+    std::string unexpected;
+    for (const std::string& symbol : undefined) {
+      if (!allowed.contains(symbol)) {
+        unexpected += (unexpected.empty() ? "" : ", ") + symbol;
+      }
+    }
+    return fail("shared library contains unexpected undefined symbols: " +
+                unexpected);
   }
   if (!g_expected_undefined.empty()) {
     std::set<std::string> expected;

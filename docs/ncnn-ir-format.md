@@ -28,7 +28,7 @@
   ──convert-ncnn-model-to-func──▶  func.func + arith.constant + ncnn 计算 op
   ──normalize-ncnn──▶  func.func + normalized ncnn 计算 op
   ──convert-ncnn-to-tosa──▶  func.func + tosa + 未分配路径的 ncnn op
-  ──ncnn-to-tosa-pipeline/verify-no-ncnn-ops──▶  严格纯 TOSA IR
+  ──ncnn-to-tosa-pipeline/verify-no-ncnn-ops──▶  无 ncnn op 的目标 IR
   ──ncnn-tosa-to-linalg-pipeline──▶  tensor + Linalg/Arith/Math IR
   ──ncnn-linalg-to-memref-pipeline──▶  caller-owned output memref + void return
   ──generate-ncnn-c-api──▶  private model + prepared bare-pointer ABI metadata
@@ -47,7 +47,8 @@
 语义由 op folder 表达，交给标准 canonicalize 或目标 conversion 消除。
 `convert-ncnn-to-tosa` 只处理函数体内明确属于 TOSA 支持集合的计算算子；单独运行时允许
 其他 ncnn op 留给其他 conversion。组合的 `ncnn-to-tosa-pipeline` 通过最终残留检查要求
-输入模型严格转换为纯 TOSA。
+输入模型严格消除 ncnn op。大多数算子转换为 TOSA；标准 GELU 为保持 ncnn 的 `erfc`
+负尾部数值语义，转换为可 bufferize 的 `linalg.map + math.erfc`。
 
 `convert-ncnn-to-tosa` 基于 MLIR dialect conversion：每种受支持算子由独立 conversion
 pattern 转换，`TypeConverter` 描述 rank-3 CHW 到 rank-4 NHWC 的类型映射，source/target

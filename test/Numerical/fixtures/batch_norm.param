@@ -1,0 +1,5 @@
+7767517
+3 3
+Input input 0 1 data 0=4 1=1 2=3
+Squeeze squeeze 1 1 data matrix -23303=1,1
+BatchNorm batch_norm 1 1 matrix output 0=3 1=0.0

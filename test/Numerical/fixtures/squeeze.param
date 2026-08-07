@@ -1,0 +1,4 @@
+7767517
+2 2
+Input input 0 1 data 0=4 1=1 2=3
+Squeeze squeeze 1 1 data output -23303=1,1

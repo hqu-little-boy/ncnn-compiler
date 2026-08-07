@@ -13,7 +13,8 @@ def ConvertNCNNToTosaPass
     : Pass<"convert-ncnn-to-tosa", "mlir::ModuleOp"> {
   let summary = "Convert the SqueezeNet ncnn op set to TOSA";
   let dependentDialects = [
-    "arith::ArithDialect", "func::FuncDialect", "tosa::TosaDialect"
+    "arith::ArithDialect", "func::FuncDialect", "linalg::LinalgDialect",
+    "math::MathDialect", "tensor::TensorDialect", "tosa::TosaDialect"
   ];
 }
 

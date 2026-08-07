@@ -49,7 +49,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | `ShuffleChannel` | `ncnn.shuffle_channel` | group, reverse | 静态 FP32；group 必须整除通道数 |
 | `Slice` | `ncnn.slice` | slices, axis | 静态 FP32；支持显式 sizes 和 `-233` 等分 |
 | `Reduction` | `ncnn.reduction` | kind, reduce_all, coeff, axes, keepdims | 静态 FP32 mean 子集 |
-| `GELU` | `ncnn.gelu` | fast | 当前支持标准 erf 形式（`fast=0`） |
+| `GELU` | `ncnn.gelu` | fast | 当前支持标准 erfc 形式（`fast=0`） |
 | `Squeeze` | `ncnn.squeeze` | axes | 显式静态 axes |
 | `BatchNorm` | `ncnn.batch_norm` | epsilon | 静态 FP32，按首维归一化 |
 | `ExpandDims` | `ncnn.expand_dims` | axes | 显式静态 axes |
@@ -119,7 +119,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | 导入 | `ncnn_importer::import_graph` | 提升为类型化 MLIR SSA DAG，通过 op 的 `InferTypeOpInterface` 执行静态形状推断 |
 | 模型→函数 | `convert-ncnn-model-to-func` | Full dialect conversion：移动模型 region，建立 `func.func` + `arith.constant`，不 clone SSA 图 |
 | 规范化 | `normalize-ncnn` | 两阶段校验/提交：SAME padding 校验由 `TypeSwitch` 分派，提交由 typed `OpRewritePattern` 完成；Split 由标准 folder/canonicalize 消除 |
-| ncnn→TOSA | `convert-ncnn-to-tosa` | MLIR dialect conversion patterns + CHW/NHWC 双向 materialization |
+| ncnn→TOSA | `convert-ncnn-to-tosa` | MLIR dialect conversion patterns + CHW/NHWC 双向 materialization；标准 GELU 使用可 bufferize 的 `linalg.map + math.erfc` |
 | TOSA→Linalg | 上游 `addTosaToLinalgPasses` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith |
 | Linalg→MemRef | `bufferize-ncnn` + `buffer-results-to-out-params` | One-Shot Bufferize，输出提升为 caller-owned 参数 |
 | C API 生成 | `generate-ncnn-c-api` | 准备 bare-pointer ABI 元数据，通过 MLIR `SymbolTable` 重命名内部函数并更新全部符号引用 |
@@ -149,7 +149,7 @@ adaptive pooling、average include-pad 和尚未分配目标路径的 ncnn op �
 |---|---|---|
 | parsed-graph | 自定义文本 | 调试用，不被下游消费 |
 | ncnn 方言 | MLIR 文本 | `ncnn.model` + 类型化 SSA 值 |
-| TOSA | MLIR 文本 | 纯上游 TOSA 方言 |
+| TOSA | MLIR 文本 | 上游 TOSA 为主；标准 GELU 同时含 Linalg/Math |
 | Linalg | MLIR 文本 | tensor + Linalg/Arith/Math |
 | MemRef | MLIR 文本 | bufferized，caller-owned output，void return |
 | C API | MLIR 文本 | 附加 bare-pointer ABI 元数据 |
@@ -184,7 +184,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 ### 5.3 链接约束
 
 - 使用 `-nostdlib`、`-Wl,-z,defs`、`--no-undefined`、版本脚本。
-- 允许的未定义符号仅限：`erff`、`expf`、`powf`、`free`、`malloc`、`memcpy`、`memset`。
+- 允许的未定义符号仅限：`erfcf`、`erff`、`expf`、`powf`、`free`、`malloc`、`memcpy`、`memset`。
 - 仅导出模型入口函数符号。
 - 禁止出现：`memrefCopy`、`runner_utils`、`RunnerUtils`、`ncnn_runtime`。
 
@@ -235,6 +235,9 @@ int <model_name>(const float *input1, ..., float *output1, ...);
   - ConvolutionDepthWise：basic、非对称 stride/dilation/padding、SAME_UPPER/LOWER
   - Reshape：静态 shape、`-1` 推断、`0` 复制输入维度
   - BinaryOp：标量、channel broadcast、反向 broadcast
+  - PP-OCRv6 rec 新增算子：GELU（含负尾部）、Squeeze、BatchNorm 零方差保护、
+    ExpandDims 负轴、rank-2 Permute、非默认 alpha/beta Gemm、BinaryOp add、
+    rank-3 输入融合 ReLU InnerProduct
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet 和 PP-OCRv6 tiny rec 与 upstream ncnn 数值对齐
   - 全有限输出、softmax 求和误差 ≤1e-5（PP-OCRv6 的 6906 类输出为 ≤2e-5）、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4
