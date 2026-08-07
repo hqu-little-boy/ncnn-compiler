@@ -471,6 +471,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin
     3x640x640)
+ncnn_add_compiled_fixture(
+    pp_ocrv5_mobile_det
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin
+    3x640x640)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -566,6 +571,7 @@ add_dependencies(compile_pp_ocrv6_tiny_rec
 add_dependencies(compile_pp_ocrv6_tiny_det compile_pp_ocrv6_tiny_rec)
 add_dependencies(compile_pp_ocrv6_small_det compile_pp_ocrv6_tiny_det)
 add_dependencies(compile_pp_ocrv6_medium_det compile_pp_ocrv6_small_det)
+add_dependencies(compile_pp_ocrv5_mobile_det compile_pp_ocrv6_medium_det)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -701,7 +707,10 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_SMALL_DET_LIBRARY_PATH="${pp_ocrv6_small_det_LIBRARY}"
     PP_OCRV6_MEDIUM_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param"
     PP_OCRV6_MEDIUM_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin"
-    PP_OCRV6_MEDIUM_DET_LIBRARY_PATH="${pp_ocrv6_medium_det_LIBRARY}")
+    PP_OCRV6_MEDIUM_DET_LIBRARY_PATH="${pp_ocrv6_medium_det_LIBRARY}"
+    PP_OCRV5_MOBILE_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param"
+    PP_OCRV5_MOBILE_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin"
+    PP_OCRV5_MOBILE_DET_LIBRARY_PATH="${pp_ocrv5_mobile_det_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
@@ -710,6 +719,7 @@ add_dependencies(numerical_tests compile_pp_ocrv6_tiny_rec)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_small_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
+add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det)
 
 gtest_discover_tests(numerical_tests
     PROPERTIES LABELS "numerical;golden" TIMEOUT 900 RUN_SERIAL TRUE)
