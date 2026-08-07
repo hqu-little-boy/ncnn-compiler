@@ -32,7 +32,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 
 ### 2.2 计算 op（当前方言/导入集合，共 26 项）
 
-下表是当前完整的 26 个计算 op 集合。表中“支持”只表示对应受限实例可导入并通过产品
+下表是当前完整的 26 个计算 op 集合。Importer 当前注册 27 个 source layer type，包含
+`Input` 和下表 26 个计算层。表中“支持”只表示对应受限实例可导入并通过产品
 strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言权威定义是
 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td)，导入权威是
 `lib/Importer/NCNNImporter.cpp` 的 `importers()`；最终能力还须满足

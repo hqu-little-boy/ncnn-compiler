@@ -177,7 +177,7 @@ SAME_UPPER/LOWER 与 tail；Concat 的 rank-3 正负 axis；Softmax 的 rank-3 �
 三路 Split 输出经过多级 consumer 的拓扑。`ConvolutionDepthWise` 当前支持独立的纯 depthwise
 静态 FP32 子集；这不等于支持通用 group convolution、动态权重、量化或融合激活。
 
-完整 26 个计算 op 的集合和能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
+完整 26 个计算 op 的集合，以及包含 `Input` 在内的 27 个 importer source layer type，能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
 为准；本节只列 numerical fixture 已覆盖的参数组合。
 
 ## 9. 多输入、多输出 ABI 必须实际调用，不能只检查 manifest
