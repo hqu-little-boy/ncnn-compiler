@@ -9,7 +9,7 @@
 - 数值测试工程：`test/Numerical/`
 - 测试支持层：`test/Numerical/support/numerical_test_support.cpp`
 - fixture 注册：`test/Numerical/CMakeLists.txt`
-- 稳定 C++ 模型编译入口：`tools/ncnn-compile.cpp`
+- 稳定且唯一的产品模型编译入口：`tools/ncnn-compile.cpp`
 - Python 流水线调试入口：`tools/compile_ncnn_model.py`
 - 方言和 lowering：`include/ncnn-mlir/Dialect/NCNN/IR/`、`lib/Conversion/NCNNToTosa/`
 - ncnn 疑似问题与上游报告前检查项：[`docs/ncnn-suspected-issues.md`](ncnn-suspected-issues.md)
@@ -174,9 +174,11 @@ full-tail、SAME_UPPER、SAME_LOWER 和 average exclude-pad。当前 average `in
 当前 Numerical 参数矩阵已覆盖：Convolution 的无 bias、dilation、非对称显式 padding、
 SAME_UPPER/LOWER；ReLU 的普通、零/负输入和 leaky slope；Pooling 的 max/average、global、
 SAME_UPPER/LOWER 与 tail；Concat 的 rank-3 正负 axis；Softmax 的 rank-3 正负 axis；以及
-三路 Split 输出经过多级 consumer 的拓扑。ncnn 的 group/depthwise convolution 使用独立的
-`ConvolutionDepthWise` layer，当前 importer 未支持，不能通过给普通 `Convolution` 增加
-group 参数来宣称支持。
+三路 Split 输出经过多级 consumer 的拓扑。`ConvolutionDepthWise` 当前支持独立的纯 depthwise
+静态 FP32 子集；这不等于支持通用 group convolution、动态权重、量化或融合激活。
+
+完整 26 个计算 op 的集合和能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
+为准；本节只列 numerical fixture 已覆盖的参数组合。
 
 ## 9. 多输入、多输出 ABI 必须实际调用，不能只检查 manifest
 
@@ -194,6 +196,10 @@ int split_scalar(const float *input1, float *output1, float *output2);
 - 每个输出独立比较，不只比较第一个输出；
 - 输出元素数来自实际 manifest/shape，不通过总字节数猜测；
 - `dlsym` 得到的 `void *` 通过 `std::bit_cast` 转为与该 case 完全匹配的函数指针类型。
+
+断言按类别报告，不能用一个总断言掩盖失败原因：安全性（返回码、finite、空指针）、逐元素
+数值（每个输出的最大绝对/相对误差和索引）、模型语义（softmax sum、top-1、top-5）以及
+ABI 结构（manifest/头文件的数量、顺序、shape、元素宏）。
 
 不要用一个固定的一入一出函数指针调用所有模型。C++ 调错函数指针签名是未定义行为，即使在某个
 ABI 上暂时能工作。
@@ -229,18 +235,18 @@ Split lowering 最终可能被优化成 `memcpy`。因此它虽然没有数学�
 
 ## 12. Sanitizer 覆盖范围容易被高估
 
-在 sanitizer CMake build 中运行 numerical test，可以覆盖：
+在 sanitizer CMake build 中运行 numerical test（fixture 通过 `ncnn-compile` 生成并加载 `.so`），可以覆盖：
 
 - GTest harness；
 - 本地 test support；
 - 通过 `add_subdirectory` 构建的 ncnn reference；
 - 动态加载和输入/输出桥接。
 
-但 `compile_ncnn_model.py` 会自行调用 clang 编译 LLVM IR。如果脚本没有显式接收并转发 sanitizer
-flags，生成的模型 `.so` 本身并未被 sanitizer instrument。测试进程带 ASan 不等于动态库内部
+但当前 `ncnn-compile` 直接调用 clang，源码没有 sanitizer 专用转发选项；生成的模型 `.so`
+本身并未被 sanitizer instrument。测试进程带 ASan 不等于动态库内部
 每个访问都已插桩。
 
-未来若要求 sanitizer 覆盖生成模型，必须给脚本增加可重复的 compile/link flag 参数，并验证
+若要求 sanitizer 覆盖生成模型，必须给 `ncnn-compile` 增加可重复的 compile/link flag 参数，并验证
 最终 `.so` 确实包含 sanitizer runtime/instrumentation；不能只看 CTest 运行在
 `build-sanitize` 目录。
 

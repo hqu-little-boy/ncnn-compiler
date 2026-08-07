@@ -8,8 +8,8 @@
 
 `ncnn` 方言 IR 是编译器**类型化前端 IR**，是一个标准的 **MLIR 模块**（`builtin.module`
 里一个 `ncnn.model`）。它由 `ncnn_importer::import_graph()` 从原始
-[parsed-graph](parsed-graph-format.md) 提升而来，是下游多路径 lowering（TOSA、Linalg/SCF、Host）
-真正消费的输入。
+[parsed-graph](parsed-graph-format.md) 提升而来，是下游唯一产品 lowering
+（TOSA→Linalg→MemRef→LLVM）真正消费的输入。
 
 > 本方言取代了早期的自定义 C++ 前端 IR（`ncnn_frontend`，已删除）。同样的
 > 「线性层列表 → 类型化 SSA DAG」提升现在直接落到 MLIR：SSA 值、use-def 链、
@@ -39,8 +39,8 @@
 后端 ABI 收尾步骤。
 它使用 MLIR full dialect conversion 消除模型边界并建立标准函数形态：`ModelOp` pattern
 创建函数并把原 region 内容移动到函数 block，input/output 映射为参数和单个 return，
-`ConstOp` pattern 转为 `arith.constant`。conversion driver 管理 SSA remap、合法性和失败
-回滚，不 clone 整个模型 SSA 图。该 pass 不转换计算语义或 CHW/OIHW 布局；后续
+`ConstOp` pattern 转为 `arith.constant`。conversion driver 管理 SSA remap、合法性和 rewrite
+失败处理，不 clone 整个模型 SSA 图，也不提供整 module 事务回滚。该 pass 不转换计算语义或 CHW/OIHW 布局；后续
 `normalize-ncnn` 保持 CHW/OIHW，收敛 axis、padding、融合属性等目标无关语义。该 pass
 先只读验证所有 ncnn op 的函数边界并预计算可能失败的 SAME padding，全部成功后才原地
 提交属性更新；失败不会留下部分规范化结果，也不需要 clone 整个模块。Split 的 SSA fan-out
@@ -55,7 +55,7 @@ pattern 转换，`TypeConverter` 描述 rank-3 CHW 到 rank-4 NHWC 的类型映�
 materialization 自动在函数边界、合法非 ncnn op 和残留 ncnn op 两侧插入 transpose + reshape。
 函数签名不参与类型转换，所以公共函数 ABI 始终保持 CHW。支持的 ncnn op 被标为 illegal，
 明确不支持的实例和未知 ncnn op 保持 legal；conversion driver 负责 SSA 值 remap、替换、删除
-和失败回滚，不使用手写值映射或模块 clone。
+和 rewrite 失败处理，不使用手写值映射或模块 clone。
 `ncnn-linalg-to-memref-pipeline` 在 Linalg 阶段之后执行 One-Shot Bufferize，随后立即将
 memref result 提升为带 `bufferize.result` 的输出参数，再执行 deallocation。入口函数不返回
 tensor/memref，调用方拥有 input/output buffer，函数只释放内部临时分配。最终 gate 禁止
@@ -67,7 +67,8 @@ Affine/SCF/Math/Arith/MemRef/Func/CF 到 LLVM dialect 的转换，因此不会�
 后生成裸指针 wrapper：公共参数顺序固定为全部输入后全部输出，内部再按原函数参数顺序组装
 静态连续 memref descriptor。模型实现被改为 private，任一空指针返回 1，成功返回 0。
 
-与 parsed-graph 的关键区别：**parsed-graph 是层的线性列表，ncnn 方言模块是类型化的 SSA DAG**。
+与 parsed-graph 的关键区别：**parsed-graph 是保留 ncnn 文件语义的线性层视图，ncnn 方言模块
+是类型化的 SSA DAG**。parsed-graph 不是下游 IR，也不提供完整的中间值 shape inference。
 `import_graph` 做了这些提升：
 
 - **blob 名 → SSA 值**：每条 ncnn blob 变成一个带 `RankedTensorType` 的 MLIR `Value`
@@ -130,7 +131,10 @@ module {
 
 ## 4. 算子与属性
 
-模型边界由 `ncnn.model`、`ncnn.input`、`ncnn.const`、`ncnn.output` 表示，另有 7 个计算算子：
+模型边界由 `ncnn.model`、`ncnn.input`、`ncnn.const`、`ncnn.output` 表示。当前计算 op 共
+26 个；权威集合是 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td) 的
+TableGen 定义，完整能力矩阵见 [ncnn-compile-support-status.md](ncnn-compile-support-status.md)。
+下表 7 项只是 SqueezeNet 示例实际使用的计算 op：
 
 | 算子 | 操作数 | 属性 | 结果 |
 |------|--------|------|------|

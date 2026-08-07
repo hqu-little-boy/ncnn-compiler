@@ -141,6 +141,17 @@ dist/resnet/
 有效产物。成功重编译会以完整的新产物集替换旧目录，因此本次不再请求的中间 MLIR 文件会消失。
 如果输出目录含有不属于 `ncnn-compile` 的文件，driver 会在编译前拒绝执行，且不会删除该文件。
 
+### 2.5 `--input-shape=<CxHxW>`
+
+为 `Input` 层省略尺寸的模型提供静态输入形状。值必须恰好包含三个正整数，分隔符为 `x`
+或 `X`，顺序为 ncnn 原生的 `C x H x W`。模型必须恰好有一个 `Input` 层且该层省略尺寸；
+该选项不能改写 `.param` 中已有尺寸，也不能为多输入模型分别提供 shape。格式或使用条件不
+满足时编译失败。
+
+```bash
+ncnn-compile model.param --input-shape=3x224x224
+```
+
 ## 3. 优化和调试信息
 
 ### 3.1 `-O0`、`-O1`、`-O2`、`-O3`
@@ -291,8 +302,9 @@ ncnn-compile model.param \
   --target-triple=x86_64-unknown-linux-gnu
 ```
 
-当前 driver 的链接和产物审计契约只支持 64 位 Linux ELF target，不支持 Windows DLL、macOS
-dylib 或 32 位 ELF。
+CLI 只接受 64 位 Linux ELF triple。当前源码和 CTest 已验证的是宿主 Linux x86-64；Linux
+AArch64 可在提供匹配 Clang 工具链和 sysroot 时尝试交叉编译，但当前不属于已验证的运行目标。
+Windows DLL、macOS dylib 和 32 位 ELF 不属于当前产物契约。
 
 AArch64 交叉编译示例：
 
@@ -303,6 +315,7 @@ ncnn-compile model.param \
 ```
 
 交叉编译时，仅指定 triple 通常不够，还必须提供匹配的 Clang 工具链和 target sysroot。
+`--verify-execution` 只能用于生成库可由当前宿主执行的情况。
 
 ### 5.2 `--march=<architecture>`
 

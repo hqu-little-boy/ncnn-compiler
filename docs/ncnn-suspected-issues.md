@@ -6,7 +6,9 @@ ncnn 的实现缺陷。本文对应的 ncnn submodule 提交为
 `a4d2ea1d4422c9e849f166fd7a4aefb52f942f6a`。
 
 上游报告前，应使用独立于本项目的最小 ncnn 程序复现，并记录编译器、目标架构、编译
-选项、输入 shape、内存分配方式和完整 sanitizer 调用栈。当前数值测试的规避方法见
+选项、输入 shape、内存分配方式和完整 sanitizer 调用栈。当前 numerical 测试由 CMake
+fixture 通过唯一产品入口 `ncnn-compile` 生成并加载模型 `.so`；sanitizer 默认覆盖 harness、
+reference 和 ABI 桥接，不会自动插桩该 `.so`。当前数值测试的规避方法见
 [`operator-numerical-validation-guide.md`](operator-numerical-validation-guide.md)。
 
 ## 1. 外部 Mat 与优化 kernel 的尾部预读

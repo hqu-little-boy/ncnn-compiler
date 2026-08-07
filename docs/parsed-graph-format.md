@@ -6,9 +6,9 @@
 
 ## 1. 这是什么阶段
 
-`parsed-graph` 是编译流水线的**最前端产物**：`.param`/`.bin` 刚被解析成
-`ncnn_graph::Graph` 数据模型，尚未做任何类型化、shape 推导或 lowering。它
-1:1 忠实反映 ncnn 原始模型文件的内容——层的顺序、blob 连线、参数字典
+`parsed-graph` 是编译流水线的**最前端语义视图**：`.param`/`.bin` 刚被解析成
+`ncnn_graph::Graph` 数据模型，尚未建立 MLIR 类型化 SSA 或 lowering。它保留 ncnn 原始模型
+的层顺序、blob 连线、参数字典
 （`key=value`）、以及从 `.bin` 按算子顺序读出并绑定到各层的权重张量。
 
 它的用途：
@@ -18,7 +18,7 @@
   确认是解析层错了还是 import 层错了。
 - **理解模型结构**：一屏看清整张图的拓扑与权重规模。
 
-它**不是**给下游 pass 吃的 IR——那是 ncnn 方言 IR（`--emit=mlir`，见
+它**不是**给下游 pass 吃的 IR，也不是完整的中间值 shape inference——那是 ncnn 方言 IR（`--emit=mlir`，见
 [ncnn-ir-format.md](ncnn-ir-format.md)）及之后的阶段。`parsed-graph`
 是纯人读的调试快照。
 
@@ -155,7 +155,7 @@ SqueezeNet v1.1 使用的 8 种算子。
 | 抽象层次 | ncnn 原始模型的忠实镜像 | 类型化的有向图 IR（SSA-ish） |
 | 参数 | 原始 `key=value` 字典 | 解析成具名属性（`kernel`/`stride`/…） |
 | 权重 | 按层绑定的张量 | 独立的 `const` 算子，带 `TensorType` |
-| shape | 仅 `Input` 显式给出 | 每个 value 都有推导出的 shape/dtype/layout |
+| shape | 主要保留 Input 参数和权重 shape；不提供中间值类型推断 | 每个 value 都有推导出的 shape/dtype，布局由维序约定 |
 | 用途 | 调试 / 交叉验证解析器 | 下游 lowering（→ tosa → linalg → …）的输入 |
 
 排查问题的顺序：先 `parsed-graph` 确认解析对，再 `ncnn-ir` 确认导入对。

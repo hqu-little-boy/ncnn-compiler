@@ -21,6 +21,9 @@
 - CMake 必须设置 `CMAKE_CXX_STANDARD 23`、
   `CMAKE_CXX_STANDARD_REQUIRED ON` 和 `CMAKE_CXX_EXTENSIONS OFF`。
 - 禁止依赖 GNU C++ 扩展或其他未显式声明的编译器扩展。
+- `constexpr`/`consteval` 小型无状态函数和常量可放在头文件中；这是 ODR-safe 的头文件例外，
+  必须保持 inline 语义且不引入可变静态状态。普通非模板方法实现仍放在 `.cpp`，并由声明
+  所在 target 显式链接对应实现库，不能依赖传递 include 或隐式链接。
 - 项目不强制指定宿主 C/C++ 编译器；编译器必须完整支持 C++23，并能与项目使用的
   LLVM/MLIR 21 库兼容。CMake 尊重用户通过 toolchain file、`CC`/`CXX` 或 cache
   选择的编译器。
@@ -281,6 +284,8 @@ const auto error = parse_layer_params(text, &params);
 - 失败的 `Tensor::set_shape()` 不得改变原 shape。
 - 二进制 cursor 的读取和对齐操作必须先验证剩余范围，成功后才能推进位置。
 - 加载失败不得对调用方暴露部分构建且看似有效的 Graph。
+- MLIR conversion 的失败处理不得描述成 clone 整个 module 的事务回滚；文档必须明确是
+  conversion driver 的 rewrite 回滚，或 importer/normalize 的两阶段校验后提交。
 
 ## 7. 文本解析与数值安全
 
@@ -433,6 +438,13 @@ cmake --build compiler/build --target format_check
 cmake --build compiler/build --target tidy
 ```
 
+若当前目录已是 `compiler/`，构建目录为 `build/`：
+
+```bash
+cmake --build build --target format_check
+cmake --build build --target tidy
+```
+
 ## 12. 测试规范
 
 ### 12.1 覆盖要求
@@ -466,6 +478,9 @@ cmake --build compiler/build-sanitize --parallel
 ctest --test-dir compiler/build-sanitize --output-on-failure
 ```
 
+sanitizer 构建的 numerical fixture 仍由 CMake 测试实际调用 `ncnn-compile`；生成的模型
+`.so` 默认不带 ASan/UBSan 插桩，sanitizer 主要覆盖 harness、reference 和动态库边界桥接。
+
 Sanitizer 报告、崩溃、未定义行为或测试失败均为阻断问题，不能只根据最终进程返回值
 忽略诊断。
 
@@ -479,6 +494,7 @@ cmake --build compiler/build --parallel
 ctest --test-dir compiler/build --output-on-failure
 cmake --build compiler/build --target format_check
 cmake --build compiler/build --target tidy
+git -C compiler diff --check
 ```
 
 涉及不可信输入、数值计算或二进制读写时，再执行第 12.2 节 sanitizer 构建。

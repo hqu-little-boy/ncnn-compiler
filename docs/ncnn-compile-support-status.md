@@ -30,7 +30,13 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | `ncnn.const` | 来自 `.bin` 的权重常量 |
 | `ncnn.output` | 标记导出输出 blob |
 
-### 2.2 计算 op（完整支持、可端到端编译）
+### 2.2 计算 op（当前方言/导入集合，共 26 项）
+
+下表是当前完整的 26 个计算 op 集合。表中“支持”只表示对应受限实例可导入并通过产品
+strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言权威定义是
+[`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td)，导入权威是
+`lib/Importer/NCNNImporter.cpp` 的 `importers()`；最终能力还须满足
+`lib/Conversion/NCNNToTosa/NCNNToTosa.cpp` 的 conversion pattern 和严格残留 op gate。
 
 | ncnn 层类型 | 方言 op | 关键属性 | 备注 |
 |---|---|---|---|
@@ -41,7 +47,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | `Concat` | `ncnn.concat` | axis | 沿 axis 拼接 |
 | `Dropout` | `ncnn.dropout` | scale（默认 1.0） | 推理时 scale=1.0 为恒等 |
 | `Softmax` | `ncnn.softmax` | axis | |
-| `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 仅纯 depthwise、静态 FP32 |
+| `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 当前支持纯 depthwise、静态 FP32；不是通用 group conv |
 | `Deconvolution` | `ncnn.deconvolution` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, output_pad_bottom/right, has_bias | 静态 FP32 2x2 stride-2 子集；可选 bias 和融合 ReLU |
 | `Padding` | `ncnn.padding` | top, bottom, left, right, value | 静态 FP32 constant spatial padding |
 | `Interp` | `ncnn.interp` | height_scale, width_scale | 静态 FP32 nearest、正整数倍上采样 |
@@ -93,8 +99,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 
 | 阶段 | 位置 | 责任 |
 |---|---|---|
-| 层类型 → importer handler | `lib/Importer/NCNNImporter.cpp` 的 `kImporters` | 层类型到 `ImportContext` handler 的分派 |
-| 算子族实现 | `lib/Importer/Import{Input,Convolution,Pooling,Activation,Tensor}.cpp` | 参数校验、SSA 构造、blob 绑定 |
+| 层类型 → importer handler | `lib/Importer/NCNNImporter.cpp` 的 `importers()` | 层类型到 `ImportContext` handler 的分派 |
+| 算子族实现 | `lib/Importer/Import{Input,Convolution,Pooling,Activation,Tensor,Ops,Detection}.cpp` | 参数校验、SSA 构造、blob 绑定 |
 | 权重字节消费 | `lib/Graph/graph.cpp` 的 `kWeightLoaders` | 带权重 layer 必须注册 loader 消费 `.bin` |
 | 共享参数解码 | `lib/Graph/graph.cpp` 的 `decode_convolution_params()` | 参数 ID/默认值/合法性的单一来源 |
 | 能力声明 | `include/ncnn-mlir/Support/LayerCapabilities.hpp` | `HasWeights`/`NeedsNormalization`/`Lowerable` |
@@ -151,7 +157,7 @@ ncnn 原生使用 **CHW** 布局（卷积权重 `[O,I,H,W]`）。C ABI 保持 CH
 该转换采用部分转换契约：可 lowering 的 ncnn op 必须由 pattern 消除；int8 convolution、
 adaptive pooling、average include-pad 和尚未分配目标路径的 ncnn op 可以残留。单 pass 成功
 不表示已经得到纯 TOSA，严格 pipeline 最后通过 `verify-no-ncnn-ops` 拒绝任何残留。转换失败时
-由 MLIR conversion driver 回滚已执行的 pattern，不通过 clone 模块实现事务性。
+由 MLIR conversion driver 处理 rewrite 失败，不通过 clone 整个 module 实现事务性。
 
 ---
 
@@ -174,10 +180,11 @@ adaptive pooling、average include-pad 和尚未分配目标路径的 ncnn op �
 
 ## 5. 目标平台与 ABI
 
-### 5.1 支持的目标
+### 5.1 CLI 接受与已验证目标
 
-- **Linux x86-64 ELF**（主要，宿主测试）
-- **Linux AArch64 ELF**（交叉编译，需配套 Clang 工具链 + sysroot）
+- CLI 接受 64 位 Linux ELF triple；**已验证**的是宿主 Linux x86-64（CTest 和数值测试）。
+- Linux AArch64 仅是可尝试的交叉编译目标，需配套 Clang 工具链和 sysroot，当前没有本项目
+  的端到端运行验证。`--verify-execution` 不能用于不能在当前宿主执行的交叉产物。
 
 不支持：Windows DLL、macOS dylib、32-bit ELF。
 
@@ -191,7 +198,8 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 - 输入为 `const float *`，输出为 `float *`。
 - 调用方拥有所有 buffer， contiguous、native-endian、f32。
 - 返回 0 表示成功；任一指针为 NULL 返回 1。
-- 仅支持静态形状。
+- 仅支持静态形状；可用 `--input-shape=CxHxW` 补齐恰好一个且尺寸省略的 Input，不能覆盖
+  已声明尺寸或表达多输入 shape。
 
 ### 5.3 链接约束
 
@@ -283,7 +291,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 | 量化 | int8 参数可解析但不被 lowering；f16 权重可解析但端到端路径仅 f32 |
 | 形状 | 仅静态形状 |
 | 数据类型 | ABI 仅 f32 |
-| 入口 | 单入口点，单组输入/输出 |
+| 入口 | 一个导出函数；可有多个输入和多个输出，ABI 按“全部输入后全部输出”排列 |
 | 平台 | 仅 Linux 64-bit ELF |
 | GPU/NPU | 无，仅 CPU（LLVM 后端） |
 | 图优化 | 无算子融合、无常量折叠 |

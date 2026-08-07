@@ -1,7 +1,8 @@
 # ncnn-mlir-driver 使用文档
 
 > 编译器**前端入口**：把 ncnn 模型（`.param` + `.bin`）解析并提升为 **MLIR `ncnn` 方言模块**，
-> 是后续 ncnn→TOSA、ncnn→Linalg/SCF、ncnn→Host 多路径下降管线的起点。
+> 是唯一产品入口 `ncnn-compile` 所使用的固定 ncnn→TOSA→Linalg→MemRef→LLVM 管线的起点。
+> `ncnn-mlir-opt` 和 Python 脚本只用于开发调试，不是另一条产品 pipeline。
 > 参数解析用 LLVM 自带的 `llvm::cl`（`mlir-opt` 同款 CommandLine 库）。
 
 > 注意：项目根目录是 `/mnt/ncnn-compiler`。本文中相对路径均以 `compiler/` 为基准。
@@ -28,7 +29,9 @@ cmake --build build --parallel
   `--tosa-to-linalg`、`--convert-arith-to-llvm` …）。做 MLIR 的解析/校验/round-trip 与
   下降调试（lit 测试用它），**不消费 ncnn 模型**。
 
-依赖：LLVM/MLIR 21（Debian 包 `llvm-21-dev` + `libmlir-21-dev`）。CMake 通过
+依赖：LLVM/MLIR 21（Debian 包 `llvm-21-dev` + `libmlir-21-dev`）、CMake 3.20+、C++23
+编译器、Python 3（lit 和 fixture 生成）、GTest 开发包以及 `clang-21`、`mlir-translate-21`、
+`llvm-nm-21`、`llvm-readelf-21`、`FileCheck-21`。CMake 通过
 `find_package(MLIR CONFIG)` 定位（config 目录 `/usr/lib/llvm-21/lib/cmake/mlir`），
 链接 `MLIRIR / MLIRSupport / MLIRFuncDialect / MLIRArithDialect / MLIRParser` 等。
 
@@ -53,6 +56,7 @@ ncnn-mlir-driver [options] <input .param file>
 |------|------|------|
 | `<input>`（位置参数，必填） | ncnn 网络结构文件 `.param` | — |
 | `--bin=<path>` | 权重文件 `.bin` | 由 `<input>` 把末尾 `.param` 换成 `.bin` 推导 |
+| `--input-shape=<CxHxW>` | 为唯一且尺寸省略的 `Input` 提供静态 shape | 无 |
 | `-o <path>` | 产物输出路径，`-` 写到 stdout | `-`（stdout） |
 | `--emit=<stage>` | 选择要发出的阶段（见下） | `mlir` |
 | `--verify` | 对导入的 MLIR 模块跑校验器 | 开 |
@@ -64,8 +68,8 @@ ncnn-mlir-driver [options] <input .param file>
 - `parsed-graph`：原始解析出的 ncnn 计算图（layer/blob/参数 + 绑定的权重形状），
   最贴近 `.param`/`.bin` 原貌，适合排查解析问题。
 
-> `--emit` 是驱动最关键的设计点：后续 `tosa`、`linalg`、`llvm`、`library`
-> 等下降阶段会加入到这个同一个枚举里，CLI 表面保持稳定。
+> `ncnn-mlir-driver` 当前只输出 `parsed-graph` 或 ncnn 方言 MLIR。后续产品阶段由
+> `ncnn-compile` 调用固定 pipeline；这里的 `--emit` 不是多路径产品接口。
 
 查看帮助（`--help` 已用 `OptionCategory` 收窄，不会被链接 libLLVM 引入的海量
 codegen option 淹没）：
@@ -144,6 +148,15 @@ MLIR 模块格式详见 [ncnn-ir-format.md](ncnn-ir-format.md)。
 
 ### 3.3 查看原始解析图
 
+为唯一且省略尺寸的 `Input` 提供 shape 时使用：
+
+```bash
+./build/tools/ncnn-mlir-driver model.param --input-shape=3x224x224
+```
+
+值必须是恰好三个正整数 `CxHxW`（`x`/`X` 均可）。模型必须恰好有一个 `Input`，且
+`.param` 未给出该 Input 的尺寸；不能用该选项覆盖已有尺寸或表达多个输入 shape。
+
 ```bash
 ./build/tools/ncnn-mlir-driver --emit=parsed-graph test/third_party/ncnn/examples/squeezenet_v1.1.param
 ```
@@ -219,15 +232,17 @@ $ echo $?
 
 Importer 输出后必须先运行 `--convert-ncnn-model-to-func`，一次性把输入、输出和权重
 转移到 `func.func` 参数/结果与 `arith.constant`，并删除模型边界算子。该 pass 是
-`--normalize-ncnn` 和各目标 conversion 的固定前置。`--convert-ncnn-to-tosa` 采用长期
-部分转换契约：只转换明确支持的算子，其他 ncnn op 可留给后续 Linalg/SCF 或 Host 路径。
+`--normalize-ncnn` 和各目标 conversion 的固定前置。`--convert-ncnn-to-tosa` 采用部分
+转换契约：只转换明确支持的算子，其他 ncnn op 可在开发阶段暂时残留；产品严格 pipeline
+的最终 gate 会拒绝任何未消除的 ncnn op。
 模型函数化使用 MLIR full dialect conversion：`ModelOp` pattern 移动原 region 并建立函数
-边界，`ConstOp` pattern 转换权重，conversion driver 负责 SSA remap、合法性和失败回滚，
-不会复制整个模型计算图。
+边界，`ConstOp` pattern 转换权重，conversion driver 负责 SSA remap、合法性和 rewrite
+失败处理，不会复制整个模型计算图；这不是整 module 的事务回滚。
 `--normalize-ncnn` 会先只读验证并预计算 SAME padding，再原地提交全部规范化修改；验证失败
 不会产生部分结果。`--convert-ncnn-to-tosa` 使用 MLIR dialect conversion patterns，借助
 `TypeConverter` 的 source/target materialization 在 CHW 和 NHWC 间转换，并由 conversion
-driver 管理 SSA remap 和失败回滚。两者均不通过 clone 整个模块换取事务性。
+driver 管理 SSA remap 和 rewrite 失败处理。两者均不 clone 整个 module，也不提供整 module
+事务回滚语义。
 
 所有项目 pass 的 CLI 名称、选项、dependent dialect、factory 和注册均由统一的
 `ncnn-mlir/Passes.td` 生成，`ncnn-mlir-opt` 通过一次 `registerNCNNPasses()` 完成注册。
@@ -257,6 +272,11 @@ convert-ncnn-model-to-func
 → canonicalize → cse
 → verify-no-ncnn-ops
 ```
+
+产品 pipeline 还固定继续执行 `ncnn-tosa-to-linalg-pipeline`、
+`ncnn-linalg-to-memref-pipeline`、`generate-ncnn-c-api` 和
+`ncnn-memref-to-llvm-pipeline`，随后完成 LLVM IR 翻译、目标代码编译、严格链接、符号/依赖
+审计和头文件生成。单独运行一个 pass 或 pipeline 不等于产品编译成功。
 
 单独运行 `--convert-ncnn-to-tosa` 用于开发和调试某条 conversion，不表示模型已完整
 lowering。可转换的算子实例在 conversion target 中是 illegal，明确不支持的实例和未知 ncnn
