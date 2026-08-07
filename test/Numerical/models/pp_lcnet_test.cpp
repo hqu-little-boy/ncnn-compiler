@@ -155,5 +155,36 @@ TEST(NumericalModel, PPOCRv6TinyDetMatchesNcnn) {
   EXPECT_EQ(repeated, actual);
 }
 
+TEST(NumericalModel, PPOCRv6SmallDetMatchesNcnn) {
+  const TensorShape inputShape(640, 640, 3);
+  constexpr std::size_t kOutputElements = 640 * 640;
+  constexpr float kTolerance = 3.0e-4F;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x53444554U, -0.01F, 0.01F);
+  const ReferenceModel reference(PP_OCRV6_SMALL_DET_PARAM_PATH,
+                                 PP_OCRV6_SMALL_DET_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 inputShape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), kOutputElements);
+
+  CompiledModel compiled(PP_OCRV6_SMALL_DET_LIBRARY_PATH, "pp_ocrv6_small_det");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kOutputElements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, kTolerance));
+  EXPECT_TRUE(std::all_of(actual.begin(), actual.end(), [](float value) {
+    return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+  }));
+
+  std::vector<float> repeated(kOutputElements);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+}
+
 }  // namespace
 }  // namespace ncnn_compiler::test
