@@ -42,8 +42,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 仅纯 depthwise、静态 FP32 |
 | `HardSigmoid` | `ncnn.hard_sigmoid` | alpha, beta | 静态 FP32 |
 | `HardSwish` | `ncnn.hard_swish` | alpha, beta | 静态 FP32 |
-| `Reshape` | `ncnn.reshape` | static shape | 支持静态 shape 和单个 `-1` |
-| `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 仅乘法；支持标量和同 rank 广播 |
+| `Reshape` | `ncnn.reshape` | static shape | 支持静态 shape、单个 `-1` 和 `0` 复制对应输入维度 |
+| `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 仅乘法；支持标量和同 rank 双向广播 |
 | `InnerProduct` | `ncnn.inner_product` | has_bias | 仅静态 FP32、rank-1 输入 |
 
 导入器（`lib/Importer/NCNNImporter.cpp`）对上述以外的层类型返回 `unsupported layer type` 错误。
@@ -54,9 +54,10 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
   在导入时拒绝。`int8_scale_term` 可解析但 **int8 量化卷积不会被 lowering**——残留 ncnn op
   被严格流水线拒绝。
 - **ConvolutionDepthWise**：当前只接受纯 depthwise FP32；通用 group convolution、动态权重、量化和
-  融合激活仍然拒绝。
-- **Pooling**：`mode=Adaptive` 和 `Average + include_pad=1` **不会被 lowering**（残留 → 拒绝）。
-  `pad_mode=0`（full + tail padding）通过尾部填充计算正常支持。
+  融合激活仍然拒绝；显式 padding 和 SAME_UPPER/LOWER 均支持。
+- **Pooling**：`mode=Adaptive` 和 regular `Average + include_pad=1` **不会被 lowering**（残留 → 拒绝）。
+  `pad_mode=0`（full + tail padding）通过尾部填充计算正常支持；global 模式按 ncnn 语义忽略
+  regular-only 的 padding 和 `include_pad` 参数。
 - **Softmax**：旧版 `fixbug0=0` 仅允许 `axis=0`。
 
 ### 2.4 算子扩展一致性契约
@@ -210,14 +211,16 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 `test/Numerical/`：将编译产物 `.so` 的输出与上游 ncnn **naive 标量 CPU 参考**对比。
 
 - `operators/supported_ops_test.cpp`：覆盖支持算子的参数矩阵，包括：
-  - Convolution：basic、no-bias、dilated、asymmetric padding、SAME_UPPER/LOWER
+  - Convolution：basic、no-bias、dilated、asymmetric padding/stride、SAME_UPPER/LOWER
   - ReLU：standard、leaky、zero/negative inputs
-  - Pooling：max、average(exclude-pad)、global max/avg、SAME_UPPER/LOWER、tail window
+  - Pooling：max、average(exclude-pad)、非对称空间参数、global 参数忽略、SAME_UPPER/LOWER、tail window
   - Softmax：channel/height/width axis + negative-axis
   - Concat：channel/height/width + negative-axis
   - Split：2-way、3-way consumer topology
   - Dropout：identity
-  - ConvolutionDepthWise：basic、非对称 stride/dilation/padding
+  - ConvolutionDepthWise：basic、非对称 stride/dilation/padding、SAME_UPPER/LOWER
+  - Reshape：静态 shape、`-1` 推断、`0` 复制输入维度
+  - BinaryOp：标量、channel broadcast、反向 broadcast
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori 与 upstream ncnn 数值对齐
   - 全有限输出、softmax 求和误差 ≤1e-5、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4

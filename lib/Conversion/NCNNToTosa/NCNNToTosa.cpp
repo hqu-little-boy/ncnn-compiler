@@ -259,6 +259,29 @@ FailureOr<SmallVector<int64_t>> getPoolPadding(PoolingOp operation) {
     operation.emitOpError("pool padding must be non-negative");
     return failure();
   }
+  auto makeDivisible = [](int64_t inputSize,
+                          int64_t kernel,
+                          int64_t stride,
+                          int64_t leading,
+                          int64_t& trailing) {
+    int64_t remainder = (inputSize + leading + trailing - kernel) % stride;
+    if (remainder < 0) {
+      remainder += stride;
+    }
+    if (remainder != 0) {
+      trailing += stride - remainder;
+    }
+  };
+  makeDivisible(input.getShape()[1],
+                operation.getKernelH(),
+                operation.getStrideH(),
+                top,
+                bottom);
+  makeDivisible(input.getShape()[2],
+                operation.getKernelW(),
+                operation.getStrideW(),
+                left,
+                right);
   return SmallVector<int64_t>{top, bottom, left, right};
 }
 
@@ -452,10 +475,57 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
     if (failed(padding)) {
       return failure();
     }
+    RankedTensorType pooledType = outputType;
+    if (!global) {
+      const int64_t pooledHeight =
+        ((inputType.getShape()[1] + (*padding)[0] + (*padding)[1] - kernel[0]) /
+         stride[0]) +
+        1;
+      const int64_t pooledWidth =
+        ((inputType.getShape()[2] + (*padding)[2] + (*padding)[3] - kernel[1]) /
+         stride[1]) +
+        1;
+      pooledType = RankedTensorType::get(
+        {1, pooledHeight, pooledWidth, inputType.getShape()[3]},
+        inputType.getElementType());
+    }
+    Value poolInput = input;
+    SmallVector<int64_t> poolPadding = *padding;
+    const bool materializeMaxPadding =
+      !global &&
+      operation.getKind() == static_cast<int64_t>(PoolKind::Maximum) &&
+      (poolPadding[0] >= kernel[0] || poolPadding[1] >= kernel[0] ||
+       poolPadding[2] >= kernel[1] || poolPadding[3] >= kernel[1]);
+    if (materializeMaxPadding) {
+      auto paddedInputType = RankedTensorType::get(
+        {inputType.getShape()[0],
+         inputType.getShape()[1] + poolPadding[0] + poolPadding[1],
+         inputType.getShape()[2] + poolPadding[2] + poolPadding[3],
+         inputType.getShape()[3]},
+        inputType.getElementType());
+      Value paddingShape = createShape(rewriter,
+                                       operation.getLoc(),
+                                       {0,
+                                        0,
+                                        poolPadding[0],
+                                        poolPadding[1],
+                                        poolPadding[2],
+                                        poolPadding[3],
+                                        0,
+                                        0});
+      Value padValue =
+        createSplat(rewriter,
+                    operation.getLoc(),
+                    RankedTensorType::get({1}, inputType.getElementType()),
+                    -std::numeric_limits<double>::infinity());
+      poolInput = rewriter.create<tosa::PadOp>(
+        operation.getLoc(), paddedInputType, input, paddingShape, padValue);
+      poolPadding.assign(4, 0);
+    }
     Value result;
     if (operation.getKind() == static_cast<int64_t>(PoolKind::Maximum)) {
       result = rewriter.create<tosa::MaxPool2dOp>(
-        operation.getLoc(), outputType, input, kernel, stride, *padding);
+        operation.getLoc(), pooledType, poolInput, kernel, stride, poolPadding);
     } else {
       Value zero =
         createSplat(rewriter,
@@ -463,7 +533,7 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
                     RankedTensorType::get({1}, inputType.getElementType()),
                     0.0);
       result = rewriter.create<tosa::AvgPool2dOp>(operation.getLoc(),
-                                                  outputType,
+                                                  pooledType,
                                                   input,
                                                   zero,
                                                   zero,
@@ -471,6 +541,13 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
                                                   stride,
                                                   *padding,
                                                   rewriter.getF32Type());
+    }
+    if (pooledType != outputType) {
+      Value start = createShape(rewriter, operation.getLoc(), {0, 0, 0, 0});
+      Value size =
+        createShape(rewriter, operation.getLoc(), outputType.getShape());
+      result = rewriter.create<tosa::SliceOp>(
+        operation.getLoc(), outputType, result, start, size);
     }
     if (global) {
       Value shape =

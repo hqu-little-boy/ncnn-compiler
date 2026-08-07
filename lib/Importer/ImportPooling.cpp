@@ -68,6 +68,13 @@ ImportResult import_pooling(ImportContext& importer,
     effective_kernel_w = *output_width;
     effective_kernel_h = *output_height;
   }
+  if (mode == 1) {
+    *pad_top = 0;
+    *pad_bottom = 0;
+    *pad_left = 0;
+    *pad_right = 0;
+    *include_pad = 0;
+  }
   auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
   if (!input) {
     return std::unexpected(input.error());

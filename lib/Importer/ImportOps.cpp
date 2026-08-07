@@ -85,14 +85,43 @@ ImportResult import_reshape(ImportContext& importer,
       make_error(context, "reshape parameter type is invalid"));
   }
   llvm::SmallVector<int64_t> shape;
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto input_type = llvm::dyn_cast<mlir::RankedTensorType>(input->getType());
+  if (!input_type) {
+    return std::unexpected(make_error(context, "reshape input must be ranked"));
+  }
+  const auto input_shape = input_type.getShape();
+  if (*w == 0) {
+    *w = input_shape.back();
+  }
+  if (*h == 0) {
+    if (input_type.getRank() < 2) {
+      return std::unexpected(
+        make_error(context, "reshape cannot copy missing height dimension"));
+    }
+    *h = input_shape[input_type.getRank() - 2];
+  }
+  if (*d == 0) {
+    if (input_type.getRank() != 4) {
+      return std::unexpected(
+        make_error(context, "reshape cannot copy missing depth dimension"));
+    }
+    *d = input_shape[1];
+  }
+  if (*c == 0) {
+    if (input_type.getRank() < 3) {
+      return std::unexpected(
+        make_error(context, "reshape cannot copy missing channel dimension"));
+    }
+    *c = input_shape.front();
+  }
   for (int64_t dimension : {*c, *d, *h, *w}) {
     if (dimension != -233) {
       shape.push_back(dimension);
     }
-  }
-  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
-  if (!input) {
-    return std::unexpected(input.error());
   }
   auto& b = importer.builder();
   mlir::ncnn::ReshapeOp::Properties props;

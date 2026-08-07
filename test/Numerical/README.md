@@ -23,15 +23,15 @@ packing、线程、Vulkan、Winograd、SGEMM、fp16、bf16 和 int8 路径。固
 3. 在 `operators/` 或 `models/` 添加薄 GTest，复用 `run_ncnn_reference`、
    `compare_values` 和 `check_softmax`。
 
-当前单算子层覆盖编译器支持的全部计算层：`Convolution`、`ReLU`、`Pooling`、
-`Split`、`Concat`、`Dropout` 和 `Softmax`。参数矩阵额外覆盖卷积的 dilation、无 bias、
-非对称/SAME padding，ReLU 的 leaky 和零/负输入，Pooling 的 average/global/SAME/tail，
-Concat/Softmax 的 rank-3 正负 axis，以及三路 Split consumer 拓扑。`Input`、`Const`、
-`Output` 是模型边界或权重表示，由这些计算层 fixture 的编译和执行一并覆盖。
+当前单算子层覆盖编译器支持的全部计算层，包括 `ConvolutionDepthWise`、`HardSigmoid`、
+`HardSwish`、`Reshape`、`BinaryOp` 和 `InnerProduct`。参数矩阵覆盖卷积的 dilation、无 bias、
+非对称 stride/padding 和 SAME padding，Depthwise 的非对称空间参数和 SAME padding，
+Pooling 的非对称参数、global 参数忽略、average/SAME/tail，Reshape 的 `-1`/`0` 语义，
+BinaryOp 的双向广播，以及 Concat/Softmax 的 rank-3 正负 axis。
 
-当前明确不属于 native numerical 覆盖范围：`ConvolutionDepthWise`/group convolution、
-average pooling `include_pad=1` 和 adaptive pooling。前者尚未由 importer 支持，后两者
-在严格 lowering 中保留 ncnn operation 并被 residual gate 拒绝。
+当前明确不属于 native numerical 覆盖范围：通用 group convolution、regular average pooling
+`include_pad=1` 和 adaptive pooling。这些配置在严格 lowering 中保留 ncnn operation 并被
+residual gate 拒绝。
 
 SqueezeNet 第一版验收要求：所有输出 finite、softmax sum 误差不超过 `1e-5`、top-1
 一致、top-5 集合一致、最大绝对误差不超过 `1e-4`。Release 构建用于验证真实优化

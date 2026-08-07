@@ -179,6 +179,32 @@ class NormalizePooling final : public OpRewritePattern<PoolingOp> {
   const PaddingMap* explicitPadding_;
 };
 
+class NormalizeDepthwiseConvolution final
+  : public OpRewritePattern<ConvolutionDepthWiseOp> {
+ public:
+  NormalizeDepthwiseConvolution(MLIRContext* context,
+                                const PaddingMap& explicitPadding)
+    : OpRewritePattern(context), explicitPadding_(&explicitPadding) {}
+
+  LogicalResult matchAndRewrite(ConvolutionDepthWiseOp operation,
+                                PatternRewriter& rewriter) const final {
+    auto padding = explicitPadding_->find(operation);
+    if (padding == explicitPadding_->end()) {
+      return failure();
+    }
+    rewriter.modifyOpInPlace(operation, [&] {
+      setI64(operation, "pad_top", padding->second[0]);
+      setI64(operation, "pad_bottom", padding->second[1]);
+      setI64(operation, "pad_left", padding->second[2]);
+      setI64(operation, "pad_right", padding->second[3]);
+    });
+    return success();
+  }
+
+ private:
+  const PaddingMap* explicitPadding_;
+};
+
 class NormalizeNCNNPass final
   : public impl::NormalizeNCNNPassBase<NormalizeNCNNPass> {
  public:
@@ -208,6 +234,9 @@ class NormalizeNCNNPass final
         .Case<ConvolutionOp>([&](ConvolutionOp convolution) {
           return validateConvolution(convolution, explicitPadding);
         })
+        .Case<ConvolutionDepthWiseOp>([&](ConvolutionDepthWiseOp convolution) {
+          return validateConvolution(convolution, explicitPadding);
+        })
         .Case<PoolingOp>([&](PoolingOp pooling) {
           return validatePooling(pooling, explicitPadding);
         })
@@ -219,6 +248,8 @@ class NormalizeNCNNPass final
     }
 
     applyPattern(module, NormalizeConvolution(&getContext(), explicitPadding));
+    applyPattern(module,
+                 NormalizeDepthwiseConvolution(&getContext(), explicitPadding));
     applyPattern(module, NormalizePooling(&getContext(), explicitPadding));
     applyPattern(module, NormalizeAxis<ConcatOp>(&getContext()));
     applyPattern(module, NormalizeAxis<SoftmaxOp>(&getContext()));
@@ -239,7 +270,8 @@ class NormalizeNCNNPass final
     });
   }
 
-  static WalkResult validateConvolution(ConvolutionOp operation,
+  template <typename Op>
+  static WalkResult validateConvolution(Op operation,
                                         PaddingMap& explicitPadding) {
     const int64_t pad = operation.getPadTop();
     if (pad != -233 && pad != -234) {

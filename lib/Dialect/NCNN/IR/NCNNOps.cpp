@@ -444,7 +444,7 @@ FailureOr<RankedTensorType> computeBinaryResult(
       location, "BinaryOp inputs must have matching rank and element type");
   }
   for (int64_t i = 0; i < first.getRank(); ++i) {
-    if (second.getShape()[i] != 1 &&
+    if (first.getShape()[i] != 1 && second.getShape()[i] != 1 &&
         second.getShape()[i] != first.getShape()[i]) {
       return emitOptionalError(location,
                                "BinaryOp input shapes are not broadcastable");

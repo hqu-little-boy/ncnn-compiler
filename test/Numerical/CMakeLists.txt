@@ -86,10 +86,13 @@ set(convolution_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution.bin)
 set(convolution_no_bias_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_no_bias.bin)
 set(convolution_dilated_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_dilated.bin)
 set(convolution_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_asymmetric.bin)
+set(convolution_asymmetric_stride_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_asymmetric_stride.bin)
 set(convolution_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_upper.bin)
 set(convolution_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_lower.bin)
 set(convolution_depthwise_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise.bin)
 set(convolution_depthwise_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_asymmetric.bin)
+set(convolution_depthwise_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_same_upper.bin)
+set(convolution_depthwise_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_same_lower.bin)
 set(inner_product_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product.bin)
 file(WRITE ${empty_bin} "")
 foreach(convolution_case IN ITEMS
@@ -97,6 +100,7 @@ foreach(convolution_case IN ITEMS
         convolution_no_bias
         convolution_dilated
         convolution_asymmetric
+        convolution_asymmetric_stride
         convolution_same_upper
         convolution_same_lower)
     execute_process(
@@ -108,6 +112,8 @@ endforeach()
 foreach(weighted_case IN ITEMS
         convolution_depthwise
         convolution_depthwise_asymmetric
+        convolution_depthwise_same_upper
+        convolution_depthwise_same_lower
         inner_product)
     execute_process(
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
@@ -132,6 +138,10 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_asymmetric.param
     ${convolution_asymmetric_bin})
 ncnn_add_compiled_fixture(
+    convolution_asymmetric_stride
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_asymmetric_stride.param
+    ${convolution_asymmetric_stride_bin})
+ncnn_add_compiled_fixture(
     convolution_same_upper
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_same_upper.param
     ${convolution_same_upper_bin})
@@ -147,6 +157,14 @@ ncnn_add_compiled_fixture(
     convolution_depthwise_asymmetric
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise_asymmetric.param
     ${convolution_depthwise_asymmetric_bin})
+ncnn_add_compiled_fixture(
+    convolution_depthwise_same_upper
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise_same_upper.param
+    ${convolution_depthwise_same_upper_bin})
+ncnn_add_compiled_fixture(
+    convolution_depthwise_same_lower
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise_same_lower.param
+    ${convolution_depthwise_same_lower_bin})
 ncnn_add_compiled_fixture(
     relu_scalar
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/relu.param
@@ -164,12 +182,20 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reshape.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    reshape_copy_dimension
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reshape_copy_dimension.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     binary_mul_scalar
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/binary_mul_scalar.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
     binary_mul_channel
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/binary_mul_channel.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    binary_mul_reverse_broadcast
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/binary_mul_reverse_broadcast.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
     inner_product
@@ -188,12 +214,24 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_average.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    pooling_asymmetric
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_asymmetric.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     pooling_global_max
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_global_max.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
     pooling_global_average
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_global_average.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    pooling_global_max_ignored_params
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_global_max_ignored_params.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    pooling_global_average_ignored_params
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_global_average_ignored_params.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
     pooling_same_upper
@@ -290,22 +328,30 @@ set(numerical_fixture_targets
     compile_convolution_no_bias
     compile_convolution_dilated
     compile_convolution_asymmetric
+    compile_convolution_asymmetric_stride
     compile_convolution_same_upper
     compile_convolution_same_lower
     compile_convolution_depthwise
     compile_convolution_depthwise_asymmetric
+    compile_convolution_depthwise_same_upper
+    compile_convolution_depthwise_same_lower
     compile_hard_sigmoid
     compile_hard_swish
     compile_reshape
+    compile_reshape_copy_dimension
     compile_binary_mul_scalar
     compile_binary_mul_channel
+    compile_binary_mul_reverse_broadcast
     compile_inner_product
     compile_relu_scalar
     compile_relu_leaky
     compile_pooling_scalar
     compile_pooling_average
+    compile_pooling_asymmetric
     compile_pooling_global_max
     compile_pooling_global_average
+    compile_pooling_global_max_ignored_params
+    compile_pooling_global_average_ignored_params
     compile_pooling_same_upper
     compile_pooling_same_lower
     compile_pooling_tail
@@ -362,26 +408,36 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_NO_BIAS_BIN_PATH="${convolution_no_bias_bin}"
     CONVOLUTION_DILATED_BIN_PATH="${convolution_dilated_bin}"
     CONVOLUTION_ASYMMETRIC_BIN_PATH="${convolution_asymmetric_bin}"
+    CONVOLUTION_ASYMMETRIC_STRIDE_BIN_PATH="${convolution_asymmetric_stride_bin}"
     CONVOLUTION_SAME_UPPER_BIN_PATH="${convolution_same_upper_bin}"
     CONVOLUTION_SAME_LOWER_BIN_PATH="${convolution_same_lower_bin}"
     CONVOLUTION_DEPTHWISE_BIN_PATH="${convolution_depthwise_bin}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_BIN_PATH="${convolution_depthwise_asymmetric_bin}"
+    CONVOLUTION_DEPTHWISE_SAME_UPPER_BIN_PATH="${convolution_depthwise_same_upper_bin}"
+    CONVOLUTION_DEPTHWISE_SAME_LOWER_BIN_PATH="${convolution_depthwise_same_lower_bin}"
     INNER_PRODUCT_BIN_PATH="${inner_product_bin}"
     CONVOLUTION_DEPTHWISE_LIBRARY_PATH="${convolution_depthwise_LIBRARY}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_LIBRARY_PATH="${convolution_depthwise_asymmetric_LIBRARY}"
+    CONVOLUTION_DEPTHWISE_SAME_UPPER_LIBRARY_PATH="${convolution_depthwise_same_upper_LIBRARY}"
+    CONVOLUTION_DEPTHWISE_SAME_LOWER_LIBRARY_PATH="${convolution_depthwise_same_lower_LIBRARY}"
     HARD_SIGMOID_LIBRARY_PATH="${hard_sigmoid_LIBRARY}"
     HARD_SWISH_LIBRARY_PATH="${hard_swish_LIBRARY}"
     RESHAPE_LIBRARY_PATH="${reshape_LIBRARY}"
+    RESHAPE_COPY_DIMENSION_LIBRARY_PATH="${reshape_copy_dimension_LIBRARY}"
     BINARY_MUL_SCALAR_LIBRARY_PATH="${binary_mul_scalar_LIBRARY}"
     BINARY_MUL_CHANNEL_LIBRARY_PATH="${binary_mul_channel_LIBRARY}"
+    BINARY_MUL_REVERSE_BROADCAST_LIBRARY_PATH="${binary_mul_reverse_broadcast_LIBRARY}"
     INNER_PRODUCT_LIBRARY_PATH="${inner_product_LIBRARY}"
     CONVOLUTION_LIBRARY_PATH="${convolution_scalar_LIBRARY}"
     RELU_LIBRARY_PATH="${relu_scalar_LIBRARY}"
     RELU_LEAKY_LIBRARY_PATH="${relu_leaky_LIBRARY}"
     POOLING_LIBRARY_PATH="${pooling_scalar_LIBRARY}"
     POOLING_AVERAGE_LIBRARY_PATH="${pooling_average_LIBRARY}"
+    POOLING_ASYMMETRIC_LIBRARY_PATH="${pooling_asymmetric_LIBRARY}"
     POOLING_GLOBAL_MAX_LIBRARY_PATH="${pooling_global_max_LIBRARY}"
     POOLING_GLOBAL_AVERAGE_LIBRARY_PATH="${pooling_global_average_LIBRARY}"
+    POOLING_GLOBAL_MAX_IGNORED_PARAMS_LIBRARY_PATH="${pooling_global_max_ignored_params_LIBRARY}"
+    POOLING_GLOBAL_AVERAGE_IGNORED_PARAMS_LIBRARY_PATH="${pooling_global_average_ignored_params_LIBRARY}"
     POOLING_SAME_UPPER_LIBRARY_PATH="${pooling_same_upper_LIBRARY}"
     POOLING_SAME_LOWER_LIBRARY_PATH="${pooling_same_lower_LIBRARY}"
     POOLING_TAIL_LIBRARY_PATH="${pooling_tail_LIBRARY}"
@@ -404,6 +460,7 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_NO_BIAS_LIBRARY_PATH="${convolution_no_bias_LIBRARY}"
     CONVOLUTION_DILATED_LIBRARY_PATH="${convolution_dilated_LIBRARY}"
     CONVOLUTION_ASYMMETRIC_LIBRARY_PATH="${convolution_asymmetric_LIBRARY}"
+    CONVOLUTION_ASYMMETRIC_STRIDE_LIBRARY_PATH="${convolution_asymmetric_stride_LIBRARY}"
     CONVOLUTION_SAME_UPPER_LIBRARY_PATH="${convolution_same_upper_LIBRARY}"
     CONVOLUTION_SAME_LOWER_LIBRARY_PATH="${convolution_same_lower_LIBRARY}"
     SQUEEZENET_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param"

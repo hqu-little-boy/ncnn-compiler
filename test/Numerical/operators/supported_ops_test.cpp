@@ -123,6 +123,16 @@ TEST(NumericalOperator, AsymmetricConvolutionPaddingMatchesNcnn) {
                                0x43415359U);
 }
 
+TEST(NumericalOperator, AsymmetricConvolutionStrideMatchesNcnn) {
+  expect_single_input_operator("convolution_asymmetric_stride",
+                               CONVOLUTION_ASYMMETRIC_STRIDE_LIBRARY_PATH,
+                               CONVOLUTION_ASYMMETRIC_STRIDE_BIN_PATH,
+                               TensorShape(8, 9, 1),
+                               32,
+                               1.0e-5F,
+                               0x43415354U);
+}
+
 TEST(NumericalOperator, ConvolutionSameUpperMatchesNcnn) {
   expect_single_input_operator("convolution_same_upper",
                                CONVOLUTION_SAME_UPPER_LIBRARY_PATH,
@@ -163,6 +173,26 @@ TEST(NumericalOperator, AsymmetricDepthwiseConvolutionMatchesNcnn) {
                                0x44574153U);
 }
 
+TEST(NumericalOperator, DepthwiseConvolutionSameUpperMatchesNcnn) {
+  expect_single_input_operator("convolution_depthwise_same_upper",
+                               CONVOLUTION_DEPTHWISE_SAME_UPPER_LIBRARY_PATH,
+                               CONVOLUTION_DEPTHWISE_SAME_UPPER_BIN_PATH,
+                               TensorShape(5, 4, 2),
+                               12,
+                               1.0e-5F,
+                               0x44535550U);
+}
+
+TEST(NumericalOperator, DepthwiseConvolutionSameLowerMatchesNcnn) {
+  expect_single_input_operator("convolution_depthwise_same_lower",
+                               CONVOLUTION_DEPTHWISE_SAME_LOWER_LIBRARY_PATH,
+                               CONVOLUTION_DEPTHWISE_SAME_LOWER_BIN_PATH,
+                               TensorShape(5, 4, 2),
+                               12,
+                               1.0e-5F,
+                               0x44534C4FU);
+}
+
 TEST(NumericalOperator, HardSigmoidMatchesNcnn) {
   expect_single_input_operator("hard_sigmoid",
                                HARD_SIGMOID_LIBRARY_PATH,
@@ -191,6 +221,16 @@ TEST(NumericalOperator, ReshapeMatchesNcnn) {
                                8,
                                0.0F,
                                0x52455348U);
+}
+
+TEST(NumericalOperator, ReshapeCopyDimensionMatchesNcnn) {
+  expect_single_input_operator("reshape_copy_dimension",
+                               RESHAPE_COPY_DIMENSION_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(4, 3, 2),
+                               24,
+                               0.0F,
+                               0x52435059U);
 }
 
 TEST(NumericalOperator, BinaryMultiplyScalarMatchesNcnn) {
@@ -226,6 +266,35 @@ TEST(NumericalOperator, BinaryMultiplyChannelBroadcastMatchesNcnn) {
   CompiledModel compiled(BINARY_MUL_CHANNEL_LIBRARY_PATH, "binary_mul_channel");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(*first_elements);
+  ASSERT_EQ(compiled.run_two_inputs(first, second, actual), 0);
+  EXPECT_TRUE(compare_values(actual, expected->front(), 0.0F));
+}
+
+TEST(NumericalOperator, BinaryMultiplyReverseBroadcastMatchesNcnn) {
+  const TensorShape first_shape(1, 1, 2);
+  const TensorShape second_shape(4, 3, 2);
+  const auto first_elements = first_shape.element_count();
+  const auto second_elements = second_shape.element_count();
+  ASSERT_TRUE(first_elements.has_value()) << first_elements.error();
+  ASSERT_TRUE(second_elements.has_value()) << second_elements.error();
+  const std::vector<float> first =
+    make_random_input(*first_elements, 0x42524231U, -2.0F, 2.0F);
+  const std::vector<float> second =
+    make_random_input(*second_elements, 0x42524232U, -2.0F, 2.0F);
+  const std::array<ReferenceInput, 2> inputs{
+    ReferenceInput("first", first_shape, first),
+    ReferenceInput("second", second_shape, second)};
+  constexpr std::array<std::string_view, 1> outputs{"output"};
+  const auto expected =
+    run_ncnn_reference(fixture_path("binary_mul_reverse_broadcast"),
+                       NUMERICAL_EMPTY_BIN_PATH,
+                       inputs,
+                       outputs);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  CompiledModel compiled(BINARY_MUL_REVERSE_BROADCAST_LIBRARY_PATH,
+                         "binary_mul_reverse_broadcast");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(*second_elements);
   ASSERT_EQ(compiled.run_two_inputs(first, second, actual), 0);
   EXPECT_TRUE(compare_values(actual, expected->front(), 0.0F));
 }
@@ -301,6 +370,16 @@ TEST(NumericalOperator, AveragePoolingExcludingPadMatchesNcnn) {
                                0x50415647U);
 }
 
+TEST(NumericalOperator, AsymmetricPoolingParametersMatchNcnn) {
+  expect_single_input_operator("pooling_asymmetric",
+                               POOLING_ASYMMETRIC_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(7, 8, 2),
+                               24,
+                               0.0F,
+                               0x50415359U);
+}
+
 TEST(NumericalOperator, GlobalMaxPoolingMatchesNcnn) {
   expect_single_input_operator("pooling_global_max",
                                POOLING_GLOBAL_MAX_LIBRARY_PATH,
@@ -319,6 +398,27 @@ TEST(NumericalOperator, GlobalAveragePoolingMatchesNcnn) {
                                2,
                                1.0e-6F,
                                0x50474156U);
+}
+
+TEST(NumericalOperator, GlobalMaxPoolingIgnoresRegularParameters) {
+  expect_single_input_operator("pooling_global_max_ignored_params",
+                               POOLING_GLOBAL_MAX_IGNORED_PARAMS_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(5, 4, 2),
+                               2,
+                               0.0F,
+                               0x5047494DU);
+}
+
+TEST(NumericalOperator, GlobalAveragePoolingIgnoresRegularParameters) {
+  expect_single_input_operator(
+    "pooling_global_average_ignored_params",
+    POOLING_GLOBAL_AVERAGE_IGNORED_PARAMS_LIBRARY_PATH,
+    NUMERICAL_EMPTY_BIN_PATH,
+    TensorShape(5, 4, 2),
+    2,
+    1.0e-6F,
+    0x50474941U);
 }
 
 TEST(NumericalOperator, PoolingSameUpperMatchesNcnn) {
