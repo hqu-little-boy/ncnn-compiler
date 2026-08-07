@@ -71,7 +71,8 @@ func.func @sigmoid(%arg0: tensor<2x3x4xf32>) -> tensor<2x3x4xf32> {
 }
 
 // CHECK-LABEL: func.func @sigmoid
-// CHECK: %[[SIGMOID:.*]] = tosa.sigmoid {{.*}} : (tensor<1x3x4x2xf32>) -> tensor<1x3x4x2xf32>
+// CHECK: %[[CLAMPED:.*]] = tosa.clamp {{.*}} {max_val = 88.3762589 : f32, min_val = -88.3762589 : f32}
+// CHECK: %[[SIGMOID:.*]] = tosa.sigmoid %[[CLAMPED]] : (tensor<1x3x4x2xf32>) -> tensor<1x3x4x2xf32>
 // CHECK: return
 // CHECK-NOT: ncnn.padding
 // CHECK-NOT: ncnn.interp

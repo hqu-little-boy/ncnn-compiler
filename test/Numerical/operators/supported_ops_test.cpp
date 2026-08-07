@@ -137,6 +137,16 @@ TEST(NumericalOperator, PaddingAsymmetricNegativeMaxMatchesNcnn) {
                                0x50414444U);
 }
 
+TEST(NumericalOperator, PaddingAllFourSidesMatchNcnn) {
+  expect_single_input_operator("padding_four_sides",
+                               PADDING_FOUR_SIDES_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(3, 2, 2),
+                               100,
+                               0.0F,
+                               0x50414434U);
+}
+
 TEST(NumericalOperator, InterpNearestTwofoldMatchesNcnn) {
   expect_single_input_operator("interp",
                                INTERP_LIBRARY_PATH,
@@ -145,6 +155,16 @@ TEST(NumericalOperator, InterpNearestTwofoldMatchesNcnn) {
                                48,
                                0.0F,
                                0x494E5450U);
+}
+
+TEST(NumericalOperator, InterpNearestAsymmetricOddEvenScalesMatchNcnn) {
+  expect_single_input_operator("interp_asymmetric",
+                               INTERP_ASYMMETRIC_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(3, 2, 2),
+                               144,
+                               0.0F,
+                               0x494E5434U);
 }
 
 TEST(NumericalOperator, DeconvolutionLayoutAndFusedReluMatchNcnn) {
@@ -178,6 +198,16 @@ TEST(NumericalOperator, DeconvolutionLayoutAndFusedReluMatchNcnn) {
     actual.begin(), actual.end(), [](float value) { return value > 0.0F; }));
 }
 
+TEST(NumericalOperator, DeconvolutionWithoutBiasMatchesNcnn) {
+  expect_single_input_operator("deconvolution_no_bias",
+                               DECONVOLUTION_NO_BIAS_LIBRARY_PATH,
+                               DECONVOLUTION_NO_BIAS_BIN_PATH,
+                               TensorShape(3, 2, 2),
+                               72,
+                               1.0e-6F,
+                               0x4445434EU);
+}
+
 TEST(NumericalOperator, SigmoidMatchesNcnnAndProducesProbabilities) {
   const TensorShape shape(5, 2, 2);
   constexpr std::array<float, 20> input{
@@ -199,6 +229,46 @@ TEST(NumericalOperator, SigmoidMatchesNcnnAndProducesProbabilities) {
   EXPECT_NEAR(actual[7], 0.5F, 1.0e-7F);
   EXPECT_LT(actual.front(), 1.0e-8F);
   EXPECT_GT(actual.back(), 1.0F - 1.0e-7F);
+}
+
+TEST(NumericalOperator, SigmoidExtremeValuesMatchNcnnClamping) {
+  const TensorShape shape(5, 2, 2);
+  constexpr std::array<float, 20> input{-std::numeric_limits<float>::infinity(),
+                                        -std::numeric_limits<float>::max(),
+                                        -100.0F,
+                                        -88.3762626647949F,
+                                        -20.0F,
+                                        -1.0F,
+                                        -0.0F,
+                                        0.0F,
+                                        1.0F,
+                                        20.0F,
+                                        88.3762626647949F,
+                                        100.0F,
+                                        std::numeric_limits<float>::max(),
+                                        std::numeric_limits<float>::infinity(),
+                                        -10.0F,
+                                        -5.0F,
+                                        5.0F,
+                                        10.0F,
+                                        -0.5F,
+                                        0.5F};
+  const ReferenceModel reference(
+    fixture_path("sigmoid"), NUMERICAL_EMPTY_BIN_PATH, "data", "output", shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel compiled(SIGMOID_LIBRARY_PATH, "sigmoid");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(input.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
+  EXPECT_GT(actual[0], 0.0F);
+  EXPECT_EQ(actual[0], actual[1]);
+  EXPECT_EQ(actual[1], actual[2]);
+  EXPECT_EQ(actual[11], 1.0F);
+  EXPECT_EQ(actual[11], actual[12]);
+  EXPECT_EQ(actual[12], actual[13]);
 }
 
 TEST(NumericalOperator, ConvolutionWithoutBiasMatchesNcnn) {

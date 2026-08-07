@@ -754,8 +754,14 @@ class ConvertInterp final : public ConversionPattern {
     }
     const int64_t inputH = sourceInput.getShape()[1];
     const int64_t inputW = sourceInput.getShape()[2];
-    if (sourceOutput.getShape()[1] != inputH * *scaleH ||
-        sourceOutput.getShape()[2] != inputW * *scaleW) {
+    int64_t expectedH = 0;
+    int64_t expectedW = 0;
+    if (llvm::MulOverflow(inputH, *scaleH, expectedH) ||
+        llvm::MulOverflow(inputW, *scaleW, expectedW)) {
+      return operation->emitOpError("resize output shape overflows");
+    }
+    if (sourceOutput.getShape()[1] != expectedH ||
+        sourceOutput.getShape()[2] != expectedW) {
       return operation->emitOpError(
         "height_scale/width_scale do not match result shape");
     }
@@ -849,6 +855,11 @@ class ConvertDeconvolution final : public ConversionPattern {
     }
     SmallVector<int64_t> outPad{
       -crop[0], outputPadH - crop[1], -crop[2], outputPadW - crop[3]};
+    if (outPad[0] <= -kernelH || outPad[1] <= -kernelH ||
+        outPad[2] <= -kernelW || outPad[3] <= -kernelW) {
+      return operation->emitOpError(
+        "crop exceeds the TOSA transpose_conv2d out_pad range");
+    }
     const int64_t expectedH = ((sourceInput.getShape()[1] - 1) * *strideH) +
                               kernelH + outPad[0] + outPad[1];
     const int64_t expectedW = ((sourceInput.getShape()[2] - 1) * *strideW) +
@@ -941,9 +952,15 @@ class ConvertSigmoid final : public ConversionPattern {
       return operation->emitOpError("supports one static f32 tensor only");
     }
     auto type = cast<RankedTensorType>(operands.front().getType());
-    rewriter.replaceOp(operation,
-                       rewriter.create<tosa::SigmoidOp>(
-                         operation->getLoc(), type, operands.front()));
+    Value clamped = rewriter.create<tosa::ClampOp>(
+      operation->getLoc(),
+      type,
+      operands.front(),
+      rewriter.getF32FloatAttr(-88.3762626647949F),
+      rewriter.getF32FloatAttr(88.3762626647949F));
+    rewriter.replaceOp(
+      operation,
+      rewriter.create<tosa::SigmoidOp>(operation->getLoc(), type, clamped));
     return success();
   }
 };

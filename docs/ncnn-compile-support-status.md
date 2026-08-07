@@ -70,10 +70,11 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 - **ConvolutionDepthWise**：当前只接受纯 depthwise FP32；通用 group convolution、动态权重、量化和
   融合激活仍然拒绝；显式 padding 和 SAME_UPPER/LOWER 均支持。
 - **Deconvolution**：当前只支持静态 FP32、2x2 kernel、stride 2、dilation 1、零 crop/output
-  padding、无显式输出 shape override；融合激活仅支持无激活或 ReLU。
+  padding、无显式输出 shape override；融合激活仅支持无激活或 ReLU。直接 NCNN IR lowering
+  会拒绝超出 TOSA `transpose_conv2d` `out_pad` 表示范围的 crop。
 - **Padding**：仅支持 spatial constant padding，不支持 per-channel padding data 或其他 padding mode。
 - **Interp**：仅支持 `resize_type=1` 的 nearest 模式、`align_corner=0` 和正整数倍 scale；显式输出
-  shape 必须与 scale 推导结果一致。
+  shape 必须与 scale 推导结果一致。scale 受 TOSA 上限 2048 约束，输出空间维度必须小于 16384。
 - **Pooling**：`mode=Adaptive` 和 regular `Average + include_pad=1` **不会被 lowering**（残留 → 拒绝）。
   `pad_mode=0`（full + tail padding）通过尾部填充计算正常支持；global 模式按 ncnn 语义忽略
   regular-only 的 padding 和 `include_pad` 参数。
@@ -247,8 +248,8 @@ int <model_name>(const float *input1, ..., float *output1, ...);
    - PP-OCRv6 rec 新增算子：GELU（含负尾部）、Squeeze、BatchNorm 零方差保护、
      ExpandDims 负轴、rank-2 Permute、非默认 alpha/beta Gemm、BinaryOp add、
      rank-3 输入融合 ReLU InnerProduct
-   - PP-OCRv6 det 新增算子：非对称 constant Padding、nearest Interp、带 bias/融合 ReLU 的
-     Deconvolution、Sigmoid 概率范围
+   - PP-OCRv6 det 新增算子：四边非对称 constant Padding、2 倍及 H/W 非对称 3/4 倍 nearest
+     Interp、带 bias/融合 ReLU及无 bias 的 Deconvolution、Sigmoid 概率范围和极值截断语义
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet、PP-OCRv6
   tiny rec 和 tiny det 与 upstream ncnn 数值对齐；tiny det 使用 `3x640x640` 输入并验证

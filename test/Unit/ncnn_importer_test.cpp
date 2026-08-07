@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <ranges>
 #include <string>
 #include <utility>
@@ -486,4 +487,33 @@ TEST_F(NcnnImporterTest, RejectsInvalidGraphs) {
   bad_channels.set_layers(std::move(layers));
   EXPECT_FALSE(import(bad_channels))
     << "input and weight channel mismatch is rejected";
+
+  auto make_interp_graph = [](float scale, std::int64_t input_size) {
+    ncnn_graph::Graph graph;
+    auto input = make_layer("Input", "input", {}, {"data"});
+    ncnn_graph::ParamDict input_params;
+    input_params.set_value(0, ncnn_graph::ParamValue::make_int(input_size));
+    input_params.set_value(1, ncnn_graph::ParamValue::make_int(input_size));
+    input_params.set_value(2, ncnn_graph::ParamValue::make_int(1));
+    input.set_params(std::move(input_params));
+    graph.add_layer(std::move(input));
+    auto interp = make_layer("Interp", "interp", {"data"}, {"out"});
+    ncnn_graph::ParamDict params;
+    params.set_value(0, ncnn_graph::ParamValue::make_int(1));
+    params.set_value(1, ncnn_graph::ParamValue::make_float(scale));
+    params.set_value(2, ncnn_graph::ParamValue::make_float(scale));
+    interp.set_params(std::move(params));
+    graph.add_layer(std::move(interp));
+    graph.set_input_blob_names({"data"});
+    graph.set_output_blob_names({"out"});
+    graph.set_weights_loaded(true);
+    return graph;
+  };
+  EXPECT_FALSE(
+    import(make_interp_graph(std::numeric_limits<float>::infinity(), 2)))
+    << "non-finite Interp scale is rejected";
+  EXPECT_FALSE(import(make_interp_graph(2049.0F, 2)))
+    << "Interp scale above the TOSA limit is rejected";
+  EXPECT_FALSE(import(make_interp_graph(2.0F, 8192)))
+    << "Interp output dimension above the TOSA limit is rejected";
 }

@@ -98,6 +98,7 @@ set(inner_product_fused_relu_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_prod
 set(batch_norm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/batch_norm.bin)
 set(gemm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/gemm.bin)
 set(deconvolution_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/deconvolution.bin)
+set(deconvolution_no_bias_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/deconvolution_no_bias.bin)
 file(WRITE ${empty_bin} "")
 foreach(convolution_case IN ITEMS
         convolution
@@ -122,7 +123,8 @@ foreach(weighted_case IN ITEMS
         inner_product_fused_relu
         batch_norm
         gemm
-        deconvolution)
+        deconvolution
+        deconvolution_no_bias)
     execute_process(
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
                 ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${weighted_case}.bin
@@ -374,13 +376,25 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/padding.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    padding_four_sides
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/padding_four_sides.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     interp
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    interp_asymmetric
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp_asymmetric.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
     deconvolution
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/deconvolution.param
     ${deconvolution_bin})
+ncnn_add_compiled_fixture(
+    deconvolution_no_bias
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/deconvolution_no_bias.param
+    ${deconvolution_no_bias_bin})
 ncnn_add_compiled_fixture(
     sigmoid
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
@@ -476,8 +490,11 @@ set(numerical_fixture_targets
     compile_softmax_negative_height
     compile_softmax_negative_width
     compile_padding
+    compile_padding_four_sides
     compile_interp
+    compile_interp_asymmetric
     compile_deconvolution
+    compile_deconvolution_no_bias
     compile_sigmoid)
 list(LENGTH numerical_fixture_targets numerical_fixture_target_count)
 math(EXPR numerical_fixture_last_index "${numerical_fixture_target_count} - 1")
@@ -533,6 +550,7 @@ target_compile_definitions(numerical_tests PRIVATE
     BATCH_NORM_BIN_PATH="${batch_norm_bin}"
     GEMM_BIN_PATH="${gemm_bin}"
     DECONVOLUTION_BIN_PATH="${deconvolution_bin}"
+    DECONVOLUTION_NO_BIAS_BIN_PATH="${deconvolution_no_bias_bin}"
     CONVOLUTION_DEPTHWISE_LIBRARY_PATH="${convolution_depthwise_LIBRARY}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_LIBRARY_PATH="${convolution_depthwise_asymmetric_LIBRARY}"
     CONVOLUTION_DEPTHWISE_SAME_UPPER_LIBRARY_PATH="${convolution_depthwise_same_upper_LIBRARY}"
@@ -594,8 +612,11 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_SAME_UPPER_LIBRARY_PATH="${convolution_same_upper_LIBRARY}"
     CONVOLUTION_SAME_LOWER_LIBRARY_PATH="${convolution_same_lower_LIBRARY}"
     PADDING_LIBRARY_PATH="${padding_LIBRARY}"
+    PADDING_FOUR_SIDES_LIBRARY_PATH="${padding_four_sides_LIBRARY}"
     INTERP_LIBRARY_PATH="${interp_LIBRARY}"
+    INTERP_ASYMMETRIC_LIBRARY_PATH="${interp_asymmetric_LIBRARY}"
     DECONVOLUTION_LIBRARY_PATH="${deconvolution_LIBRARY}"
+    DECONVOLUTION_NO_BIAS_LIBRARY_PATH="${deconvolution_no_bias_LIBRARY}"
     SIGMOID_LIBRARY_PATH="${sigmoid_LIBRARY}"
     SQUEEZENET_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param"
     SQUEEZENET_BIN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin"

@@ -97,9 +97,12 @@ ImportResult import_interp(ImportContext& importer,
   auto outputH = get_int(params, 3, 0, "output_h");
   auto outputW = get_int(params, 4, 0, "output_w");
   auto alignCorner = get_int(params, 6, 0, "align_corner");
+  constexpr float kMaximumTosaScale = 2048.0F;
   if (!resizeType || !heightScale || !widthScale || !outputH || !outputW ||
       !alignCorner || *resizeType != 1 || *alignCorner != 0 ||
+      !std::isfinite(*heightScale) || !std::isfinite(*widthScale) ||
       *heightScale < 1.0F || *widthScale < 1.0F ||
+      *heightScale > kMaximumTosaScale || *widthScale > kMaximumTosaScale ||
       std::trunc(*heightScale) != *heightScale ||
       std::trunc(*widthScale) != *widthScale) {
     return std::unexpected(make_error(
@@ -111,15 +114,18 @@ ImportResult import_interp(ImportContext& importer,
     return std::unexpected(input.error());
   }
   auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
-  const int64_t heightFactor = static_cast<int64_t>(*heightScale);
-  const int64_t widthFactor = static_cast<int64_t>(*widthScale);
+  const auto heightFactor = static_cast<int64_t>(*heightScale);
+  const auto widthFactor = static_cast<int64_t>(*widthScale);
+  constexpr int64_t kMaximumTosaDimension = 16383;
   if (!inputType || inputType.getRank() != 3 ||
+      inputType.getShape()[1] > kMaximumTosaDimension / heightFactor ||
+      inputType.getShape()[2] > kMaximumTosaDimension / widthFactor ||
       (*outputH != 0 && (*outputH % heightFactor != 0 ||
                          *outputH / heightFactor != inputType.getShape()[1])) ||
       (*outputW != 0 && (*outputW % widthFactor != 0 ||
                          *outputW / widthFactor != inputType.getShape()[2]))) {
-    return std::unexpected(
-      make_error(context, "Interp explicit output size must match its scale"));
+    return std::unexpected(make_error(
+      context, "Interp output must fit TOSA limits and match its scale"));
   }
   auto& builder = importer.builder();
   mlir::ncnn::InterpOp::Properties properties;
