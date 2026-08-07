@@ -57,6 +57,25 @@ func.func @global_softmax(%arg0: tensor<4x2x2xf32>) -> tensor<4xf32> {
 // CHECK: %[[SCALED:.*]] = tosa.mul %[[SOFTMAX]], %[[SCALE]],
 // CHECK: return %[[SCALED]] : tensor<4xf32>
 
+func.func @anglenet_ops(%arg0: tensor<4x3x4xf32>) -> tensor<4xf32> {
+  %shuffle = ncnn.shuffle_channel %arg0 {group = 2 : i64, reverse = false} : (tensor<4x3x4xf32>) -> tensor<4x3x4xf32>
+  %left, %right = ncnn.slice %shuffle {axis = 0 : i64, slices = array<i64: 2, 2>} : (tensor<4x3x4xf32>) -> (tensor<2x3x4xf32>, tensor<2x3x4xf32>)
+  %joined = ncnn.concat %left, %right {axis = 0 : i64} : (tensor<2x3x4xf32>, tensor<2x3x4xf32>) -> tensor<4x3x4xf32>
+  %mean = ncnn.reduction %joined {axes = array<i64: 1, 2>, coeff = 1.000000e+00 : f32, keepdims = false, kind = 3 : i64, reduce_all = false} : (tensor<4x3x4xf32>) -> tensor<4xf32>
+  return %mean : tensor<4xf32>
+}
+
+// CHECK-LABEL: func.func @anglenet_ops
+// CHECK: tosa.reshape {{.*}} -> tensor<1x3x4x2x2xf32>
+// CHECK: tosa.transpose {{.*}}perms = array<i32: 0, 1, 2, 4, 3>
+// CHECK: tosa.slice {{.*}} -> tensor<1x3x4x2xf32>
+// CHECK: tosa.slice {{.*}} -> tensor<1x3x4x2xf32>
+// CHECK: tosa.reduce_sum {{.*}}axis = 1 : i32
+// CHECK: tosa.reduce_sum {{.*}}axis = 2 : i32
+// CHECK: tosa.mul
+// CHECK: tosa.reshape {{.*}} -> tensor<4xf32>
+// CHECK: return
+
 func.func @leaky_relu(%arg0: tensor<4xf32>) -> tensor<4xf32> {
   %relu = ncnn.relu %arg0 {negative_slope = 2.500000e-01 : f32} : (tensor<4xf32>) -> tensor<4xf32>
   return %relu : tensor<4xf32>
@@ -77,3 +96,6 @@ func.func @leaky_relu(%arg0: tensor<4xf32>) -> tensor<4xf32> {
 // CHECK-NOT: ncnn.concat
 // CHECK-NOT: ncnn.dropout
 // CHECK-NOT: ncnn.softmax
+// CHECK-NOT: ncnn.shuffle_channel
+// CHECK-NOT: ncnn.slice
+// CHECK-NOT: ncnn.reduction

@@ -1063,6 +1063,155 @@ class ConvertInnerProduct final : public ConversionPattern {
   }
 };
 
+class ConvertShuffleChannel final
+  : public OpConversionPattern<ShuffleChannelOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    ShuffleChannelOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto type = dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+    if (!type || type.getRank() != 4 || !type.getElementType().isF32()) {
+      return operation.emitOpError("requires a static CHW f32 input");
+    }
+    const int64_t channels = type.getShape()[3];
+    const int64_t group = operation.getReverse()
+                            ? channels / operation.getGroup()
+                            : operation.getGroup();
+    if (group <= 0 || channels % group != 0) {
+      return operation.emitOpError("group must divide channel count");
+    }
+    auto groupedType = RankedTensorType::get({type.getShape()[0],
+                                              type.getShape()[1],
+                                              type.getShape()[2],
+                                              group,
+                                              channels / group},
+                                             type.getElementType());
+    Value grouped = reshapeValue(
+      rewriter, operation.getLoc(), adaptor.getInput(), groupedType);
+    auto shuffledType = RankedTensorType::get({type.getShape()[0],
+                                               type.getShape()[1],
+                                               type.getShape()[2],
+                                               channels / group,
+                                               group},
+                                              type.getElementType());
+    Value shuffled =
+      rewriter.create<tosa::TransposeOp>(operation.getLoc(),
+                                         shuffledType,
+                                         grouped,
+                                         ArrayRef<int32_t>{0, 1, 2, 4, 3});
+    rewriter.replaceOp(
+      operation, reshapeValue(rewriter, operation.getLoc(), shuffled, type));
+    return success();
+  }
+};
+
+class ConvertSlice final : public OpConversionPattern<SliceOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    SliceOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
+    auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
+    int64_t sourceAxis = operation.getAxis();
+    if (sourceAxis < 0) {
+      sourceAxis += sourceType.getRank();
+    }
+    const uint32_t axis = convertAxis(sourceAxis, sourceType.getRank());
+    int64_t offset = 0;
+    SmallVector<Value> results;
+    for (Value result : operation.getResults()) {
+      auto sourceResultType = cast<RankedTensorType>(result.getType());
+      auto resultType = sourceResultType.getRank() == 3
+                          ? getNHWCType(sourceResultType)
+                          : sourceResultType;
+      SmallVector<int64_t> start(inputType.getRank(), 0);
+      start[axis] = offset;
+      results.push_back(rewriter.create<tosa::SliceOp>(
+        operation.getLoc(),
+        resultType,
+        adaptor.getInput(),
+        createShape(rewriter, operation.getLoc(), start),
+        createShape(rewriter, operation.getLoc(), resultType.getShape())));
+      offset += resultType.getShape()[axis];
+    }
+    rewriter.replaceOp(operation, results);
+    return success();
+  }
+};
+
+class ConvertReduction final : public OpConversionPattern<ReductionOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    ReductionOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto sourceInput = cast<RankedTensorType>(operation.getInput().getType());
+    auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
+    if (operation.getKind() != 3 || !inputType.getElementType().isF32()) {
+      return operation.emitOpError("only static f32 mean is supported");
+    }
+    SmallVector<int64_t> sourceAxes;
+    if (operation.getReduceAll()) {
+      for (int64_t axis = 0; axis < sourceInput.getRank(); ++axis) {
+        sourceAxes.push_back(axis);
+      }
+    } else {
+      llvm::append_range(sourceAxes, operation.getAxes());
+    }
+    SmallVector<uint32_t> axes;
+    int64_t reducedElements = 1;
+    for (int64_t sourceAxis : sourceAxes) {
+      if (sourceAxis < 0) {
+        sourceAxis += sourceInput.getRank();
+      }
+      axes.push_back(convertAxis(sourceAxis, sourceInput.getRank()));
+      if (llvm::MulOverflow(reducedElements,
+                            sourceInput.getShape()[sourceAxis],
+                            reducedElements)) {
+        return operation.emitOpError("reduced element count overflows");
+      }
+    }
+    llvm::sort(axes);
+    Value result = adaptor.getInput();
+    SmallVector<int64_t> reducedShape(inputType.getShape());
+    for (uint32_t axis : axes) {
+      reducedShape[axis] = 1;
+      auto reducedType =
+        RankedTensorType::get(reducedShape, inputType.getElementType());
+      result = rewriter.create<tosa::ReduceSumOp>(
+        operation.getLoc(), reducedType, result, axis);
+    }
+    auto reducedType = cast<RankedTensorType>(result.getType());
+    const double scale = operation.getCoeff().convertToDouble() /
+                         static_cast<double>(reducedElements);
+    Value factor = createSplat(
+      rewriter, operation.getLoc(), getBroadcastScalarType(reducedType), scale);
+    result =
+      rewriter.create<tosa::MulOp>(operation.getLoc(),
+                                   reducedType,
+                                   result,
+                                   factor,
+                                   createI8Zero(rewriter, operation.getLoc()));
+    auto outputType = cast<RankedTensorType>(operation.getOutput().getType());
+    auto convertedOutputType =
+      outputType.getRank() == 3 ? getNHWCType(outputType) : outputType;
+    if (reducedType != convertedOutputType) {
+      result =
+        reshapeValue(rewriter, operation.getLoc(), result, convertedOutputType);
+    }
+    rewriter.replaceOp(operation, result);
+    return success();
+  }
+};
+
 class ConvertNCNNToTosaPass final
   : public impl::ConvertNCNNToTosaPassBase<ConvertNCNNToTosaPass> {
  public:
@@ -1121,7 +1270,10 @@ class ConvertNCNNToTosaPass final
                  ConvertSplit,
                  ConvertConcat,
                  ConvertDropout,
-                 ConvertSoftmax>(typeConverter, context);
+                 ConvertSoftmax,
+                 ConvertShuffleChannel,
+                 ConvertSlice,
+                 ConvertReduction>(typeConverter, context);
     patterns.add<ConvertHardActivation>(
       typeConverter, context, "ncnn.hard_sigmoid", false);
     patterns.add<ConvertHardActivation>(
@@ -1146,7 +1298,14 @@ class ConvertNCNNToTosaPass final
              (operation.getKind() == static_cast<int64_t>(PoolKind::Average) &&
               operation.getIncludePad());
     });
-    target.addIllegalOp<ReluOp, SplitOp, ConcatOp, DropoutOp, SoftmaxOp>();
+    target.addIllegalOp<ReluOp,
+                        SplitOp,
+                        ConcatOp,
+                        DropoutOp,
+                        SoftmaxOp,
+                        ShuffleChannelOp,
+                        SliceOp,
+                        ReductionOp>();
     for (StringRef name : {"ncnn.hard_sigmoid",
                            "ncnn.hard_swish",
                            "ncnn.convolution_depthwise",

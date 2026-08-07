@@ -99,6 +99,27 @@ class ImportContext {
     return result;
   }
 
+  template <typename Op>
+  mlir::LogicalResult infer_tensor_results(
+    mlir::Location location,
+    mlir::ValueRange operands,
+    typename Op::Properties& properties,
+    llvm::SmallVectorImpl<mlir::Type>& inferred_types) {
+    captured_diag_.clear();
+    mlir::ScopedDiagnosticHandler handler(context_,
+                                          [this](mlir::Diagnostic& diagnostic) {
+                                            captured_diag_ = diagnostic.str();
+                                            return mlir::success();
+                                          });
+    return Op::inferReturnTypes(context_,
+                                location,
+                                operands,
+                                mlir::DictionaryAttr{},
+                                mlir::OpaqueProperties(&properties),
+                                mlir::RegionRange{},
+                                inferred_types);
+  }
+
   const std::string& captured_diagnostic() const noexcept;
 
  private:
@@ -131,6 +152,11 @@ ImportResult import_binary_op(ImportContext& importer,
                               const LayerContext& context);
 ImportResult import_inner_product(ImportContext& importer,
                                   const LayerContext& context);
+ImportResult import_shuffle_channel(ImportContext& importer,
+                                    const LayerContext& context);
+ImportResult import_slice(ImportContext& importer, const LayerContext& context);
+ImportResult import_reduction(ImportContext& importer,
+                              const LayerContext& context);
 ImportResult import_pooling(ImportContext& importer,
                             const LayerContext& context);
 ImportResult import_relu(ImportContext& importer, const LayerContext& context);

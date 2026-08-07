@@ -202,6 +202,18 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/inner_product.param
     ${inner_product_bin})
 ncnn_add_compiled_fixture(
+    shuffle_channel
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/shuffle_channel.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    slice
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slice.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    reduction_mean
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reduction_mean.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     relu_leaky
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/relu_leaky.param
     ${empty_bin})
@@ -323,6 +335,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin
     3x80x160)
+ncnn_add_compiled_fixture(
+    chineseocr_lite_anglenet
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin
+    3x32x192)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -343,6 +360,9 @@ set(numerical_fixture_targets
     compile_binary_mul_channel
     compile_binary_mul_reverse_broadcast
     compile_inner_product
+    compile_shuffle_channel
+    compile_slice
+    compile_reduction_mean
     compile_relu_scalar
     compile_relu_leaky
     compile_pooling_scalar
@@ -384,7 +404,9 @@ endforeach()
 add_dependencies(compile_squeezenet_v1_1 compile_softmax_negative_width)
 add_dependencies(compile_pp_lcnet_x1_0_doc_ori compile_squeezenet_v1_1)
 add_dependencies(compile_pp_lcnet_x1_0_textline_ori
-                 compile_pp_lcnet_x1_0_doc_ori)
+                  compile_pp_lcnet_x1_0_doc_ori)
+add_dependencies(compile_chineseocr_lite_anglenet
+                 compile_pp_lcnet_x1_0_textline_ori)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -428,6 +450,9 @@ target_compile_definitions(numerical_tests PRIVATE
     BINARY_MUL_CHANNEL_LIBRARY_PATH="${binary_mul_channel_LIBRARY}"
     BINARY_MUL_REVERSE_BROADCAST_LIBRARY_PATH="${binary_mul_reverse_broadcast_LIBRARY}"
     INNER_PRODUCT_LIBRARY_PATH="${inner_product_LIBRARY}"
+    SHUFFLE_CHANNEL_LIBRARY_PATH="${shuffle_channel_LIBRARY}"
+    SLICE_LIBRARY_PATH="${slice_LIBRARY}"
+    REDUCTION_MEAN_LIBRARY_PATH="${reduction_mean_LIBRARY}"
     CONVOLUTION_LIBRARY_PATH="${convolution_scalar_LIBRARY}"
     RELU_LIBRARY_PATH="${relu_scalar_LIBRARY}"
     RELU_LEAKY_LIBRARY_PATH="${relu_leaky_LIBRARY}"
@@ -471,10 +496,14 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}"
     PP_LCNET_TEXTLINE_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param"
     PP_LCNET_TEXTLINE_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin"
-    PP_LCNET_TEXTLINE_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_LIBRARY}")
+    PP_LCNET_TEXTLINE_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_LIBRARY}"
+    CHINESEOCR_LITE_ANGLENET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param"
+    CHINESEOCR_LITE_ANGLENET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin"
+    CHINESEOCR_LITE_ANGLENET_LIBRARY_PATH="${chineseocr_lite_anglenet_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
+add_dependencies(numerical_tests compile_chineseocr_lite_anglenet)
 
 gtest_discover_tests(numerical_tests
     PROPERTIES LABELS "numerical;golden" TIMEOUT 900 RUN_SERIAL TRUE)

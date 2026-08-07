@@ -30,6 +30,9 @@ DEFINE_NAIVE_CREATOR(HardSwish)
 DEFINE_NAIVE_CREATOR(Reshape)
 DEFINE_NAIVE_CREATOR(BinaryOp)
 DEFINE_NAIVE_CREATOR(InnerProduct)
+DEFINE_NAIVE_CREATOR(ShuffleChannel)
+DEFINE_NAIVE_CREATOR(Slice)
+DEFINE_NAIVE_CREATOR(Reduction)
 DEFINE_NAIVE_CREATOR(ReLU)
 DEFINE_NAIVE_CREATOR(Pooling)
 DEFINE_NAIVE_CREATOR(Split)
@@ -54,6 +57,11 @@ bool register_naive_layers(ncnn::Net& network) {
            0 &&
          network.register_custom_layer("InnerProduct",
                                        create_naive_InnerProduct) == 0 &&
+         network.register_custom_layer("ShuffleChannel",
+                                       create_naive_ShuffleChannel) == 0 &&
+         network.register_custom_layer("Slice", create_naive_Slice) == 0 &&
+         network.register_custom_layer("Reduction", create_naive_Reduction) ==
+           0 &&
          network.register_custom_layer("ReLU", create_naive_ReLU) == 0 &&
          network.register_custom_layer("Pooling", create_naive_Pooling) == 0 &&
          network.register_custom_layer("Split", create_naive_Split) == 0 &&

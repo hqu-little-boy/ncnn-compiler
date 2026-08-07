@@ -29,3 +29,16 @@ func.func @all_ops(%arg0: tensor<3x227x227xf32>) -> tensor<128xf32> {
   %sm = ncnn.softmax %g {axis = 0 : i64} : (tensor<128xf32>) -> tensor<128xf32>
   return %sm : tensor<128xf32>
 }
+
+// CHECK-LABEL: func.func @anglenet_ops
+func.func @anglenet_ops(%arg0: tensor<4x3x4xf32>) -> tensor<4xf32> {
+  // CHECK: ncnn.shuffle_channel
+  %shuffle = ncnn.shuffle_channel %arg0 {group = 2 : i64, reverse = false} : (tensor<4x3x4xf32>) -> tensor<4x3x4xf32>
+  // CHECK: ncnn.slice
+  %left, %right = ncnn.slice %shuffle {axis = 0 : i64, slices = array<i64: 2, 2>} : (tensor<4x3x4xf32>) -> (tensor<2x3x4xf32>, tensor<2x3x4xf32>)
+  %joined = ncnn.concat %left, %right {axis = 0 : i64} : (tensor<2x3x4xf32>, tensor<2x3x4xf32>) -> tensor<4x3x4xf32>
+  // CHECK: ncnn.reduction
+  // CHECK-SAME: axes = array<i64: 1, 2>
+  %mean = ncnn.reduction %joined {axes = array<i64: 1, 2>, coeff = 1.000000e+00 : f32, keepdims = false, kind = 3 : i64, reduce_all = false} : (tensor<4x3x4xf32>) -> tensor<4xf32>
+  return %mean : tensor<4xf32>
+}

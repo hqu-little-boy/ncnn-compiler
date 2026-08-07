@@ -62,5 +62,31 @@ TEST(NumericalModel, PPLCNetTextlineOriMatchesNcnn) {
   EXPECT_TRUE(check_softmax(actual, *expected));
 }
 
+TEST(NumericalModel, ChineseOCRLiteAngleNetMatchesNcnn) {
+  const TensorShape inputShape(192, 32, 3);
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x414E474CU, -1.0F, 1.0F);
+  const ReferenceModel reference(CHINESEOCR_LITE_ANGLENET_PARAM_PATH,
+                                 CHINESEOCR_LITE_ANGLENET_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 inputShape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), 2U);
+
+  CompiledModel compiled(CHINESEOCR_LITE_ANGLENET_LIBRARY_PATH,
+                         "chineseocr_lite_anglenet");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(2);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F));
+  EXPECT_NEAR(
+    std::accumulate(actual.begin(), actual.end(), 0.0F), 1.0F, 1.0e-5F);
+  EXPECT_TRUE(check_softmax(actual, *expected));
+}
+
 }  // namespace
 }  // namespace ncnn_compiler::test

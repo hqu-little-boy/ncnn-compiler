@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <set>
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
@@ -490,6 +491,98 @@ FailureOr<RankedTensorType> computeInnerProductResult(
   return RankedTensorType::get({weight.getShape()[0]}, input.getElementType());
 }
 
+LogicalResult inferSliceResults(
+  std::optional<Location> location,
+  RankedTensorType input,
+  ArrayRef<int64_t> requestedSlices,
+  int64_t axis,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape()) {
+    return emitOptionalError(location, "Slice input must be static f32");
+  }
+  if (requestedSlices.size() < 2) {
+    return emitOptionalError(location, "Slice requires at least two slices");
+  }
+  const int64_t rank = input.getRank();
+  if (axis < 0) {
+    axis += rank;
+  }
+  if (axis < 0 || axis >= rank) {
+    return emitOptionalError(location, "Slice axis is outside input rank");
+  }
+  const int64_t extent = input.getShape()[axis];
+  int64_t consumed = 0;
+  for (std::size_t index = 0; index < requestedSlices.size(); ++index) {
+    int64_t size = requestedSlices[index];
+    if (size == -233) {
+      const int64_t remainingResults =
+        static_cast<int64_t>(requestedSlices.size() - index);
+      size = (extent - consumed) / remainingResults;
+    }
+    if (size <= 0 || size > extent - consumed) {
+      return emitOptionalError(location,
+                               "Slice sizes must be positive and fit input");
+    }
+    SmallVector<int64_t> shape(input.getShape());
+    shape[axis] = size;
+    inferredReturnShapes.emplace_back(shape, input.getElementType());
+    consumed += size;
+  }
+  if (consumed != extent) {
+    return emitOptionalError(location,
+                             "Slice sizes must consume the entire axis");
+  }
+  return success();
+}
+
+FailureOr<RankedTensorType> computeReductionResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  int64_t operation,
+  bool reduceAll,
+  ArrayRef<int64_t> axes,
+  bool keepDims) {
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape()) {
+    return emitOptionalError(location, "Reduction input must be static f32");
+  }
+  if (operation != 3) {
+    return emitOptionalError(location, "Reduction only supports mean");
+  }
+  const int64_t rank = input.getRank();
+  std::set<int64_t> reducedAxes;
+  if (reduceAll) {
+    for (int64_t axis = 0; axis < rank; ++axis) {
+      reducedAxes.insert(axis);
+    }
+  } else {
+    if (axes.empty()) {
+      return emitOptionalError(location,
+                               "Reduction requires axes when reduce_all=false");
+    }
+    for (int64_t axis : axes) {
+      if (axis < 0) {
+        axis += rank;
+      }
+      if (axis < 0 || axis >= rank || !reducedAxes.insert(axis).second) {
+        return emitOptionalError(location,
+                                 "Reduction axes must be unique and in range");
+      }
+    }
+  }
+  SmallVector<int64_t> shape;
+  for (int64_t axis = 0; axis < rank; ++axis) {
+    if (!reducedAxes.contains(axis)) {
+      shape.push_back(input.getShape()[axis]);
+    } else if (keepDims) {
+      shape.push_back(1);
+    }
+  }
+  if (shape.empty()) {
+    shape.push_back(1);
+  }
+  return RankedTensorType::get(shape, input.getElementType());
+}
+
 }  // namespace
 
 //===----------------------------------------------------------------------===//
@@ -655,6 +748,52 @@ LogicalResult InnerProductOp::inferReturnTypeComponents(
   }
   inferredReturnShapes.push_back(
     ShapedTypeComponents(result->getShape(), result->getElementType()));
+  return success();
+}
+
+LogicalResult ShuffleChannelOp::verify() {
+  auto input = llvm::dyn_cast<RankedTensorType>(getInput().getType());
+  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
+      input.getRank() != 3 || input.getShape()[0] <= 0) {
+    return emitOpError(
+      "input must be a static positive-channel CHW f32 tensor");
+  }
+  if (getGroup() <= 0 || input.getShape()[0] % getGroup() != 0) {
+    return emitOpError("group must be positive and divide channel count");
+  }
+  return success();
+}
+
+LogicalResult SliceOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  SliceOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  return inferSliceResults(location,
+                           input,
+                           adaptor.getSlices(),
+                           adaptor.getAxis(),
+                           inferredReturnShapes);
+}
+
+LogicalResult ReductionOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  ReductionOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  auto result = computeReductionResult(location,
+                                       input,
+                                       adaptor.getKind(),
+                                       adaptor.getReduceAll(),
+                                       adaptor.getAxes(),
+                                       adaptor.getKeepdims());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
   return success();
 }
 

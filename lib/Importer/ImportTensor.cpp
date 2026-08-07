@@ -93,4 +93,165 @@ ImportResult import_concat(ImportContext& importer,
     context, std::string(context.layer.get_outputs()[0]), concat.getResult());
 }
 
+ImportResult import_shuffle_channel(ImportContext& importer,
+                                    const LayerContext& context) {
+  constexpr int kAllowed[] = {0, 1};
+  auto arity = expect_source_arity(context.layer, 1, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto featureMask = validate_feature_mask(context.layer.get_params());
+  auto group = get_int(context.layer.get_params(), 0, 1, "group");
+  auto reverse = get_int(context.layer.get_params(), 1, 0, "reverse");
+  if (!arity || !allowed || !featureMask || !group || !reverse) {
+    return std::unexpected(make_error(context,
+                                      !arity         ? arity.error()
+                                      : !allowed     ? allowed.error()
+                                      : !featureMask ? featureMask.error()
+                                      : !group       ? group.error()
+                                                     : reverse.error()));
+  }
+  auto boolean = expect_boolean(*reverse, "reverse");
+  if (!boolean || *group <= 0) {
+    return std::unexpected(make_error(
+      context, !boolean ? boolean.error() : "group must be positive"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto& builder = importer.builder();
+  auto op = builder.create<mlir::ncnn::ShuffleChannelOp>(
+    builder.getUnknownLoc(),
+    input->getType(),
+    *input,
+    builder.getI64IntegerAttr(*group),
+    builder.getBoolAttr(*reverse));
+  if (mlir::failed(op.verify())) {
+    return std::unexpected(make_error(context, "invalid channel shuffle"));
+  }
+  importer.tag_source(op.getOperation(), context);
+  return importer.bind_blob(
+    context, std::string(context.layer.get_outputs()[0]), op.getResult());
+}
+
+ImportResult import_slice(ImportContext& importer,
+                          const LayerContext& context) {
+  constexpr int kAllowed[] = {0, 1};
+  if (context.layer.get_inputs().size() != 1 ||
+      context.layer.get_outputs().size() < 2) {
+    return std::unexpected(
+      make_error(context, "Slice requires one input and at least two outputs"));
+  }
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto featureMask = validate_feature_mask(context.layer.get_params());
+  auto axis = get_int(context.layer.get_params(), 1, 0, "axis");
+  const auto* slicesValue = find_param(context.layer.get_params(), 0);
+  if (!allowed || !featureMask || !axis || slicesValue == nullptr ||
+      slicesValue->get_kind() != ncnn_graph::ParamValue::Kind::IntArray) {
+    return std::unexpected(
+      make_error(context,
+                 !allowed       ? allowed.error()
+                 : !featureMask ? featureMask.error()
+                 : !axis        ? axis.error()
+                         : "parameter 0 (slices) must be an integer array"));
+  }
+  auto slices = *slicesValue->get_int_array();
+  if (slices.size() != context.layer.get_outputs().size()) {
+    return std::unexpected(
+      make_error(context, "slice count must match output count"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto& builder = importer.builder();
+  mlir::ncnn::SliceOp::Properties properties;
+  properties.slices = builder.getDenseI64ArrayAttr(slices);
+  properties.axis = builder.getI64IntegerAttr(*axis);
+  llvm::SmallVector<mlir::Type> resultTypes;
+  if (mlir::failed(importer.infer_tensor_results<mlir::ncnn::SliceOp>(
+        builder.getUnknownLoc(), *input, properties, resultTypes)) ||
+      resultTypes.size() != slices.size()) {
+    return std::unexpected(make_error(context,
+                                      importer.captured_diagnostic().empty()
+                                        ? "slice shape inference failed"
+                                        : importer.captured_diagnostic()));
+  }
+  auto op = builder.create<mlir::ncnn::SliceOp>(builder.getUnknownLoc(),
+                                                resultTypes,
+                                                *input,
+                                                properties.slices,
+                                                properties.axis);
+  importer.tag_source(op.getOperation(), context);
+  for (std::size_t index = 0; index < resultTypes.size(); ++index) {
+    auto bound = importer.bind_blob(
+      context, context.layer.get_outputs()[index], op->getResult(index));
+    if (!bound) {
+      return bound;
+    }
+  }
+  return {};
+}
+
+ImportResult import_reduction(ImportContext& importer,
+                              const LayerContext& context) {
+  constexpr int kAllowed[] = {0, 1, 2, 3, 4, 5};
+  auto arity = expect_source_arity(context.layer, 1, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto featureMask = validate_feature_mask(context.layer.get_params());
+  auto operation = get_int(context.layer.get_params(), 0, 0, "operation");
+  auto reduceAll = get_int(context.layer.get_params(), 1, 1, "reduce_all");
+  auto coeff = get_float(context.layer.get_params(), 2, 1.0F, "coeff");
+  auto keepDims = get_int(context.layer.get_params(), 4, 0, "keepdims");
+  auto fixbug = get_int(context.layer.get_params(), 5, 0, "fixbug0");
+  if (!arity || !allowed || !featureMask || !operation || !reduceAll ||
+      !coeff || !keepDims || !fixbug) {
+    return std::unexpected(make_error(context, "invalid Reduction parameters"));
+  }
+  auto reduceBoolean = expect_boolean(*reduceAll, "reduce_all");
+  auto keepBoolean = expect_boolean(*keepDims, "keepdims");
+  const auto* axesValue = find_param(context.layer.get_params(), 3);
+  if (!reduceBoolean || !keepBoolean || *operation != 3 ||
+      (axesValue != nullptr &&
+       axesValue->get_kind() != ncnn_graph::ParamValue::Kind::IntArray)) {
+    return std::unexpected(make_error(
+      context, "Reduction supports static FP32 mean with integer axes only"));
+  }
+  std::span<const int64_t> axes;
+  if (axesValue != nullptr) {
+    axes = *axesValue->get_int_array();
+  }
+  if (!*reduceAll && (axes.empty() || *fixbug != 1)) {
+    return std::unexpected(
+      make_error(context, "explicit Reduction axes require fixbug0=1"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto& builder = importer.builder();
+  mlir::ncnn::ReductionOp::Properties properties;
+  properties.kind = builder.getI64IntegerAttr(*operation);
+  properties.reduce_all = builder.getBoolAttr(*reduceAll);
+  properties.coeff = builder.getF32FloatAttr(*coeff);
+  properties.axes = builder.getDenseI64ArrayAttr(axes);
+  properties.keepdims = builder.getBoolAttr(*keepDims);
+  auto resultType =
+    importer.infer_single_tensor_result<mlir::ncnn::ReductionOp>(
+      builder.getUnknownLoc(), *input, properties);
+  if (mlir::failed(resultType)) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto op = builder.create<mlir::ncnn::ReductionOp>(builder.getUnknownLoc(),
+                                                    *resultType,
+                                                    *input,
+                                                    properties.kind,
+                                                    properties.reduce_all,
+                                                    properties.coeff,
+                                                    properties.axes,
+                                                    properties.keepdims);
+  importer.tag_source(op.getOperation(), context);
+  return importer.bind_blob(
+    context, std::string(context.layer.get_outputs()[0]), op.getResult());
+}
+
 }  // namespace ncnn_importer::detail

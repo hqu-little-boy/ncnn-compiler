@@ -593,6 +593,49 @@ TEST(NumericalOperator, SplitThreeWayConsumerTopologyMatchesNcnn) {
                                0x53504C33U);
 }
 
+TEST(NumericalOperator, ShuffleChannelMatchesNcnn) {
+  expect_single_input_operator("shuffle_channel",
+                               SHUFFLE_CHANNEL_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(4, 3, 4),
+                               48,
+                               0.0F,
+                               0x53485546U);
+}
+
+TEST(NumericalOperator, SliceMatchesNcnn) {
+  const TensorShape shape(4, 3, 4);
+  const auto elements = shape.element_count();
+  ASSERT_TRUE(elements.has_value()) << elements.error();
+  const std::vector<float> input =
+    make_random_input(*elements, 0x534C4943U, -2.0F, 2.0F);
+  const ReferenceInput referenceInput("data", shape, input);
+  constexpr std::array<std::string_view, 2> kOutputs{"left", "right"};
+  const auto expected = run_ncnn_reference(fixture_path("slice"),
+                                           NUMERICAL_EMPTY_BIN_PATH,
+                                           std::span(&referenceInput, 1),
+                                           kOutputs);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), 2);
+  CompiledModel compiled(SLICE_LIBRARY_PATH, "slice");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> left(24);
+  std::vector<float> right(24);
+  ASSERT_EQ(compiled.run_two_outputs(input, left, right), 0);
+  EXPECT_TRUE(compare_values(left, (*expected)[0], 0.0F));
+  EXPECT_TRUE(compare_values(right, (*expected)[1], 0.0F));
+}
+
+TEST(NumericalOperator, ReductionMeanMatchesNcnn) {
+  expect_single_input_operator("reduction_mean",
+                               REDUCTION_MEAN_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(4, 3, 4),
+                               4,
+                               1.0e-6F,
+                               0x52454455U);
+}
+
 TEST(NumericalSupport, TensorShapeRejectsNegativeAndOverflowingSizes) {
   const TensorShape negative(-1, 2, 3);
   const auto negative_elements = negative.element_count();
