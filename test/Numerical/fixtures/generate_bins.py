@@ -14,14 +14,15 @@ sizes = {
     "convolution_same_upper": (18, 0),
     "convolution_same_lower": (18, 0),
     "convolution_depthwise": (18, 2),
+    "convolution_depthwise_asymmetric": (12, 2),
     "inner_product": (24, 3),
 }
 if case not in sizes:
     output.write_bytes(b"")
     raise SystemExit(0)
 kernel_count, bias_count = sizes[case]
-if case in {"convolution_depthwise", "inner_product"}:
-    rng = random.Random(0x4E434E4E if case == "convolution_depthwise" else 0x49505052)
+if case in {"convolution_depthwise", "convolution_depthwise_asymmetric", "inner_product"}:
+    rng = random.Random(0x4E434E4E if case.startswith("convolution_depthwise") else 0x49505052)
     weights = [rng.uniform(-0.25, 0.25) for _ in range(kernel_count)]
     bias = [rng.uniform(-0.1, 0.1) for _ in range(bias_count)]
 else:

@@ -1,0 +1,4 @@
+7767517
+2 2
+Input input 0 1 data 0=9 1=11 2=2
+ConvolutionDepthWise convolution_depthwise_asymmetric 1 1 data output 0=2 1=3 11=2 2=2 12=1 3=2 13=3 4=1 15=2 14=0 16=1 5=1 6=12 7=2

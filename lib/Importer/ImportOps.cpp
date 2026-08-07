@@ -286,17 +286,14 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
   mlir::ncnn::ConvolutionDepthWiseOp::Properties props;
   props.kernel_h = i64(p->kernel_h);
   props.kernel_w = i64(p->kernel_w);
-  props.stride_h = i64(context.layer.get_params().get_int(3, 1));
-  props.stride_w = i64(context.layer.get_params().get_int(3, 1));
-  props.dilation_h = i64(context.layer.get_params().get_int(2, 1));
-  props.dilation_w = i64(context.layer.get_params().get_int(2, 1));
-  props.pad_top = i64(context.layer.get_params().get_int(
-    14, context.layer.get_params().get_int(4, 0)));
-  props.pad_bottom = i64(context.layer.get_params().get_int(
-    16, context.layer.get_params().get_int(4, 0)));
-  props.pad_left = i64(context.layer.get_params().get_int(4, 0));
-  props.pad_right = i64(context.layer.get_params().get_int(
-    15, context.layer.get_params().get_int(4, 0)));
+  props.stride_h = i64(p->stride_h);
+  props.stride_w = i64(p->stride_w);
+  props.dilation_h = i64(p->dilation_h);
+  props.dilation_w = i64(p->dilation_w);
+  props.pad_top = i64(p->pad_top);
+  props.pad_bottom = i64(p->pad_bottom);
+  props.pad_left = i64(p->pad_left);
+  props.pad_right = i64(p->pad_right);
   props.has_bias = b.getBoolAttr(p->has_bias);
   llvm::SmallVector<mlir::Value> operands{*input, *weight};
   operands.append(bias);

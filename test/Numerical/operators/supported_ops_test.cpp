@@ -153,6 +153,16 @@ TEST(NumericalOperator, DepthwiseConvolutionMatchesNcnn) {
                                0x44574356U);
 }
 
+TEST(NumericalOperator, AsymmetricDepthwiseConvolutionMatchesNcnn) {
+  expect_single_input_operator("convolution_depthwise_asymmetric",
+                               CONVOLUTION_DEPTHWISE_ASYMMETRIC_LIBRARY_PATH,
+                               CONVOLUTION_DEPTHWISE_ASYMMETRIC_BIN_PATH,
+                               TensorShape(9, 11, 2),
+                               32,
+                               1.0e-5F,
+                               0x44574153U);
+}
+
 TEST(NumericalOperator, HardSigmoidMatchesNcnn) {
   expect_single_input_operator("hard_sigmoid",
                                HARD_SIGMOID_LIBRARY_PATH,

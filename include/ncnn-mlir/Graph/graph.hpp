@@ -98,6 +98,14 @@ struct ConvolutionDepthWiseParams {
   std::int64_t output_channels = 0;
   std::int64_t kernel_w = 0;
   std::int64_t kernel_h = 0;
+  std::int64_t dilation_w = 1;
+  std::int64_t dilation_h = 1;
+  std::int64_t stride_w = 1;
+  std::int64_t stride_h = 1;
+  std::int64_t pad_left = 0;
+  std::int64_t pad_right = 0;
+  std::int64_t pad_top = 0;
+  std::int64_t pad_bottom = 0;
   std::int64_t group = 1;
   bool has_bias = false;
   std::int64_t weight_count = 0;

@@ -110,7 +110,7 @@ Value reshapeValue(OpBuilder& builder,
                    Value input,
                    RankedTensorType outputType) {
   Value shape = createShape(builder, location, outputType.getShape());
-  return builder.create<tosa::ReshapeOp>(location, outputType, input, shape);
+  return {builder.create<tosa::ReshapeOp>(location, outputType, input, shape)};
 }
 
 Value restoreNCNNLayout(OpBuilder& builder,
@@ -316,7 +316,7 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
                                      int64_t dilation,
                                      int64_t leading,
                                      int64_t& trailing) {
-      int64_t effective = (kernel - 1) * dilation + 1;
+      int64_t effective = ((kernel - 1) * dilation) + 1;
       int64_t numerator = inputSize - 1 + leading + trailing - effective + 1;
       int64_t remainder = numerator % stride;
       if (remainder < 0) {
@@ -340,16 +340,16 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
                           padLeft,
                           padding[3]);
     int64_t effectiveH =
-      (operation.getKernelH() - 1) * operation.getDilationH() + 1;
+      ((operation.getKernelH() - 1) * operation.getDilationH()) + 1;
     int64_t effectiveW =
-      (operation.getKernelW() - 1) * operation.getDilationW() + 1;
+      ((operation.getKernelW() - 1) * operation.getDilationW()) + 1;
     int64_t paddedHeight =
-      (inputShape[1] + padding[0] + padding[1] - effectiveH) /
-        operation.getStrideH() +
+      ((inputShape[1] + padding[0] + padding[1] - effectiveH) /
+       operation.getStrideH()) +
       1;
     int64_t paddedWidth =
-      (inputShape[2] + padding[2] + padding[3] - effectiveW) /
-        operation.getStrideW() +
+      ((inputShape[2] + padding[2] + padding[3] - effectiveW) /
+       operation.getStrideW()) +
       1;
     auto paddedOutputType = RankedTensorType::get(
       {1, paddedHeight, paddedWidth, sourceOutput.getShape()[0]},
@@ -719,7 +719,7 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
                                      int64_t dilationValue,
                                      int64_t leading,
                                      int64_t& trailing) {
-      int64_t effective = (kernel - 1) * dilationValue + 1;
+      int64_t effective = ((kernel - 1) * dilationValue) + 1;
       int64_t numerator = inputSize - 1 + leading + trailing - effective + 1;
       int64_t remainder = numerator % strideValue;
       if (remainder < 0) {
@@ -752,13 +752,15 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
                   RankedTensorType::get({1}, weightType.getElementType()),
                   0.0);
     auto outputType = getNHWCType(sourceOutput);
-    int64_t effectiveH = (weightType.getShape()[2] - 1) * (*dilation)[0] + 1;
-    int64_t effectiveW = (weightType.getShape()[3] - 1) * (*dilation)[1] + 1;
+    int64_t effectiveH = ((weightType.getShape()[2] - 1) * (*dilation)[0]) + 1;
+    int64_t effectiveW = ((weightType.getShape()[3] - 1) * (*dilation)[1]) + 1;
     int64_t paddedHeight =
-      (inputType.getShape()[1] + pad[0] + pad[1] - effectiveH) / (*stride)[0] +
+      ((inputType.getShape()[1] + pad[0] + pad[1] - effectiveH) /
+       (*stride)[0]) +
       1;
     int64_t paddedWidth =
-      (inputType.getShape()[2] + pad[2] + pad[3] - effectiveW) / (*stride)[1] +
+      ((inputType.getShape()[2] + pad[2] + pad[3] - effectiveW) /
+       (*stride)[1]) +
       1;
     auto paddedOutputType = RankedTensorType::get(
       {1, paddedHeight, paddedWidth, outputs}, sourceOutput.getElementType());
@@ -856,8 +858,8 @@ class ConvertBinary final : public ConversionPattern {
     }
     Value shift = createI8Zero(rewriter, operation->getLoc());
     auto multiply = [&](Value a, Value b) -> Value {
-      return rewriter.create<tosa::MulOp>(
-        operation->getLoc(), outputType, a, b, shift);
+      return {rewriter.create<tosa::MulOp>(
+        operation->getLoc(), outputType, a, b, shift)};
     };
     auto divide = [&](Value a, Value b) -> Value {
       Value reciprocal = rewriter.create<tosa::ReciprocalOp>(

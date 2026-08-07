@@ -89,6 +89,7 @@ set(convolution_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_
 set(convolution_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_upper.bin)
 set(convolution_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_lower.bin)
 set(convolution_depthwise_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise.bin)
+set(convolution_depthwise_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_asymmetric.bin)
 set(inner_product_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product.bin)
 file(WRITE ${empty_bin} "")
 foreach(convolution_case IN ITEMS
@@ -104,7 +105,10 @@ foreach(convolution_case IN ITEMS
                 ${convolution_case}
         COMMAND_ERROR_IS_FATAL ANY)
 endforeach()
-foreach(weighted_case IN ITEMS convolution_depthwise inner_product)
+foreach(weighted_case IN ITEMS
+        convolution_depthwise
+        convolution_depthwise_asymmetric
+        inner_product)
     execute_process(
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
                 ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${weighted_case}.bin
@@ -139,6 +143,10 @@ ncnn_add_compiled_fixture(
     convolution_depthwise
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise.param
     ${convolution_depthwise_bin})
+ncnn_add_compiled_fixture(
+    convolution_depthwise_asymmetric
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise_asymmetric.param
+    ${convolution_depthwise_asymmetric_bin})
 ncnn_add_compiled_fixture(
     relu_scalar
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/relu.param
@@ -272,6 +280,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin
     3x224x224)
+ncnn_add_compiled_fixture(
+    pp_lcnet_x1_0_textline_ori
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin
+    3x80x160)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -280,6 +293,7 @@ set(numerical_fixture_targets
     compile_convolution_same_upper
     compile_convolution_same_lower
     compile_convolution_depthwise
+    compile_convolution_depthwise_asymmetric
     compile_hard_sigmoid
     compile_hard_swish
     compile_reshape
@@ -323,6 +337,8 @@ foreach(index RANGE ${numerical_fixture_last_index})
 endforeach()
 add_dependencies(compile_squeezenet_v1_1 compile_softmax_negative_width)
 add_dependencies(compile_pp_lcnet_x1_0_doc_ori compile_squeezenet_v1_1)
+add_dependencies(compile_pp_lcnet_x1_0_textline_ori
+                 compile_pp_lcnet_x1_0_doc_ori)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -349,8 +365,10 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_SAME_UPPER_BIN_PATH="${convolution_same_upper_bin}"
     CONVOLUTION_SAME_LOWER_BIN_PATH="${convolution_same_lower_bin}"
     CONVOLUTION_DEPTHWISE_BIN_PATH="${convolution_depthwise_bin}"
+    CONVOLUTION_DEPTHWISE_ASYMMETRIC_BIN_PATH="${convolution_depthwise_asymmetric_bin}"
     INNER_PRODUCT_BIN_PATH="${inner_product_bin}"
     CONVOLUTION_DEPTHWISE_LIBRARY_PATH="${convolution_depthwise_LIBRARY}"
+    CONVOLUTION_DEPTHWISE_ASYMMETRIC_LIBRARY_PATH="${convolution_depthwise_asymmetric_LIBRARY}"
     HARD_SIGMOID_LIBRARY_PATH="${hard_sigmoid_LIBRARY}"
     HARD_SWISH_LIBRARY_PATH="${hard_swish_LIBRARY}"
     RESHAPE_LIBRARY_PATH="${reshape_LIBRARY}"
@@ -393,9 +411,13 @@ target_compile_definitions(numerical_tests PRIVATE
     SQUEEZENET_LIBRARY_PATH="${squeezenet_v1_1_LIBRARY}"
     PP_LCNET_DOC_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
     PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
-    PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}")
+    PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}"
+    PP_LCNET_TEXTLINE_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param"
+    PP_LCNET_TEXTLINE_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin"
+    PP_LCNET_TEXTLINE_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
+add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
 
 gtest_discover_tests(numerical_tests
     PROPERTIES LABELS "numerical;golden" TIMEOUT 900 RUN_SERIAL TRUE)

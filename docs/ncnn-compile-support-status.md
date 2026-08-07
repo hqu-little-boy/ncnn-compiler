@@ -12,7 +12,8 @@
 
 ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型（`.param` + `.bin`）
 编译为具有稳定 C ABI 的 Linux 共享库（`.so`）。技术栈为 LLVM/MLIR 21、C++23，当前以
-**SqueezeNet v1.1** 和静态 FP32 的 `PP-LCNet_x1_0_doc_ori` 作为端到端验证目标。
+**SqueezeNet v1.1** 以及静态 FP32 的 `PP-LCNet_x1_0_doc_ori`、
+`PP-LCNet_x1_0_textline_ori` 作为端到端验证目标。
 
 ---
 
@@ -38,7 +39,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | `Concat` | `ncnn.concat` | axis | 沿 axis 拼接 |
 | `Dropout` | `ncnn.dropout` | scale（默认 1.0） | 推理时 scale=1.0 为恒等 |
 | `Softmax` | `ncnn.softmax` | axis | |
-| `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel/stride/pad, has_bias | 仅纯 depthwise、静态 FP32 |
+| `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 仅纯 depthwise、静态 FP32 |
 | `HardSigmoid` | `ncnn.hard_sigmoid` | alpha, beta | 静态 FP32 |
 | `HardSwish` | `ncnn.hard_swish` | alpha, beta | 静态 FP32 |
 | `Reshape` | `ncnn.reshape` | static shape | 支持静态 shape 和单个 `-1` |
@@ -208,7 +209,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 
 `test/Numerical/`：将编译产物 `.so` 的输出与上游 ncnn **naive 标量 CPU 参考**对比。
 
-- `operators/supported_ops_test.cpp`：覆盖全部 7 个计算 op 的参数矩阵：
+- `operators/supported_ops_test.cpp`：覆盖支持算子的参数矩阵，包括：
   - Convolution：basic、no-bias、dilated、asymmetric padding、SAME_UPPER/LOWER
   - ReLU：standard、leaky、zero/negative inputs
   - Pooling：max、average(exclude-pad)、global max/avg、SAME_UPPER/LOWER、tail window
@@ -216,8 +217,9 @@ int <model_name>(const float *input1, ..., float *output1, ...);
   - Concat：channel/height/width + negative-axis
   - Split：2-way、3-way consumer topology
   - Dropout：identity
+  - ConvolutionDepthWise：basic、非对称 stride/dilation/padding
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
-- `models/pp_lcnet_test.cpp`：PP-LCNet doc ori 与 upstream ncnn 数值对齐
+- `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori 与 upstream ncnn 数值对齐
   - 全有限输出、softmax 求和误差 ≤1e-5、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4
 
 ### 7.4 运行时测试
@@ -237,7 +239,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 
 | 类别 | 限制 |
 |---|---|
-| 算子覆盖 | SqueezeNet + PP-LCNet doc ori 所需算子子集；无通用 group conv、Interp、Padding、BN、RNN |
+| 算子覆盖 | SqueezeNet + PP-LCNet doc/textline ori 所需算子子集；无通用 group conv、Interp、Padding、BN、RNN |
 | 量化 | int8 参数可解析但不被 lowering；f16 权重可解析但端到端路径仅 f32 |
 | 形状 | 仅静态形状 |
 | 数据类型 | ABI 仅 f32 |

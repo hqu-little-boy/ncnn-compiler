@@ -135,6 +135,56 @@ TEST(ParserTest, DecodesSequentialWeightLayerParameters) {
   EXPECT_FALSE(ncnn_graph::decode_inner_product_params(inner_product));
 }
 
+TEST(ParserTest, DecodesAsymmetricDepthwiseSpatialParameters) {
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  params.set_value(1, ncnn_graph::ParamValue::make_int(3));
+  params.set_value(11, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(2, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(12, ncnn_graph::ParamValue::make_int(3));
+  params.set_value(3, ncnn_graph::ParamValue::make_int(4));
+  params.set_value(13, ncnn_graph::ParamValue::make_int(5));
+  params.set_value(4, ncnn_graph::ParamValue::make_int(6));
+  params.set_value(15, ncnn_graph::ParamValue::make_int(7));
+  params.set_value(14, ncnn_graph::ParamValue::make_int(8));
+  params.set_value(16, ncnn_graph::ParamValue::make_int(9));
+  params.set_value(6, ncnn_graph::ParamValue::make_int(24));
+  params.set_value(7, ncnn_graph::ParamValue::make_int(4));
+
+  auto decoded = ncnn_graph::decode_convolution_depthwise_params(params);
+  ASSERT_TRUE(decoded) << decoded.error();
+  EXPECT_EQ(decoded->kernel_w, 3);
+  EXPECT_EQ(decoded->kernel_h, 2);
+  EXPECT_EQ(decoded->dilation_w, 2);
+  EXPECT_EQ(decoded->dilation_h, 3);
+  EXPECT_EQ(decoded->stride_w, 4);
+  EXPECT_EQ(decoded->stride_h, 5);
+  EXPECT_EQ(decoded->pad_left, 6);
+  EXPECT_EQ(decoded->pad_right, 7);
+  EXPECT_EQ(decoded->pad_top, 8);
+  EXPECT_EQ(decoded->pad_bottom, 9);
+}
+
+TEST(ParserTest, AppliesDepthwiseSpatialParameterFallbacks) {
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(1, ncnn_graph::ParamValue::make_int(3));
+  params.set_value(2, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(3, ncnn_graph::ParamValue::make_int(4));
+  params.set_value(4, ncnn_graph::ParamValue::make_int(6));
+  params.set_value(14, ncnn_graph::ParamValue::make_int(8));
+  params.set_value(6, ncnn_graph::ParamValue::make_int(18));
+  params.set_value(7, ncnn_graph::ParamValue::make_int(2));
+
+  auto decoded = ncnn_graph::decode_convolution_depthwise_params(params);
+  ASSERT_TRUE(decoded) << decoded.error();
+  EXPECT_EQ(decoded->dilation_h, 2);
+  EXPECT_EQ(decoded->stride_h, 4);
+  EXPECT_EQ(decoded->pad_right, 6);
+  EXPECT_EQ(decoded->pad_top, 8);
+  EXPECT_EQ(decoded->pad_bottom, 8);
+}
+
 namespace {
 
 void expect_failure(std::string_view text,

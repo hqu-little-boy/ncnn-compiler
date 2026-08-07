@@ -36,5 +36,31 @@ TEST(NumericalModel, PPLCNetDocOriMatchesNcnn) {
   EXPECT_TRUE(check_softmax(actual, *expected));
 }
 
+TEST(NumericalModel, PPLCNetTextlineOriMatchesNcnn) {
+  const TensorShape input_shape(160, 80, 3);
+  const auto input_elements = input_shape.element_count();
+  ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
+  const std::vector<float> input =
+    make_random_input(*input_elements, 0x54455854U, -1.0F, 1.0F);
+  const ReferenceModel reference(PP_LCNET_TEXTLINE_ORI_PARAM_PATH,
+                                 PP_LCNET_TEXTLINE_ORI_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 input_shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), 2U);
+
+  CompiledModel compiled(PP_LCNET_TEXTLINE_ORI_LIBRARY_PATH,
+                         "pp_lcnet_x1_0_textline_ori");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(2);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F));
+  EXPECT_NEAR(
+    std::accumulate(actual.begin(), actual.end(), 0.0F), 1.0F, 1.0e-5F);
+  EXPECT_TRUE(check_softmax(actual, *expected));
+}
+
 }  // namespace
 }  // namespace ncnn_compiler::test

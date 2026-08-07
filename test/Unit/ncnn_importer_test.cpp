@@ -388,6 +388,56 @@ TEST_F(NcnnImporterTest, PoolingShapes) {
     << "adaptive pooling rejects zero output height";
 }
 
+TEST_F(NcnnImporterTest, ImportsAsymmetricDepthwiseSpatialParameters) {
+  ncnn_graph::Graph graph;
+  auto input = make_layer("Input", "input", {}, {"data"});
+  ncnn_graph::ParamDict input_params;
+  input_params.set_value(0, ncnn_graph::ParamValue::make_int(9));
+  input_params.set_value(1, ncnn_graph::ParamValue::make_int(11));
+  input_params.set_value(2, ncnn_graph::ParamValue::make_int(2));
+  input.set_params(std::move(input_params));
+  graph.add_layer(std::move(input));
+
+  auto depthwise =
+    make_layer("ConvolutionDepthWise", "depthwise", {"data"}, {"out"});
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(1, ncnn_graph::ParamValue::make_int(3));
+  params.set_value(11, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(2, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(12, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(3, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(13, ncnn_graph::ParamValue::make_int(3));
+  params.set_value(4, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(15, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(14, ncnn_graph::ParamValue::make_int(0));
+  params.set_value(16, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(6, ncnn_graph::ParamValue::make_int(12));
+  params.set_value(7, ncnn_graph::ParamValue::make_int(2));
+  depthwise.set_params(std::move(params));
+  depthwise.add_weight(
+    make_tensor({2, 1, 2, 3}, ncnn_graph::DataType::Float32));
+  graph.add_layer(std::move(depthwise));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"out"});
+  graph.set_weights_loaded(true);
+
+  auto imported = import(graph);
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  mlir::ModuleOp module = imported->get();
+  EXPECT_TRUE(shape_is(output_type(module), {2, 4, 4}));
+  module->walk([&](mlir::ncnn::ConvolutionDepthWiseOp op) {
+    EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("stride_h").getInt(), 3);
+    EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("stride_w").getInt(), 2);
+    EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("dilation_h").getInt(), 1);
+    EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("dilation_w").getInt(), 2);
+    EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("pad_top").getInt(), 0);
+    EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("pad_bottom").getInt(), 1);
+    EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("pad_left").getInt(), 1);
+    EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("pad_right").getInt(), 2);
+  });
+}
+
 TEST_F(NcnnImporterTest, RejectsInvalidGraphs) {
   ncnn_graph::Graph unknown_graph;
   unknown_graph.add_layer(make_layer("Mystery", "bad", {}, {"out"}));

@@ -34,6 +34,19 @@ func.func @depthwise(%arg0: tensor<4x5x5xf32>) -> tensor<4x5x5xf32> {
 // CHECK-SAME: pad = array<i64: 1, 1, 1, 1>
 // CHECK-SAME: -> tensor<1x5x5x4xf32>
 
+func.func @depthwise_asymmetric(%arg0: tensor<2x10x8xf32>) -> tensor<2x4x4xf32> {
+  %weight = arith.constant dense<1.000000e+00> : tensor<2x1x2x3xf32>
+  %result = "ncnn.convolution_depthwise"(%arg0, %weight) {dilation_h = 1 : i64, dilation_w = 2 : i64, kernel_h = 2 : i64, kernel_w = 3 : i64, has_bias = false, pad_bottom = 1 : i64, pad_left = 1 : i64, pad_right = 2 : i64, pad_top = 0 : i64, stride_h = 3 : i64, stride_w = 2 : i64} : (tensor<2x10x8xf32>, tensor<2x1x2x3xf32>) -> tensor<2x4x4xf32>
+  return %result : tensor<2x4x4xf32>
+}
+
+// CHECK-LABEL: func.func @depthwise_asymmetric
+// CHECK: tosa.depthwise_conv2d
+// CHECK-SAME: dilation = array<i64: 1, 2>
+// CHECK-SAME: pad = array<i64: 0, 1, 1, 2>
+// CHECK-SAME: stride = array<i64: 3, 2>
+// CHECK-SAME: -> tensor<1x4x4x2xf32>
+
 func.func @reshape_inner_product(%arg0: tensor<2x2x2xf32>) -> tensor<3xf32> {
   %flat = "ncnn.reshape"(%arg0) {shape = array<i64: 8>} : (tensor<2x2x2xf32>) -> tensor<8xf32>
   %weight = arith.constant dense<1.000000e+00> : tensor<3x8xf32>

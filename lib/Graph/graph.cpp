@@ -332,11 +332,21 @@ decode_convolution_depthwise_params(const ParamDict& params) {
                                             : kernel_w.error());
   }
   auto kernel_h = decode_int_param(params, 11, *kernel_w, "kernel_h");
+  auto dilation_w = decode_int_param(params, 2, 1, "dilation_w");
+  auto dilation_h = decode_int_param(params, 12, *dilation_w, "dilation_h");
+  auto stride_w = decode_int_param(params, 3, 1, "stride_w");
+  auto stride_h = decode_int_param(params, 13, *stride_w, "stride_h");
+  auto pad_left = decode_int_param(params, 4, 0, "pad_left");
+  auto pad_right = decode_int_param(params, 15, *pad_left, "pad_right");
+  auto pad_top = decode_int_param(params, 14, *pad_left, "pad_top");
+  auto pad_bottom = decode_int_param(params, 16, *pad_top, "pad_bottom");
   auto group = decode_int_param(params, 7, 1, "group");
   auto bias_term = decode_int_param(params, 5, 0, "bias_term");
   auto weight_count = decode_int_param(params, 6, 0, "weight_data_size");
   auto int8_scale_term = decode_int_param(params, 8, 0, "int8_scale_term");
-  if (!kernel_h || !group || !bias_term || !weight_count || !int8_scale_term) {
+  if (!kernel_h || !dilation_w || !dilation_h || !stride_w || !stride_h ||
+      !pad_left || !pad_right || !pad_top || !pad_bottom || !group ||
+      !bias_term || !weight_count || !int8_scale_term) {
     return std::unexpected("invalid convolution depthwise parameter type");
   }
   if (*output_channels <= 0) {
@@ -345,6 +355,12 @@ decode_convolution_depthwise_params(const ParamDict& params) {
   if (*kernel_w <= 0 || *kernel_h <= 0) {
     return std::unexpected(
       "convolution depthwise kernel dimensions must be positive");
+  }
+  if (*dilation_w <= 0 || *dilation_h <= 0) {
+    return std::unexpected("convolution depthwise dilation must be positive");
+  }
+  if (*stride_w <= 0 || *stride_h <= 0) {
+    return std::unexpected("convolution depthwise stride must be positive");
   }
   if (*weight_count <= 0) {
     return std::unexpected(
@@ -365,6 +381,14 @@ decode_convolution_depthwise_params(const ParamDict& params) {
   result.output_channels = *output_channels;
   result.kernel_w = *kernel_w;
   result.kernel_h = *kernel_h;
+  result.dilation_w = *dilation_w;
+  result.dilation_h = *dilation_h;
+  result.stride_w = *stride_w;
+  result.stride_h = *stride_h;
+  result.pad_left = *pad_left;
+  result.pad_right = *pad_right;
+  result.pad_top = *pad_top;
+  result.pad_bottom = *pad_bottom;
   result.group = *group;
   result.has_bias = *bias_term == 1;
   result.weight_count = *weight_count;
