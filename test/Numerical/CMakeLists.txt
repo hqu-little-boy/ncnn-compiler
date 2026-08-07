@@ -206,12 +206,20 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/shuffle_channel.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    shuffle_channel_reverse
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/shuffle_channel_reverse.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     slice
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slice.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
     reduction_mean
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reduction_mean.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    reduction_mean_keepdims_coeff
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reduction_mean_keepdims_coeff.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
     relu_leaky
@@ -361,8 +369,10 @@ set(numerical_fixture_targets
     compile_binary_mul_reverse_broadcast
     compile_inner_product
     compile_shuffle_channel
+    compile_shuffle_channel_reverse
     compile_slice
     compile_reduction_mean
+    compile_reduction_mean_keepdims_coeff
     compile_relu_scalar
     compile_relu_leaky
     compile_pooling_scalar
@@ -451,8 +461,10 @@ target_compile_definitions(numerical_tests PRIVATE
     BINARY_MUL_REVERSE_BROADCAST_LIBRARY_PATH="${binary_mul_reverse_broadcast_LIBRARY}"
     INNER_PRODUCT_LIBRARY_PATH="${inner_product_LIBRARY}"
     SHUFFLE_CHANNEL_LIBRARY_PATH="${shuffle_channel_LIBRARY}"
+    SHUFFLE_CHANNEL_REVERSE_LIBRARY_PATH="${shuffle_channel_reverse_LIBRARY}"
     SLICE_LIBRARY_PATH="${slice_LIBRARY}"
     REDUCTION_MEAN_LIBRARY_PATH="${reduction_mean_LIBRARY}"
+    REDUCTION_MEAN_KEEPDIMS_COEFF_LIBRARY_PATH="${reduction_mean_keepdims_coeff_LIBRARY}"
     CONVOLUTION_LIBRARY_PATH="${convolution_scalar_LIBRARY}"
     RELU_LIBRARY_PATH="${relu_scalar_LIBRARY}"
     RELU_LEAKY_LIBRARY_PATH="${relu_leaky_LIBRARY}"

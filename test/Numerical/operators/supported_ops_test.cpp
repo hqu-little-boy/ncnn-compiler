@@ -83,6 +83,38 @@ void expect_concat(std::string_view name,
   EXPECT_TRUE(compare_values(actual, expected->front(), 0.0F));
 }
 
+void expect_shuffle_channel(std::string_view fixture,
+                            std::string_view libraryPath,
+                            std::span<const std::size_t> sourceChannels) {
+  const TensorShape shape(4, 3, 6);
+  constexpr std::size_t kChannelElements = 12;
+  std::vector<float> input(6 * kChannelElements);
+  for (std::size_t channel = 0; channel < 6; ++channel) {
+    std::fill_n(
+      input.begin() + static_cast<std::ptrdiff_t>(channel * kChannelElements),
+      kChannelElements,
+      static_cast<float>(channel));
+  }
+  const ReferenceModel reference(
+    fixture_path(fixture), NUMERICAL_EMPTY_BIN_PATH, "data", "output", shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel compiled(libraryPath, fixture);
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(input.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 0.0F));
+  ASSERT_EQ(sourceChannels.size(), 6U);
+  for (std::size_t outputChannel = 0; outputChannel < 6; ++outputChannel) {
+    const auto begin = actual.begin() + static_cast<std::ptrdiff_t>(
+                                          outputChannel * kChannelElements);
+    EXPECT_TRUE(std::all_of(begin, begin + kChannelElements, [&](float value) {
+      return value == static_cast<float>(sourceChannels[outputChannel]);
+    }));
+  }
+}
+
 TEST(NumericalOperator, ConvolutionMatchesNcnn) {
   expect_single_input_operator("convolution",
                                CONVOLUTION_LIBRARY_PATH,
@@ -594,17 +626,20 @@ TEST(NumericalOperator, SplitThreeWayConsumerTopologyMatchesNcnn) {
 }
 
 TEST(NumericalOperator, ShuffleChannelMatchesNcnn) {
-  expect_single_input_operator("shuffle_channel",
-                               SHUFFLE_CHANNEL_LIBRARY_PATH,
-                               NUMERICAL_EMPTY_BIN_PATH,
-                               TensorShape(4, 3, 4),
-                               48,
-                               0.0F,
-                               0x53485546U);
+  constexpr std::array<std::size_t, 6> kSourceChannels{0, 3, 1, 4, 2, 5};
+  expect_shuffle_channel(
+    "shuffle_channel", SHUFFLE_CHANNEL_LIBRARY_PATH, kSourceChannels);
+}
+
+TEST(NumericalOperator, ShuffleChannelReverseMatchesNcnn) {
+  constexpr std::array<std::size_t, 6> kSourceChannels{0, 2, 4, 1, 3, 5};
+  expect_shuffle_channel("shuffle_channel_reverse",
+                         SHUFFLE_CHANNEL_REVERSE_LIBRARY_PATH,
+                         kSourceChannels);
 }
 
 TEST(NumericalOperator, SliceMatchesNcnn) {
-  const TensorShape shape(4, 3, 4);
+  const TensorShape shape(4, 3, 5);
   const auto elements = shape.element_count();
   ASSERT_TRUE(elements.has_value()) << elements.error();
   const std::vector<float> input =
@@ -620,10 +655,12 @@ TEST(NumericalOperator, SliceMatchesNcnn) {
   CompiledModel compiled(SLICE_LIBRARY_PATH, "slice");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> left(24);
-  std::vector<float> right(24);
+  std::vector<float> right(36);
   ASSERT_EQ(compiled.run_two_outputs(input, left, right), 0);
   EXPECT_TRUE(compare_values(left, (*expected)[0], 0.0F));
   EXPECT_TRUE(compare_values(right, (*expected)[1], 0.0F));
+  EXPECT_TRUE(std::equal(left.begin(), left.end(), input.begin()));
+  EXPECT_TRUE(std::equal(right.begin(), right.end(), input.begin() + 24));
 }
 
 TEST(NumericalOperator, ReductionMeanMatchesNcnn) {
@@ -634,6 +671,36 @@ TEST(NumericalOperator, ReductionMeanMatchesNcnn) {
                                4,
                                1.0e-6F,
                                0x52454455U);
+}
+
+TEST(NumericalOperator, ReductionMeanKeepdimsCoeffMatchesNcnn) {
+  const TensorShape shape(4, 3, 4);
+  const auto elements = shape.element_count();
+  ASSERT_TRUE(elements.has_value()) << elements.error();
+  std::vector<float> input(*elements);
+  for (std::size_t index = 0; index < input.size(); ++index) {
+    input[index] = static_cast<float>(index + 1);
+  }
+  const ReferenceModel reference(fixture_path("reduction_mean_keepdims_coeff"),
+                                 NUMERICAL_EMPTY_BIN_PATH,
+                                 "data",
+                                 "output",
+                                 shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), 4U);
+
+  CompiledModel compiled(REDUCTION_MEAN_KEEPDIMS_COEFF_LIBRARY_PATH,
+                         "reduction_mean_keepdims_coeff");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(4);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
+  for (std::size_t channel = 0; channel < actual.size(); ++channel) {
+    const float first = static_cast<float>((channel * 12) + 1);
+    const float last = first + 11.0F;
+    EXPECT_NEAR(actual[channel], 0.25F * (first + last), 1.0e-6F);
+  }
 }
 
 TEST(NumericalSupport, TensorShapeRejectsNegativeAndOverflowingSizes) {
