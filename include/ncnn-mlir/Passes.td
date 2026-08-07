@@ -27,7 +27,7 @@ def BufferizeNCNNPass : Pass<"bufferize-ncnn", "mlir::ModuleOp"> {
 }
 
 def GenerateCAPIPass : Pass<"generate-ncnn-c-api", "mlir::ModuleOp"> {
-  let summary = "Generate a null-checked bare-pointer C wrapper for an ncnn entry";
+  let summary = "Prepare a typed model-specific C ABI for an ncnn entry";
   let dependentDialects = ["LLVM::LLVMDialect"];
   let options = [
     Option<"exportName", "export-name", "std::string", "",
@@ -38,7 +38,7 @@ def GenerateCAPIPass : Pass<"generate-ncnn-c-api", "mlir::ModuleOp"> {
 }
 
 def FinalizeCAPIPass : Pass<"finalize-ncnn-c-api", "mlir::ModuleOp"> {
-  let summary = "Materialize a prepared ncnn bare-pointer wrapper in LLVM dialect";
+  let summary = "Materialize a prepared typed ncnn wrapper in LLVM dialect";
   let dependentDialects = ["LLVM::LLVMDialect"];
 }
 

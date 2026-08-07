@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <format>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "llvm/ADT/SmallSet.h"
@@ -32,6 +33,38 @@ struct ArgumentInfo {
   MemRefType type;
   bool output;
 };
+
+std::optional<StringRef> abiElementType(Type type) {
+  if (type.isF16()) {
+    return "f16";
+  }
+  if (type.isBF16()) {
+    return "bf16";
+  }
+  if (type.isF32()) {
+    return "f32";
+  }
+  if (type.isF64()) {
+    return "f64";
+  }
+  auto integer = dyn_cast<IntegerType>(type);
+  if (!integer ||
+      !llvm::is_contained({8u, 16u, 32u, 64u}, integer.getWidth())) {
+    return std::nullopt;
+  }
+  switch (integer.getWidth()) {
+    case 8:
+      return integer.isUnsigned() ? "ui8" : "i8";
+    case 16:
+      return integer.isUnsigned() ? "ui16" : "i16";
+    case 32:
+      return integer.isUnsigned() ? "ui32" : "i32";
+    case 64:
+      return integer.isUnsigned() ? "ui64" : "i64";
+    default:
+      llvm_unreachable("validated integer width");
+  }
+}
 
 constexpr StringLiteral kExportNameAttr = "ncnn.c_api.export_name";
 constexpr StringLiteral kInternalNameAttr = "ncnn.c_api.internal_name";
@@ -112,11 +145,17 @@ class GenerateCAPIPass final
     SmallVector<ArgumentInfo> outputs;
     for (unsigned index = 0; index < function.getNumArguments(); ++index) {
       auto type = dyn_cast<MemRefType>(function.getArgumentTypes()[index]);
-      if (!type || !type.hasStaticShape() || !type.getLayout().isIdentity() ||
-          !type.getElementType().isF32()) {
+      if (!type || !type.getLayout().isIdentity() ||
+          !abiElementType(type.getElementType())) {
         return function.emitOpError()
                << "argument " << index
-               << " must be a static identity-layout f32 memref";
+               << " must be a ranked identity-layout memref with a supported "
+                  "C ABI element type";
+      }
+      if (type.getRank() > 32) {
+        return function.emitOpError()
+               << "argument " << index
+               << " rank exceeds the C ABI dynamic-dimension mask capacity";
       }
       ArgumentInfo info{.functionIndex = index,
                         .type = type,
@@ -126,6 +165,14 @@ class GenerateCAPIPass final
     }
     if (inputs.empty() || outputs.empty()) {
       return function.emitOpError("requires at least one input and one output");
+    }
+    for (const ArgumentInfo& output : outputs) {
+      if (!output.type.hasStaticShape()) {
+        return function.emitOpError()
+               << "output " << output.functionIndex
+               << " has dynamic extents; output shape inference is required "
+                  "before this ABI can be generated";
+      }
     }
 
     SmallVector<Attribute> argumentTypes;
@@ -144,7 +191,7 @@ class GenerateCAPIPass final
       }
       llvm::json::Array shape;
       for (int64_t dimension : info.type.getShape()) {
-        shape.push_back(dimension);
+        shape.push_back(ShapedType::isDynamic(dimension) ? -1 : dimension);
       }
       llvm::json::Object argument;
       argument["name"] = std::format(
@@ -152,6 +199,17 @@ class GenerateCAPIPass final
         info.output ? "output" : "input",
         info.output ? outputManifest.size() + 1 : inputManifest.size() + 1);
       argument["shape"] = std::move(shape);
+      argument["element_type"] = *abiElementType(info.type.getElementType());
+      uint32_t dynamicDimMask = 0;
+      for (auto [index, dimension] : llvm::enumerate(info.type.getShape())) {
+        if (ShapedType::isDynamic(dimension)) {
+          dynamicDimMask |= UINT32_C(1) << index;
+        }
+      }
+      argument["dynamic_dim_mask"] = dynamicDimMask;
+      if (info.output) {
+        argument["shape_depends_on_data"] = false;
+      }
       (info.output ? outputManifest : inputManifest)
         .push_back(std::move(argument));
     }
@@ -273,16 +331,24 @@ class FinalizeCAPIPass final
 
     LLVMTypeConverter typeConverter(getOperation().getContext());
     auto pointerType = LLVM::LLVMPointerType::get(getOperation().getContext());
-    SmallVector<Type> pointerTypes(wrapperOrder.size(), pointerType);
+    SmallVector<Type> wrapperTypes;
+    for (unsigned functionIndex : wrapperOrder) {
+      wrapperTypes.push_back(pointerType);
+      if (!outputs.contains(functionIndex) &&
+          !argumentTypes[functionIndex].hasStaticShape()) {
+        wrapperTypes.push_back(pointerType);
+      }
+    }
     auto wrapperType = LLVM::LLVMFunctionType::get(
-      IntegerType::get(getOperation().getContext(), 32), pointerTypes, false);
+      IntegerType::get(getOperation().getContext(), 32), wrapperTypes, false);
     OpBuilder builder(internal);
     auto wrapper = builder.create<LLVM::LLVMFuncOp>(internal.getLoc(),
                                                     exportName.getValue(),
                                                     wrapperType,
                                                     LLVM::Linkage::External);
     Block* entry = wrapper.addEntryBlock(builder);
-    Block* successBlock = &wrapper.getBody().emplaceBlock();
+    Block* nonNullBlock = &wrapper.getBody().emplaceBlock();
+    Block* invokeBlock = &wrapper.getBody().emplaceBlock();
     Block* errorBlock = &wrapper.getBody().emplaceBlock();
 
     builder.setInsertionPointToStart(entry);
@@ -300,7 +366,7 @@ class FinalizeCAPIPass final
                                    anyNull,
                                    errorBlock,
                                    ValueRange{},
-                                   successBlock,
+                                   nonNullBlock,
                                    ValueRange{});
 
     builder.setInsertionPointToStart(errorBlock);
@@ -308,15 +374,108 @@ class FinalizeCAPIPass final
       internal.getLoc(), builder.getI32IntegerAttr(1));
     builder.create<LLVM::ReturnOp>(internal.getLoc(), failure);
 
-    builder.setInsertionPointToStart(successBlock);
+    builder.setInsertionPointToStart(nonNullBlock);
+    Value invalidShape;
+    unsigned validationIndex = 0;
+    auto i64Type = builder.getI64Type();
+    for (unsigned functionIndex : wrapperOrder) {
+      ++validationIndex;
+      MemRefType type = argumentTypes[functionIndex];
+      if (outputs.contains(functionIndex) || type.hasStaticShape()) {
+        continue;
+      }
+      Value shape = entry->getArgument(validationIndex++);
+      for (auto [dimensionIndex, dimension] :
+           llvm::enumerate(type.getShape())) {
+        Value address = builder.create<LLVM::GEPOp>(
+          internal.getLoc(),
+          pointerType,
+          i64Type,
+          shape,
+          ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimensionIndex)});
+        Value size =
+          builder.create<LLVM::LoadOp>(internal.getLoc(), i64Type, address);
+        Value expected = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(),
+          builder.getI64IntegerAttr(
+            ShapedType::isDynamic(dimension) ? 0 : dimension));
+        Value valid = builder.create<LLVM::ICmpOp>(
+          internal.getLoc(),
+          ShapedType::isDynamic(dimension) ? LLVM::ICmpPredicate::sgt
+                                           : LLVM::ICmpPredicate::eq,
+          size,
+          expected);
+        Value invalid = builder.create<LLVM::XOrOp>(
+          internal.getLoc(),
+          valid,
+          builder.create<LLVM::ConstantOp>(internal.getLoc(),
+                                           builder.getBoolAttr(true)));
+        invalidShape = invalidShape
+                         ? builder.create<LLVM::OrOp>(
+                             internal.getLoc(), invalidShape, invalid)
+                         : invalid;
+      }
+    }
+    if (invalidShape) {
+      builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                     invalidShape,
+                                     errorBlock,
+                                     ValueRange{},
+                                     invokeBlock,
+                                     ValueRange{});
+    } else {
+      builder.create<LLVM::BrOp>(internal.getLoc(), ValueRange{}, invokeBlock);
+    }
+
+    builder.setInsertionPointToStart(invokeBlock);
     SmallVector<SmallVector<Value>> unpacked(argumentTypes.size());
-    for (auto [wrapperIndex, functionIndex] : llvm::enumerate(wrapperOrder)) {
-      auto descriptor =
-        MemRefDescriptor::fromStaticShape(builder,
-                                          internal.getLoc(),
-                                          typeConverter,
-                                          argumentTypes[functionIndex],
-                                          entry->getArgument(wrapperIndex));
+    unsigned wrapperIndex = 0;
+    for (unsigned functionIndex : wrapperOrder) {
+      MemRefType type = argumentTypes[functionIndex];
+      Value data = entry->getArgument(wrapperIndex++);
+      MemRefDescriptor descriptor = [&] {
+        if (type.hasStaticShape()) {
+          return MemRefDescriptor::fromStaticShape(
+            builder, internal.getLoc(), typeConverter, type, data);
+        }
+
+        Value shape = entry->getArgument(wrapperIndex++);
+        auto result = MemRefDescriptor::poison(
+          builder, internal.getLoc(), typeConverter.convertType(type));
+        result.setAllocatedPtr(builder, internal.getLoc(), data);
+        result.setAlignedPtr(builder, internal.getLoc(), data);
+        result.setConstantOffset(builder, internal.getLoc(), 0);
+        SmallVector<Value> sizes;
+        sizes.reserve(type.getRank());
+        for (auto [dimensionIndex, dimension] :
+             llvm::enumerate(type.getShape())) {
+          if (!ShapedType::isDynamic(dimension)) {
+            sizes.push_back(builder.create<LLVM::ConstantOp>(
+              internal.getLoc(), builder.getI64IntegerAttr(dimension)));
+          } else {
+            Value address = builder.create<LLVM::GEPOp>(
+              internal.getLoc(),
+              pointerType,
+              i64Type,
+              shape,
+              ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimensionIndex)});
+            sizes.push_back(builder.create<LLVM::LoadOp>(
+              internal.getLoc(), i64Type, address));
+          }
+          result.setSize(
+            builder, internal.getLoc(), dimensionIndex, sizes.back());
+        }
+        Value stride = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getI64IntegerAttr(1));
+        for (unsigned reverseIndex = 0; reverseIndex < type.getRank();
+             ++reverseIndex) {
+          unsigned dimensionIndex = type.getRank() - reverseIndex - 1;
+          result.setStride(builder, internal.getLoc(), dimensionIndex, stride);
+          stride = builder.create<LLVM::MulOp>(
+            internal.getLoc(), stride, sizes[dimensionIndex]);
+        }
+        return result;
+      }();
       MemRefDescriptor::unpack(builder,
                                internal.getLoc(),
                                descriptor,

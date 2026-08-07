@@ -79,7 +79,9 @@ Affine/SCF/Math/Arith/MemRef/Func/CF 到 LLVM dialect 的转换，因此不会�
 - **参数字典 → 强类型属性**：ncnn 的 `{0=64 1=3 …}` 数字 key 解析成
   `ncnn.convolution {kernel_h=3, kernel_w=3, stride_h=2, …}` 这样的具名强类型属性
   （`I64Attr` / `BoolAttr` / `F32Attr`）。
-- **shape inference**：每个值都带推断出的静态形状与元素类型（`tensor<64x113x113xf32>`）。
+- **shape inference**：每个值都带推断出的 ranked shape 与元素类型；当前 importer 生成静态
+  类型（例如 `tensor<64x113x113xf32>`），动态 extent/rank 需要扩展 shape propagation 和
+  downstream lowering。
   conv/pool/concat 实现 `InferTensorTypeAdaptor`，importer 通过标准 `inferReturnTypes` 获取结果，
   `InferTypeOpInterface` 用相同实现精确复核声明类型。
 

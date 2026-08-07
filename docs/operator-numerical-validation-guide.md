@@ -182,8 +182,9 @@ SAME_UPPER/LOWER 与 tail；Concat 的 rank-3 正负 axis；Softmax 的 rank-3 �
 
 ## 9. 多输入、多输出 ABI 必须实际调用，不能只检查 manifest
 
-公共 C ABI 的顺序固定为全部输入参数，然后全部输出参数，内部 wrapper 再恢复模型函数原始参数
-顺序。Concat 和 Split 是最小的 ABI 回归用例：
+公共 C ABI 的顺序固定为全部输入 tensor 参数组，然后全部输出数据指针。当前静态 fixture 的
+输入组只有数据指针；固定-rank动态输入还会在数据指针后携带 shape。内部 wrapper 再恢复模型
+函数原始参数顺序。Concat 和 Split 是最小的静态 ABI 回归用例：
 
 ```c
 int concat_scalar(const float *input1, const float *input2, float *output1);

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <format>
 #include <limits>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <regex>
@@ -159,6 +160,9 @@ llvm::cl::opt<std::string> g_expected_undefined("expected-undefined",
 struct Argument {
   std::string name;
   std::vector<std::int64_t> shape;
+  std::string element_type;
+  std::uint32_t dynamic_dim_mask;
+  bool shape_depends_on_data;
 };
 
 struct Manifest {
@@ -438,16 +442,39 @@ int run(const std::vector<std::string>& command,
       }
       auto name = argument_object->getString("name");
       auto* shape = argument_object->getArray("shape");
-      if (!name || shape == nullptr) {
+      auto element_type = argument_object->getString("element_type");
+      auto dynamic_dim_mask = argument_object->getInteger("dynamic_dim_mask");
+      if (!name || shape == nullptr || !element_type || !dynamic_dim_mask ||
+          *dynamic_dim_mask < 0) {
         return false;
       }
-      Argument argument{.name = std::string(*name), .shape = {}};
+      Argument argument{
+        .name = std::string(*name),
+        .shape = {},
+        .element_type = std::string(*element_type),
+        .dynamic_dim_mask = static_cast<std::uint32_t>(*dynamic_dim_mask),
+        .shape_depends_on_data =
+          argument_object->getBoolean("shape_depends_on_data").value_or(false)};
       for (llvm::json::Value& dimension : *shape) {
         auto integer = dimension.getAsInteger();
-        if (!integer || *integer < 0) {
+        if (!integer || *integer < -1) {
           return false;
         }
         argument.shape.push_back(*integer);
+      }
+      if (argument.shape.size() > 32 ||
+          static_cast<std::uint64_t>(*dynamic_dim_mask) >
+            std::numeric_limits<std::uint32_t>::max()) {
+        return false;
+      }
+      std::uint32_t expected_mask = 0;
+      for (std::size_t index = 0; index < argument.shape.size(); ++index) {
+        if (argument.shape[index] == -1) {
+          expected_mask |= UINT32_C(1) << index;
+        }
+      }
+      if (argument.dynamic_dim_mask != expected_mask) {
+        return false;
       }
       destination.push_back(std::move(argument));
     }
@@ -484,6 +511,10 @@ int run(const std::vector<std::string>& command,
 [[nodiscard]] std::expected<std::size_t, std::string> element_count(
   const Argument& argument) {
   for (std::int64_t dimension : argument.shape) {
+    if (dimension < 0) {
+      return std::unexpected(std::format(
+        "argument '{}' has a dynamic element count", argument.name));
+    }
     if (static_cast<std::uint64_t>(dimension) >
         std::numeric_limits<std::size_t>::max()) {
       return std::unexpected(
@@ -518,6 +549,11 @@ int run(const std::vector<std::string>& command,
       llvm::json::Object object;
       object["name"] = argument.name;
       object["shape"] = std::move(shape);
+      object["element_type"] = argument.element_type;
+      object["dynamic_dim_mask"] = argument.dynamic_dim_mask;
+      if (argument.shape_depends_on_data) {
+        object["shape_depends_on_data"] = true;
+      }
       result.push_back(std::move(object));
     }
     return result;
@@ -530,14 +566,49 @@ int run(const std::vector<std::string>& command,
     path, llvm::formatv("{0:2}\n", llvm::json::Value(std::move(object))).str());
 }
 
+std::optional<std::string_view> c_type(const Argument& argument) {
+  static const std::map<std::string, std::string_view> types = {
+    {"f16", "ncnn_float16_t"},
+    {"bf16", "ncnn_bfloat16_t"},
+    {"f32", "float"},
+    {"f64", "double"},
+    {"i8", "int8_t"},
+    {"i16", "int16_t"},
+    {"i32", "int32_t"},
+    {"i64", "int64_t"},
+    {"ui8", "uint8_t"},
+    {"ui16", "uint16_t"},
+    {"ui32", "uint32_t"},
+    {"ui64", "uint64_t"}};
+  auto found = types.find(argument.element_type);
+  return found == types.end() ? std::nullopt
+                              : std::optional<std::string_view>(found->second);
+}
+
+std::string macro_name(const Manifest& manifest,
+                       const Argument& argument,
+                       std::string_view suffix) {
+  std::string result =
+    std::format("{}_{}_{}", manifest.function, argument.name, suffix);
+  std::ranges::transform(result, result.begin(), [](unsigned char character) {
+    return static_cast<char>(std::toupper(character));
+  });
+  return result;
+}
+
 [[nodiscard]] std::expected<void, std::string> write_header(
   const fs::path& path, const Manifest& manifest) {
   std::string guard = std::format("NCNN_{}_H", manifest.function);
   std::ranges::transform(guard, guard.begin(), [](unsigned char c) {
     return static_cast<char>(std::toupper(c));
   });
-  std::string contents =
-    std::format("#ifndef {}\n#define {}\n\n", guard, guard);
+  std::string contents = std::format(
+    "#ifndef {}\n#define {}\n\n#include <stdint.h>\n\n"
+    "#define NCNN_DYNAMIC_DIM INT64_C(-1)\n\n"
+    "typedef uint16_t ncnn_float16_t;\n"
+    "typedef uint16_t ncnn_bfloat16_t;\n\n",
+    guard,
+    guard);
   std::set<std::string> macros;
   for (const Argument* argument : [&] {
          std::vector<const Argument*> result;
@@ -549,32 +620,72 @@ int run(const std::vector<std::string>& command,
          }
          return result;
        }()) {
-    std::string macro =
-      std::format("{}_{}_elements", manifest.function, argument->name);
-    std::ranges::transform(
-      macro, macro.begin(), [](unsigned char c) { return std::toupper(c); });
-    if (!macros.insert(macro).second) {
-      return std::unexpected(std::format(
-        "argument '{}' duplicates generated element-count macro '{}'",
-        argument->name,
-        macro));
+    const std::string rank_macro = macro_name(manifest, *argument, "rank");
+    if (!macros.insert(rank_macro).second) {
+      return std::unexpected(
+        std::format("argument '{}' duplicates generated ABI macro '{}'",
+                    argument->name,
+                    rank_macro));
     }
-    auto count = element_count(*argument);
-    if (!count) {
-      return std::unexpected(count.error());
+    contents +=
+      std::format("#define {} {}\n", rank_macro, argument->shape.size());
+    for (auto [index, dimension] : llvm::enumerate(argument->shape)) {
+      contents += std::format(
+        "#define {} {}\n",
+        macro_name(manifest, *argument, std::format("dim{}", index)),
+        dimension < 0 ? "NCNN_DYNAMIC_DIM" : std::to_string(dimension));
     }
-    contents += std::format("#define {} {}\n", macro, *count);
+    contents += std::format("#define {} UINT32_C(0x{:x})\n",
+                            macro_name(manifest, *argument, "dynamic_dim_mask"),
+                            argument->dynamic_dim_mask);
+    if (argument->dynamic_dim_mask == 0) {
+      auto count = element_count(*argument);
+      if (!count) {
+        return std::unexpected(count.error());
+      }
+      contents += std::format(
+        "#define {} {}\n", macro_name(manifest, *argument, "elements"), *count);
+    }
+    if (std::ranges::any_of(manifest.outputs, [&](const Argument& output) {
+          return &output == argument;
+        })) {
+      contents +=
+        std::format("#define {} {}\n",
+                    macro_name(manifest, *argument, "shape_depends_on_data"),
+                    argument->shape_depends_on_data ? 1 : 0);
+    }
+    contents += "\n";
   }
   contents +=
     std::format("\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\nint {}(",
                 manifest.function);
   bool first = true;
   for (const Argument& input : manifest.inputs) {
-    contents += std::format("{}const float *{}", first ? "" : ", ", input.name);
+    auto type = c_type(input);
+    if (!type) {
+      return std::unexpected(
+        std::format("argument '{}' has unsupported element type '{}'",
+                    input.name,
+                    input.element_type));
+    }
+    contents +=
+      std::format("{}const {} *{}", first ? "" : ", ", *type, input.name);
     first = false;
+    if (input.dynamic_dim_mask != 0) {
+      contents += std::format(", const int64_t {}_shape[{}]",
+                              input.name,
+                              macro_name(manifest, input, "rank"));
+    }
   }
   for (const Argument& output : manifest.outputs) {
-    contents += std::format("{}float *{}", first ? "" : ", ", output.name);
+    auto type = c_type(output);
+    if (!type) {
+      return std::unexpected(
+        std::format("argument '{}' has unsupported element type '{}'",
+                    output.name,
+                    output.element_type));
+    }
+    contents += std::format("{}{} *{}", first ? "" : ", ", *type, output.name);
     first = false;
   }
   contents += std::format(

@@ -134,7 +134,9 @@ module {
 - **权重**被抬成 `ncnn.const`（`%cst`=卷积核 `[O,I,H,W]`、`%cst_0`=bias `[O]`），
   作为 `ncnn.convolution` 的操作数。
 - **ncnn 数字参数**变成具名强类型属性（`kernel_h`、`stride_h`、`pad_*`、`has_bias`…）。
-- **每个值带推断出的静态形状/元素类型**（`tensor<64x113x113xf32>`）。
+- **每个值带推断出的 ranked shape/元素类型**；当前导入路径生成静态类型，例如
+  `tensor<64x113x113xf32>`。动态 extent/rank 需要对应 importer、shape analysis 和 lowering
+  实现，不能由 CLI shape 字符串单独获得。
 - **来源溯源**保留在 `ncnn.name` / `ncnn.source_layer` discardable 属性里。
 
 MLIR 模块格式详见 [ncnn-ir-format.md](ncnn-ir-format.md)。

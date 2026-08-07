@@ -25,6 +25,7 @@ module {
 // MANIFEST: 5
 // MANIFEST: "name": "output1"
 // MANIFEST: 2
+// MANIFEST: "shape_depends_on_data": false
 // MANIFEST: "name": "output2"
 // MANIFEST: 4
 

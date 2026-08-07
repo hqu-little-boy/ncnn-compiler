@@ -113,10 +113,27 @@ def c_identifier(name):
 
 
 def element_count(argument):
+    if any(dimension < 0 for dimension in argument["shape"]):
+        raise ValueError(f"{argument['name']} has a dynamic element count")
     count = 1
     for dimension in argument["shape"]:
         count *= dimension
     return count
+
+
+def c_type(argument):
+    types = {
+        "f16": "ncnn_float16_t", "bf16": "ncnn_bfloat16_t",
+        "f32": "float", "f64": "double", "i8": "int8_t",
+        "i16": "int16_t", "i32": "int32_t", "i64": "int64_t",
+        "ui8": "uint8_t", "ui16": "uint16_t", "ui32": "uint32_t",
+        "ui64": "uint64_t",
+    }
+    return types[argument["element_type"]]
+
+
+def macro_name(function, argument, suffix):
+    return f"{function}_{argument['name']}_{suffix}".upper()
 
 
 def write_header(path, manifest):
@@ -124,16 +141,41 @@ def write_header(path, manifest):
     guard = f"NCNN_{function.upper()}_H"
     parameters = []
     for argument in manifest["inputs"]:
-        parameters.append(f"const float *{argument['name']}")
+        parameters.append(f"const {c_type(argument)} *{argument['name']}")
+        if argument["dynamic_dim_mask"]:
+            rank = macro_name(function, argument, "rank")
+            parameters.append(f"const int64_t {argument['name']}_shape[{rank}]")
     for argument in manifest["outputs"]:
-        parameters.append(f"float *{argument['name']}")
+        parameters.append(f"{c_type(argument)} *{argument['name']}")
     declaration = f"int {function}({', '.join(parameters)});"
     sizes = []
     for argument in manifest["inputs"] + manifest["outputs"]:
-        macro = f"{function}_{argument['name']}_elements".upper()
-        sizes.append(f"#define {macro} {element_count(argument)}")
+        sizes.append(f"#define {macro_name(function, argument, 'rank')} {len(argument['shape'])}")
+        for index, dimension in enumerate(argument["shape"]):
+            value = "NCNN_DYNAMIC_DIM" if dimension < 0 else dimension
+            sizes.append(f"#define {macro_name(function, argument, f'dim{index}')} {value}")
+        mask = argument["dynamic_dim_mask"]
+        sizes.append(
+            f"#define {macro_name(function, argument, 'dynamic_dim_mask')} "
+            f"UINT32_C(0x{mask:x})"
+        )
+        if not mask:
+            sizes.append(
+                f"#define {macro_name(function, argument, 'elements')} "
+                f"{element_count(argument)}"
+            )
+        if argument in manifest["outputs"]:
+            depends = int(argument.get("shape_depends_on_data", False))
+            sizes.append(
+                f"#define {macro_name(function, argument, 'shape_depends_on_data')} "
+                f"{depends}"
+            )
+        sizes.append("")
     path.write_text(
-        f"#ifndef {guard}\n#define {guard}\n\n"
+        f"#ifndef {guard}\n#define {guard}\n\n#include <stdint.h>\n\n"
+        "#define NCNN_DYNAMIC_DIM INT64_C(-1)\n\n"
+        "typedef uint16_t ncnn_float16_t;\n"
+        "typedef uint16_t ncnn_bfloat16_t;\n\n"
         + "\n".join(sizes)
         + "\n\n"
         "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n"
@@ -151,7 +193,8 @@ def write_harness(path, header_name, manifest):
     names = []
     for argument in arguments:
         declarations.append(
-            f"  float *{argument['name']} = calloc({element_count(argument)}, sizeof(float));"
+            f"  {c_type(argument)} *{argument['name']} = "
+            f"calloc({element_count(argument)}, sizeof({c_type(argument)}));"
         )
         declarations.append(f"  if (!{argument['name']}) return 2;")
         names.append(argument["name"])

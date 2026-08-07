@@ -33,17 +33,34 @@ model/
 └── libmodel.so
 ```
 
-头文件声明模型的 C ABI 入口并定义各参数的元素数量宏。例如：
+当前产品模型路径生成静态模型的 C ABI 入口，并为每个 tensor 定义 rank、维度、动态维 mask
+和静态元素数量宏。例如：
 
 ```c
+#define MODEL_INPUT1_RANK 3
+#define MODEL_INPUT1_DIM0 3
+#define MODEL_INPUT1_DIM1 227
+#define MODEL_INPUT1_DIM2 227
+#define MODEL_INPUT1_DYNAMIC_DIM_MASK UINT32_C(0x0)
 #define MODEL_INPUT1_ELEMENTS 154587
+
+#define MODEL_OUTPUT1_RANK 1
+#define MODEL_OUTPUT1_DIM0 1000
+#define MODEL_OUTPUT1_DYNAMIC_DIM_MASK UINT32_C(0x0)
 #define MODEL_OUTPUT1_ELEMENTS 1000
+#define MODEL_OUTPUT1_SHAPE_DEPENDS_ON_DATA 0
 
 int model(const float *input1, float *output1);
 ```
 
 输入参数排在输出参数之前。输入声明为 `const float *`，输出声明为 `float *`。调用成功返回
 `0`；任一输入或输出为空指针时返回非零错误码。
+
+ABI pass 和头文件生成器已经使用模型专用 typed 参数，并支持为固定-rank动态输入追加 shape
+参数；wrapper 会验证 shape、构造运行时 memref size/stride。当前 ncnn importer、算子 lowering
+和产品测试仍只产生静态 f32 模型。动态输出需要的 `<model>_infer_output_shapes`、数据依赖输出
+和动态 rank 分派尚未实现，因此不能作为产品命令行能力使用。完整目标见
+[`dynamic-rank-c-abi.md`](../../docs/dynamic-rank-c-abi.md)。
 
 ## 2. 输入和输出
 
@@ -143,9 +160,10 @@ dist/resnet/
 
 ### 2.5 `--input-shape=<CxHxW>`
 
-为 `Input` 层省略尺寸的模型提供静态输入形状。值必须恰好包含三个正整数，分隔符为 `x`
+为 `Input` 层省略尺寸的模型提供当前静态产品路径所需的编译期输入形状。值必须恰好包含三个正整数，分隔符为 `x`
 或 `X`，顺序为 ncnn 原生的 `C x H x W`。模型必须恰好有一个 `Input` 层且该层省略尺寸；
-该选项不能改写 `.param` 中已有尺寸，也不能为多输入模型分别提供 shape。格式或使用条件不
+该选项不能改写 `.param` 中已有尺寸，也不能为多输入模型分别提供 shape。动态 rank/extent
+属于生成 C ABI 的运行时 shape 参数，不使用该选项表达。格式或使用条件不
 满足时编译失败。
 
 ```bash

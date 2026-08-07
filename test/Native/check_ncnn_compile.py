@@ -107,6 +107,25 @@ def main():
     manifest = json.loads((all_output / "relu_all.json").read_text())
     if manifest["function"] != "relu_all" or not manifest["inputs"]:
         raise RuntimeError(f"unexpected ABI manifest: {manifest}")
+    input1 = manifest["inputs"][0]
+    if input1["element_type"] != "f32" or input1["dynamic_dim_mask"] != 0:
+        raise RuntimeError(f"missing typed ABI metadata: {input1}")
+    all_header = (all_output / "relu_all.h").read_text()
+    required_header_text = {
+        "#include <stdint.h>",
+        "#define NCNN_DYNAMIC_DIM INT64_C(-1)",
+        "#define RELU_ALL_INPUT1_RANK 3",
+        "#define RELU_ALL_INPUT1_DYNAMIC_DIM_MASK UINT32_C(0x0)",
+        "const float *input1",
+        "float *output1",
+    }
+    missing_header_text = {
+        text for text in required_header_text if text not in all_header
+    }
+    if missing_header_text:
+        raise RuntimeError(
+            f"generated header lacks typed ABI contract: {sorted(missing_header_text)}"
+        )
 
     previous_header = (all_output / "relu_all.h").read_bytes()
     previous_library = (all_output / "librelu_all.so").read_bytes()

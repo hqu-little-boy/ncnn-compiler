@@ -192,15 +192,22 @@ adaptive pooling、average include-pad 和尚未分配目标路径的 ncnn op �
 ### 5.2 C ABI 契约
 
 ```c
-int <model_name>(const float *input1, ..., float *output1, ...);
+int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 ```
 
-- 所有输入参数在前，输出参数在后。
-- 输入为 `const float *`，输出为 `float *`。
-- 调用方拥有所有 buffer， contiguous、native-endian、f32。
+- 所有输入 tensor 参数组在前，输出数据指针在后；输入参数组为 `data`、可选 `shape`。
+- 元素类型由 C 指针类型表达。ABI 层支持 f16、bf16、f32、f64 以及 8/16/32/64 位有符号、
+  无符号整数；当前 ncnn 产品模型路径仍只产生 f32 tensor。
+- 完全静态 tensor 省略 shape；固定-rank动态输入增加 `const int64_t shape[RANK]`。
+- 调用方拥有所有 buffer；数据为 contiguous、native-endian。动态输入 shape 的静态维必须匹配
+  头文件宏，动态维必须大于 0。
 - 返回 0 表示成功；任一指针为 NULL 返回 1。
-- 仅支持静态形状；可用 `--input-shape=CxHxW` 补齐恰好一个且尺寸省略的 Input，不能覆盖
-  已声明尺寸或表达多输入 shape。
+- 当前产品实现和默认测试覆盖静态 shape；可用 `--input-shape=CxHxW` 补齐恰好一个且尺寸
+  省略的 Input，不能覆盖已声明尺寸或表达多输入 shape。
+- ABI pass 已能为固定-rank动态输入构造运行时 memref descriptor，但 importer 和算子 lowering
+  尚未形成动态模型全链。动态输出、独立 shape inference、数据依赖输出和动态 rank 分派仍未
+  实现；不得宣称当前产品动态库已支持动态 shape。设计规范见
+  [`dynamic-rank-c-abi.md`](../../docs/dynamic-rank-c-abi.md)。
 
 ### 5.3 链接约束
 
@@ -290,7 +297,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 |---|---|
 | 算子覆盖 | SqueezeNet、PP-LCNet、AngleNet、PP-OCRv6 tiny rec/tiny det/small det/medium det、PP-OCRv5 mobile det 所需子集；无通用 group conv、RNN，Interp/Padding/Deconvolution 仅支持表中静态子集 |
 | 量化 | int8 参数可解析但不被 lowering；f16 权重可解析但端到端路径仅 f32 |
-| 形状 | 仅静态形状 |
+| 形状 | 当前已验证产品路径为静态 shape；动态 extent/rank 已有目标 ABI 设计，仍需全链实现与默认测试 |
 | 数据类型 | ABI 仅 f32 |
 | 入口 | 一个导出函数；可有多个输入和多个输出，ABI 按“全部输入后全部输出”排列 |
 | 平台 | 仅 Linux 64-bit ELF |
