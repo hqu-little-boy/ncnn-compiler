@@ -14,7 +14,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 编译为具有稳定 C ABI 的 Linux 共享库（`.so`）。技术栈为 LLVM/MLIR 21、C++23，当前以
 **SqueezeNet v1.1** 以及静态 FP32 的 `PP-LCNet_x1_0_doc_ori`、
 `PP-LCNet_x1_0_textline_ori`、`Chineseocr_Lite_AngleNet`、
-`PP-OCRv6_tiny_rec`、`PP-OCRv6_tiny_det`、`PP-OCRv6_small_det` 作为端到端验证目标。
+`PP-OCRv6_tiny_rec`、`PP-OCRv6_tiny_det`、`PP-OCRv6_small_det`、
+`PP-OCRv6_medium_det` 作为端到端验证目标。
 
 ---
 
@@ -243,7 +244,8 @@ int <model_name>(const float *input1, ..., float *output1, ...);
   - Concat：channel/height/width + negative-axis
   - Split：2-way、3-way consumer topology
   - Dropout：identity
-  - ConvolutionDepthWise：basic、非对称 stride/dilation/padding、SAME_UPPER/LOWER
+  - ConvolutionDepthWise：basic、非对称 stride/dilation/padding、SAME_UPPER/LOWER，及
+    PP-OCRv6 small/medium 使用的 `C=96/K=7/pad=3`、`C=256/K=9/pad=4` 大核实例
   - Reshape：静态 shape、`-1` 推断、`0` 复制输入维度
   - BinaryOp：标量、channel broadcast、反向 broadcast
    - PP-OCRv6 rec 新增算子：GELU（含负尾部）、Squeeze、BatchNorm 零方差保护、
@@ -254,9 +256,9 @@ int <model_name>(const float *input1, ..., float *output1, ...);
      的 Deconvolution；Sigmoid 概率范围、极值截断和 NaN 传播语义；权重加载另覆盖正式 FP32 tag
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet、PP-OCRv6
-  tiny rec、tiny det 和 small det 与 upstream ncnn 数值对齐；两个 det 模型均使用
-  `3x640x640` 输入并验证 `1x640x640` 概率图及重复调用一致性。tiny 使用 `1e-4` 预算；
-  small 使用独立 `3e-4` 预算，固定输入下实测最大绝对误差约 `2.256e-4`
+  tiny rec、tiny det、small det 和 medium det 与 upstream ncnn 数值对齐；三个 det 模型均使用
+  `3x640x640` 输入并验证 `1x640x640` 概率图及重复调用一致性。tiny 和 medium 使用 `1e-4`
+  预算；small 使用独立 `3e-4` 预算，固定输入下实测最大绝对误差约 `2.256e-4`
   - 全有限输出、softmax 求和误差 ≤1e-5（PP-OCRv6 的 6906 类输出为 ≤2e-5）、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4
 
 ### 7.4 运行时测试
@@ -276,7 +278,7 @@ int <model_name>(const float *input1, ..., float *output1, ...);
 
 | 类别 | 限制 |
 |---|---|
-| 算子覆盖 | SqueezeNet、PP-LCNet、AngleNet、PP-OCRv6 tiny rec/tiny det/small det 所需子集；无通用 group conv、RNN，Interp/Padding/Deconvolution 仅支持表中静态子集 |
+| 算子覆盖 | SqueezeNet、PP-LCNet、AngleNet、PP-OCRv6 tiny rec/tiny det/small det/medium det 所需子集；无通用 group conv、RNN，Interp/Padding/Deconvolution 仅支持表中静态子集 |
 | 量化 | int8 参数可解析但不被 lowering；f16 权重可解析但端到端路径仅 f32 |
 | 形状 | 仅静态形状 |
 | 数据类型 | ABI 仅 f32 |

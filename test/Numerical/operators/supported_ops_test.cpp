@@ -438,6 +438,16 @@ TEST(NumericalOperator, DepthwiseConvolution7x7MatchesNcnn) {
                                0x44573758U);
 }
 
+TEST(NumericalOperator, DepthwiseConvolution9x9MatchesNcnn) {
+  expect_single_input_operator("convolution_depthwise_9x9",
+                               CONVOLUTION_DEPTHWISE_9X9_LIBRARY_PATH,
+                               CONVOLUTION_DEPTHWISE_9X9_BIN_PATH,
+                               TensorShape(5, 4, 256),
+                               5 * 4 * 256,
+                               1.0e-5F,
+                               0x44573958U);
+}
+
 TEST(NumericalOperator, AsymmetricDepthwiseConvolutionMatchesNcnn) {
   expect_single_input_operator("convolution_depthwise_asymmetric",
                                CONVOLUTION_DEPTHWISE_ASYMMETRIC_LIBRARY_PATH,

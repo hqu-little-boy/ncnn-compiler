@@ -94,6 +94,7 @@ set(convolution_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_
 set(convolution_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_lower.bin)
 set(convolution_depthwise_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise.bin)
 set(convolution_depthwise_7x7_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_7x7.bin)
+set(convolution_depthwise_9x9_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_9x9.bin)
 set(convolution_depthwise_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_asymmetric.bin)
 set(convolution_depthwise_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_same_upper.bin)
 set(convolution_depthwise_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_same_lower.bin)
@@ -122,6 +123,7 @@ endforeach()
 foreach(weighted_case IN ITEMS
         convolution_depthwise
         convolution_depthwise_7x7
+        convolution_depthwise_9x9
         convolution_depthwise_asymmetric
         convolution_depthwise_same_upper
         convolution_depthwise_same_lower
@@ -174,6 +176,10 @@ ncnn_add_compiled_fixture(
     convolution_depthwise_7x7
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise_7x7.param
     ${convolution_depthwise_7x7_bin})
+ncnn_add_compiled_fixture(
+    convolution_depthwise_9x9
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise_9x9.param
+    ${convolution_depthwise_9x9_bin})
 ncnn_add_compiled_fixture(
     convolution_depthwise_asymmetric
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise_asymmetric.param
@@ -460,6 +466,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.bin
     3x640x640)
+ncnn_add_compiled_fixture(
+    pp_ocrv6_medium_det
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin
+    3x640x640)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -470,6 +481,7 @@ set(numerical_fixture_targets
     compile_convolution_same_lower
     compile_convolution_depthwise
     compile_convolution_depthwise_7x7
+    compile_convolution_depthwise_9x9
     compile_convolution_depthwise_asymmetric
     compile_convolution_depthwise_same_upper
     compile_convolution_depthwise_same_lower
@@ -553,6 +565,7 @@ add_dependencies(compile_pp_ocrv6_tiny_rec
                  compile_chineseocr_lite_anglenet)
 add_dependencies(compile_pp_ocrv6_tiny_det compile_pp_ocrv6_tiny_rec)
 add_dependencies(compile_pp_ocrv6_small_det compile_pp_ocrv6_tiny_det)
+add_dependencies(compile_pp_ocrv6_medium_det compile_pp_ocrv6_small_det)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -581,6 +594,7 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_SAME_LOWER_BIN_PATH="${convolution_same_lower_bin}"
     CONVOLUTION_DEPTHWISE_BIN_PATH="${convolution_depthwise_bin}"
     CONVOLUTION_DEPTHWISE_7X7_BIN_PATH="${convolution_depthwise_7x7_bin}"
+    CONVOLUTION_DEPTHWISE_9X9_BIN_PATH="${convolution_depthwise_9x9_bin}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_BIN_PATH="${convolution_depthwise_asymmetric_bin}"
     CONVOLUTION_DEPTHWISE_SAME_UPPER_BIN_PATH="${convolution_depthwise_same_upper_bin}"
     CONVOLUTION_DEPTHWISE_SAME_LOWER_BIN_PATH="${convolution_depthwise_same_lower_bin}"
@@ -593,6 +607,7 @@ target_compile_definitions(numerical_tests PRIVATE
     DECONVOLUTION_TINY_HEAD_BIN_PATH="${deconvolution_tiny_head_bin}"
     CONVOLUTION_DEPTHWISE_LIBRARY_PATH="${convolution_depthwise_LIBRARY}"
     CONVOLUTION_DEPTHWISE_7X7_LIBRARY_PATH="${convolution_depthwise_7x7_LIBRARY}"
+    CONVOLUTION_DEPTHWISE_9X9_LIBRARY_PATH="${convolution_depthwise_9x9_LIBRARY}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_LIBRARY_PATH="${convolution_depthwise_asymmetric_LIBRARY}"
     CONVOLUTION_DEPTHWISE_SAME_UPPER_LIBRARY_PATH="${convolution_depthwise_same_upper_LIBRARY}"
     CONVOLUTION_DEPTHWISE_SAME_LOWER_LIBRARY_PATH="${convolution_depthwise_same_lower_LIBRARY}"
@@ -683,7 +698,10 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_TINY_DET_LIBRARY_PATH="${pp_ocrv6_tiny_det_LIBRARY}"
     PP_OCRV6_SMALL_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.param"
     PP_OCRV6_SMALL_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.bin"
-    PP_OCRV6_SMALL_DET_LIBRARY_PATH="${pp_ocrv6_small_det_LIBRARY}")
+    PP_OCRV6_SMALL_DET_LIBRARY_PATH="${pp_ocrv6_small_det_LIBRARY}"
+    PP_OCRV6_MEDIUM_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param"
+    PP_OCRV6_MEDIUM_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin"
+    PP_OCRV6_MEDIUM_DET_LIBRARY_PATH="${pp_ocrv6_medium_det_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
@@ -691,6 +709,7 @@ add_dependencies(numerical_tests compile_chineseocr_lite_anglenet)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_rec)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_small_det)
+add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
 
 gtest_discover_tests(numerical_tests
     PROPERTIES LABELS "numerical;golden" TIMEOUT 900 RUN_SERIAL TRUE)

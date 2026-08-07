@@ -16,6 +16,7 @@ sizes = {
     "convolution_same_lower": (18, 0),
     "convolution_depthwise": (18, 2),
     "convolution_depthwise_7x7": (4704, 96),
+    "convolution_depthwise_9x9": (20736, 256),
     "convolution_depthwise_asymmetric": (12, 2),
     "convolution_depthwise_same_upper": (18, 0),
     "convolution_depthwise_same_lower": (18, 0),
@@ -58,8 +59,9 @@ if case.startswith("deconvolution"):
             -0.52, 0.62, -0.72, 0.82,
         ][:kernel_count]
     bias = [-0.05, 0.10][:bias_count]
-elif case == "convolution_depthwise_7x7":
-    rng = random.Random(0x44573758)
+elif case in ("convolution_depthwise_7x7", "convolution_depthwise_9x9"):
+    seed = 0x44573758 if case.endswith("7x7") else 0x44573958
+    rng = random.Random(seed)
     weights = [rng.uniform(-0.025, 0.025) for _ in range(kernel_count)]
     bias = [rng.uniform(-0.01, 0.01) for _ in range(bias_count)]
 elif case.startswith("convolution_depthwise") or case.startswith("inner_product"):
