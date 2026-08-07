@@ -22,6 +22,7 @@ sizes = {
     "inner_product_fused_relu": (24, 4),
     "deconvolution": (16, 2),
     "deconvolution_no_bias": (24, 0),
+    "deconvolution_tiny_head": (64, 0),
 }
 if case == "batch_norm":
     slope = [0.0001, -0.75, 0.5]
@@ -44,14 +45,17 @@ kernel_count, bias_count = sizes[case]
 if case.startswith("deconvolution"):
     # ncnn stores deconvolution weights as [output][input][kh][kw]. Distinct
     # values make an accidental input/output transpose visible in the golden.
-    weights = [
-        0.10, 0.20, 0.30, 0.40,
-        -0.50, -0.60, -0.70, -0.80,
-        -0.15, 0.25, -0.35, 0.45,
-        0.55, -0.65, 0.75, -0.85,
-        0.12, -0.22, 0.32, -0.42,
-        -0.52, 0.62, -0.72, 0.82,
-    ][:kernel_count]
+    if case == "deconvolution_tiny_head":
+        weights = [((index * 17) % 67 - 33) / 64.0 for index in range(64)]
+    else:
+        weights = [
+            0.10, 0.20, 0.30, 0.40,
+            -0.50, -0.60, -0.70, -0.80,
+            -0.15, 0.25, -0.35, 0.45,
+            0.55, -0.65, 0.75, -0.85,
+            0.12, -0.22, 0.32, -0.42,
+            -0.52, 0.62, -0.72, 0.82,
+        ][:kernel_count]
     bias = [-0.05, 0.10][:bias_count]
 elif case.startswith("convolution_depthwise") or case.startswith("inner_product"):
     rng = random.Random(0x4E434E4E if case.startswith("convolution_depthwise") else 0x49505052)
@@ -64,4 +68,5 @@ else:
     ][:kernel_count]
     bias = [0.125, -0.25][:bias_count]
 payload = weights + bias
-output.write_bytes(struct.pack("<I", 0) + struct.pack(f"<{len(payload)}f", *payload))
+flag = 0x0002C056 if case == "deconvolution_tiny_head" else 0
+output.write_bytes(struct.pack("<I", flag) + struct.pack(f"<{len(payload)}f", *payload))

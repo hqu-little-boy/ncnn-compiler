@@ -258,6 +258,35 @@ ncnn_graph::Graph make_pool_graph(std::int64_t input_size,
   return graph;
 }
 
+ncnn_graph::Graph make_deconvolution_graph(std::int64_t weight_count) {
+  ncnn_graph::Graph graph;
+  auto input = make_layer("Input", "input", {}, {"data"});
+  ncnn_graph::ParamDict input_params;
+  input_params.set_value(0, ncnn_graph::ParamValue::make_int(2));
+  input_params.set_value(1, ncnn_graph::ParamValue::make_int(2));
+  input_params.set_value(2, ncnn_graph::ParamValue::make_int(16));
+  input.set_params(std::move(input_params));
+  graph.add_layer(std::move(input));
+
+  auto deconvolution = make_layer("Deconvolution", "deconv", {"data"}, {"out"});
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(1, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(3, ncnn_graph::ParamValue::make_int(2));
+  params.set_value(6, ncnn_graph::ParamValue::make_int(weight_count));
+  params.set_value(9, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(10,
+                   ncnn_graph::ParamValue::make_float_array({0.125F, -0.25F}));
+  deconvolution.set_params(std::move(params));
+  deconvolution.add_weight(
+    make_tensor({1, 16, 2, 2}, ncnn_graph::DataType::Float32));
+  graph.add_layer(std::move(deconvolution));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"out"});
+  graph.set_weights_loaded(true);
+  return graph;
+}
+
 class NcnnImporterTest : public ::testing::Test {
  protected:
   NcnnImporterTest() { register_dialects(context_); }
@@ -437,6 +466,20 @@ TEST_F(NcnnImporterTest, ImportsAsymmetricDepthwiseSpatialParameters) {
     EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("pad_left").getInt(), 1);
     EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("pad_right").getInt(), 2);
   });
+}
+
+TEST_F(NcnnImporterTest, DeconvolutionIgnoresReluActivationParameters) {
+  auto imported = import(make_deconvolution_graph(64));
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::DeconvolutionOp>(imported->get()), 1);
+  EXPECT_EQ(count_ops<mlir::ncnn::ReluOp>(imported->get()), 1);
+}
+
+TEST_F(NcnnImporterTest, RejectsDeconvolutionWeightCountMismatch) {
+  auto imported = import(make_deconvolution_graph(68));
+  ASSERT_FALSE(imported.has_value());
+  EXPECT_NE(imported.error().to_string().find("weight_data_size"),
+            std::string::npos);
 }
 
 TEST_F(NcnnImporterTest, RejectsInvalidGraphs) {

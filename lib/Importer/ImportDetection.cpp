@@ -185,7 +185,6 @@ ImportResult import_deconvolution(ImportContext& importer,
       params.output_pad_bottom != 0 || params.output_pad_right != 0 ||
       params.output_h != 0 || params.output_w != 0 ||
       (params.activation_type != 0 && params.activation_type != 1) ||
-      params.has_activation_params ||
       context.layer.get_weights().size() != params.expected_weight_tensors()) {
     return std::unexpected(make_error(
       context, "only static FP32 2x2 stride-2 Deconvolution is supported"));
@@ -199,9 +198,13 @@ ImportResult import_deconvolution(ImportContext& importer,
   if (!inputType || inputType.getRank() != 3 || weightShape.size() != 4 ||
       weightShape[0] != params.output_channels ||
       weightShape[1] != inputType.getShape()[0] || weightShape[2] != 2 ||
-      weightShape[3] != 2) {
+      weightShape[3] != 2 ||
+      context.layer.get_weights()[0].element_count() !=
+        static_cast<std::size_t>(params.weight_count)) {
     return std::unexpected(
-      make_error(context, "Deconvolution weight must have shape [O,I,2,2]"));
+      make_error(context,
+                 "Deconvolution weight shape or weight_data_size is "
+                 "inconsistent"));
   }
   for (const auto& weight : context.layer.get_weights()) {
     if (weight.get_dtype() != ncnn_graph::DataType::Float32) {

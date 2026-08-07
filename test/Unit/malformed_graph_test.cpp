@@ -221,6 +221,30 @@ TEST_F(MalformedGraphTest, WeightLoading) {
               convolution->get_layers()[1].get_weights()[0].byte_size() == 4)
     << "valid little-endian float32 convolution weight loads";
 
+  auto tagged_float32_weight = float32_weight;
+  tagged_float32_weight[0] = std::byte{0x56};
+  tagged_float32_weight[1] = std::byte{0xc0};
+  tagged_float32_weight[2] = std::byte{0x02};
+  auto tagged_float32_path = fixture_dir / "tagged-float32.bin";
+  EXPECT_TRUE(write_bytes(tagged_float32_path, tagged_float32_weight));
+  auto tagged_convolution = load_text(
+    "tagged-float32", kConvolutionGraph, tagged_float32_path.string());
+  EXPECT_TRUE(
+    tagged_convolution &&
+    tagged_convolution->get_layers()[1].get_weights()[0].get_dtype() ==
+      ncnn_graph::DataType::Float32)
+    << "official float32 weight tag loads";
+
+  auto truncated_tagged_float32 = tagged_float32_weight;
+  truncated_tagged_float32.pop_back();
+  auto truncated_tagged_path = fixture_dir / "truncated-tagged-float32.bin";
+  EXPECT_TRUE(write_bytes(truncated_tagged_path, truncated_tagged_float32));
+  auto truncated_tagged = load_text("truncated-tagged-float32",
+                                    kConvolutionGraph,
+                                    truncated_tagged_path.string());
+  EXPECT_TRUE(!truncated_tagged && contains(truncated_tagged.error(), "EOF"))
+    << "truncated official float32 payload is rejected";
+
   auto empty_convolution =
     load_text("empty-convolution", kConvolutionGraph, empty_bin_path.string());
   EXPECT_TRUE(

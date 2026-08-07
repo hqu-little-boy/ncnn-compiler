@@ -147,6 +147,26 @@ TEST(NumericalOperator, PaddingAllFourSidesMatchNcnn) {
                                0x50414434U);
 }
 
+TEST(NumericalOperator, PaddingIdentityMatchesNcnnAndInput) {
+  const TensorShape shape(4, 3, 2);
+  const std::vector<float> input =
+    make_random_input(24, 0x50494445U, -2.0F, 2.0F);
+  const ReferenceModel reference(fixture_path("padding_identity"),
+                                 NUMERICAL_EMPTY_BIN_PATH,
+                                 "data",
+                                 "output",
+                                 shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel compiled(PADDING_IDENTITY_LIBRARY_PATH, "padding_identity");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(input.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 0.0F));
+  EXPECT_EQ(actual, input);
+}
+
 TEST(NumericalOperator, InterpNearestTwofoldMatchesNcnn) {
   expect_single_input_operator("interp",
                                INTERP_LIBRARY_PATH,
@@ -165,6 +185,36 @@ TEST(NumericalOperator, InterpNearestAsymmetricOddEvenScalesMatchNcnn) {
                                144,
                                0.0F,
                                0x494E5434U);
+}
+
+TEST(NumericalOperator, InterpIdentityMatchesNcnnAndInput) {
+  const TensorShape shape(4, 3, 2);
+  const std::vector<float> input =
+    make_random_input(24, 0x49494445U, -2.0F, 2.0F);
+  const ReferenceModel reference(fixture_path("interp_identity"),
+                                 NUMERICAL_EMPTY_BIN_PATH,
+                                 "data",
+                                 "output",
+                                 shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel compiled(INTERP_IDENTITY_LIBRARY_PATH, "interp_identity");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(input.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 0.0F));
+  EXPECT_EQ(actual, input);
+}
+
+TEST(NumericalOperator, InterpNearestEightfoldMatchesNcnn) {
+  expect_single_input_operator("interp_eightfold",
+                               INTERP_EIGHTFOLD_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(2, 3, 2),
+                               768,
+                               0.0F,
+                               0x494E5438U);
 }
 
 TEST(NumericalOperator, DeconvolutionLayoutAndFusedReluMatchNcnn) {
@@ -206,6 +256,16 @@ TEST(NumericalOperator, DeconvolutionWithoutBiasMatchesNcnn) {
                                72,
                                1.0e-6F,
                                0x4445434EU);
+}
+
+TEST(NumericalOperator, DeconvolutionTinyHeadMatchesNcnn) {
+  expect_single_input_operator("deconvolution_tiny_head",
+                               DECONVOLUTION_TINY_HEAD_LIBRARY_PATH,
+                               DECONVOLUTION_TINY_HEAD_BIN_PATH,
+                               TensorShape(2, 2, 16),
+                               16,
+                               1.0e-6F,
+                               0x44544844U);
 }
 
 TEST(NumericalOperator, SigmoidMatchesNcnnAndProducesProbabilities) {
@@ -269,6 +329,33 @@ TEST(NumericalOperator, SigmoidExtremeValuesMatchNcnnClamping) {
   EXPECT_EQ(actual[11], 1.0F);
   EXPECT_EQ(actual[11], actual[12]);
   EXPECT_EQ(actual[12], actual[13]);
+}
+
+TEST(NumericalOperator, SigmoidNaNMatchesNcnn) {
+  const TensorShape shape(5, 2, 2);
+  constexpr std::size_t kNanIndex = 3;
+  const std::array<float, 20> input{
+    -2.0F, -0.0F, 0.0F,   std::numeric_limits<float>::quiet_NaN(),
+    2.0F,  -1.0F, 1.0F,   0.5F,
+    -0.5F, 3.0F,  -3.0F,  4.0F,
+    -4.0F, 0.25F, -0.25F, 5.0F,
+    -5.0F, 6.0F,  -6.0F,  1.5F};
+  const ReferenceModel reference(
+    fixture_path("sigmoid"), NUMERICAL_EMPTY_BIN_PATH, "data", "output", shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel compiled(SIGMOID_LIBRARY_PATH, "sigmoid");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(input.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  ASSERT_TRUE(std::isnan((*expected)[kNanIndex]));
+  EXPECT_TRUE(std::isnan(actual[kNanIndex]));
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    if (index != kNanIndex) {
+      EXPECT_NEAR(actual[index], (*expected)[index], 1.0e-6F) << index;
+    }
+  }
 }
 
 TEST(NumericalOperator, ConvolutionWithoutBiasMatchesNcnn) {

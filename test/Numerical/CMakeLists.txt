@@ -43,6 +43,9 @@ add_subdirectory(
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn
     ${CMAKE_CURRENT_BINARY_DIR}/ncnn
     EXCLUDE_FROM_ALL)
+if(NOT MSVC)
+    target_compile_options(ncnn PRIVATE -fno-fast-math)
+endif()
 
 function(ncnn_add_compiled_fixture name param_file bin_file)
     set(input_shape "${ARGV3}")
@@ -99,6 +102,7 @@ set(batch_norm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/batch_norm.bin)
 set(gemm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/gemm.bin)
 set(deconvolution_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/deconvolution.bin)
 set(deconvolution_no_bias_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/deconvolution_no_bias.bin)
+set(deconvolution_tiny_head_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/deconvolution_tiny_head.bin)
 file(WRITE ${empty_bin} "")
 foreach(convolution_case IN ITEMS
         convolution
@@ -124,7 +128,8 @@ foreach(weighted_case IN ITEMS
         batch_norm
         gemm
         deconvolution
-        deconvolution_no_bias)
+        deconvolution_no_bias
+        deconvolution_tiny_head)
     execute_process(
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
                 ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${weighted_case}.bin
@@ -380,12 +385,24 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/padding_four_sides.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    padding_identity
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/padding_identity.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     interp
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
     interp_asymmetric
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp_asymmetric.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    interp_identity
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp_identity.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    interp_eightfold
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp_eightfold.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
     deconvolution
@@ -395,6 +412,10 @@ ncnn_add_compiled_fixture(
     deconvolution_no_bias
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/deconvolution_no_bias.param
     ${deconvolution_no_bias_bin})
+ncnn_add_compiled_fixture(
+    deconvolution_tiny_head
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/deconvolution_tiny_head.param
+    ${deconvolution_tiny_head_bin})
 ncnn_add_compiled_fixture(
     sigmoid
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
@@ -491,10 +512,14 @@ set(numerical_fixture_targets
     compile_softmax_negative_width
     compile_padding
     compile_padding_four_sides
+    compile_padding_identity
     compile_interp
     compile_interp_asymmetric
+    compile_interp_identity
+    compile_interp_eightfold
     compile_deconvolution
     compile_deconvolution_no_bias
+    compile_deconvolution_tiny_head
     compile_sigmoid)
 list(LENGTH numerical_fixture_targets numerical_fixture_target_count)
 math(EXPR numerical_fixture_last_index "${numerical_fixture_target_count} - 1")
@@ -551,6 +576,7 @@ target_compile_definitions(numerical_tests PRIVATE
     GEMM_BIN_PATH="${gemm_bin}"
     DECONVOLUTION_BIN_PATH="${deconvolution_bin}"
     DECONVOLUTION_NO_BIAS_BIN_PATH="${deconvolution_no_bias_bin}"
+    DECONVOLUTION_TINY_HEAD_BIN_PATH="${deconvolution_tiny_head_bin}"
     CONVOLUTION_DEPTHWISE_LIBRARY_PATH="${convolution_depthwise_LIBRARY}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_LIBRARY_PATH="${convolution_depthwise_asymmetric_LIBRARY}"
     CONVOLUTION_DEPTHWISE_SAME_UPPER_LIBRARY_PATH="${convolution_depthwise_same_upper_LIBRARY}"
@@ -613,10 +639,14 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_SAME_LOWER_LIBRARY_PATH="${convolution_same_lower_LIBRARY}"
     PADDING_LIBRARY_PATH="${padding_LIBRARY}"
     PADDING_FOUR_SIDES_LIBRARY_PATH="${padding_four_sides_LIBRARY}"
+    PADDING_IDENTITY_LIBRARY_PATH="${padding_identity_LIBRARY}"
     INTERP_LIBRARY_PATH="${interp_LIBRARY}"
     INTERP_ASYMMETRIC_LIBRARY_PATH="${interp_asymmetric_LIBRARY}"
+    INTERP_IDENTITY_LIBRARY_PATH="${interp_identity_LIBRARY}"
+    INTERP_EIGHTFOLD_LIBRARY_PATH="${interp_eightfold_LIBRARY}"
     DECONVOLUTION_LIBRARY_PATH="${deconvolution_LIBRARY}"
     DECONVOLUTION_NO_BIAS_LIBRARY_PATH="${deconvolution_no_bias_LIBRARY}"
+    DECONVOLUTION_TINY_HEAD_LIBRARY_PATH="${deconvolution_tiny_head_LIBRARY}"
     SIGMOID_LIBRARY_PATH="${sigmoid_LIBRARY}"
     SQUEEZENET_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param"
     SQUEEZENET_BIN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin"
