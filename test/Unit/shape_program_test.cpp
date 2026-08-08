@@ -72,4 +72,22 @@ TEST(ShapeProgramTest, ProvesEquivalentConstrainedExpressions) {
   EXPECT_FALSE(quarterThenDouble.equivalentUnder({}, half));
 }
 
+TEST(ShapeProgramTest, ConsumesPowerOfTwoInputConstraint) {
+  mlir::ncnn::DimensionExpr fiveHalvesThenDouble(0, 1);
+  for (int step = 0; step < 5; ++step) {
+    fiveHalvesThenDouble.append(mlir::ncnn::ShapeOpcode::Divide, 2);
+  }
+  fiveHalvesThenDouble.append(mlir::ncnn::ShapeOpcode::Multiply, 2);
+
+  mlir::ncnn::DimensionExpr fourHalves(0, 1);
+  for (int step = 0; step < 4; ++step) {
+    fourHalves.append(mlir::ncnn::ShapeOpcode::Divide, 2);
+  }
+
+  llvm::SmallVector<mlir::ncnn::ShapeConstraint> constraints{
+    {.inputIndex = 0, .inputDimension = 1, .minimum = 32, .multipleOf = 32}};
+  EXPECT_TRUE(fiveHalvesThenDouble.equivalentUnder(constraints, fourHalves));
+  EXPECT_FALSE(fiveHalvesThenDouble.equivalentUnder({}, fourHalves));
+}
+
 }  // namespace

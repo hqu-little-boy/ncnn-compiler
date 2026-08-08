@@ -48,6 +48,19 @@ void appendInstruction(ShapeTransform& transform,
   transform.dimensions[dimension].append(opcode, operand);
 }
 
+LogicalResult requireSameDimensionExpr(Operation* operation,
+                                       unsigned dimension,
+                                       ArrayRef<ShapeConstraint> constraints,
+                                       const DimensionExpr& lhs,
+                                       const DimensionExpr& rhs) {
+  if (lhs.equivalentUnder(constraints, rhs)) {
+    return success();
+  }
+  return operation->emitOpError()
+         << "cannot prove input dimension " << dimension
+         << " equal under input shape constraints";
+}
+
 class ConvertModel final : public OpConversionPattern<ModelOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
@@ -165,7 +178,9 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           continue;
         }
         ShapeTransform transform = source->second;
-        if (auto padding = dyn_cast<PaddingOp>(operation)) {
+        if (isa<ReluOp, SigmoidOp, SplitOp>(operation)) {
+          shapeTransforms[result] = std::move(transform);
+        } else if (auto padding = dyn_cast<PaddingOp>(operation)) {
           appendInstruction(transform,
                             1,
                             ShapeOpcode::Add,
@@ -206,9 +221,15 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
             const bool same = (padTop == -233 || padTop == -234) &&
                               padBottom == padTop && padLeft == padTop &&
                               padRight == padTop;
-            if (!same || strideH != 1 || strideW != 1) {
+            if (!same) {
               continue;
             }
+            appendInstruction(transform, 1, ShapeOpcode::Add, -1);
+            appendInstruction(transform, 1, ShapeOpcode::Divide, strideH);
+            appendInstruction(transform, 1, ShapeOpcode::Add, 1);
+            appendInstruction(transform, 2, ShapeOpcode::Add, -1);
+            appendInstruction(transform, 2, ShapeOpcode::Divide, strideW);
+            appendInstruction(transform, 2, ShapeOpcode::Add, 1);
             shapeTransforms[result] = std::move(transform);
             continue;
           }
@@ -260,20 +281,30 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           }
           shapeTransforms[result] = std::move(transform);
         } else if (auto deconvolution = dyn_cast<DeconvolutionOp>(operation)) {
-          const int64_t heightOffset =
+          const int64_t effectiveH =
             (deconvolution.getDilationH() * (deconvolution.getKernelH() - 1)) +
-            1 + deconvolution.getOutputPadBottom() - deconvolution.getPadTop() -
-            deconvolution.getPadBottom() - deconvolution.getStrideH();
-          const int64_t widthOffset =
+            1;
+          const int64_t effectiveW =
             (deconvolution.getDilationW() * (deconvolution.getKernelW() - 1)) +
-            1 + deconvolution.getOutputPadRight() - deconvolution.getPadLeft() -
-            deconvolution.getPadRight() - deconvolution.getStrideW();
+            1;
+          appendInstruction(transform, 1, ShapeOpcode::Add, -1);
           appendInstruction(
             transform, 1, ShapeOpcode::Multiply, deconvolution.getStrideH());
-          appendInstruction(transform, 1, ShapeOpcode::Add, heightOffset);
+          appendInstruction(transform,
+                            1,
+                            ShapeOpcode::Add,
+                            effectiveH + deconvolution.getOutputPadBottom() -
+                              deconvolution.getPadTop() -
+                              deconvolution.getPadBottom());
+          appendInstruction(transform, 2, ShapeOpcode::Add, -1);
           appendInstruction(
             transform, 2, ShapeOpcode::Multiply, deconvolution.getStrideW());
-          appendInstruction(transform, 2, ShapeOpcode::Add, widthOffset);
+          appendInstruction(transform,
+                            2,
+                            ShapeOpcode::Add,
+                            effectiveW + deconvolution.getOutputPadRight() -
+                              deconvolution.getPadLeft() -
+                              deconvolution.getPadRight());
           shapeTransforms[result] = std::move(transform);
         } else if (auto concat = dyn_cast<ConcatOp>(operation)) {
           if (concat.getAxis() != 0) {
@@ -293,12 +324,13 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
               if (!ShapedType::isDynamic(resultType.getShape()[dimension])) {
                 continue;
               }
-              if (!transform.dimensions[dimension].equivalentUnder(
+              if (failed(requireSameDimensionExpr(
+                    concat,
+                    dimension,
                     shapeConstraints,
-                    candidate->second.dimensions[dimension])) {
-                return concat.emitOpError()
-                       << "cannot prove input dimension " << dimension
-                       << " equal under input shape constraints";
+                    transform.dimensions[dimension],
+                    candidate->second.dimensions[dimension]))) {
+                return failure();
               }
             }
           }
@@ -327,29 +359,31 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
             } else if (secondType.getShape()[dimension] != 1 &&
                        ShapedType::isDynamic(
                          resultType.getShape()[dimension]) &&
-                       !transform.dimensions[dimension].equivalentUnder(
+                       failed(requireSameDimensionExpr(
+                         binary,
+                         dimension,
                          shapeConstraints,
-                         candidate->second.dimensions[dimension])) {
-              return binary.emitOpError()
-                     << "cannot prove input dimension " << dimension
-                     << " equal under input shape constraints";
+                         transform.dimensions[dimension],
+                         candidate->second.dimensions[dimension]))) {
+              return failure();
             }
           }
-          shapeTransforms[result] = std::move(transform);
-        } else if (result.getType() == operation.getOperand(0).getType()) {
           shapeTransforms[result] = std::move(transform);
         }
       }
     }
-    for (auto [resultIndex, output] : llvm::enumerate(outputs)) {
+    functionResultIndex = 0;
+    for (OutputOp output : outputs) {
       auto outputType = cast<RankedTensorType>(output.getInput().getType());
       if (outputType.hasStaticShape()) {
+        functionResultIndex +=
+          output.getInput().getDefiningOp<DetectionOutputOp>() ? 2 : 1;
         continue;
       }
       auto transform = shapeTransforms.find(output.getInput());
       if (transform != shapeTransforms.end()) {
         function.setResultAttr(
-          resultIndex,
+          functionResultIndex,
           "ncnn.shape_source_input",
           rewriter.getI32IntegerAttr(static_cast<int32_t>(
             transform->second.dimensions.front().getInputIndex())));
@@ -363,9 +397,12 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           programs.push_back(
             rewriter.getDenseI64ArrayAttr(dimension.serialize()));
         }
-        function.setResultAttr(
-          resultIndex, "ncnn.shape_program", rewriter.getArrayAttr(programs));
+        function.setResultAttr(functionResultIndex,
+                               "ncnn.shape_program",
+                               rewriter.getArrayAttr(programs));
       }
+      functionResultIndex +=
+        output.getInput().getDefiningOp<DetectionOutputOp>() ? 2 : 1;
     }
     SmallVector<Location> argumentLocations(inputTypes.size(), model.getLoc());
     Block* entry = rewriter.createBlock(&function.getBody(),
