@@ -79,6 +79,12 @@ class CompiledModel final {
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] std::string_view error() const noexcept;
   int run(std::span<const float> input, std::span<float> output) const;
+  int run_dynamic(std::span<const float> input,
+                  std::span<const std::int64_t> input_shape,
+                  std::span<float> output,
+                  std::uint64_t output_capacity) const;
+  int infer_dynamic(std::span<const std::int64_t> input_shape,
+                    std::span<std::int64_t> output_shape) const;
   int run_two_outputs(std::span<const float> input,
                       std::span<float> first_output,
                       std::span<float> second_output) const;

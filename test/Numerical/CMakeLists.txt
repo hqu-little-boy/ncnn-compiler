@@ -49,11 +49,26 @@ endif()
 
 function(ncnn_add_compiled_fixture name param_file bin_file)
     set(input_shape "${ARGV3}")
+    set(input_constraints ${ARGN})
+    if(NOT "${input_shape}" STREQUAL "")
+        list(REMOVE_AT input_constraints 0)
+    endif()
     set(output_dir ${CMAKE_CURRENT_BINARY_DIR}/generated/${name})
     set(library ${output_dir}/lib${name}.so)
     set(input_shape_args)
     if(NOT "${input_shape}" STREQUAL "")
         list(APPEND input_shape_args --input-shape ${input_shape})
+    endif()
+    set(input_constraint_args)
+    foreach(constraint IN LISTS input_constraints)
+        list(APPEND input_constraint_args --input-dim-constraint ${constraint})
+    endforeach()
+    set(sanitizer_args)
+    if(CMAKE_CXX_FLAGS MATCHES "fsanitize")
+        list(APPEND sanitizer_args
+             --clang-arg=-fsanitize=address,undefined
+             --clang-arg=-fno-omit-frame-pointer
+             --linker-arg=-fsanitize=address,undefined)
     endif()
     add_custom_command(
         OUTPUT ${library} ${output_dir}/${name}.h ${output_dir}/${name}.json
@@ -69,6 +84,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             --bin ${bin_file}
             --model-name ${name}
             ${input_shape_args}
+            ${input_constraint_args}
+            ${sanitizer_args}
             --output-dir ${output_dir}
             --emit-manifest
         DEPENDS
@@ -485,6 +502,13 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin
     3x640x640)
+ncnn_add_compiled_fixture(
+    pp_ocrv5_server_det_dynamic
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin
+    3x?x?
+    0:1:min=32,multiple=32
+    0:2:min=32,multiple=32)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -583,6 +607,7 @@ add_dependencies(compile_pp_ocrv6_small_det compile_pp_ocrv6_tiny_det)
 add_dependencies(compile_pp_ocrv6_medium_det compile_pp_ocrv6_small_det)
 add_dependencies(compile_pp_ocrv5_mobile_det compile_pp_ocrv6_medium_det)
 add_dependencies(compile_pp_ocrv5_server_det compile_pp_ocrv5_mobile_det)
+add_dependencies(compile_pp_ocrv5_server_det_dynamic compile_pp_ocrv5_server_det)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -593,7 +618,8 @@ target_link_libraries(numerical_test_support PUBLIC ncnn GTest::gtest)
 add_executable(numerical_tests
     operators/supported_ops_test.cpp
     models/squeezenet_test.cpp
-    models/pp_lcnet_test.cpp)
+    models/pp_lcnet_test.cpp
+    models/dynamic_pp_ocr_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
     numerical_test_support
     GTest::gtest_main
@@ -725,7 +751,10 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV5_MOBILE_DET_LIBRARY_PATH="${pp_ocrv5_mobile_det_LIBRARY}"
     PP_OCRV5_SERVER_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
     PP_OCRV5_SERVER_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
-    PP_OCRV5_SERVER_DET_LIBRARY_PATH="${pp_ocrv5_server_det_LIBRARY}")
+    PP_OCRV5_SERVER_DET_LIBRARY_PATH="${pp_ocrv5_server_det_LIBRARY}"
+    PP_OCRV5_SERVER_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
+    PP_OCRV5_SERVER_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
+    PP_OCRV5_SERVER_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_server_det_dynamic_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
@@ -737,6 +766,7 @@ add_dependencies(numerical_tests compile_pp_ocrv6_small_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_det)
+add_dependencies(numerical_tests compile_pp_ocrv5_server_det_dynamic)
 
 gtest_discover_tests(numerical_tests
     PROPERTIES LABELS "numerical;golden" TIMEOUT 900 RUN_SERIAL TRUE)

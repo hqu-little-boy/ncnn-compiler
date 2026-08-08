@@ -251,6 +251,33 @@ int CompiledModel::run(std::span<const float> input,
   return std::bit_cast<Function>(symbol_)(input.data(), output.data());
 }
 
+int CompiledModel::run_dynamic(
+  std::span<const float> input,
+  std::span<const std::int64_t> input_shape,
+  std::span<float> output,
+  std::uint64_t output_capacity) const {
+  if (symbol_ == nullptr || input_shape.size() != 3) {
+    return -1;
+  }
+  using Function = int (*)(const float*, const std::int64_t*, float*,
+                           std::uint64_t);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(input.data(), input_shape.data(),
+                                           output.data(), output_capacity);
+}
+
+int CompiledModel::infer_dynamic(
+  std::span<const std::int64_t> input_shape,
+  std::span<std::int64_t> output_shape) const {
+  if (symbol_ == nullptr || input_shape.size() != 3 || output_shape.size() != 3) {
+    return -1;
+  }
+  using Function = int (*)(const std::int64_t*, std::int64_t*);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(input_shape.data(),
+                                           output_shape.data());
+}
+
 int CompiledModel::run_two_outputs(std::span<const float> input,
                                    std::span<float> first_output,
                                    std::span<float> second_output) const {
