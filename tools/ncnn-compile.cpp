@@ -54,12 +54,12 @@ llvm::cl::opt<std::string> g_model_name(
   llvm::cl::value_desc("name"),
   llvm::cl::init(""),
   llvm::cl::cat(g_category));
-llvm::cl::opt<std::string> g_input_shape(
+llvm::cl::list<std::string> g_input_shapes(
   "input-shape",
-  llvm::cl::desc("Static input shape override as CxHxW when Input dimensions "
-                 "are omitted"),
+  llvm::cl::desc("Input shape override as CxHxW; '?' is a dynamic extent. "
+                 "Repeat once per Input layer"),
   llvm::cl::value_desc("CxHxW"),
-  llvm::cl::init(""),
+  llvm::cl::ZeroOrMore,
   llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_output_dir("output-dir",
                                         llvm::cl::desc("Output directory"),
@@ -160,9 +160,14 @@ llvm::cl::opt<std::string> g_expected_undefined("expected-undefined",
 struct Argument {
   std::string name;
   std::vector<std::int64_t> shape;
+  std::vector<std::int64_t> maximum_shape;
   std::string element_type;
   std::uint32_t dynamic_dim_mask;
   bool shape_depends_on_data;
+  std::int32_t shape_source_input;
+  bool dynamic_rank;
+  std::uint32_t rank_min;
+  std::uint32_t rank_max;
 };
 
 struct Manifest {
@@ -451,16 +456,34 @@ int run(const std::vector<std::string>& command,
       Argument argument{
         .name = std::string(*name),
         .shape = {},
+        .maximum_shape = {},
         .element_type = std::string(*element_type),
         .dynamic_dim_mask = static_cast<std::uint32_t>(*dynamic_dim_mask),
         .shape_depends_on_data =
-          argument_object->getBoolean("shape_depends_on_data").value_or(false)};
+          argument_object->getBoolean("shape_depends_on_data").value_or(false),
+        .shape_source_input = static_cast<std::int32_t>(
+          argument_object->getInteger("shape_source_input").value_or(-1)),
+        .dynamic_rank =
+          argument_object->getBoolean("dynamic_rank").value_or(false),
+        .rank_min = static_cast<std::uint32_t>(
+          argument_object->getInteger("rank_min").value_or(0)),
+        .rank_max = static_cast<std::uint32_t>(
+          argument_object->getInteger("rank_max").value_or(0))};
       for (llvm::json::Value& dimension : *shape) {
         auto integer = dimension.getAsInteger();
         if (!integer || *integer < -1) {
           return false;
         }
         argument.shape.push_back(*integer);
+      }
+      if (auto* maximum_shape = argument_object->getArray("maximum_shape")) {
+        for (llvm::json::Value& dimension : *maximum_shape) {
+          auto integer = dimension.getAsInteger();
+          if (!integer || *integer <= 0) {
+            return false;
+          }
+          argument.maximum_shape.push_back(*integer);
+        }
       }
       if (argument.shape.size() > 32 ||
           static_cast<std::uint64_t>(*dynamic_dim_mask) >
@@ -476,6 +499,14 @@ int run(const std::vector<std::string>& command,
       if (argument.dynamic_dim_mask != expected_mask) {
         return false;
       }
+      if (argument.shape_source_input < -1) {
+        return false;
+      }
+      if (argument.dynamic_rank &&
+          (!argument.shape.empty() || argument.dynamic_dim_mask != 0 ||
+           argument.rank_min != 1 || argument.rank_max != 4)) {
+        return false;
+      }
       destination.push_back(std::move(argument));
     }
     return true;
@@ -483,6 +514,25 @@ int run(const std::vector<std::string>& command,
   if (!parse_arguments("inputs", manifest.inputs) ||
       !parse_arguments("outputs", manifest.outputs)) {
     return std::unexpected("ABI manifest has invalid inputs or outputs");
+  }
+  for (const Argument& output : manifest.outputs) {
+    if (output.shape_source_input >=
+        static_cast<std::int32_t>(manifest.inputs.size())) {
+      return std::unexpected(
+        "ABI manifest output has an invalid input shape "
+        "source");
+    }
+    if (output.shape_depends_on_data &&
+        (output.maximum_shape.size() != output.shape.size() ||
+         output.dynamic_dim_mask == 0)) {
+      return std::unexpected(
+        "ABI manifest data-dependent output has no finite maximum shape");
+    }
+    if ((output.dynamic_rank || output.dynamic_dim_mask != 0) &&
+        output.shape_source_input < 0 && !output.shape_depends_on_data) {
+      return std::unexpected(
+        "ABI manifest dynamic output has no input shape source");
+    }
   }
   manifest.function = c_identifier(manifest.function);
   std::set<std::string> argument_names;
@@ -510,7 +560,9 @@ int run(const std::vector<std::string>& command,
 
 [[nodiscard]] std::expected<std::size_t, std::string> element_count(
   const Argument& argument) {
-  for (std::int64_t dimension : argument.shape) {
+  const auto& shape =
+    argument.shape_depends_on_data ? argument.maximum_shape : argument.shape;
+  for (std::int64_t dimension : shape) {
     if (dimension < 0) {
       return std::unexpected(std::format(
         "argument '{}' has a dynamic element count", argument.name));
@@ -526,7 +578,7 @@ int run(const std::vector<std::string>& command,
     }
   }
   std::size_t count = 1;
-  for (std::int64_t dimension : argument.shape) {
+  for (std::int64_t dimension : shape) {
     const auto size = static_cast<std::size_t>(dimension);
     if (count > std::numeric_limits<std::size_t>::max() / size) {
       return std::unexpected(std::format(
@@ -551,8 +603,23 @@ int run(const std::vector<std::string>& command,
       object["shape"] = std::move(shape);
       object["element_type"] = argument.element_type;
       object["dynamic_dim_mask"] = argument.dynamic_dim_mask;
+      if (!argument.maximum_shape.empty()) {
+        llvm::json::Array maximum_shape;
+        for (std::int64_t dimension : argument.maximum_shape) {
+          maximum_shape.push_back(dimension);
+        }
+        object["maximum_shape"] = std::move(maximum_shape);
+      }
+      if (argument.dynamic_rank) {
+        object["dynamic_rank"] = true;
+        object["rank_min"] = argument.rank_min;
+        object["rank_max"] = argument.rank_max;
+      }
       if (argument.shape_depends_on_data) {
         object["shape_depends_on_data"] = true;
+      }
+      if (argument.shape_source_input >= 0) {
+        object["shape_source_input"] = argument.shape_source_input;
       }
       result.push_back(std::move(object));
     }
@@ -604,7 +671,8 @@ std::string macro_name(const Manifest& manifest,
   });
   std::string contents = std::format(
     "#ifndef {}\n#define {}\n\n#include <stdint.h>\n\n"
-    "#define NCNN_DYNAMIC_DIM INT64_C(-1)\n\n"
+    "#define NCNN_DYNAMIC_DIM INT64_C(-1)\n"
+    "#define NCNN_MAX_RANK 4\n\n"
     "typedef uint16_t ncnn_float16_t;\n"
     "typedef uint16_t ncnn_bfloat16_t;\n\n",
     guard,
@@ -620,6 +688,14 @@ std::string macro_name(const Manifest& manifest,
          }
          return result;
        }()) {
+    if (argument->dynamic_rank) {
+      contents += std::format("#define {} {}\n#define {} {}\n\n",
+                              macro_name(manifest, *argument, "rank_min"),
+                              argument->rank_min,
+                              macro_name(manifest, *argument, "rank_max"),
+                              argument->rank_max);
+      continue;
+    }
     const std::string rank_macro = macro_name(manifest, *argument, "rank");
     if (!macros.insert(rank_macro).second) {
       return std::unexpected(
@@ -671,7 +747,10 @@ std::string macro_name(const Manifest& manifest,
     contents +=
       std::format("{}const {} *{}", first ? "" : ", ", *type, input.name);
     first = false;
-    if (input.dynamic_dim_mask != 0) {
+    if (input.dynamic_rank) {
+      contents += std::format(
+        ", const int64_t *{}_shape, uint32_t {}_rank", input.name, input.name);
+    } else if (input.dynamic_dim_mask != 0) {
       contents += std::format(", const int64_t {}_shape[{}]",
                               input.name,
                               macro_name(manifest, input, "rank"));
@@ -687,9 +766,67 @@ std::string macro_name(const Manifest& manifest,
     }
     contents += std::format("{}{} *{}", first ? "" : ", ", *type, output.name);
     first = false;
+    if (output.shape_depends_on_data) {
+      contents += std::format(", int64_t {}_actual_shape[{}]",
+                              output.name,
+                              macro_name(manifest, output, "rank"));
+    }
   }
-  contents += std::format(
-    ");\n\n#ifdef __cplusplus\n}}\n#endif\n\n#endif  // {}\n", guard);
+  contents += ");\n";
+  const bool has_dynamic_output =
+    std::ranges::any_of(manifest.outputs, [](const Argument& output) {
+      return (output.dynamic_rank || output.dynamic_dim_mask != 0) &&
+             !output.shape_depends_on_data;
+    });
+  if (has_dynamic_output) {
+    contents += std::format("\nint {}_infer_output_shapes(", manifest.function);
+    first = true;
+    for (const Argument& input : manifest.inputs) {
+      if (input.dynamic_rank) {
+        contents += std::format("{}const int64_t *{}_shape, uint32_t {}_rank",
+                                first ? "" : ", ",
+                                input.name,
+                                input.name);
+        first = false;
+        continue;
+      }
+      if (input.dynamic_dim_mask == 0) {
+        continue;
+      }
+      contents += std::format("{}const int64_t {}_shape[{}]",
+                              first ? "" : ", ",
+                              input.name,
+                              macro_name(manifest, input, "rank"));
+      first = false;
+    }
+    for (const Argument& output : manifest.outputs) {
+      if (output.shape_depends_on_data) {
+        continue;
+      }
+      if (output.dynamic_rank) {
+        contents += std::format(
+          "{}int64_t *{}_shape, uint32_t {}_shape_capacity, uint32_t "
+          "*{}_rank",
+          first ? "" : ", ",
+          output.name,
+          output.name,
+          output.name);
+        first = false;
+        continue;
+      }
+      if (output.dynamic_dim_mask == 0) {
+        continue;
+      }
+      contents += std::format("{}int64_t {}_shape[{}]",
+                              first ? "" : ", ",
+                              output.name,
+                              macro_name(manifest, output, "rank"));
+      first = false;
+    }
+    contents += ");\n";
+  }
+  contents +=
+    std::format("\n#ifdef __cplusplus\n}}\n#endif\n\n#endif  // {}\n", guard);
   return write_file(path, contents);
 }
 
@@ -855,38 +992,178 @@ validate_output_directory(const fs::path& output_dir,
 
 [[nodiscard]] std::expected<void, std::string> write_harness(
   const fs::path& path, std::string_view header, const Manifest& manifest) {
-  std::vector<const Argument*> arguments;
-  for (const Argument& input : manifest.inputs) {
-    arguments.push_back(&input);
-  }
-  for (const Argument& output : manifest.outputs) {
-    arguments.push_back(&output);
-  }
   std::string code = std::format(
     "#include <math.h>\n#include <stddef.h>\n#include <stdio.h>\n"
-    "#include <stdlib.h>\n#include \"{}\"\n\nint main(void) {{\n",
+    "#include <stdlib.h>\n#include \"{}\"\n\n"
+    "static size_t element_count(const int64_t *shape, size_t rank) {{\n"
+    "  size_t count = 1;\n"
+    "  for (size_t i = 0; i < rank; ++i) count *= (size_t)shape[i];\n"
+    "  return count;\n"
+    "}}\n\nint main(void) {{\n",
     header);
-  for (const Argument* argument : arguments) {
-    auto count = element_count(*argument);
-    if (!count) {
-      return std::unexpected(count.error());
+
+  const bool dynamic_rank =
+    manifest.inputs.size() == 1 && manifest.outputs.size() == 1 &&
+    manifest.inputs[0].dynamic_rank && manifest.outputs[0].dynamic_rank;
+  if (dynamic_rank) {
+    auto input_type = c_type(manifest.inputs[0]);
+    auto output_type = c_type(manifest.outputs[0]);
+    if (!input_type || !output_type) {
+      return std::unexpected("unsupported dynamic-rank harness element type");
     }
-    code += std::format("  float *{} = calloc({}, sizeof(float));\n",
-                        argument->name,
-                        std::max<std::size_t>(1, *count));
+    code += std::format(
+      "  int64_t input1_shape[NCNN_MAX_RANK] = {{2, 2, 2, 2}};\n"
+      "  int64_t output1_shape[NCNN_MAX_RANK] = {{0}};\n"
+      "  uint32_t output1_rank = 0;\n"
+      "  {} input1[16] = {{0}};\n"
+      "  {} output1[16] = {{0}};\n"
+      "  for (uint32_t i = 0; i < 16; ++i) input1[i] = ({})i + 1;\n"
+      "  for (uint32_t rank = 1; rank <= NCNN_MAX_RANK; ++rank) {{\n"
+      "    if ({}_infer_output_shapes(input1_shape, rank, output1_shape, "
+      "NCNN_MAX_RANK, &output1_rank) != 0) return 6;\n"
+      "    if (output1_rank != rank) return 7;\n"
+      "    for (uint32_t i = 0; i < rank; ++i) if (output1_shape[i] != 2) "
+      "return 8;\n"
+      "    if ({}(input1, input1_shape, rank, output1) != 0) return 4;\n"
+      "    if ({}(input1, input1_shape, rank, output1) != 0) return 9;\n"
+      "    size_t count = element_count(input1_shape, rank);\n"
+      "    for (size_t i = 0; i < count; ++i) if (output1[i] != input1[i]) "
+      "return 13;\n"
+      "  }}\n"
+      "  if ({}(input1, input1_shape, 0, output1) == 0) return 10;\n"
+      "  if ({}(input1, input1_shape, 5, output1) == 0) return 11;\n"
+      "  if ({}_infer_output_shapes(input1_shape, 4, output1_shape, 3, "
+      "&output1_rank) == 0) return 12;\n"
+      "  if ({}(NULL, input1_shape, 1, output1) == 0) return 3;\n"
+      "  if ({}(input1, NULL, 1, output1) == 0) return 3;\n"
+      "  if ({}(input1, input1_shape, 1, NULL) == 0) return 3;\n"
+      "  return 0;\n}}\n",
+      *input_type,
+      *output_type,
+      *input_type,
+      manifest.function,
+      manifest.function,
+      manifest.function,
+      manifest.function,
+      manifest.function,
+      manifest.function,
+      manifest.function,
+      manifest.function,
+      manifest.function);
+    return write_file(path, code);
+  }
+
+  for (const Argument& input : manifest.inputs) {
+    if (input.dynamic_dim_mask != 0) {
+      code += std::format(
+        "  int64_t {}_shape[{}] = {{", input.name, input.shape.size());
+      for (std::size_t index = 0; index < input.shape.size(); ++index) {
+        code += std::format("{}{}",
+                            index == 0 ? "" : ", ",
+                            input.shape[index] < 0 ? 2 : input.shape[index]);
+      }
+      code += "};\n";
+      code += std::format("  size_t {}_count = element_count({}_shape, {});\n",
+                          input.name,
+                          input.name,
+                          input.shape.size());
+    } else {
+      auto count = element_count(input);
+      if (!count) {
+        return std::unexpected(count.error());
+      }
+      code += std::format("  size_t {}_count = {};\n", input.name, *count);
+    }
+    auto type = c_type(input);
+    if (!type) {
+      return std::unexpected("unsupported harness input element type");
+    }
+    code += std::format("  {} *{} = calloc({}_count, sizeof({}));\n",
+                        *type,
+                        input.name,
+                        input.name,
+                        *type);
     code += std::format(
       "  if (!{}) {{ fprintf(stderr, \"ABI verification failed: cannot "
       "allocate {}\\n\"); return 2; }}\n",
-      argument->name,
-      argument->name);
+      input.name,
+      input.name);
+  }
+
+  const bool has_dynamic_output =
+    std::ranges::any_of(manifest.outputs, [](const Argument& output) {
+      return (output.dynamic_rank || output.dynamic_dim_mask != 0) &&
+             !output.shape_depends_on_data;
+    });
+  std::string shape_call = manifest.function + "_infer_output_shapes(";
+  bool first_shape_argument = true;
+  for (const Argument& input : manifest.inputs) {
+    if (input.dynamic_dim_mask != 0) {
+      shape_call +=
+        std::format("{}{}_shape", first_shape_argument ? "" : ", ", input.name);
+      first_shape_argument = false;
+    }
+  }
+  for (const Argument& output : manifest.outputs) {
+    if (output.dynamic_dim_mask != 0 && !output.shape_depends_on_data) {
+      code += std::format(
+        "  int64_t {}_shape[{}] = {{0}};\n", output.name, output.shape.size());
+      shape_call += std::format(
+        "{}{}_shape", first_shape_argument ? "" : ", ", output.name);
+      first_shape_argument = false;
+    }
+  }
+  shape_call += ")";
+  if (has_dynamic_output) {
+    code += std::format("  if ({} != 0) return 6;\n", shape_call);
+  }
+
+  for (const Argument& output : manifest.outputs) {
+    if (output.dynamic_dim_mask != 0 && !output.shape_depends_on_data) {
+      code += std::format("  size_t {}_count = element_count({}_shape, {});\n",
+                          output.name,
+                          output.name,
+                          output.shape.size());
+    } else {
+      auto count = element_count(output);
+      if (!count) {
+        return std::unexpected(count.error());
+      }
+      code += std::format("  size_t {}_count = {};\n", output.name, *count);
+    }
+    auto type = c_type(output);
+    if (!type) {
+      return std::unexpected("unsupported harness output element type");
+    }
+    code += std::format("  {} *{} = calloc({}_count, sizeof({}));\n",
+                        *type,
+                        output.name,
+                        output.name,
+                        *type);
+    code += std::format("  if (!{}) return 2;\n", output.name);
+  }
+
+  std::vector<std::string> call_arguments;
+  for (const Argument& input : manifest.inputs) {
+    call_arguments.push_back(input.name);
+    if (input.dynamic_dim_mask != 0) {
+      call_arguments.push_back(input.name + "_shape");
+    }
+  }
+  for (const Argument& output : manifest.outputs) {
+    call_arguments.push_back(output.name);
+    if (output.shape_depends_on_data) {
+      code += std::format("  int64_t {}_actual_shape[{}] = {{0}};\n",
+                          output.name,
+                          output.shape.size());
+      call_arguments.push_back(output.name + "_actual_shape");
+    }
   }
   auto call = [&](std::optional<std::size_t> null_index) {
     std::string result = manifest.function + "(";
-    for (std::size_t index = 0; index < arguments.size(); ++index) {
-      if (index != 0) {
-        result += ", ";
-      }
-      result += null_index == index ? "NULL" : arguments[index]->name;
+    for (std::size_t index = 0; index < call_arguments.size(); ++index) {
+      result += index == 0 ? "" : ", ";
+      result += null_index == index ? "NULL" : call_arguments[index];
     }
     return result + ")";
   };
@@ -895,27 +1172,26 @@ validate_output_directory(const fs::path& output_dir,
     "  if (model_status != 0) { fprintf(stderr, \"ABI verification "
     "failed: model returned %d\\n\", model_status); return 4; }\n";
   for (const Argument& output : manifest.outputs) {
-    auto count = element_count(output);
-    if (!count) {
-      return std::unexpected(count.error());
-    }
     code += std::format(
-      "  for (size_t i = 0; i < {}; ++i) if (!isfinite({}[i])) {{ "
+      "  for (size_t i = 0; i < {}_count; ++i) if (!isfinite({}[i])) {{ "
       "fprintf(stderr, \"ABI verification failed: output {}[%zu] is not "
       "finite\\n\", i); return 5; }}\n",
-      *count,
+      output.name,
       output.name,
       output.name);
   }
-  for (std::size_t index = 0; index < arguments.size(); ++index) {
+  for (std::size_t index = 0; index < call_arguments.size(); ++index) {
     code += std::format(
       "  if ({} == 0) {{ fprintf(stderr, \"ABI verification failed: NULL "
       "argument {} was accepted\\n\"); return 3; }}\n",
       call(index),
-      arguments[index]->name);
+      call_arguments[index]);
   }
-  for (const Argument* argument : arguments) {
-    code += std::format("  free({});\n", argument->name);
+  for (const Argument& input : manifest.inputs) {
+    code += std::format("  free({});\n", input.name);
+  }
+  for (const Argument& output : manifest.outputs) {
+    code += std::format("  free({});\n", output.name);
   }
   code += "  return 0;\n}\n";
   return write_file(path, code);
@@ -1072,8 +1348,8 @@ int main(int argc, char** argv) {
 
   std::vector<std::string> driver_command{
     driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()};
-  if (!g_input_shape.empty()) {
-    driver_command.push_back("--input-shape=" + g_input_shape);
+  for (const std::string& input_shape : g_input_shapes) {
+    driver_command.push_back("--input-shape=" + input_shape);
   }
   if (int status = run(driver_command)) {
     return status;
@@ -1173,8 +1449,17 @@ int main(int argc, char** argv) {
   if (!header_result) {
     return fail(header_result.error());
   }
-  auto exports_result = write_file(
-    exports, std::format("{{\n  global: {};\n  local: *;\n}};\n", model_name));
+  const bool has_dynamic_output =
+    std::ranges::any_of(manifest->outputs, [](const Argument& output) {
+      return (output.dynamic_rank || output.dynamic_dim_mask != 0) &&
+             !output.shape_depends_on_data;
+    });
+  std::string exported_symbols = std::format("{{\n  global: {};", model_name);
+  if (has_dynamic_output) {
+    exported_symbols += std::format(" {}_infer_output_shapes;", model_name);
+  }
+  exported_symbols += "\n  local: *;\n};\n";
+  auto exports_result = write_file(exports, exported_symbols);
   if (!exports_result) {
     return fail(exports_result.error());
   }
@@ -1241,9 +1526,13 @@ int main(int argc, char** argv) {
   if (!text) {
     return fail(text.error());
   }
-  if (symbols(*text) != std::set<std::string>{model_name}) {
+  std::set<std::string> expected_exports = {model_name};
+  if (has_dynamic_output) {
+    expected_exports.insert(model_name + "_infer_output_shapes");
+  }
+  if (symbols(*text) != expected_exports) {
     return fail(
-      "shared library exports symbols other than the model entry point");
+      "shared library exports symbols outside the model ABI entry points");
   }
   capture_path = staging.path() / "needed.txt";
   if (int status =

@@ -73,6 +73,7 @@ std::span<const ImportEntry> importers() noexcept {
     ImportEntry{.type = "Padding", .handler = import_padding},
     ImportEntry{.type = "Interp", .handler = import_interp},
     ImportEntry{.type = "Sigmoid", .handler = import_sigmoid},
+    ImportEntry{.type = "DetectionOutput", .handler = import_detection_output},
     ImportEntry{.type = "HardSigmoid", .handler = import_hard_sigmoid},
     ImportEntry{.type = "HardSwish", .handler = import_hard_swish},
     ImportEntry{.type = "Reshape", .handler = import_reshape},
@@ -253,18 +254,45 @@ ImportContext::ImportContext(mlir::MLIRContext& context,
     module_(mlir::ModuleOp::create(builder_.getUnknownLoc())),
     model_(),
     blobs_(),
-    captured_diag_() {
+    captured_diag_(),
+    imported_input_count_(0) {
   builder_.setInsertionPointToEnd(module_->getBody());
 }
 
 std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError>
 ImportContext::run(const ncnn_graph::Graph& source) {
-  if (options_.input_shape && source.layer_count_of("Input") != 1) {
+  const std::size_t input_count = source.layer_count_of("Input");
+  if (options_.dynamic_rank) {
+    return std::unexpected(
+      ImportError(0,
+                  "Input",
+                  "input-shape",
+                  "dynamic rank must be specialized before import"));
+  }
+  if (options_.input_shape && input_count != 1) {
     return std::unexpected(
       ImportError(0,
                   "Input",
                   "input-shape",
                   "input shape override requires exactly one Input layer"));
+  }
+  if (options_.input_shape && !options_.input_shapes.empty()) {
+    return std::unexpected(ImportError(0,
+                                       "Input",
+                                       "input-shape",
+                                       "legacy input_shape and input_shapes "
+                                       "cannot both be specified"));
+  }
+  if (!options_.input_shapes.empty() &&
+      options_.input_shapes.size() != input_count) {
+    return std::unexpected(ImportError(
+      0,
+      "Input",
+      "input-shape",
+      std::format("input shape override count {} does not match {} Input "
+                  "layers",
+                  options_.input_shapes.size(),
+                  input_count)));
   }
   auto prepared = prepare_model();
   if (!prepared) {
@@ -284,9 +312,23 @@ mlir::OpBuilder& ImportContext::builder() noexcept {
   return builder_;
 }
 
-const std::optional<std::vector<std::int64_t>>& ImportContext::input_shape()
+const std::optional<ncnn_importer::InputShape>& ImportContext::input_shape()
   const noexcept {
   return options_.input_shape;
+}
+
+const std::vector<ncnn_importer::InputShape>& ImportContext::input_shapes()
+  const noexcept {
+  return options_.input_shapes;
+}
+
+std::optional<ncnn_importer::InputShape>
+ImportContext::next_input_shape() noexcept {
+  if (options_.input_shapes.empty()) {
+    ++imported_input_count_;
+    return options_.input_shape;
+  }
+  return options_.input_shapes[imported_input_count_++];
 }
 
 std::expected<mlir::Value, ImportError> ImportContext::find_blob(
@@ -344,6 +386,12 @@ const std::string& ImportContext::captured_diagnostic() const noexcept {
 ImportResult ImportContext::prepare_model() {
   model_ = builder_.create<mlir::ncnn::ModelOp>(
     builder_.getUnknownLoc(), builder_.getStringAttr("model"));
+  if (options_.rank_specialization) {
+    const std::uint32_t rank = *options_.rank_specialization;
+    model_.setSymName(std::format("model_rank{}", rank));
+    model_->setAttr("ncnn.rank_variant", builder_.getI32IntegerAttr(rank));
+    model_->setAttr("ncnn.dynamic_rank", builder_.getUnitAttr());
+  }
   mlir::Block* block = &model_.getBody().emplaceBlock();
   builder_.setInsertionPointToStart(block);
   return {};
@@ -418,6 +466,54 @@ std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> import_graph(
   const ncnn_graph::Graph& graph,
   mlir::MLIRContext& context,
   const ImportOptions& options) {
+  if (options.dynamic_rank) {
+    if (graph.layer_count_of("Input") != 1 || options.input_shape ||
+        !options.input_shapes.empty() || options.rank_specialization) {
+      return std::unexpected(ImportError(
+        0,
+        "Input",
+        "input-shape",
+        "dynamic rank requires exactly one Input and no fixed shape override"));
+    }
+    for (const ncnn_graph::Layer& layer : graph.get_layers()) {
+      if (layer.get_type() != "Input" && layer.get_type() != "ReLU") {
+        return std::unexpected(ImportError(
+          0,
+          std::string(layer.get_type()),
+          std::string(layer.get_name()),
+          "dynamic rank supports only identity/shape-preserving ReLU models"));
+      }
+      if (layer.get_type() == "Input" &&
+          !layer.get_params().get_entries().empty()) {
+        return std::unexpected(
+          ImportError(0,
+                      "Input",
+                      std::string(layer.get_name()),
+                      "dynamic rank requires omitted Input dimensions"));
+      }
+    }
+    mlir::OpBuilder builder(&context);
+    auto module = mlir::ModuleOp::create(builder.getUnknownLoc());
+    for (std::uint32_t rank = 1; rank <= 4; ++rank) {
+      ImportOptions specialized;
+      specialized.input_shapes = {InputShape(rank, kDynamicExtent)};
+      specialized.rank_specialization = rank;
+      detail::ImportContext importer(context, specialized);
+      auto imported = importer.run(graph);
+      if (!imported) {
+        return std::unexpected(ImportError(
+          imported.error().get_layer_index(),
+          std::string(imported.error().get_layer_type()),
+          std::string(imported.error().get_layer_name()),
+          std::format("dynamic-rank specialization {} is unsupported: {}",
+                      rank,
+                      imported.error().get_message())));
+      }
+      module.getBody()->getOperations().splice(
+        module.getBody()->end(), imported->get().getBody()->getOperations());
+    }
+    return mlir::OwningOpRef<mlir::ModuleOp>(module);
+  }
   detail::ImportContext importer(context, options);
   return importer.run(graph);
 }

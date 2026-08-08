@@ -1,5 +1,6 @@
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -96,8 +97,8 @@ FailureOr<RankedTensorType> computeConvResult(MLIRContext* context,
   ArrayRef<int64_t> inShape = input.getShape();
   ArrayRef<int64_t> wShape = weight.getShape();
   for (int64_t dim : inShape) {
-    if (dim <= 0) {
-      return fail("convolution input dimensions must be positive");
+    if (!ShapedType::isDynamic(dim) && dim <= 0) {
+      return fail("convolution input dimensions must be positive or dynamic");
     }
   }
   for (int64_t dim : wShape) {
@@ -105,7 +106,7 @@ FailureOr<RankedTensorType> computeConvResult(MLIRContext* context,
       return fail("convolution weight dimensions must be positive");
     }
   }
-  if (wShape[1] != inShape[0]) {
+  if (!ShapedType::isDynamic(inShape[0]) && wShape[1] != inShape[0]) {
     return fail("convolution input channels do not match weight channels");
   }
   if (wShape[2] != kernelH || wShape[3] != kernelW) {
@@ -178,25 +179,28 @@ FailureOr<RankedTensorType> computeConvResult(MLIRContext* context,
   }
   int64_t outputHeight = 0;
   int64_t outputWidth = 0;
-  if (sameUpper || sameLower) {
+  if (ShapedType::isDynamic(inShape[1])) {
+    outputHeight = ShapedType::kDynamic;
+  } else if (sameUpper || sameLower) {
     outputHeight = 1 + ((inShape[1] - 1) / strideH);
-    outputWidth = 1 + ((inShape[2] - 1) / strideW);
   } else {
     FailureOr<int64_t> height = checkedAdd(inShape[1], padTop);
-    if (succeeded(height)) {
-      height = checkedAdd(*height, padBottom);
-    }
-    FailureOr<int64_t> width = checkedAdd(inShape[2], padLeft);
-    if (succeeded(width)) {
-      width = checkedAdd(*width, padRight);
-    }
-    if (failed(height) || failed(width)) {
-      return fail("convolution padded dimension overflows");
-    }
-    if (*height < *extentHeight || *width < *extentWidth) {
-      return fail("convolution kernel exceeds padded input");
+    height = succeeded(height) ? checkedAdd(*height, padBottom) : height;
+    if (failed(height) || *height < *extentHeight) {
+      return fail("convolution kernel exceeds padded input height");
     }
     outputHeight = 1 + ((*height - *extentHeight) / strideH);
+  }
+  if (ShapedType::isDynamic(inShape[2])) {
+    outputWidth = ShapedType::kDynamic;
+  } else if (sameUpper || sameLower) {
+    outputWidth = 1 + ((inShape[2] - 1) / strideW);
+  } else {
+    FailureOr<int64_t> width = checkedAdd(inShape[2], padLeft);
+    width = succeeded(width) ? checkedAdd(*width, padRight) : width;
+    if (failed(width) || *width < *extentWidth) {
+      return fail("convolution kernel exceeds padded input width");
+    }
     outputWidth = 1 + ((*width - *extentWidth) / strideW);
   }
   Type resultElem = requantized
@@ -323,23 +327,30 @@ FailureOr<RankedTensorType> computePaddingResult(
   int64_t bottom,
   int64_t left,
   int64_t right) {
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
-      input.getRank() != 3) {
+  if (!input || !input.getElementType().isF32() || input.getRank() != 3) {
     return emitOptionalError(location,
-                             "Padding input must be a static FP32 CHW tensor");
+                             "Padding input must be an FP32 CHW tensor");
   }
   if (top < 0 || bottom < 0 || left < 0 || right < 0) {
     return emitOptionalError(location, "Padding extents must be non-negative");
   }
-  auto height = checkedAdd(input.getShape()[1], top);
-  auto width = checkedAdd(input.getShape()[2], left);
-  if (succeeded(height)) {
-    height = checkedAdd(*height, bottom);
-  }
-  if (succeeded(width)) {
-    width = checkedAdd(*width, right);
-  }
-  if (failed(height) || failed(width) || *height <= 0 || *width <= 0) {
+  auto addPadding = [&](unsigned dimension,
+                        int64_t before,
+                        int64_t after) -> FailureOr<int64_t> {
+    if (input.isDynamicDim(dimension)) {
+      return ShapedType::kDynamic;
+    }
+    auto result = checkedAdd(input.getShape()[dimension], before);
+    if (succeeded(result)) {
+      result = checkedAdd(*result, after);
+    }
+    return result;
+  };
+  auto height = addPadding(1, top, bottom);
+  auto width = addPadding(2, left, right);
+  if (failed(height) || failed(width) ||
+      (!ShapedType::isDynamic(*height) && *height <= 0) ||
+      (!ShapedType::isDynamic(*width) && *width <= 0)) {
     return emitOptionalError(location, "Padding output dimension overflows");
   }
   return RankedTensorType::get({input.getShape()[0], *height, *width},
@@ -351,18 +362,74 @@ FailureOr<RankedTensorType> computeInterpResult(
   RankedTensorType input,
   int64_t heightScale,
   int64_t widthScale) {
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
-      input.getRank() != 3 || heightScale <= 0 || widthScale <= 0) {
+  if (!input || !input.getElementType().isF32() || input.getRank() != 3 ||
+      heightScale <= 0 || widthScale <= 0) {
     return emitOptionalError(
-      location, "Interp requires a static FP32 CHW input and positive scales");
+      location, "Interp requires an FP32 CHW input and positive scales");
   }
-  auto height = checkedMultiply(input.getShape()[1], heightScale);
-  auto width = checkedMultiply(input.getShape()[2], widthScale);
+  auto scaleDimension = [&](unsigned dimension,
+                            int64_t scale) -> FailureOr<int64_t> {
+    return input.isDynamicDim(dimension)
+             ? FailureOr<int64_t>(ShapedType::kDynamic)
+             : checkedMultiply(input.getShape()[dimension], scale);
+  };
+  auto height = scaleDimension(1, heightScale);
+  auto width = scaleDimension(2, widthScale);
   if (failed(height) || failed(width)) {
     return emitOptionalError(location, "Interp output dimension overflows");
   }
   return RankedTensorType::get({input.getShape()[0], *height, *width},
                                input.getElementType());
+}
+
+FailureOr<RankedTensorType> computeDetectionOutputResult(
+  std::optional<Location> location,
+  RankedTensorType locationType,
+  RankedTensorType confidenceType,
+  RankedTensorType priorboxType,
+  int64_t numClass,
+  int64_t nmsTopK,
+  int64_t keepTopK,
+  double nmsThreshold,
+  double confidenceThreshold,
+  ArrayRef<double> variances) {
+  auto fail = [&](const Twine& message) -> FailureOr<RankedTensorType> {
+    return emitOptionalError(location, message);
+  };
+  for (RankedTensorType type : {locationType, confidenceType, priorboxType}) {
+    if (!type || !type.getElementType().isF32() || !type.hasStaticShape()) {
+      return fail("DetectionOutput requires static FP32 inputs");
+    }
+  }
+  if (numClass <= 1 || nmsTopK <= 0 || keepTopK <= 0 ||
+      !std::isfinite(nmsThreshold) || nmsThreshold < 0.0 ||
+      !std::isfinite(confidenceThreshold) || confidenceThreshold < 0.0 ||
+      confidenceThreshold > 1.0 || llvm::any_of(variances, [](double value) {
+        return !std::isfinite(value) || value <= 0.0;
+      })) {
+    return fail("DetectionOutput parameters are invalid");
+  }
+  const int64_t locationElements = locationType.getNumElements();
+  const int64_t confidenceElements = confidenceType.getNumElements();
+  const int64_t priorboxElements = priorboxType.getNumElements();
+  if (locationElements <= 0 || locationElements % 4 != 0) {
+    return fail("DetectionOutput location element count must be 4 * num_prior");
+  }
+  const int64_t numPrior = locationElements / 4;
+  const ArrayRef<int64_t> priorShape = priorboxType.getShape();
+  if (confidenceElements != numPrior * numClass || priorboxType.getRank() < 2 ||
+      priorShape[priorboxType.getRank() - 2] != 2 ||
+      priorShape.back() != locationElements ||
+      priorboxElements != locationElements * 2) {
+    return fail("DetectionOutput input shapes are inconsistent");
+  }
+  auto perClass = checkedMultiply(numClass - 1, std::min(nmsTopK, numPrior));
+  if (failed(perClass)) {
+    return fail("DetectionOutput maximum detection count overflows");
+  }
+  const int64_t maximumDetections = std::min(keepTopK, *perClass);
+  return RankedTensorType::get({maximumDetections, 6},
+                               locationType.getElementType());
 }
 
 // Pooling 单个空间维的输出尺寸（regular 模式）。
@@ -683,12 +750,21 @@ FailureOr<RankedTensorType> computeBinaryResult(
     return emitOptionalError(
       location, "BinaryOp inputs must have matching rank and element type");
   }
+  if ((!first.hasStaticShape() || !second.hasStaticShape()) &&
+      first != second) {
+    return emitOptionalError(
+      location,
+      "dynamic BinaryOp inputs must have identical ranked tensor types");
+  }
   for (int64_t i = 0; i < first.getRank(); ++i) {
     if (first.getShape()[i] != 1 && second.getShape()[i] != 1 &&
         second.getShape()[i] != first.getShape()[i]) {
       return emitOptionalError(location,
                                "BinaryOp input shapes are not broadcastable");
     }
+  }
+  if (!first.hasStaticShape()) {
+    return first;
   }
   SmallVector<int64_t> shape(first.getShape().begin(), first.getShape().end());
   for (int64_t i = 0; i < first.getRank(); ++i) {
@@ -1043,6 +1119,36 @@ LogicalResult InterpOp::inferReturnTypeComponents(
   }
   inferredReturnShapes.emplace_back(result->getShape(),
                                     result->getElementType());
+  return success();
+}
+
+LogicalResult DetectionOutputOp::inferReturnTypeComponents(
+  MLIRContext* context,
+  std::optional<Location> location,
+  DetectionOutputOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  SmallVector<double> variances{adaptor.getVarianceX().convertToDouble(),
+                                adaptor.getVarianceY().convertToDouble(),
+                                adaptor.getVarianceW().convertToDouble(),
+                                adaptor.getVarianceH().convertToDouble()};
+  auto result = computeDetectionOutputResult(
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getLocation().getType()),
+    dyn_cast<RankedTensorType>(adaptor.getConfidence().getType()),
+    dyn_cast<RankedTensorType>(adaptor.getPriorbox().getType()),
+    adaptor.getNumClass(),
+    adaptor.getNmsTopK(),
+    adaptor.getKeepTopK(),
+    adaptor.getNmsThreshold().convertToDouble(),
+    adaptor.getConfidenceThreshold().convertToDouble(),
+    variances);
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  inferredReturnShapes.emplace_back(ArrayRef<int64_t>{2},
+                                    IntegerType::get(context, 64));
   return success();
 }
 

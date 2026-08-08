@@ -97,12 +97,10 @@ ImportResult import_interp(ImportContext& importer,
   auto outputH = get_int(params, 3, 0, "output_h");
   auto outputW = get_int(params, 4, 0, "output_w");
   auto alignCorner = get_int(params, 6, 0, "align_corner");
-  constexpr float kMaximumTosaScale = 2048.0F;
   if (!resizeType || !heightScale || !widthScale || !outputH || !outputW ||
       !alignCorner || *resizeType != 1 || *alignCorner != 0 ||
       !std::isfinite(*heightScale) || !std::isfinite(*widthScale) ||
       *heightScale < 1.0F || *widthScale < 1.0F ||
-      *heightScale > kMaximumTosaScale || *widthScale > kMaximumTosaScale ||
       std::trunc(*heightScale) != *heightScale ||
       std::trunc(*widthScale) != *widthScale) {
     return std::unexpected(make_error(
@@ -116,16 +114,17 @@ ImportResult import_interp(ImportContext& importer,
   auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
   const auto heightFactor = static_cast<int64_t>(*heightScale);
   const auto widthFactor = static_cast<int64_t>(*widthScale);
-  constexpr int64_t kMaximumTosaDimension = 16383;
   if (!inputType || inputType.getRank() != 3 ||
-      inputType.getShape()[1] > kMaximumTosaDimension / heightFactor ||
-      inputType.getShape()[2] > kMaximumTosaDimension / widthFactor ||
-      (*outputH != 0 && (*outputH % heightFactor != 0 ||
-                         *outputH / heightFactor != inputType.getShape()[1])) ||
-      (*outputW != 0 && (*outputW % widthFactor != 0 ||
-                         *outputW / widthFactor != inputType.getShape()[2]))) {
-    return std::unexpected(make_error(
-      context, "Interp output must fit TOSA limits and match its scale"));
+      (*outputH != 0 &&
+       (*outputH % heightFactor != 0 ||
+        (!inputType.isDynamicDim(1) &&
+         *outputH / heightFactor != inputType.getShape()[1]))) ||
+      (*outputW != 0 &&
+       (*outputW % widthFactor != 0 ||
+        (!inputType.isDynamicDim(2) &&
+         *outputW / widthFactor != inputType.getShape()[2])))) {
+    return std::unexpected(
+      make_error(context, "Interp output must match its scale"));
   }
   auto& builder = importer.builder();
   mlir::ncnn::InterpOp::Properties properties;
@@ -159,6 +158,80 @@ ImportResult import_sigmoid(ImportContext& importer,
   auto& builder = importer.builder();
   auto operation = builder.create<mlir::ncnn::SigmoidOp>(
     builder.getUnknownLoc(), input->getType(), *input);
+  importer.tag_source(operation, context);
+  return importer.bind_blob(
+    context, context.layer.get_outputs()[0], operation.getOutput());
+}
+
+ImportResult import_detection_output(ImportContext& importer,
+                                     const LayerContext& context) {
+  constexpr int kAllowed[] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+  auto arity = expect_source_arity(context.layer, 3, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!arity || !allowed || !mask) {
+    return std::unexpected(make_error(context,
+                                      !arity     ? arity.error()
+                                      : !allowed ? allowed.error()
+                                                 : mask.error()));
+  }
+  const auto& params = context.layer.get_params();
+  auto numClass = get_int(params, 0, 0, "num_class");
+  auto nmsThreshold = get_float(params, 1, 0.05F, "nms_threshold");
+  auto nmsTopK = get_int(params, 2, 300, "nms_top_k");
+  auto keepTopK = get_int(params, 3, 100, "keep_top_k");
+  auto confidenceThreshold = get_float(params, 4, 0.5F, "confidence_threshold");
+  auto varianceX = get_float(params, 5, 0.1F, "variance_x");
+  auto varianceY = get_float(params, 6, 0.1F, "variance_y");
+  auto varianceW = get_float(params, 7, 0.2F, "variance_w");
+  auto varianceH = get_float(params, 8, 0.2F, "variance_h");
+  if (!numClass || !nmsThreshold || !nmsTopK || !keepTopK ||
+      !confidenceThreshold || !varianceX || !varianceY || !varianceW ||
+      !varianceH || *numClass == -233) {
+    return std::unexpected(make_error(
+      context, "DetectionOutput requires valid Caffe-style SSD parameters"));
+  }
+  llvm::SmallVector<mlir::Value> inputs;
+  for (const std::string& name : context.layer.get_inputs()) {
+    auto input = importer.find_blob(context, name);
+    if (!input) {
+      return std::unexpected(input.error());
+    }
+    inputs.push_back(*input);
+  }
+  auto& builder = importer.builder();
+  mlir::ncnn::DetectionOutputOp::Properties properties;
+  properties.num_class = builder.getI64IntegerAttr(*numClass);
+  properties.nms_threshold = builder.getF32FloatAttr(*nmsThreshold);
+  properties.nms_top_k = builder.getI64IntegerAttr(*nmsTopK);
+  properties.keep_top_k = builder.getI64IntegerAttr(*keepTopK);
+  properties.confidence_threshold =
+    builder.getF32FloatAttr(*confidenceThreshold);
+  properties.variance_x = builder.getF32FloatAttr(*varianceX);
+  properties.variance_y = builder.getF32FloatAttr(*varianceY);
+  properties.variance_w = builder.getF32FloatAttr(*varianceW);
+  properties.variance_h = builder.getF32FloatAttr(*varianceH);
+  llvm::SmallVector<mlir::Type> types;
+  if (mlir::failed(importer.infer_tensor_results<mlir::ncnn::DetectionOutputOp>(
+        builder.getUnknownLoc(), inputs, properties, types)) ||
+      types.size() != 2) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto operation = builder.create<mlir::ncnn::DetectionOutputOp>(
+    builder.getUnknownLoc(),
+    mlir::TypeRange(types),
+    inputs[0],
+    inputs[1],
+    inputs[2],
+    properties.num_class,
+    properties.nms_threshold,
+    properties.nms_top_k,
+    properties.keep_top_k,
+    properties.confidence_threshold,
+    properties.variance_x,
+    properties.variance_y,
+    properties.variance_w,
+    properties.variance_h);
   importer.tag_source(operation, context);
   return importer.bind_blob(
     context, context.layer.get_outputs()[0], operation.getOutput());

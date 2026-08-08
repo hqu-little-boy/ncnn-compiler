@@ -275,6 +275,25 @@ int CompiledModel::run_two_inputs(std::span<const float> first_input,
     first_input.data(), second_input.data(), output.data());
 }
 
+int CompiledModel::run_three_inputs_two_outputs(
+  std::span<const float> first_input,
+  std::span<const float> second_input,
+  std::span<const float> third_input,
+  std::span<float> first_output,
+  std::span<std::int64_t> second_output) const {
+  if (symbol_ == nullptr) {
+    return -1;
+  }
+  using Function =
+    int (*)(const float*, const float*, const float*, float*, std::int64_t*);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(first_input.data(),
+                                          second_input.data(),
+                                          third_input.data(),
+                                          first_output.data(),
+                                          second_output.data());
+}
+
 std::vector<float> make_random_input(std::size_t size,
                                      std::uint32_t seed,
                                      float minimum,

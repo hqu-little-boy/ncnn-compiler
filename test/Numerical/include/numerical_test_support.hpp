@@ -85,6 +85,11 @@ class CompiledModel final {
   int run_two_inputs(std::span<const float> first_input,
                      std::span<const float> second_input,
                      std::span<float> output) const;
+  int run_three_inputs_two_outputs(std::span<const float> first_input,
+                                   std::span<const float> second_input,
+                                   std::span<const float> third_input,
+                                   std::span<float> first_output,
+                                   std::span<std::int64_t> second_output) const;
 
  private:
   void* handle_;

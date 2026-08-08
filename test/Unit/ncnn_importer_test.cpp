@@ -287,6 +287,39 @@ ncnn_graph::Graph make_deconvolution_graph(std::int64_t weight_count) {
   return graph;
 }
 
+ncnn_graph::Graph make_detection_output_graph() {
+  ncnn_graph::Graph graph;
+  auto add_input = [&](std::string name,
+                       std::string blob,
+                       std::int64_t width,
+                       std::int64_t height) {
+    auto input = make_layer("Input", std::move(name), {}, {std::move(blob)});
+    ncnn_graph::ParamDict params;
+    params.set_value(0, ncnn_graph::ParamValue::make_int(width));
+    params.set_value(1, ncnn_graph::ParamValue::make_int(height));
+    params.set_value(2, ncnn_graph::ParamValue::make_int(1));
+    input.set_params(std::move(params));
+    graph.add_layer(std::move(input));
+  };
+  add_input("location", "location", 12, 1);
+  add_input("confidence", "confidence", 9, 1);
+  add_input("priorbox", "priorbox", 12, 2);
+  auto detection = make_layer("DetectionOutput",
+                              "detection",
+                              {"location", "confidence", "priorbox"},
+                              {"detections"});
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(3));
+  params.set_value(2, ncnn_graph::ParamValue::make_int(3));
+  params.set_value(3, ncnn_graph::ParamValue::make_int(2));
+  detection.set_params(std::move(params));
+  graph.add_layer(std::move(detection));
+  graph.set_input_blob_names({"location", "confidence", "priorbox"});
+  graph.set_output_blob_names({"detections"});
+  graph.set_weights_loaded(true);
+  return graph;
+}
+
 class NcnnImporterTest : public ::testing::Test {
  protected:
   NcnnImporterTest() { register_dialects(context_); }
@@ -296,10 +329,126 @@ class NcnnImporterTest : public ::testing::Test {
     return ncnn_importer::import_graph(graph, context_);
   }
 
+  std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ncnn_importer::ImportError>
+  import(const ncnn_graph::Graph& graph,
+         const ncnn_importer::ImportOptions& options) {
+    return ncnn_importer::import_graph(graph, context_, options);
+  }
+
   mlir::MLIRContext context_;
 };
 
 }  // namespace
+
+TEST_F(NcnnImporterTest, ImportsDynamicInputShapeOverride) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "input", {}, {"data"}));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"data"});
+  graph.set_weights_loaded(true);
+  ncnn_importer::ImportOptions options;
+  options.input_shape = ncnn_importer::InputShape{4, -1, 8};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  auto type = result_type_by_name(imported->get(), "input");
+  ASSERT_TRUE(type);
+  EXPECT_TRUE(shape_is(type, {4, mlir::ShapedType::kDynamic, 8}));
+}
+
+TEST_F(NcnnImporterTest, ImportsDynamicRankSpecializations) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "input", {}, {"data"}));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"data"});
+  graph.set_weights_loaded(true);
+  ncnn_importer::ImportOptions options;
+  options.dynamic_rank = true;
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  std::array<bool, 4> ranks{};
+  imported->get().walk([&](mlir::ncnn::ModelOp model) {
+    auto rank = model->getAttrOfType<mlir::IntegerAttr>("ncnn.rank_variant");
+    ASSERT_TRUE(rank);
+    ASSERT_GE(rank.getInt(), 1);
+    ASSERT_LE(rank.getInt(), 4);
+    ranks[rank.getInt() - 1] = true;
+  });
+  EXPECT_TRUE(std::ranges::all_of(ranks, std::identity{}));
+}
+
+TEST_F(NcnnImporterTest, RejectsUnsupportedDynamicRankModel) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "input", {}, {"data"}));
+  graph.add_layer(
+    make_layer("Convolution", "convolution", {"data"}, {"output"}));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"output"});
+  graph.set_weights_loaded(true);
+  ncnn_importer::ImportOptions options;
+  options.dynamic_rank = true;
+  auto imported = import(graph, options);
+  ASSERT_FALSE(imported.has_value());
+  EXPECT_NE(imported.error().get_message().find("identity/shape-preserving"),
+            std::string_view::npos);
+}
+
+TEST_F(NcnnImporterTest, DoesNotOverrideExplicitInputShape) {
+  auto graph = make_supported_graph();
+  ncnn_importer::ImportOptions options;
+  options.input_shape = ncnn_importer::InputShape{4, -1, 8};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  EXPECT_TRUE(
+    shape_is(result_type_by_name(imported->get(), "input"), {1, 5, 5}));
+}
+
+TEST_F(NcnnImporterTest, AppliesMultipleInputShapesInSourceOrder) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "first", {}, {"first_blob"}));
+  graph.add_layer(make_layer("Input", "second", {}, {"second_blob"}));
+  graph.set_input_blob_names({"first_blob", "second_blob"});
+  graph.set_output_blob_names({"first_blob", "second_blob"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions options;
+  options.input_shapes = {{2, -1, 4}, {1, 3, -1}};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  EXPECT_TRUE(shape_is(result_type_by_name(imported->get(), "first"),
+                       {2, mlir::ShapedType::kDynamic, 4}));
+  EXPECT_TRUE(shape_is(result_type_by_name(imported->get(), "second"),
+                       {1, 3, mlir::ShapedType::kDynamic}));
+}
+
+TEST_F(NcnnImporterTest, RejectsInputShapeContractErrors) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "input", {}, {"data"}));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"data"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions mismatch;
+  mismatch.input_shapes = {{1, 2, 3}, {4, 5, 6}};
+  auto mismatched = import(graph, mismatch);
+  ASSERT_FALSE(mismatched.has_value());
+  EXPECT_NE(mismatched.error().get_message().find("count 2 does not match 1"),
+            std::string_view::npos);
+
+  ncnn_importer::ImportOptions conflict;
+  conflict.input_shape = ncnn_importer::InputShape{1, 2, 3};
+  conflict.input_shapes = {{1, 2, 3}};
+  auto conflicted = import(graph, conflict);
+  ASSERT_FALSE(conflicted.has_value());
+  EXPECT_NE(conflicted.error().get_message().find("cannot both be specified"),
+            std::string_view::npos);
+
+  ncnn_importer::ImportOptions invalid;
+  invalid.input_shape = ncnn_importer::InputShape{1, 0, 3};
+  auto invalid_shape = import(graph, invalid);
+  ASSERT_FALSE(invalid_shape.has_value());
+  EXPECT_NE(invalid_shape.error().get_message().find("positive or dynamic"),
+            std::string_view::npos);
+}
 
 TEST_F(NcnnImporterTest, ImportsSupportedGraph) {
   auto imported = import(make_supported_graph());
@@ -327,6 +476,25 @@ TEST_F(NcnnImporterTest, ImportsSupportedGraph) {
     << "pad_mode 0 uses ceil/full-padding output shape";
   EXPECT_TRUE(shape_is(output_type(module), {4}))
     << "global pool and softmax produce rank-one output";
+}
+
+TEST_F(NcnnImporterTest, ImportsBoundedDetectionOutputContract) {
+  auto imported = import(make_detection_output_graph());
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::DetectionOutputOp>(imported->get()), 1);
+  EXPECT_TRUE(shape_is(output_type(imported->get()), {2, 6}));
+
+  auto invalid = make_detection_output_graph();
+  auto layers = std::vector<ncnn_graph::Layer>(invalid.get_layers().begin(),
+                                               invalid.get_layers().end());
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(-233));
+  layers.back().set_params(std::move(params));
+  invalid.set_layers(std::move(layers));
+  auto rejected = import(invalid);
+  ASSERT_FALSE(rejected.has_value());
+  EXPECT_NE(rejected.error().get_message().find("Caffe-style"),
+            std::string_view::npos);
 }
 
 TEST_F(NcnnImporterTest, ImportsInt8Quantization) {
@@ -555,8 +723,8 @@ TEST_F(NcnnImporterTest, RejectsInvalidGraphs) {
   EXPECT_FALSE(
     import(make_interp_graph(std::numeric_limits<float>::infinity(), 2)))
     << "non-finite Interp scale is rejected";
-  EXPECT_FALSE(import(make_interp_graph(2049.0F, 2)))
-    << "Interp scale above the TOSA limit is rejected";
-  EXPECT_FALSE(import(make_interp_graph(2.0F, 8192)))
-    << "Interp output dimension above the TOSA limit is rejected";
+  EXPECT_TRUE(import(make_interp_graph(2049.0F, 2)))
+    << "direct Linalg Interp is not restricted by TOSA scale limits";
+  EXPECT_TRUE(import(make_interp_graph(2.0F, 8192)))
+    << "direct Linalg Interp is not restricted by TOSA dimension limits";
 }

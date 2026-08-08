@@ -11,6 +11,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/IR/Builders.h"
@@ -84,6 +85,11 @@ Value convertNHWCToCHW(OpBuilder& builder,
 bool isStaticF32Tensor(Type type) {
   auto tensor = dyn_cast<RankedTensorType>(type);
   return tensor && tensor.hasStaticShape() && tensor.getElementType().isF32();
+}
+
+bool isRankedF32Tensor(Type type) {
+  auto tensor = dyn_cast<RankedTensorType>(type);
+  return tensor && tensor.getElementType().isF32();
 }
 
 FailureOr<int64_t> getRequiredIntegerAttr(Operation* operation,
@@ -163,6 +169,20 @@ Value convertCHWToNHWC(OpBuilder& builder, Location location, Value input) {
   Value transposed = builder.create<tosa::TransposeOp>(
     location, hwcType, input, ArrayRef<int32_t>{1, 2, 0});
   RankedTensorType nhwcType = getNHWCType(chwType);
+  if (!chwType.hasStaticShape()) {
+    SmallVector<OpFoldResult> outputShape;
+    outputShape.push_back(builder.getIndexAttr(1));
+    for (unsigned dimension = 0; dimension < 3; ++dimension) {
+      int64_t extent = hwcType.getShape()[dimension];
+      outputShape.push_back(ShapedType::isDynamic(extent)
+                              ? OpFoldResult(builder.create<tensor::DimOp>(
+                                  location, transposed, dimension))
+                              : OpFoldResult(builder.getIndexAttr(extent)));
+    }
+    SmallVector<ReassociationIndices> reassociation = {{0, 1}, {2}, {3}};
+    return builder.create<tensor::ExpandShapeOp>(
+      location, nhwcType, transposed, reassociation, outputShape);
+  }
   Value shape = createShape(builder, location, nhwcType.getShape());
   Value result =
     builder.create<tosa::ReshapeOp>(location, nhwcType, transposed, shape);
@@ -177,6 +197,13 @@ Value convertNHWCToCHW(OpBuilder& builder,
   auto hwcType = RankedTensorType::get(
     {nhwcType.getShape()[1], nhwcType.getShape()[2], nhwcType.getShape()[3]},
     nhwcType.getElementType());
+  if (!nhwcType.hasStaticShape()) {
+    SmallVector<ReassociationIndices> reassociation = {{0, 1}, {2}, {3}};
+    Value reshaped = builder.create<tensor::CollapseShapeOp>(
+      location, hwcType, input, reassociation);
+    return builder.create<tosa::TransposeOp>(
+      location, chwType, reshaped, ArrayRef<int32_t>{2, 0, 1});
+  }
   Value shape = createShape(builder, location, hwcType.getShape());
   Value reshaped =
     builder.create<tosa::ReshapeOp>(location, hwcType, input, shape);
@@ -336,6 +363,9 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
                     {1}, cast<ShapedType>(weight.getType()).getElementType()),
                   0.0);
     SmallVector<int64_t> padding{padTop, padBottom, padLeft, padRight};
+    auto inputShape = cast<RankedTensorType>(input.getType()).getShape();
+    const bool dynamicSpatial = ShapedType::isDynamic(inputShape[1]) ||
+                                ShapedType::isDynamic(inputShape[2]);
     auto adjustTrailingPadding = [&](int64_t inputSize,
                                      int64_t kernel,
                                      int64_t stride,
@@ -352,34 +382,38 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
         trailing += stride - remainder;
       }
     };
-    auto inputShape = cast<RankedTensorType>(input.getType()).getShape();
-    adjustTrailingPadding(inputShape[1],
-                          operation.getKernelH(),
-                          operation.getStrideH(),
-                          operation.getDilationH(),
-                          padTop,
-                          padding[1]);
-    adjustTrailingPadding(inputShape[2],
-                          operation.getKernelW(),
-                          operation.getStrideW(),
-                          operation.getDilationW(),
-                          padLeft,
-                          padding[3]);
+    if (!dynamicSpatial) {
+      adjustTrailingPadding(inputShape[1],
+                            operation.getKernelH(),
+                            operation.getStrideH(),
+                            operation.getDilationH(),
+                            padTop,
+                            padding[1]);
+      adjustTrailingPadding(inputShape[2],
+                            operation.getKernelW(),
+                            operation.getStrideW(),
+                            operation.getDilationW(),
+                            padLeft,
+                            padding[3]);
+    }
     int64_t effectiveH =
       ((operation.getKernelH() - 1) * operation.getDilationH()) + 1;
     int64_t effectiveW =
       ((operation.getKernelW() - 1) * operation.getDilationW()) + 1;
-    int64_t paddedHeight =
-      ((inputShape[1] + padding[0] + padding[1] - effectiveH) /
-       operation.getStrideH()) +
-      1;
-    int64_t paddedWidth =
-      ((inputShape[2] + padding[2] + padding[3] - effectiveW) /
-       operation.getStrideW()) +
-      1;
-    auto paddedOutputType = RankedTensorType::get(
-      {1, paddedHeight, paddedWidth, sourceOutput.getShape()[0]},
-      sourceOutput.getElementType());
+    auto paddedOutputType = outputType;
+    if (!dynamicSpatial) {
+      int64_t paddedHeight =
+        ((inputShape[1] + padding[0] + padding[1] - effectiveH) /
+         operation.getStrideH()) +
+        1;
+      int64_t paddedWidth =
+        ((inputShape[2] + padding[2] + padding[3] - effectiveW) /
+         operation.getStrideW()) +
+        1;
+      paddedOutputType = RankedTensorType::get(
+        {1, paddedHeight, paddedWidth, sourceOutput.getShape()[0]},
+        sourceOutput.getElementType());
+    }
     Value result = rewriter.create<tosa::Conv2DOp>(
       operation.getLoc(),
       paddedOutputType,
@@ -667,9 +701,9 @@ class ConvertPadding final : public ConversionPattern {
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
     if (operands.size() != 1 || operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
-        !isStaticF32Tensor(operation->getResult(0).getType())) {
-      return operation->emitOpError("supports one static CHW f32 tensor only");
+        !isRankedF32Tensor(operation->getOperand(0).getType()) ||
+        !isRankedF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("supports one ranked CHW f32 tensor only");
     }
     auto sourceInput =
       cast<RankedTensorType>(operation->getOperand(0).getType());
@@ -690,10 +724,12 @@ class ConvertPadding final : public ConversionPattern {
       pad.push_back(*value);
     }
     if (sourceOutput.getShape()[0] != sourceInput.getShape()[0] ||
-        sourceOutput.getShape()[1] !=
-          sourceInput.getShape()[1] + pad[0] + pad[1] ||
-        sourceOutput.getShape()[2] !=
-          sourceInput.getShape()[2] + pad[2] + pad[3]) {
+        (!sourceInput.isDynamicDim(1) &&
+         sourceOutput.getShape()[1] !=
+           sourceInput.getShape()[1] + pad[0] + pad[1]) ||
+        (!sourceInput.isDynamicDim(2) &&
+         sourceOutput.getShape()[2] !=
+           sourceInput.getShape()[2] + pad[2] + pad[3])) {
       return operation->emitOpError("padding does not match result shape");
     }
     auto value = operation->getAttrOfType<FloatAttr>("value");
@@ -729,9 +765,9 @@ class ConvertInterp final : public ConversionPattern {
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
     if (operands.size() != 1 || operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
-        !isStaticF32Tensor(operation->getResult(0).getType())) {
-      return operation->emitOpError("supports one static CHW f32 tensor only");
+        !isRankedF32Tensor(operation->getOperand(0).getType()) ||
+        !isRankedF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("supports one ranked CHW f32 tensor only");
     }
     auto sourceInput =
       cast<RankedTensorType>(operation->getOperand(0).getType());
@@ -752,18 +788,62 @@ class ConvertInterp final : public ConversionPattern {
     if (*scaleH <= 0 || *scaleW <= 0) {
       return operation->emitOpError("resize scales must be positive");
     }
-    const int64_t inputH = sourceInput.getShape()[1];
-    const int64_t inputW = sourceInput.getShape()[2];
-    int64_t expectedH = 0;
-    int64_t expectedW = 0;
-    if (llvm::MulOverflow(inputH, *scaleH, expectedH) ||
-        llvm::MulOverflow(inputW, *scaleW, expectedW)) {
-      return operation->emitOpError("resize output shape overflows");
-    }
+    int64_t expectedH = sourceInput.isDynamicDim(1)
+                          ? ShapedType::kDynamic
+                          : sourceInput.getShape()[1] * *scaleH;
+    int64_t expectedW = sourceInput.isDynamicDim(2)
+                          ? ShapedType::kDynamic
+                          : sourceInput.getShape()[2] * *scaleW;
     if (sourceOutput.getShape()[1] != expectedH ||
         sourceOutput.getShape()[2] != expectedW) {
       return operation->emitOpError(
         "height_scale/width_scale do not match result shape");
+    }
+
+    auto outputType = getNHWCType(sourceOutput);
+    if (!sourceInput.hasStaticShape()) {
+      Value input = operands.front();
+      Value inputH =
+        rewriter.create<tensor::DimOp>(operation->getLoc(), input, 1);
+      Value inputW =
+        rewriter.create<tensor::DimOp>(operation->getLoc(), input, 2);
+      Value heightFactor =
+        rewriter.create<arith::ConstantIndexOp>(operation->getLoc(), *scaleH);
+      Value widthFactor =
+        rewriter.create<arith::ConstantIndexOp>(operation->getLoc(), *scaleW);
+      Value outputH = rewriter.create<arith::MulIOp>(
+        operation->getLoc(), inputH, heightFactor);
+      Value outputW = rewriter.create<arith::MulIOp>(
+        operation->getLoc(), inputW, widthFactor);
+      Value empty = rewriter.create<tensor::EmptyOp>(
+        operation->getLoc(), outputType, ValueRange{outputH, outputW});
+      AffineMap identity = rewriter.getMultiDimIdentityMap(4);
+      SmallVector<utils::IteratorType> iterators(4,
+                                                 utils::IteratorType::parallel);
+      auto result = rewriter.create<linalg::GenericOp>(
+        operation->getLoc(),
+        outputType,
+        ValueRange{},
+        ValueRange{empty},
+        ArrayRef<AffineMap>{identity},
+        iterators,
+        [&](OpBuilder& nested, Location location, ValueRange) {
+          Value batch = nested.create<linalg::IndexOp>(location, 0);
+          Value outputHeight = nested.create<linalg::IndexOp>(location, 1);
+          Value outputWidth = nested.create<linalg::IndexOp>(location, 2);
+          Value channel = nested.create<linalg::IndexOp>(location, 3);
+          Value inputHeight =
+            nested.create<arith::DivUIOp>(location, outputHeight, heightFactor);
+          Value inputWidth =
+            nested.create<arith::DivUIOp>(location, outputWidth, widthFactor);
+          Value value = nested.create<tensor::ExtractOp>(
+            location,
+            input,
+            ValueRange{batch, inputHeight, inputWidth, channel});
+          nested.create<linalg::YieldOp>(location, value);
+        });
+      rewriter.replaceOp(operation, result.getResults());
+      return success();
     }
 
     // ncnn nearest uses floor(out / scale). TOSA nearest rounds to the closest
@@ -776,15 +856,14 @@ class ConvertInterp final : public ConversionPattern {
       createShape(rewriter,
                   operation->getLoc(),
                   {*scaleH - 1 - (*scaleH / 2), *scaleW - 1 - (*scaleW / 2)});
-    rewriter.replaceOp(
-      operation,
-      rewriter.create<tosa::ResizeOp>(operation->getLoc(),
-                                      getNHWCType(sourceOutput),
-                                      operands.front(),
-                                      scale,
-                                      offset,
-                                      border,
-                                      "NEAREST_NEIGHBOR"));
+    rewriter.replaceOp(operation,
+                       rewriter.create<tosa::ResizeOp>(operation->getLoc(),
+                                                       outputType,
+                                                       operands.front(),
+                                                       scale,
+                                                       offset,
+                                                       border,
+                                                       "NEAREST_NEIGHBOR"));
     return success();
   }
 };
@@ -1458,7 +1537,7 @@ class ConvertBinary final : public ConversionPattern {
     ConversionPatternRewriter& rewriter) const final {
     if (operands.empty() || operands.size() > 2 ||
         operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operation->getResult(0).getType())) {
+        !isRankedF32Tensor(operation->getResult(0).getType())) {
       return operation->emitOpError(
         "supports one result and one or two operands");
     }
@@ -1763,6 +1842,8 @@ class ConvertReduction final : public OpConversionPattern<ReductionOp> {
   }
 };
 
+#include "DetectionOutputLowering.inc"
+
 class ConvertNCNNToTosaPass final
   : public impl::ConvertNCNNToTosaPassBase<ConvertNCNNToTosaPass> {
  public:
@@ -1842,15 +1923,18 @@ class ConvertNCNNToTosaPass final
     patterns.add<ConvertBinary>(typeConverter, context, "ncnn.binary");
     patterns.add<ConvertInnerProduct>(
       typeConverter, context, "ncnn.inner_product");
-    patterns
-      .add<ConvertPadding, ConvertInterp, ConvertDeconvolution, ConvertSigmoid>(
-        typeConverter, context);
+    patterns.add<ConvertPadding,
+                 ConvertInterp,
+                 ConvertDeconvolution,
+                 ConvertSigmoid,
+                 ConvertDetectionOutput>(typeConverter, context);
 
     ConversionTarget target(*context);
     target.addLegalDialect<arith::ArithDialect,
                            func::FuncDialect,
                            linalg::LinalgDialect,
                            math::MathDialect,
+                           scf::SCFDialect,
                            tensor::TensorDialect,
                            tosa::TosaDialect>();
     target.addLegalOp<ModuleOp>();
@@ -1863,6 +1947,7 @@ class ConvertNCNNToTosaPass final
               operation.getIncludePad());
     });
     target.addIllegalOp<ReluOp,
+                        DetectionOutputOp,
                         SplitOp,
                         ConcatOp,
                         DropoutOp,

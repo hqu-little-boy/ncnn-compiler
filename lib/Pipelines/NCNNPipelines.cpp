@@ -75,6 +75,7 @@ void buildNCNNMemRefToLLVMPipeline(OpPassManager& passManager) {
   passManager.addPass(createSCFToControlFlowPass());
   passManager.addPass(createConvertMathToLibmPass());
   passManager.addPass(memref::createExpandStridedMetadataPass());
+  passManager.addPass(createLowerAffinePass());
   passManager.addPass(createArithToLLVMConversionPass());
   passManager.addPass(createFinalizeMemRefToLLVMConversionPass());
   passManager.addPass(createConvertFuncToLLVMPass());

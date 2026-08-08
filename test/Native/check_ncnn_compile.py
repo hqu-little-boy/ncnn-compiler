@@ -127,6 +127,214 @@ def main():
             f"generated header lacks typed ABI contract: {sorted(missing_header_text)}"
         )
 
+    dynamic_param = work_dir / "dynamic_identity.param"
+    dynamic_bin = work_dir / "dynamic_identity.bin"
+    dynamic_param.write_text(
+        "7767517\n1 1\nInput input 0 1 data\n", encoding="ascii"
+    )
+    dynamic_bin.write_bytes(b"")
+    dynamic_output = work_dir / "dynamic-identity"
+    run(
+        [
+            args.compiler,
+            dynamic_param,
+            "--bin",
+            dynamic_bin,
+            "--model-name",
+            "dynamic_identity",
+            "--output-dir",
+            dynamic_output,
+            "--input-shape=3x?x?",
+            "--emit-manifest",
+            "--verify-execution",
+            "-O0",
+        ]
+    )
+    assert_files(
+        dynamic_output,
+        {
+            "libdynamic_identity.so",
+            "dynamic_identity.h",
+            "dynamic_identity.json",
+        },
+    )
+    dynamic_manifest = json.loads(
+        (dynamic_output / "dynamic_identity.json").read_text()
+    )
+    if dynamic_manifest["outputs"][0].get("shape_source_input") != 0:
+        raise RuntimeError(f"dynamic output shape source missing: {dynamic_manifest}")
+    dynamic_header = (dynamic_output / "dynamic_identity.h").read_text()
+    if "dynamic_identity_infer_output_shapes" not in dynamic_header:
+        raise RuntimeError("dynamic shape inference declaration missing")
+
+    dynamic_rank_output = work_dir / "dynamic-rank-identity"
+    run(
+        [
+            args.compiler,
+            dynamic_param,
+            "--bin",
+            dynamic_bin,
+            "--model-name",
+            "dynamic_rank_identity",
+            "--output-dir",
+            dynamic_rank_output,
+            "--input-shape=*",
+            "--emit-manifest",
+            "--verify-execution",
+            "-O0",
+        ]
+    )
+    assert_files(
+        dynamic_rank_output,
+        {
+            "libdynamic_rank_identity.so",
+            "dynamic_rank_identity.h",
+            "dynamic_rank_identity.json",
+        },
+    )
+    dynamic_rank_manifest = json.loads(
+        (dynamic_rank_output / "dynamic_rank_identity.json").read_text()
+    )
+    for argument in dynamic_rank_manifest["inputs"] + dynamic_rank_manifest["outputs"]:
+        if not argument.get("dynamic_rank"):
+            raise RuntimeError(f"dynamic rank missing from manifest: {argument}")
+        if (argument.get("rank_min"), argument.get("rank_max")) != (1, 4):
+            raise RuntimeError(f"invalid rank range in manifest: {argument}")
+    dynamic_rank_header = (
+        dynamic_rank_output / "dynamic_rank_identity.h"
+    ).read_text()
+    required_dynamic_rank_abi = {
+        "#define NCNN_MAX_RANK 4",
+        "const int64_t *input1_shape, uint32_t input1_rank",
+        "uint32_t output1_shape_capacity, uint32_t *output1_rank",
+    }
+    missing_dynamic_rank_abi = required_dynamic_rank_abi - {
+        text for text in required_dynamic_rank_abi if text in dynamic_rank_header
+    }
+    if missing_dynamic_rank_abi:
+        raise RuntimeError(
+            f"dynamic rank header contract missing: {sorted(missing_dynamic_rank_abi)}"
+        )
+
+    dynamic_debug_output = work_dir / "dynamic-debug"
+    run(
+        [
+            "python3",
+            args.debug_compiler,
+            "--driver",
+            args.driver,
+            "--opt",
+            args.opt,
+            "--translate",
+            args.translate,
+            "--clang",
+            args.clang,
+            "--nm",
+            args.nm,
+            "--readelf",
+            args.readelf,
+            "--param",
+            dynamic_param,
+            "--bin",
+            dynamic_bin,
+            "--model-name",
+            "dynamic_debug",
+            "--input-shape=3x?x?",
+            "-o",
+            dynamic_debug_output,
+            "-O0",
+        ]
+    )
+    assert_files(dynamic_debug_output, {"libdynamic_debug.so", "dynamic_debug.h"})
+    if "dynamic_debug_infer_output_shapes" not in (
+        dynamic_debug_output / "dynamic_debug.h"
+    ).read_text():
+        raise RuntimeError("debug compiler dynamic shape declaration missing")
+
+    dynamic_relu_param = work_dir / "dynamic_relu.param"
+    dynamic_relu_param.write_text(
+        "7767517\n2 2\n"
+        "Input input 0 1 data\n"
+        "ReLU relu 1 1 data output\n",
+        encoding="ascii",
+    )
+    dynamic_relu_output = work_dir / "dynamic-relu"
+    run(
+        [
+            args.compiler,
+            dynamic_relu_param,
+            "--bin",
+            dynamic_bin,
+            "--model-name",
+            "dynamic_relu",
+            "--output-dir",
+            dynamic_relu_output,
+            "--input-shape=3x?x?",
+            "--verify-execution",
+            "-O0",
+        ]
+    )
+    assert_files(
+        dynamic_relu_output, {"libdynamic_relu.so", "dynamic_relu.h"}
+    )
+
+    dynamic_padding_param = work_dir / "dynamic_padding.param"
+    dynamic_padding_param.write_text(
+        "7767517\n2 2\n"
+        "Input input 0 1 data\n"
+        "Padding padding 1 1 data output "
+        "0=1 1=2 2=3 3=4 4=0 5=0.0 6=0\n",
+        encoding="ascii",
+    )
+    dynamic_padding_output = work_dir / "dynamic-padding"
+    run(
+        [
+            args.compiler,
+            dynamic_padding_param,
+            "--bin",
+            dynamic_bin,
+            "--model-name",
+            "dynamic_padding",
+            "--output-dir",
+            dynamic_padding_output,
+            "--input-shape=3x?x?",
+            "--verify-execution",
+            "-O0",
+        ]
+    )
+    assert_files(
+        dynamic_padding_output,
+        {"libdynamic_padding.so", "dynamic_padding.h"},
+    )
+
+    dynamic_interp_param = work_dir / "dynamic_interp.param"
+    dynamic_interp_param.write_text(
+        "7767517\n2 2\n"
+        "Input input 0 1 data\n"
+        "Interp interp 1 1 data output 0=1 1=2.0 2=3.0 3=0 4=0 6=0\n",
+        encoding="ascii",
+    )
+    dynamic_interp_output = work_dir / "dynamic-interp"
+    run(
+        [
+            args.compiler,
+            dynamic_interp_param,
+            "--bin",
+            dynamic_bin,
+            "--model-name",
+            "dynamic_interp",
+            "--output-dir",
+            dynamic_interp_output,
+            "--input-shape=3x?x?",
+            "--verify-execution",
+            "-O0",
+        ]
+    )
+    assert_files(
+        dynamic_interp_output,
+        {"libdynamic_interp.so", "dynamic_interp.h"},
+    )
+
     previous_header = (all_output / "relu_all.h").read_bytes()
     previous_library = (all_output / "librelu_all.so").read_bytes()
     failed = subprocess.run(

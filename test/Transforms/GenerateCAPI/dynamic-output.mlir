@@ -8,4 +8,4 @@ module {
   }
 }
 
-// CHECK: output 1 has dynamic extents; output shape inference is required before this ABI can be generated
+// CHECK: output 1 has dynamic extents without a valid input shape source

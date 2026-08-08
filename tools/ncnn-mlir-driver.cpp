@@ -55,12 +55,12 @@ llvm::cl::opt<std::string> g_output_path(
   llvm::cl::init("-"),
   llvm::cl::cat(g_driver_category));
 
-llvm::cl::opt<std::string> g_input_shape(
+llvm::cl::list<std::string> g_input_shapes(
   "input-shape",
-  llvm::cl::desc("Static input shape override as CxHxW for a model whose Input "
-                 "omits dimensions"),
-  llvm::cl::value_desc("CxHxW"),
-  llvm::cl::init(""),
+  llvm::cl::desc("Input shape override as CxHxW; '?' is a dynamic extent, and "
+                 "'*' requests dynamic rank 1..4"),
+  llvm::cl::value_desc("shape|*"),
+  llvm::cl::ZeroOrMore,
   llvm::cl::cat(g_driver_category));
 
 // 产物阶段。后续 tosa/linalg/llvm/library 等阶段接入这同一个枚举即可。
@@ -127,11 +127,15 @@ std::optional<std::vector<std::int64_t>> parse_input_shape(
     std::size_t end = text.find_first_of("xX", begin);
     std::string_view token = text.substr(begin, end - begin);
     std::int64_t value = 0;
-    auto parsed =
-      std::from_chars(token.data(), token.data() + token.size(), value);
-    if (token.empty() || parsed.ec != std::errc{} ||
-        parsed.ptr != token.data() + token.size() || value <= 0) {
-      return std::nullopt;
+    if (token == "?") {
+      value = ncnn_importer::kDynamicExtent;
+    } else {
+      auto parsed =
+        std::from_chars(token.data(), token.data() + token.size(), value);
+      if (token.empty() || parsed.ec != std::errc{} ||
+          parsed.ptr != token.data() + token.size() || value <= 0) {
+        return std::nullopt;
+      }
     }
     shape.push_back(value);
     if (end == std::string_view::npos) {
@@ -177,15 +181,24 @@ int main(int argc, char** argv) {
   mlir::MLIRContext context(registry);
   context.loadAllAvailableDialects();
 
-  auto parsed_shape = parse_input_shape(g_input_shape);
-  if (!parsed_shape) {
-    llvm::errs() << "error: --input-shape must be three positive dimensions "
-                    "formatted as CxHxW\n";
-    return 1;
-  }
   ncnn_importer::ImportOptions import_options;
-  if (!parsed_shape->empty()) {
-    import_options.input_shape = std::move(*parsed_shape);
+  for (const std::string& input_shape : g_input_shapes) {
+    if (input_shape == "*") {
+      if (g_input_shapes.size() != 1) {
+        llvm::errs() << "error: dynamic-rank '*' must be the only "
+                        "--input-shape\n";
+        return 1;
+      }
+      import_options.dynamic_rank = true;
+      continue;
+    }
+    auto parsed_shape = parse_input_shape(input_shape);
+    if (!parsed_shape || parsed_shape->empty()) {
+      llvm::errs() << "error: --input-shape must be CxHxW; each extent must "
+                      "be positive or '?'\n";
+      return 1;
+    }
+    import_options.input_shapes.push_back(std::move(*parsed_shape));
   }
   auto imported =
     ncnn_importer::import_graph(*decoded, context, import_options);

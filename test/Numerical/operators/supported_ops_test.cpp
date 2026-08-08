@@ -19,6 +19,54 @@ std::string fixture_path(std::string_view name) {
          ".param";
 }
 
+TEST(SupportedOps, DetectionOutputCaffeSsd) {
+  const std::vector<float> location{
+    1.0F, -1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+  const std::vector<float> confidence{
+    0.1F, 0.9F, 0.2F, 0.1F, 0.8F, 0.95F, 0.6F, 0.4F, 0.4F};
+  const std::vector<float> prior{
+    0.0F, 0.0F, 0.4F, 0.4F, 0.05F, 0.05F, 0.45F, 0.45F, 0.6F, 0.6F, 1.0F, 1.0F,
+    0.1F, 0.1F, 0.2F, 0.2F, 0.1F,  0.1F,  0.2F,  0.2F,  0.1F, 0.1F, 0.2F, 0.2F};
+
+  const std::array<ReferenceInput, 3> inputs{
+    ReferenceInput("location", TensorShape(12, 1, 1), location),
+    ReferenceInput("confidence", TensorShape(9, 1, 1), confidence),
+    ReferenceInput("prior", TensorShape(12, 2, 1), prior)};
+  constexpr std::array<std::string_view, 1> outputs{"output"};
+  const auto reference = run_ncnn_reference(fixture_path("detection_output"),
+                                            NUMERICAL_EMPTY_BIN_PATH,
+                                            inputs,
+                                            outputs);
+  ASSERT_TRUE(reference.has_value()) << reference.error();
+  ASSERT_EQ(reference->front().size(), 12);
+
+  CompiledModel compiled(DETECTION_OUTPUT_LIBRARY_PATH, "detection_output");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> output(18, 0.0F);
+  std::array<std::int64_t, 2> actualShape{};
+  ASSERT_EQ(compiled.run_three_inputs_two_outputs(
+              location, confidence, prior, output, actualShape),
+            0);
+
+  EXPECT_EQ(actualShape, (std::array<std::int64_t, 2>{2, 6}));
+  const std::array<float, 12> expected{2.0F,
+                                       0.95F,
+                                       0.05F,
+                                       0.05F,
+                                       0.45F,
+                                       0.45F,
+                                       1.0F,
+                                       0.9F,
+                                       0.04F,
+                                       -0.04F,
+                                       0.44F,
+                                       0.36F};
+  EXPECT_TRUE(compare_values(
+    std::span<const float>(output.data(), expected.size()), expected, 1.0e-6F));
+  EXPECT_TRUE(compare_values(
+    std::span<const float>(output.data(), 12), reference->front(), 1.0e-6F));
+}
+
 void expect_single_input_operator(std::string_view name,
                                   std::string_view library_path,
                                   std::string_view bin_path,

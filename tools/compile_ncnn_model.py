@@ -113,10 +113,11 @@ def c_identifier(name):
 
 
 def element_count(argument):
-    if any(dimension < 0 for dimension in argument["shape"]):
+    shape = argument.get("maximum_shape", argument["shape"])
+    if any(dimension < 0 for dimension in shape):
         raise ValueError(f"{argument['name']} has a dynamic element count")
     count = 1
-    for dimension in argument["shape"]:
+    for dimension in shape:
         count *= dimension
     return count
 
@@ -142,14 +143,66 @@ def write_header(path, manifest):
     parameters = []
     for argument in manifest["inputs"]:
         parameters.append(f"const {c_type(argument)} *{argument['name']}")
-        if argument["dynamic_dim_mask"]:
+        if argument.get("dynamic_rank"):
+            parameters.append(f"const int64_t *{argument['name']}_shape")
+            parameters.append(f"uint32_t {argument['name']}_rank")
+        elif argument["dynamic_dim_mask"]:
             rank = macro_name(function, argument, "rank")
             parameters.append(f"const int64_t {argument['name']}_shape[{rank}]")
     for argument in manifest["outputs"]:
         parameters.append(f"{c_type(argument)} *{argument['name']}")
+        if argument.get("shape_depends_on_data", False):
+            rank = macro_name(function, argument, "rank")
+            parameters.append(
+                f"int64_t {argument['name']}_actual_shape[{rank}]"
+            )
     declaration = f"int {function}({', '.join(parameters)});"
+    dynamic_outputs = [
+        argument for argument in manifest["outputs"]
+        if (argument.get("dynamic_rank") or argument["dynamic_dim_mask"])
+        and not argument.get("shape_depends_on_data", False)
+    ]
+    shape_declaration = ""
+    if dynamic_outputs:
+        shape_parameters = []
+        for argument in manifest["inputs"]:
+            if argument.get("dynamic_rank"):
+                shape_parameters.extend([
+                    f"const int64_t *{argument['name']}_shape",
+                    f"uint32_t {argument['name']}_rank",
+                ])
+            elif argument["dynamic_dim_mask"]:
+                rank = macro_name(function, argument, "rank")
+                shape_parameters.append(
+                    f"const int64_t {argument['name']}_shape[{rank}]"
+                )
+        for argument in dynamic_outputs:
+            if argument.get("dynamic_rank"):
+                shape_parameters.extend([
+                    f"int64_t *{argument['name']}_shape",
+                    f"uint32_t {argument['name']}_shape_capacity",
+                    f"uint32_t *{argument['name']}_rank",
+                ])
+            else:
+                rank = macro_name(function, argument, "rank")
+                shape_parameters.append(
+                    f"int64_t {argument['name']}_shape[{rank}]"
+                )
+        shape_declaration = (
+            f"\nint {function}_infer_output_shapes("
+            f"{', '.join(shape_parameters)});"
+        )
     sizes = []
     for argument in manifest["inputs"] + manifest["outputs"]:
+        if argument.get("dynamic_rank"):
+            sizes.extend([
+                f"#define {macro_name(function, argument, 'rank_min')} "
+                f"{argument['rank_min']}",
+                f"#define {macro_name(function, argument, 'rank_max')} "
+                f"{argument['rank_max']}",
+                "",
+            ])
+            continue
         sizes.append(f"#define {macro_name(function, argument, 'rank')} {len(argument['shape'])}")
         for index, dimension in enumerate(argument["shape"]):
             value = "NCNN_DYNAMIC_DIM" if dimension < 0 else dimension
@@ -173,13 +226,14 @@ def write_header(path, manifest):
         sizes.append("")
     path.write_text(
         f"#ifndef {guard}\n#define {guard}\n\n#include <stdint.h>\n\n"
-        "#define NCNN_DYNAMIC_DIM INT64_C(-1)\n\n"
+        "#define NCNN_DYNAMIC_DIM INT64_C(-1)\n"
+        "#define NCNN_MAX_RANK 4\n\n"
         "typedef uint16_t ncnn_float16_t;\n"
         "typedef uint16_t ncnn_bfloat16_t;\n\n"
         + "\n".join(sizes)
         + "\n\n"
         "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n"
-        f"{declaration}\n\n"
+        f"{declaration}{shape_declaration}\n\n"
         "#ifdef __cplusplus\n}\n#endif\n\n"
         f"#endif  // {guard}\n",
         encoding="ascii",
@@ -188,9 +242,44 @@ def write_header(path, manifest):
 
 def write_harness(path, header_name, manifest):
     function = manifest["function"]
+    if (
+        len(manifest["inputs"]) == 1
+        and len(manifest["outputs"]) == 1
+        and manifest["inputs"][0].get("dynamic_rank")
+        and manifest["outputs"][0].get("dynamic_rank")
+    ):
+        input_type = c_type(manifest["inputs"][0])
+        output_type = c_type(manifest["outputs"][0])
+        path.write_text(
+            "#include <stddef.h>\n"
+            f'#include "{header_name}"\n\n'
+            "int main(void) {\n"
+            "  int64_t input1_shape[NCNN_MAX_RANK] = {2, 2, 2, 2};\n"
+            "  int64_t output1_shape[NCNN_MAX_RANK] = {0};\n"
+            "  uint32_t output1_rank = 0;\n"
+            f"  {input_type} input1[16] = {{0}};\n"
+            f"  {output_type} output1[16] = {{0}};\n"
+            f"  for (uint32_t i = 0; i < 16; ++i) input1[i] = "
+            f"({input_type})i + 1;\n"
+            "  for (uint32_t rank = 1; rank <= NCNN_MAX_RANK; ++rank) {\n"
+            f"    if ({function}_infer_output_shapes(input1_shape, rank, "
+            "output1_shape, NCNN_MAX_RANK, &output1_rank) != 0) return 6;\n"
+            "    if (output1_rank != rank) return 7;\n"
+            f"    if ({function}(input1, input1_shape, rank, output1) != 0) "
+            "return 4;\n"
+            "    size_t count = 1;\n"
+            "    for (uint32_t i = 0; i < rank; ++i) count *= 2;\n"
+            "    for (size_t i = 0; i < count; ++i) "
+            "if (output1[i] != input1[i]) return 8;\n"
+            "  }\n"
+            "  return 0;\n}\n",
+            encoding="ascii",
+        )
+        return
     arguments = manifest["inputs"] + manifest["outputs"]
     declarations = []
     names = []
+    allocated_names = []
     for argument in arguments:
         declarations.append(
             f"  {c_type(argument)} *{argument['name']} = "
@@ -198,6 +287,13 @@ def write_harness(path, header_name, manifest):
         )
         declarations.append(f"  if (!{argument['name']}) return 2;")
         names.append(argument["name"])
+        allocated_names.append(argument["name"])
+        if argument.get("shape_depends_on_data", False):
+            declarations.append(
+                f"  int64_t {argument['name']}_actual_shape["
+                f"{len(argument['shape'])}] = {{0}};"
+            )
+            names.append(f"{argument['name']}_actual_shape")
     null_checks = []
     for index in range(len(names)):
         call_arguments = names.copy()
@@ -205,7 +301,7 @@ def write_harness(path, header_name, manifest):
         null_checks.append(
             f"  if ({function}({', '.join(call_arguments)}) == 0) return 3;"
         )
-    frees = [f"  free({name});" for name in names]
+    frees = [f"  free({name});" for name in allocated_names]
     finite_checks = []
     for argument in manifest["outputs"]:
         count = element_count(argument)
@@ -269,6 +365,7 @@ def main():
     parser.add_argument("--param", help=argparse.SUPPRESS)
     parser.add_argument("--bin")
     parser.add_argument("--model-name")
+    parser.add_argument("--input-shape", action="append", default=[])
     parser.add_argument("-o", "--output-dir")
     parser.add_argument(
         "--emit",
@@ -363,7 +460,11 @@ def main():
     exports_path = staging_dir / "exports.map"
     library = staging_dir / f"lib{model_name}.so"
 
-    run([args.driver, param_path, "--bin", bin_path, "-o", ncnn_ir])
+    driver_command = [args.driver, param_path, "--bin", bin_path]
+    for input_shape in args.input_shape:
+        driver_command.append(f"--input-shape={input_shape}")
+    driver_command.extend(["-o", ncnn_ir])
+    run(driver_command)
     run([args.opt, "--ncnn-to-tosa-pipeline", ncnn_ir, "-o", tosa_ir])
     run([args.opt, "--ncnn-tosa-to-linalg-pipeline", tosa_ir, "-o", linalg_ir])
     run([args.opt, "--ncnn-linalg-to-memref-pipeline", linalg_ir, "-o", memref_ir])
@@ -401,8 +502,16 @@ def main():
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     write_header(header_path, manifest)
+    dynamic_outputs = [
+        output for output in manifest["outputs"]
+        if output.get("dynamic_rank") or output["dynamic_dim_mask"]
+    ]
+    exported_symbols = model_name
+    if dynamic_outputs:
+        exported_symbols += f"; {model_name}_infer_output_shapes"
     exports_path.write_text(
-        f"{{\n  global: {model_name};\n  local: *;\n}};\n", encoding="ascii"
+        f"{{\n  global: {exported_symbols};\n  local: *;\n}};\n",
+        encoding="ascii",
     )
 
     run(
@@ -444,7 +553,10 @@ def main():
             return 1
 
     defined = symbols(capture([args.nm, "-D", "--defined-only", library]))
-    if defined != {model_name}:
+    expected_defined = {model_name}
+    if dynamic_outputs:
+        expected_defined.add(f"{model_name}_infer_output_shapes")
+    if defined != expected_defined:
         print(f"unexpected exported symbols: {sorted(defined)}", file=sys.stderr)
         return 1
 

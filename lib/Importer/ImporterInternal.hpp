@@ -57,7 +57,9 @@ class ImportContext {
     const ncnn_graph::Graph& source);
 
   mlir::OpBuilder& builder() noexcept;
-  const std::optional<std::vector<std::int64_t>>& input_shape() const noexcept;
+  const std::optional<ncnn_importer::InputShape>& input_shape() const noexcept;
+  const std::vector<ncnn_importer::InputShape>& input_shapes() const noexcept;
+  std::optional<ncnn_importer::InputShape> next_input_shape() noexcept;
   std::expected<mlir::Value, ImportError> find_blob(const LayerContext& context,
                                                     std::string_view name);
   ImportResult bind_blob(const LayerContext& context,
@@ -135,6 +137,7 @@ class ImportContext {
   mlir::ncnn::ModelOp model_;
   llvm::StringMap<mlir::Value> blobs_;
   std::string captured_diag_;
+  std::size_t imported_input_count_ = 0;
 };
 
 ImportResult import_input(ImportContext& importer, const LayerContext& context);
@@ -150,6 +153,8 @@ ImportResult import_interp(ImportContext& importer,
                            const LayerContext& context);
 ImportResult import_sigmoid(ImportContext& importer,
                             const LayerContext& context);
+ImportResult import_detection_output(ImportContext& importer,
+                                     const LayerContext& context);
 ImportResult import_hard_sigmoid(ImportContext& importer,
                                  const LayerContext& context);
 ImportResult import_hard_swish(ImportContext& importer,

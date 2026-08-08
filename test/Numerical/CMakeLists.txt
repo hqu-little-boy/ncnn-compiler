@@ -433,6 +433,10 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    detection_output
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/detection_output.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     squeezenet_v1_1
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin)
@@ -549,7 +553,8 @@ set(numerical_fixture_targets
     compile_deconvolution
     compile_deconvolution_no_bias
     compile_deconvolution_tiny_head
-    compile_sigmoid)
+    compile_sigmoid
+    compile_detection_output)
 list(LENGTH numerical_fixture_targets numerical_fixture_target_count)
 math(EXPR numerical_fixture_last_index "${numerical_fixture_target_count} - 1")
 foreach(index RANGE ${numerical_fixture_last_index})
@@ -684,6 +689,7 @@ target_compile_definitions(numerical_tests PRIVATE
     DECONVOLUTION_NO_BIAS_LIBRARY_PATH="${deconvolution_no_bias_LIBRARY}"
     DECONVOLUTION_TINY_HEAD_LIBRARY_PATH="${deconvolution_tiny_head_LIBRARY}"
     SIGMOID_LIBRARY_PATH="${sigmoid_LIBRARY}"
+    DETECTION_OUTPUT_LIBRARY_PATH="${detection_output_LIBRARY}"
     SQUEEZENET_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param"
     SQUEEZENET_BIN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin"
     SQUEEZENET_LIBRARY_PATH="${squeezenet_v1_1_LIBRARY}"
@@ -712,6 +718,7 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV5_MOBILE_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin"
     PP_OCRV5_MOBILE_DET_LIBRARY_PATH="${pp_ocrv5_mobile_det_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
+add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(numerical_tests compile_chineseocr_lite_anglenet)

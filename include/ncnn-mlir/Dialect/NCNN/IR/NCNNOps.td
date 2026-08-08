@@ -191,6 +191,32 @@ def NCNN_SigmoidOp : NCNN_LayerOp<"sigmoid", [SameOperandsAndResultType]> {
   let hasVerifier = 1;
 }
 
+def NCNN_DetectionOutputOp
+  : NCNN_LayerOp<"detection_output", [InferTensorTypeAdaptor]> {
+  let summary = "Decode SSD boxes, apply per-class NMS, and emit detections.";
+  let description =
+    [{
+    Implements the ncnn DetectionOutput contract for Caffe-style SSD inputs.
+    The result storage is `[maximum_detections, 6]`; only a data-dependent
+    prefix is logically present. Rows contain label, confidence, xmin, ymin,
+    xmax, and ymax. The exact logical extent must be returned by lowering.
+  }];
+  let arguments = (ins NCNN_RankedTensor:$location,
+    NCNN_RankedTensor:$confidence,
+    NCNN_RankedTensor:$priorbox,
+    I64Attr:$num_class,
+    F32Attr:$nms_threshold,
+    I64Attr:$nms_top_k,
+    I64Attr:$keep_top_k,
+    F32Attr:$confidence_threshold,
+    F32Attr:$variance_x,
+    F32Attr:$variance_y,
+    F32Attr:$variance_w,
+    F32Attr:$variance_h);
+  let results = (outs NCNN_RankedTensor:$output,
+    NCNN_RankedTensor:$actual_shape);
+}
+
 def NCNN_HardSigmoidOp
   : NCNN_LayerOp<"hard_sigmoid", [SameOperandsAndResultType]> {
   let arguments = (ins NCNN_RankedTensor:$input, F32Attr:$alpha, F32Attr:$beta);

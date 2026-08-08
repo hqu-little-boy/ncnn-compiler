@@ -1,0 +1,6 @@
+7767517
+4 4
+Input location 0 1 location 0=12 1=1 2=1
+Input confidence 0 1 confidence 0=9 1=1 2=1
+Input prior 0 1 prior 0=12 1=2 2=1
+DetectionOutput detection 3 1 location confidence prior output 0=3 1=0.5 2=2 3=2 4=0.5

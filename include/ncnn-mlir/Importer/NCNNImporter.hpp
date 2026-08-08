@@ -15,6 +15,9 @@
 
 namespace ncnn_importer {
 
+using InputShape = std::vector<std::int64_t>;
+inline constexpr std::int64_t kDynamicExtent = -1;
+
 // 导入错误的结构化上下文，对应原 ncnn_frontend::ImportError。
 class ImportError {
  public:
@@ -41,7 +44,16 @@ std::size_t get_layer_importer_count() noexcept;
 
 struct ImportOptions {
   // Used only when the model has one Input layer whose w/h/c are all omitted.
-  std::optional<std::vector<std::int64_t>> input_shape;
+  std::optional<InputShape> input_shape;
+
+  // One shape per Input layer, in source-layer order.
+  std::vector<InputShape> input_shapes;
+
+  // Import one specialization for each logical ncnn rank in [1, 4].
+  bool dynamic_rank = false;
+
+  // Internal rank selected while materializing a dynamic-rank specialization.
+  std::optional<std::uint32_t> rank_specialization;
 };
 
 // 把解析好的 ncnn 计算图提升为 MLIR 模块：一个 ncnn.model，输入、权重和输出

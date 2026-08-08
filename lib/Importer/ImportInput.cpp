@@ -30,17 +30,46 @@ ImportResult import_input(ImportContext& importer,
   }
   const bool dimensions_omitted =
     *width == 0 && *height == 0 && *channels == 0 && *depth == 0;
-  if (dimensions_omitted && importer.input_shape()) {
-    const auto& shape = *importer.input_shape();
-    if (shape.size() != 3 || shape[0] <= 0 || shape[1] <= 0 || shape[2] <= 0) {
+  auto shape_override = importer.next_input_shape();
+  auto valid_extent = [](std::int64_t extent) {
+    return extent > 0 || extent == ncnn_importer::kDynamicExtent;
+  };
+  if (dimensions_omitted && shape_override) {
+    const auto& shape = *shape_override;
+    const bool specialized_dynamic_rank =
+      importer.input_shapes().size() == 1 && shape.size() >= 1 &&
+      shape.size() <= 4 && std::ranges::all_of(shape, [](std::int64_t extent) {
+        return extent == ncnn_importer::kDynamicExtent;
+      });
+    if ((!specialized_dynamic_rank && shape.size() != 3) ||
+        !std::ranges::all_of(shape, valid_extent)) {
       return std::unexpected(
-        make_error(context, "input shape override must be positive [C,H,W]"));
+        make_error(context,
+                   "input shape override must have rank 1..4 with positive or "
+                   "dynamic extents"));
+    }
+    if (specialized_dynamic_rank && shape.size() != 3) {
+      auto& builder = importer.builder();
+      llvm::SmallVector<std::int64_t> dimensions(shape.size(),
+                                                 mlir::ShapedType::kDynamic);
+      auto type = mlir::RankedTensorType::get(dimensions, builder.getF32Type());
+      auto input = builder.create<mlir::ncnn::InputOp>(
+        builder.getUnknownLoc(),
+        type,
+        builder.getStringAttr(context.layer.get_name()),
+        builder.getStringAttr(context.layer.get_outputs()[0]));
+      importer.tag_source(input.getOperation(), context);
+      return importer.bind_blob(context,
+                                std::string(context.layer.get_outputs()[0]),
+                                input.getOutput());
     }
     *channels = shape[0];
     *height = shape[1];
     *width = shape[2];
   }
-  if (*width <= 0 || *height <= 0 || *channels <= 0 || *depth != 0) {
+  if ((!valid_extent(*width) || !valid_extent(*height) ||
+       !valid_extent(*channels)) ||
+      *depth != 0) {
     return std::unexpected(make_error(
       context,
       "Input requires positive w/h/c and unsupported depth must be 0"));
@@ -51,8 +80,13 @@ ImportResult import_input(ImportContext& importer,
   }
 
   auto& builder = importer.builder();
+  auto mlir_extent = [](std::int64_t extent) {
+    return extent == ncnn_importer::kDynamicExtent ? mlir::ShapedType::kDynamic
+                                                   : extent;
+  };
   auto type = mlir::RankedTensorType::get(
-    llvm::SmallVector<std::int64_t>{*channels, *height, *width},
+    llvm::SmallVector<std::int64_t>{
+      mlir_extent(*channels), mlir_extent(*height), mlir_extent(*width)},
     builder.getF32Type());
   auto input = builder.create<mlir::ncnn::InputOp>(
     builder.getUnknownLoc(),

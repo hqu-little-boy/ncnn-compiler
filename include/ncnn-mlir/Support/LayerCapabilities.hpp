@@ -49,6 +49,8 @@ inline constexpr std::array kLayerDescriptors{
                   .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "Interp",
                   .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "DetectionOutput",
+                  .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "Sigmoid",
                   .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "ReLU",

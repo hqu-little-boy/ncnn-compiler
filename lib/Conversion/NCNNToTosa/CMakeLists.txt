@@ -13,6 +13,7 @@ target_link_libraries(NCNNToTosa PUBLIC
     MLIRLinalgDialect
     MLIRMathDialect
     MLIRPass
+    MLIRSCFDialect
     MLIRTensorDialect
     MLIRTosaDialect
     MLIRTransforms)
