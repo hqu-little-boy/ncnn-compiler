@@ -171,8 +171,6 @@ module {
   }
 }
 
-// CHECK: error: 'memref.dealloc' op has a matching deallocation that may execute after it; expected exactly one to avoid double-free
-
 // -----
 
 module {

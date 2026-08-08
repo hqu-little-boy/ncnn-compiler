@@ -548,10 +548,17 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
       (poolPadding[0] >= kernel[0] || poolPadding[1] >= kernel[0] ||
        poolPadding[2] >= kernel[1] || poolPadding[3] >= kernel[1]);
     if (materializeMaxPadding) {
+      auto paddedDimension =
+        [](int64_t dimension, int64_t before, int64_t after) {
+          return ShapedType::isDynamic(dimension) ? ShapedType::kDynamic
+                                                  : dimension + before + after;
+        };
       auto paddedInputType = RankedTensorType::get(
         {inputType.getShape()[0],
-         inputType.getShape()[1] + poolPadding[0] + poolPadding[1],
-         inputType.getShape()[2] + poolPadding[2] + poolPadding[3],
+         paddedDimension(
+           inputType.getShape()[1], poolPadding[0], poolPadding[1]),
+         paddedDimension(
+           inputType.getShape()[2], poolPadding[2], poolPadding[3]),
          inputType.getShape()[3]},
         inputType.getElementType());
       Value paddingShape = createShape(rewriter,
@@ -992,6 +999,93 @@ class ConvertDeconvolution final : public ConversionPattern {
                                                sourceOutput.getElementType()),
                          0.0);
     }
+    auto outputType = getNHWCType(sourceOutput);
+    if (dynamicSpatial) {
+      if (kernelH != 2 || kernelW != 2 || *strideH != 2 || *strideW != 2 ||
+          llvm::any_of(crop, [](int64_t value) { return value != 0; }) ||
+          outputPadH != 0 || outputPadW != 0) {
+        return operation->emitOpError(
+          "dynamic Deconvolution only supports 2x2 kernel, stride 2, and zero "
+          "padding/output padding");
+      }
+
+      Value input = operands[0];
+      Location location = operation->getLoc();
+      Value inputH = rewriter.create<tensor::DimOp>(location, input, 1);
+      Value inputW = rewriter.create<tensor::DimOp>(location, input, 2);
+      Value two = rewriter.create<arith::ConstantIndexOp>(location, 2);
+      Value outputH = rewriter.create<arith::MulIOp>(location, inputH, two);
+      Value outputW = rewriter.create<arith::MulIOp>(location, inputW, two);
+      Value empty = rewriter.create<tensor::EmptyOp>(
+        location, outputType, ValueRange{outputH, outputW});
+
+      AffineExpr n = rewriter.getAffineDimExpr(0);
+      AffineExpr oh = rewriter.getAffineDimExpr(1);
+      AffineExpr ow = rewriter.getAffineDimExpr(2);
+      AffineExpr outputChannel = rewriter.getAffineDimExpr(3);
+      AffineExpr inputChannel = rewriter.getAffineDimExpr(4);
+      AffineMap biasMap = AffineMap::get(
+        4, 0, {rewriter.getAffineDimExpr(3)}, rewriter.getContext());
+      AffineMap outputMap = rewriter.getMultiDimIdentityMap(4);
+      SmallVector<utils::IteratorType> parallelIterators(
+        4, utils::IteratorType::parallel);
+      auto initialized = rewriter.create<linalg::GenericOp>(
+        location,
+        outputType,
+        ValueRange{bias},
+        ValueRange{empty},
+        ArrayRef<AffineMap>{biasMap, outputMap},
+        parallelIterators,
+        [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+          nested.create<linalg::YieldOp>(nestedLocation, arguments[0]);
+        });
+
+      AffineMap inputMap =
+        AffineMap::get(5,
+                       0,
+                       {n, oh.floorDiv(2), ow.floorDiv(2), inputChannel},
+                       rewriter.getContext());
+      AffineMap weightMap =
+        AffineMap::get(5,
+                       0,
+                       {outputChannel, inputChannel, oh % 2, ow % 2},
+                       rewriter.getContext());
+      AffineMap resultMap =
+        AffineMap::get(5, 0, {n, oh, ow, outputChannel}, rewriter.getContext());
+      SmallVector<utils::IteratorType> iterators(4,
+                                                 utils::IteratorType::parallel);
+      iterators.push_back(utils::IteratorType::reduction);
+      auto result = rewriter.create<linalg::GenericOp>(
+        location,
+        outputType,
+        ValueRange{input, operands[1]},
+        ValueRange{initialized.getResult(0)},
+        ArrayRef<AffineMap>{inputMap, weightMap, resultMap},
+        iterators,
+        [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+          Value product = nested.create<arith::MulFOp>(
+            nestedLocation, arguments[0], arguments[1]);
+          Value sum =
+            nested.create<arith::AddFOp>(nestedLocation, product, arguments[2]);
+          nested.create<linalg::YieldOp>(nestedLocation, sum);
+        });
+      Value dynamicResult = result.getResult(0);
+      const int64_t activationType =
+        getIntegerAttrOr(operation, "activation_type", 0);
+      if (activationType == 1) {
+        dynamicResult = rewriter.create<tosa::ClampOp>(
+          location,
+          outputType,
+          dynamicResult,
+          rewriter.getF32FloatAttr(0.0),
+          rewriter.getF32FloatAttr(std::numeric_limits<float>::infinity()));
+      } else if (activationType != 0) {
+        return operation->emitOpError(
+          "only no activation and ReLU activation_type=1 are supported");
+      }
+      rewriter.replaceOp(operation, dynamicResult);
+      return success();
+    }
     auto ohwiType = getOHWIType(weightType);
     Value weight =
       rewriter.create<tosa::TransposeOp>(operation->getLoc(),
@@ -1008,7 +1102,6 @@ class ConvertDeconvolution final : public ConversionPattern {
                   operation->getLoc(),
                   RankedTensorType::get({1}, weightType.getElementType()),
                   0.0);
-    auto outputType = getNHWCType(sourceOutput);
     Value result = rewriter.create<tosa::TransposeConv2DOp>(
       operation->getLoc(),
       outputType,

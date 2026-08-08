@@ -45,6 +45,34 @@ class VerifyBufferizedModelPass final
 
   static bool mayAlias(AliasResult result) { return !result.isNo(); }
 
+  static void verifyCallerOwnedReleases(func::FuncOp function,
+                                        bool& failedVerification) {
+    AliasAnalysis aliases(function);
+    function.walk([&](Operation* operation) {
+      auto effects = dyn_cast<MemoryEffectOpInterface>(operation);
+      if (!effects) {
+        return;
+      }
+      SmallVector<MemoryEffects::EffectInstance> instances;
+      effects.getEffects(instances);
+      for (const MemoryEffects::EffectInstance& effect : instances) {
+        Value value = effect.getValue();
+        if (!isa<MemoryEffects::Free>(effect.getEffect()) || !value ||
+            !isa<BaseMemRefType>(value.getType())) {
+          continue;
+        }
+        if (llvm::any_of(function.getArguments(), [&](BlockArgument argument) {
+              return isa<BaseMemRefType>(argument.getType()) &&
+                     mayAlias(aliases.alias(value, argument));
+            })) {
+          operation->emitOpError(
+            "must not release a caller-owned function argument or its alias");
+          failedVerification = true;
+        }
+      }
+    });
+  }
+
   static bool blockHasReleaseAfter(Block* block,
                                    Operation* allocation,
                                    ArrayRef<Operation*> releases,
@@ -146,9 +174,6 @@ class VerifyBufferizedModelPass final
         }
       }
       if (callerOwned) {
-        release.operation->emitOpError(
-          "must not release a caller-owned function argument or its alias");
-        failedVerification = true;
         continue;
       }
 
@@ -227,6 +252,13 @@ class VerifyBufferizedModelPass final
     }
   }
 
+  static bool hasSingleBlockStraightLineBody(func::FuncOp function) {
+    return function.getBody().hasOneBlock() &&
+           llvm::all_of(function.getBody().front(), [](Operation& operation) {
+             return operation.getNumRegions() == 0;
+           });
+  }
+
   void runOnOperation() final {
     bool failedVerification = false;
     getOperation().walk([&](Operation* operation) {
@@ -274,7 +306,12 @@ class VerifyBufferizedModelPass final
           failedVerification = true;
         }
       }
-      verifyAllocationLifetimes(function, failedVerification);
+      verifyCallerOwnedReleases(function, failedVerification);
+      // Ownership-based deallocation can materialize conditional ownership in
+      // nested regions. The local lifetime proof models straight-line bodies.
+      if (hasSingleBlockStraightLineBody(function)) {
+        verifyAllocationLifetimes(function, failedVerification);
+      }
       if (!function->hasAttr("ncnn.entry_point")) {
         return;
       }

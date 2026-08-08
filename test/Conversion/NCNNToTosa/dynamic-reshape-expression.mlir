@@ -1,4 +1,5 @@
 // RUN: ncnn-mlir-opt --ncnn-to-tosa-pipeline %s | FileCheck %s
+// RUN: ncnn-mlir-opt --ncnn-to-tosa-pipeline %s | ncnn-mlir-opt --ncnn-tosa-to-linalg-pipeline | ncnn-mlir-opt --ncnn-linalg-to-memref-pipeline | FileCheck %s --check-prefix=MEMREF
 
 module {
   "ncnn.model"() <{sym_name = "reshape_from_reference"}> ({
@@ -22,3 +23,13 @@ module {
 // CHECK: %[[SHAPE:.*]] = tensor.from_elements %c1, %[[H]], %[[W]]
 // CHECK: tensor.reshape {{.*}}(%[[SHAPE]])
 // CHECK-NOT: ncnn.
+
+// MEMREF-LABEL: func.func @reshape_from_reference(
+// MEMREF-SAME: %[[DATA:[A-Za-z0-9_]+]]: memref<1x?x?xf32>,
+// MEMREF-SAME: %[[REFERENCE:[A-Za-z0-9_]+]]: memref<1x?x?xf32>,
+// MEMREF-SAME: %[[OUTPUT:[A-Za-z0-9_]+]]: memref<1x?x?xf32> {bufferize.result, ncnn.shape_program = [array<i64>, array<i64>, array<i64>], ncnn.shape_source_input = 1 : i32})
+// MEMREF: %[[RESHAPE:.*]] = memref.reshape %[[DATA]]
+// MEMREF: memref.copy %[[RESHAPE]], %[[OUTPUT]]
+// MEMREF-NOT: memref<1x?x?xf32, strided
+// MEMREF-NOT: tensor.
+// MEMREF-NOT: bufferization.

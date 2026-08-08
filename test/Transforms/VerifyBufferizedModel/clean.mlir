@@ -32,6 +32,18 @@ func.func private @exclusive_branch_deallocation(%condition: i1) {
   return
 }
 
+func.func private @region_owned_allocation(%condition: i1) {
+  %result = scf.if %condition -> (memref<4xf32>) {
+    %allocation = memref.alloc() : memref<4xf32>
+    scf.yield %allocation : memref<4xf32>
+  } else {
+    %allocation = memref.alloc() : memref<4xf32>
+    scf.yield %allocation : memref<4xf32>
+  }
+  memref.dealloc %result : memref<4xf32>
+  return
+}
+
 func.func private @automatic_allocation() {
   %allocation = memref.alloca() : memref<4xf32>
   return
@@ -61,6 +73,7 @@ func.func private @reallocation() {
 // CHECK-LABEL: func.func private @branch_carried_allocation()
 // CHECK-LABEL: func.func private @allocation_subview()
 // CHECK-LABEL: func.func private @exclusive_branch_deallocation(
+// CHECK-LABEL: func.func private @region_owned_allocation(
 // CHECK-LABEL: func.func private @automatic_allocation()
 // CHECK-LABEL: func.func private @region_carried_allocation(
 // CHECK-LABEL: func.func private @reallocation()
