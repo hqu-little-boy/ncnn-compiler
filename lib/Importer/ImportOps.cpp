@@ -4,6 +4,70 @@
 
 namespace ncnn_importer::detail {
 namespace {
+
+std::expected<llvm::SmallVector<int64_t>, std::string> parse_shape_expression(
+  std::string_view expression, mlir::ValueRange inputs) {
+  llvm::SmallVector<int64_t> sources;
+  std::size_t begin = 0;
+  while (begin < expression.size()) {
+    const std::size_t end = expression.find(',', begin);
+    const std::string_view token = expression.substr(
+      begin,
+      end == std::string_view::npos ? expression.size() - begin : end - begin);
+    if (token.size() != 2 || token[0] < '0' || token[0] > '9') {
+      return std::unexpected(
+        "reshape shape expression currently requires dimension references");
+    }
+    const auto inputIndex = static_cast<unsigned>(token[0] - '0');
+    if (inputIndex >= inputs.size()) {
+      return std::unexpected("reshape shape expression input is out of range");
+    }
+    auto type =
+      mlir::dyn_cast<mlir::RankedTensorType>(inputs[inputIndex].getType());
+    if (!type) {
+      return std::unexpected("reshape shape expression input must be ranked");
+    }
+    int64_t dimension = -1;
+    switch (token[1]) {
+      case 'w':
+        dimension = type.getRank() - 1;
+        break;
+      case 'h':
+        dimension = type.getRank() - 2;
+        break;
+      case 'd':
+        dimension = type.getRank() == 4 ? 1 : -1;
+        break;
+      case 'c':
+        dimension = type.getRank() >= 3 ? 0 : -1;
+        break;
+      default:
+        break;
+    }
+    if (dimension < 0 || dimension >= type.getRank()) {
+      return std::unexpected(
+        "reshape shape expression references a missing dimension");
+    }
+    sources.push_back(inputIndex);
+    sources.push_back(dimension);
+    if (end == std::string_view::npos) {
+      break;
+    }
+    begin = end + 1;
+  }
+  if (sources.empty() || sources.size() > 8) {
+    return std::unexpected(
+      "reshape shape expression must produce rank 1 through 4");
+  }
+
+  llvm::SmallVector<int64_t> ncnnOrder(sources);
+  sources.clear();
+  for (std::size_t index = ncnnOrder.size(); index > 0; index -= 2) {
+    sources.push_back(ncnnOrder[index - 2]);
+    sources.push_back(ncnnOrder[index - 1]);
+  }
+  return sources;
+}
 ImportResult arity_params(const LayerContext& context,
                           std::size_t in,
                           std::size_t out,
@@ -71,11 +135,29 @@ ImportResult import_hard_swish(ImportContext& i, const LayerContext& c) {
 ImportResult import_reshape(ImportContext& importer,
                             const LayerContext& context) {
   constexpr int ids[] = {0, 1, 2, 6, 11};
-  auto valid = arity_params(context, 1, 1, ids);
-  if (!valid) {
-    return std::unexpected(valid.error());
+  auto validParams = validate_param_ids(context.layer.get_params(), ids);
+  if (!validParams) {
+    return std::unexpected(make_error(context, validParams.error()));
+  }
+  auto featureMask = validate_feature_mask(context.layer.get_params());
+  if (!featureMask) {
+    return std::unexpected(make_error(context, featureMask.error()));
+  }
+  if (context.layer.get_outputs().size() != 1 ||
+      context.layer.get_inputs().empty()) {
+    return std::unexpected(make_error(
+      context, "reshape requires at least one input and one output"));
   }
   const auto& p = context.layer.get_params();
+  const auto expression = p.get_string(6);
+  if (expression && expression->get().empty()) {
+    return std::unexpected(
+      make_error(context, "reshape shape expression must not be empty"));
+  }
+  if (!expression && context.layer.get_inputs().size() != 1) {
+    return std::unexpected(make_error(
+      context, "reshape without a shape expression requires one input"));
+  }
   auto w = get_int(p, 0, -233, "w");
   auto h = get_int(p, 1, -233, "h");
   auto d = get_int(p, 11, -233, "d");
@@ -84,55 +166,97 @@ ImportResult import_reshape(ImportContext& importer,
     return std::unexpected(
       make_error(context, "reshape parameter type is invalid"));
   }
-  llvm::SmallVector<int64_t> shape;
-  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
-  if (!input) {
-    return std::unexpected(input.error());
+  llvm::SmallVector<mlir::Value> inputs;
+  for (const std::string& name : context.layer.get_inputs()) {
+    auto value = importer.find_blob(context, name);
+    if (!value) {
+      return std::unexpected(value.error());
+    }
+    inputs.push_back(*value);
   }
-  auto input_type = llvm::dyn_cast<mlir::RankedTensorType>(input->getType());
+  mlir::Value input = inputs.front();
+  auto input_type = llvm::dyn_cast<mlir::RankedTensorType>(input.getType());
   if (!input_type) {
     return std::unexpected(make_error(context, "reshape input must be ranked"));
   }
+  llvm::SmallVector<int64_t> shape;
+  llvm::SmallVector<int64_t> shapeSources;
+  if (expression) {
+    auto parsed = parse_shape_expression(expression->get(), inputs);
+    if (!parsed) {
+      return std::unexpected(make_error(context, parsed.error()));
+    }
+    shapeSources = std::move(*parsed);
+    const int64_t sourceInput = shapeSources.front();
+    int64_t dimension = 0;
+    for (std::size_t index = 0; index < shapeSources.size(); index += 2) {
+      if (shapeSources[index] != sourceInput ||
+          shapeSources[index + 1] != dimension) {
+        return std::unexpected(
+          make_error(context,
+                     "reshape shape expression must preserve one input's "
+                     "dimension order"));
+      }
+      ++dimension;
+    }
+    for (std::size_t index = 0; index < shapeSources.size(); index += 2) {
+      auto sourceType = mlir::cast<mlir::RankedTensorType>(
+        inputs[shapeSources[index]].getType());
+      shape.push_back(sourceType.getShape()[shapeSources[index + 1]]);
+    }
+  }
   const auto input_shape = input_type.getShape();
-  if (*w == 0) {
+  if (!expression && *w == 0) {
     *w = input_shape.back();
   }
-  if (*h == 0) {
+  if (!expression && *h == 0) {
     if (input_type.getRank() < 2) {
       return std::unexpected(
         make_error(context, "reshape cannot copy missing height dimension"));
     }
     *h = input_shape[input_type.getRank() - 2];
   }
-  if (*d == 0) {
+  if (!expression && *d == 0) {
     if (input_type.getRank() != 4) {
       return std::unexpected(
         make_error(context, "reshape cannot copy missing depth dimension"));
     }
     *d = input_shape[1];
   }
-  if (*c == 0) {
+  if (!expression && *c == 0) {
     if (input_type.getRank() < 3) {
       return std::unexpected(
         make_error(context, "reshape cannot copy missing channel dimension"));
     }
     *c = input_shape.front();
   }
-  for (int64_t dimension : {*c, *d, *h, *w}) {
-    if (dimension != -233) {
-      shape.push_back(dimension);
+  if (!expression) {
+    for (int64_t dimension : {*c, *d, *h, *w}) {
+      if (dimension != -233) {
+        shape.push_back(dimension);
+      }
     }
   }
   auto& b = importer.builder();
   mlir::ncnn::ReshapeOp::Properties props;
   props.shape = b.getDenseI64ArrayAttr(shape);
+  if (expression) {
+    props.shape_sources = b.getDenseI64ArrayAttr(shapeSources);
+    props.shape_expression = b.getStringAttr(expression->get());
+  }
   auto type = importer.infer_single_tensor_result<mlir::ncnn::ReshapeOp>(
-    b.getUnknownLoc(), *input, props);
+    b.getUnknownLoc(), inputs, props);
   if (mlir::failed(type)) {
     return std::unexpected(make_error(context, importer.captured_diagnostic()));
   }
-  auto op = b.create<mlir::ncnn::ReshapeOp>(
-    b.getUnknownLoc(), *type, *input, props.shape);
+  auto op =
+    b.create<mlir::ncnn::ReshapeOp>(b.getUnknownLoc(),
+                                    *type,
+                                    input,
+                                    mlir::ValueRange(inputs).drop_front(),
+                                    props.shape,
+                                    props.shape_sources,
+                                    props.shape_expression);
   importer.tag_source(op.getOperation(), context);
   return importer.bind_blob(
     context, std::string(context.layer.get_outputs()[0]), op.getResult());
@@ -318,13 +442,19 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
   }
   auto p =
     ncnn_graph::decode_convolution_depthwise_params(context.layer.get_params());
+  auto activation =
+    get_int(context.layer.get_params(), 9, 0, "activation_type");
+  auto padValue = get_float(context.layer.get_params(), 18, 0.0F, "pad_value");
   if (!p) {
     return std::unexpected(make_error(context, p.error()));
   }
-  if (p->dynamic_weight || p->int8_scale_term != 0 ||
-      context.layer.get_params().get_int(9, 0) != 0 ||
-      context.layer.get_params().has(10) ||
-      context.layer.get_params().get_float(18, 0.0F) != 0.0F) {
+  if (!activation || !padValue) {
+    return std::unexpected(
+      make_error(context, !activation ? activation.error() : padValue.error()));
+  }
+  if (p->dynamic_weight || p->int8_scale_term != 0 || *activation < 0 ||
+      *activation > 1 || context.layer.get_params().has(10) ||
+      *padValue != 0.0F) {
     return std::unexpected(make_error(
       context, "only static pure depthwise FP32 convolution is supported"));
   }
@@ -412,7 +542,14 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
                                                          props.pad_right,
                                                          props.has_bias);
   importer.tag_source(op.getOperation(), context);
+  mlir::Value output = op.getResult();
+  if (*activation == 1) {
+    auto relu = b.create<mlir::ncnn::ReluOp>(
+      b.getUnknownLoc(), *type, output, b.getF32FloatAttr(0.0F));
+    importer.tag_source(relu.getOperation(), context);
+    output = relu.getResult();
+  }
   return importer.bind_blob(
-    context, std::string(context.layer.get_outputs()[0]), op.getResult());
+    context, std::string(context.layer.get_outputs()[0]), output);
 }
 }  // namespace ncnn_importer::detail

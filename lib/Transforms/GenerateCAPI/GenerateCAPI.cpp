@@ -166,7 +166,7 @@ class GenerateCAPIPass final
       }
       auto input = dyn_cast<MemRefType>(function.getArgumentTypes()[0]);
       auto output = dyn_cast<MemRefType>(function.getArgumentTypes()[1]);
-      const unsigned rank = static_cast<unsigned>(rankAttr.getInt());
+      const auto rank = static_cast<unsigned>(rankAttr.getInt());
       if (!input || !output || input.getRank() != rank ||
           output.getRank() != rank || input != output ||
           input.hasStaticShape() || !input.getLayout().isIdentity() ||
@@ -348,7 +348,8 @@ class GenerateCAPIPass final
       auto program = function.getArgAttrOfType<ArrayAttr>(output.functionIndex,
                                                           "ncnn.shape_program");
       if (!output.type.hasStaticShape() &&
-          (!program || program.size() != output.type.getRank() ||
+          (!program ||
+           program.size() != static_cast<std::size_t>(output.type.getRank()) ||
            llvm::any_of(program, [](Attribute dimension) {
              auto instructions = dyn_cast<DenseI64ArrayAttr>(dimension);
              if (!instructions || instructions.size() % 2 != 0) {
@@ -773,14 +774,14 @@ class FinalizeCAPIPass final
 
         Value shape;
         if (outputs.contains(functionIndex)) {
-          auto outputPosition =
+          auto* outputPosition =
             llvm::find(outputArgumentIndices, functionIndex);
-          unsigned outputIndex = static_cast<unsigned>(
+          auto outputIndex = static_cast<unsigned>(
             outputPosition - outputArgumentIndices.begin());
           shape = inputShapes[shapeSources[outputIndex]];
         } else {
           shape = entry->getArgument(wrapperShapeIndices[functionIndex]);
-          auto inputPosition = llvm::find(inputIndices, functionIndex);
+          auto* inputPosition = llvm::find(inputIndices, functionIndex);
           inputShapes[inputPosition - inputIndices.begin()] = shape;
         }
         auto result = MemRefDescriptor::poison(
@@ -805,9 +806,9 @@ class FinalizeCAPIPass final
             Value size =
               builder.create<LLVM::LoadOp>(internal.getLoc(), i64Type, address);
             if (outputs.contains(functionIndex)) {
-              auto outputPosition =
+              auto* outputPosition =
                 llvm::find(outputArgumentIndices, functionIndex);
-              unsigned outputIndex = static_cast<unsigned>(
+              auto outputIndex = static_cast<unsigned>(
                 outputPosition - outputArgumentIndices.begin());
               size = applyShapeTransform(size, outputIndex, dimensionIndex);
             }
@@ -1206,7 +1207,6 @@ class FinalizeCAPIPass final
     builder.setInsertionPointToStart(inferError);
     builder.create<LLVM::ReturnOp>(location, constantI32(1));
     builder.setInsertionPointToStart(inferCopy);
-    Value invalidShape;
     for (unsigned dimension = 0; dimension < 4; ++dimension) {
       Value active = builder.create<LLVM::ICmpOp>(
         location,

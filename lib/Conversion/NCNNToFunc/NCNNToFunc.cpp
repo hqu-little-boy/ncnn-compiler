@@ -105,16 +105,39 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
       if (operation.getNumOperands() == 0 || operation.getNumResults() == 0) {
         continue;
       }
-      auto source = shapeTransforms.find(operation.getOperand(0));
-      if (source == shapeTransforms.end()) {
-        continue;
-      }
       for (Value result : operation.getResults()) {
         auto inputType =
           dyn_cast<RankedTensorType>(operation.getOperand(0).getType());
         auto resultType = dyn_cast<RankedTensorType>(result.getType());
         if (!inputType || !resultType || inputType.getRank() != 3 ||
             resultType.getRank() != 3) {
+          continue;
+        }
+        if (auto reshape = dyn_cast<ReshapeOp>(operation);
+            reshape && reshape.getShapeSources()) {
+          ArrayRef<int64_t> sources = *reshape.getShapeSources();
+          int64_t sourceOperand = sources.front();
+          bool identity = sources.size() ==
+                          static_cast<std::size_t>(resultType.getRank()) * 2;
+          for (int64_t dimension = 0;
+               identity && dimension < resultType.getRank();
+               ++dimension) {
+            identity = sources[dimension * 2] == sourceOperand &&
+                       sources[(dimension * 2) + 1] == dimension;
+          }
+          if (identity && sourceOperand >= 0 &&
+              static_cast<unsigned>(sourceOperand) <
+                operation.getNumOperands()) {
+            auto reshapeSource =
+              shapeTransforms.find(operation.getOperand(sourceOperand));
+            if (reshapeSource != shapeTransforms.end()) {
+              shapeTransforms[result] = reshapeSource->second;
+            }
+          }
+          continue;
+        }
+        auto source = shapeTransforms.find(operation.getOperand(0));
+        if (source == shapeTransforms.end()) {
           continue;
         }
         ShapeTransform transform = source->second;
@@ -142,9 +165,9 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
             continue;
           }
           const int64_t effectiveH =
-            convolution.getDilationH() * (convolution.getKernelH() - 1) + 1;
+            (convolution.getDilationH() * (convolution.getKernelH() - 1)) + 1;
           const int64_t effectiveW =
-            convolution.getDilationW() * (convolution.getKernelW() - 1) + 1;
+            (convolution.getDilationW() * (convolution.getKernelW() - 1)) + 1;
           appendInstruction(
             transform,
             1,

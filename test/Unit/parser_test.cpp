@@ -55,6 +55,15 @@ TEST(ParserTest, ZeroLengthExplicitArray) {
     << "zero-length explicit array parses";
 }
 
+TEST(ParserTest, PreservesQuotedShapeExpression) {
+  auto params = ncnn_graph::parse_layer_params("6=\"1w,1h,1c\" 7=\"+(1w, 2)\"");
+  ASSERT_TRUE(params) << params.error();
+  ASSERT_TRUE(params->get_string(6));
+  EXPECT_EQ(params->get_string(6)->get(), "1w,1h,1c");
+  ASSERT_TRUE(params->get_string(7));
+  EXPECT_EQ(params->get_string(7)->get(), "+(1w, 2)");
+}
+
 TEST(ParserTest, ParamValueWrongKindReturnsNullopt) {
   auto integer = ncnn_graph::ParamValue::make_int(0);
   EXPECT_EQ(integer.get_int(), 0);
@@ -208,6 +217,8 @@ TEST(ParserTest, RejectsMalformedInput) {
     "0=1,,2", "empty element", "consecutive array commas rejected");
   expect_failure("0=,1", "empty element", "leading array comma rejected");
   expect_failure("0=1,", "empty element", "trailing array comma rejected");
+  expect_failure(
+    "6=\"1w,1h", "unterminated quoted", "unterminated string rejected");
   expect_failure(
     "-23300=2,1", "length mismatch", "explicit array length mismatch rejected");
   expect_failure(

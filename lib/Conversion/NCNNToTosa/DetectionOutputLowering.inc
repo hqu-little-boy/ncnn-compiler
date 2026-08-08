@@ -270,7 +270,7 @@ class ConvertDetectionOutput final
                      Location loc,
                      RankedTensorType type,
                      Value value) {
-    return b.create<tensor::SplatOp>(loc, type, value);
+    return {b.create<tensor::SplatOp>(loc, type, value)};
   }
 
   static Value findInsertionPosition(OpBuilder& b,
@@ -357,9 +357,11 @@ class ConvertDetectionOutput final
                                    Value c1) {
     Value position =
       findInsertionPosition(b, loc, scores, score, limit, c0, c1);
-    return {insertAtPosition(b, loc, scores, score, position, c0, c1),
-            insertAtPosition(b, loc, indices, index, position, c0, c1),
-            position};
+    return {.scores =
+              insertAtPosition(b, loc, scores, score, position, c0, c1),
+            .indices =
+              insertAtPosition(b, loc, indices, index, position, c0, c1),
+            .position = position};
   }
 
   static std::array<Value, 4> decode(OpBuilder& b,
@@ -381,7 +383,7 @@ class ConvertDetectionOutput final
         b.create<tensor::ExtractOp>(loc, locations, at);
       priorValues[coordinate] = b.create<tensor::ExtractOp>(loc, priors, at);
       Value varianceAt =
-        b.create<arith::ConstantIndexOp>(loc, numPrior * 4 + coordinate);
+        b.create<arith::ConstantIndexOp>(loc, (numPrior * 4) + coordinate);
       varianceValues[coordinate] =
         b.create<tensor::ExtractOp>(loc, priors, varianceAt);
     }

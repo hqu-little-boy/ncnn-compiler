@@ -288,12 +288,12 @@ TEST(NumericalOperator, DeconvolutionLayoutAndFusedReluMatchNcnn) {
   std::vector<float> actual(expected->size());
   ASSERT_EQ(compiled.run(input, actual), 0);
   EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
-  EXPECT_TRUE(std::all_of(
-    actual.begin(), actual.end(), [](float value) { return value >= 0.0F; }));
-  EXPECT_TRUE(std::any_of(
-    actual.begin(), actual.end(), [](float value) { return value == 0.0F; }));
-  EXPECT_TRUE(std::any_of(
-    actual.begin(), actual.end(), [](float value) { return value > 0.0F; }));
+  EXPECT_TRUE(
+    std::ranges::all_of(actual, [](float value) { return value >= 0.0F; }));
+  EXPECT_TRUE(
+    std::ranges::any_of(actual, [](float value) { return value == 0.0F; }));
+  EXPECT_TRUE(
+    std::ranges::any_of(actual, [](float value) { return value > 0.0F; }));
 }
 
 TEST(NumericalOperator, DeconvolutionWithoutBiasMatchesNcnn) {
@@ -331,7 +331,7 @@ TEST(NumericalOperator, SigmoidMatchesNcnnAndProducesProbabilities) {
   std::vector<float> actual(input.size());
   ASSERT_EQ(compiled.run(input, actual), 0);
   EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
-  EXPECT_TRUE(std::all_of(actual.begin(), actual.end(), [](float value) {
+  EXPECT_TRUE(std::ranges::all_of(actual, [](float value) {
     return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
   }));
   EXPECT_NEAR(actual[7], 0.5F, 1.0e-7F);
@@ -617,9 +617,8 @@ TEST(NumericalOperator, BatchNormZeroVarianceMatchesNcnn) {
   std::vector<float> actual(*elements);
   ASSERT_EQ(compiled.run(input, actual), 0);
   EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
-  EXPECT_TRUE(std::all_of(actual.begin(), actual.end(), [](float value) {
-    return std::isfinite(value);
-  }));
+  EXPECT_TRUE(std::ranges::all_of(
+    actual, [](float value) { return std::isfinite(value); }));
 }
 
 TEST(NumericalOperator, ExpandDimsNegativeAxisMatchesNcnn) {
@@ -768,8 +767,8 @@ TEST(NumericalOperator, InnerProductRankThreeFusedReluMatchesNcnn) {
   std::vector<float> actual(4);
   ASSERT_EQ(compiled.run(input, actual), 0);
   EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
-  EXPECT_TRUE(std::all_of(
-    actual.begin(), actual.end(), [](float value) { return value >= 0.0F; }));
+  EXPECT_TRUE(
+    std::ranges::all_of(actual, [](float value) { return value >= 0.0F; }));
 }
 
 TEST(NumericalOperator, ReluMatchesNcnn) {
@@ -1128,7 +1127,7 @@ TEST(NumericalOperator, ReductionMeanKeepdimsCoeffMatchesNcnn) {
   ASSERT_EQ(compiled.run(input, actual), 0);
   EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
   for (std::size_t channel = 0; channel < actual.size(); ++channel) {
-    const float first = static_cast<float>((channel * 12) + 1);
+    const auto first = static_cast<float>((channel * 12) + 1);
     const float last = first + 11.0F;
     EXPECT_NEAR(actual[channel], 0.25F * (first + last), 1.0e-6F);
   }

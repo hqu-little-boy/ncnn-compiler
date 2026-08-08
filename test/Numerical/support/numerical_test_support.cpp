@@ -293,7 +293,7 @@ int CompiledModel::run_three_inputs_two_outputs(
                            std::uint32_t*);
   static_assert(sizeof(Function) == sizeof(symbol_));
   std::uint32_t rank = 0;
-  Function function = std::bit_cast<Function>(symbol_);
+  auto function = std::bit_cast<Function>(symbol_);
   if (function(first_input.data(),
                second_input.data(),
                third_input.data(),

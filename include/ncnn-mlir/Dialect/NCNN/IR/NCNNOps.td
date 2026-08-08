@@ -245,7 +245,11 @@ def NCNN_BatchNormOp : NCNN_LayerOp<"batch_norm", [InferTensorTypeAdaptor]> {
 }
 
 def NCNN_ReshapeOp : NCNN_LayerOp<"reshape", [InferTensorTypeAdaptor]> {
-  let arguments = (ins NCNN_RankedTensor:$input, DenseI64ArrayAttr:$shape);
+  let arguments = (ins NCNN_RankedTensor:$input,
+    Variadic<NCNN_RankedTensor>:$shape_references,
+    DenseI64ArrayAttr:$shape,
+    OptionalAttr<DenseI64ArrayAttr>:$shape_sources,
+    OptionalAttr<StrAttr>:$shape_expression);
   let results = (outs NCNN_RankedTensor:$output);
 }
 

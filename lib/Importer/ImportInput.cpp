@@ -37,7 +37,7 @@ ImportResult import_input(ImportContext& importer,
   if (dimensions_omitted && shape_override) {
     const auto& shape = *shape_override;
     const bool specialized_dynamic_rank =
-      importer.input_shapes().size() == 1 && shape.size() >= 1 &&
+      importer.input_shapes().size() == 1 && !shape.empty() &&
       shape.size() <= 4 && std::ranges::all_of(shape, [](std::int64_t extent) {
         return extent == ncnn_importer::kDynamicExtent;
       });

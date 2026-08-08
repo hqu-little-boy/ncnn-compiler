@@ -27,7 +27,8 @@ ImportResult import_convolution(ImportContext& importer,
   }
   const ncnn_graph::ConvolutionParams& convolution = *decoded;
   if (convolution.dynamic_weight ||
-      (convolution.activation_type != 0 && convolution.activation_type != 1) ||
+      (convolution.activation_type != 0 && convolution.activation_type != 1 &&
+       convolution.activation_type != 4) ||
       convolution.has_activation_params || convolution.pad_value != 0.0F) {
     return std::unexpected(
       make_error(context,
@@ -82,7 +83,10 @@ ImportResult import_convolution(ImportContext& importer,
       builder.getUnknownLoc(),
       restored_type,
       input_value,
-      builder.getDenseI64ArrayAttr(restored_type.getShape()));
+      mlir::ValueRange{},
+      builder.getDenseI64ArrayAttr(restored_type.getShape()),
+      nullptr,
+      nullptr);
     importer.tag_source(restored.getOperation(), context);
     input_value = restored.getResult();
   }
@@ -155,6 +159,11 @@ ImportResult import_convolution(ImportContext& importer,
       location, *result_type, result, builder.getF32FloatAttr(0.0F));
     importer.tag_source(relu.getOperation(), context);
     result = relu.getResult();
+  } else if (convolution.activation_type == 4) {
+    auto sigmoid =
+      builder.create<mlir::ncnn::SigmoidOp>(location, *result_type, result);
+    importer.tag_source(sigmoid.getOperation(), context);
+    result = sigmoid.getResult();
   }
   return importer.bind_blob(
     context, std::string(context.layer.get_outputs()[0]), result);

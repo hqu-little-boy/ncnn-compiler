@@ -180,8 +180,8 @@ Value convertCHWToNHWC(OpBuilder& builder, Location location, Value input) {
                               : OpFoldResult(builder.getIndexAttr(extent)));
     }
     SmallVector<ReassociationIndices> reassociation = {{0, 1}, {2}, {3}};
-    return builder.create<tensor::ExpandShapeOp>(
-      location, nhwcType, transposed, reassociation, outputShape);
+    return {builder.create<tensor::ExpandShapeOp>(
+      location, nhwcType, transposed, reassociation, outputShape)};
   }
   Value shape = createShape(builder, location, nhwcType.getShape());
   Value result =
@@ -1266,17 +1266,56 @@ class ConvertReshape final : public ConversionPattern {
     Operation* operation,
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
-    if (operands.size() != 1 || operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
-        !isStaticF32Tensor(operation->getResult(0).getType())) {
-      return operation->emitOpError("supports one static f32 tensor only");
+    if (operands.empty() || operation->getNumResults() != 1 ||
+        !isRankedF32Tensor(operation->getOperand(0).getType()) ||
+        !isRankedF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("requires ranked f32 input and output");
     }
     auto inputType = cast<RankedTensorType>(operation->getOperand(0).getType());
     auto outputType = cast<RankedTensorType>(operation->getResult(0).getType());
     Value input = restoreNCNNLayout(
       rewriter, operation->getLoc(), operands.front(), inputType);
-    Value reshaped =
-      reshapeValue(rewriter, operation->getLoc(), input, outputType);
+    Value reshaped;
+    auto shapeSources =
+      operation->getAttrOfType<DenseI64ArrayAttr>("shape_sources");
+    if (shapeSources) {
+      if (shapeSources.size() != (outputType.getRank() * 2)) {
+        return operation->emitOpError("has invalid shape source metadata");
+      }
+      SmallVector<Value> dimensions;
+      ArrayRef<int64_t> sources = shapeSources.asArrayRef();
+      for (int64_t outputDimension = 0; outputDimension < outputType.getRank();
+           ++outputDimension) {
+        int64_t inputIndex = sources[outputDimension * 2];
+        int64_t sourceDimension = sources[(outputDimension * 2) + 1];
+        if (inputIndex < 0 ||
+            static_cast<uint64_t>(inputIndex) >= operands.size()) {
+          return operation->emitOpError("shape source input is out of range");
+        }
+        Value source = operands[inputIndex];
+        auto sourceType =
+          cast<RankedTensorType>(operation->getOperand(inputIndex).getType());
+        if (sourceType.getRank() == 3) {
+          static constexpr int64_t kCHWToNHWCDimension[] = {3, 1, 2};
+          sourceDimension = kCHWToNHWCDimension[sourceDimension];
+        }
+        dimensions.push_back(rewriter.create<tensor::DimOp>(
+          operation->getLoc(), source, sourceDimension));
+      }
+      auto shapeType =
+        RankedTensorType::get({outputType.getRank()}, rewriter.getIndexType());
+      Value shape = rewriter.create<tensor::FromElementsOp>(
+        operation->getLoc(), shapeType, dimensions);
+      reshaped = rewriter.create<tensor::ReshapeOp>(
+        operation->getLoc(), outputType, input, shape);
+    } else {
+      if (operands.size() != 1 || !inputType.hasStaticShape() ||
+          !outputType.hasStaticShape()) {
+        return operation->emitOpError(
+          "dynamic Reshape requires shape expression metadata");
+      }
+      reshaped = reshapeValue(rewriter, operation->getLoc(), input, outputType);
+    }
     rewriter.replaceOp(
       operation,
       convertNCNNLayout(rewriter, operation->getLoc(), reshaped, outputType));

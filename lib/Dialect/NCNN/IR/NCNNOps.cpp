@@ -608,8 +608,14 @@ FailureOr<RankedTensorType> computeReshapeResult(
     return emitOptionalError(location, "Reshape input must be f32");
   }
   int64_t inputCount = 1;
+  bool dynamicInputCount = false;
   for (int64_t dim : input.getShape()) {
-    inputCount *= dim;
+    if (ShapedType::isDynamic(dim)) {
+      dynamicInputCount = true;
+    } else if (llvm::MulOverflow(inputCount, dim, inputCount)) {
+      return emitOptionalError(location,
+                               "Reshape input element count overflows");
+    }
   }
   SmallVector<int64_t> shape(shapeRef);
   int unknown = -1;
@@ -623,19 +629,30 @@ FailureOr<RankedTensorType> computeReshapeResult(
       unknown = static_cast<int>(i);
       continue;
     }
+    if (ShapedType::isDynamic(shape[i])) {
+      continue;
+    }
     if (shape[i] <= 0) {
       return emitOptionalError(location,
                                "Reshape dimensions must be positive or -1");
     }
-    outputCount *= shape[i];
+    if (llvm::MulOverflow(outputCount, shape[i], outputCount)) {
+      return emitOptionalError(location,
+                               "Reshape output element count overflows");
+    }
   }
   if (unknown != -1) {
-    if (outputCount == 0 || inputCount % outputCount != 0) {
+    if (dynamicInputCount) {
+      shape[unknown] = ShapedType::kDynamic;
+    } else if (outputCount == 0 || inputCount % outputCount != 0) {
       return emitOptionalError(location,
                                "Reshape element count does not match input");
+    } else {
+      shape[unknown] = inputCount / outputCount;
     }
-    shape[unknown] = inputCount / outputCount;
-  } else if (inputCount != outputCount) {
+  } else if (!dynamicInputCount &&
+             llvm::none_of(shape, ShapedType::isDynamic) &&
+             inputCount != outputCount) {
     return emitOptionalError(location,
                              "Reshape element count does not match input");
   }
@@ -693,7 +710,7 @@ FailureOr<RankedTensorType> computeExpandDimsResult(
     }
   }
   SmallVector<int64_t> shape;
-  auto inputDimension = input.getShape().begin();
+  const auto* inputDimension = input.getShape().begin();
   for (int64_t axis = 0; axis < outputRank; ++axis) {
     shape.push_back(axes.contains(axis) ? 1 : *inputDimension++);
   }
@@ -867,7 +884,7 @@ LogicalResult inferSliceResults(
   for (std::size_t index = 0; index < requestedSlices.size(); ++index) {
     int64_t size = requestedSlices[index];
     if (size == -233) {
-      const int64_t remainingResults =
+      const auto remainingResults =
         static_cast<int64_t>(requestedSlices.size() - index);
       size = (extent - consumed) / remainingResults;
     }
@@ -1167,6 +1184,46 @@ LogicalResult ReshapeOp::inferReturnTypeComponents(
   ReshapeOp::Adaptor adaptor,
   SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
   auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  if (adaptor.getShapeExpression()) {
+    auto sources = adaptor.getShapeSources();
+    if (!sources || sources->empty() || sources->size() % 2 != 0 ||
+        sources->size() / 2 != adaptor.getShape().size()) {
+      return emitOptionalError(
+        location, "Reshape shape expression requires one source per dimension");
+    }
+    SmallVector<int64_t> expressionShape;
+    for (std::size_t index = 0; index < sources->size(); index += 2) {
+      int64_t inputIndex = (*sources)[index];
+      int64_t dimension = (*sources)[index + 1];
+      if (inputIndex < 0 ||
+          static_cast<uint64_t>(inputIndex) >= adaptor.getOperands().size()) {
+        return emitOptionalError(location,
+                                 "Reshape shape source input is out of range");
+      }
+      auto source =
+        dyn_cast<RankedTensorType>(adaptor.getOperands()[inputIndex].getType());
+      if (!source || dimension < 0 || dimension >= source.getRank()) {
+        return emitOptionalError(location,
+                                 "Reshape shape source is inconsistent");
+      }
+      expressionShape.push_back(source.getShape()[dimension]);
+    }
+    if (adaptor.getShape() != ArrayRef<int64_t>(expressionShape)) {
+      return emitOptionalError(
+        location, "Reshape shape attribute does not match shape sources");
+    }
+    auto result = computeReshapeResult(location, input, expressionShape);
+    if (failed(result)) {
+      return failure();
+    }
+    inferredReturnShapes.emplace_back(result->getShape(),
+                                      result->getElementType());
+    return success();
+  }
+  if (!adaptor.getShapeReferences().empty() || adaptor.getShapeSources()) {
+    return emitOptionalError(
+      location, "Reshape shape references require a shape expression");
+  }
   auto result = computeReshapeResult(location, input, adaptor.getShape());
   if (failed(result)) {
     return failure();

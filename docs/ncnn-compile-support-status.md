@@ -15,7 +15,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 **SqueezeNet v1.1** 以及静态 FP32 的 `PP-LCNet_x1_0_doc_ori`、
 `PP-LCNet_x1_0_textline_ori`、`Chineseocr_Lite_AngleNet`、
 `PP-OCRv6_tiny_rec`、`PP-OCRv6_tiny_det`、`PP-OCRv6_small_det`、
-`PP-OCRv6_medium_det`、`PP-OCRv5_mobile_det` 作为端到端验证目标。
+`PP-OCRv6_medium_det`、`PP-OCRv5_mobile_det`、`PP-OCRv5_server_det` 作为端到端验证目标。
 
 ---
 
@@ -41,21 +41,21 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 
 | ncnn 层类型 | 方言 op | 关键属性 | 备注 |
 |---|---|---|---|
-| `Convolution` | `ncnn.convolution` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias, int8_scale_term | 仅支持 fp32 静态权重；交叉相关 |
+| `Convolution` | `ncnn.convolution` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias, int8_scale_term | 仅支持 fp32 静态权重；融合 ReLU/Sigmoid 拆为显式 op；交叉相关 |
 | `ReLU` | `ncnn.relu` | negative_slope（0=ReLU，≠0=LeakyReLU） | |
 | `Pooling` | `ncnn.pooling` | kind(0=max/1=avg), mode(0=regular/1=global/2=adaptive), kernel/stride/pad_*, pad_mode(0–3), include_pad | 见 §2.3 限制 |
 | `Split` | `ncnn.split` | 无 | 纯路由，≥2 输出；SSA 化后被消除 |
 | `Concat` | `ncnn.concat` | axis | 沿 axis 拼接 |
 | `Dropout` | `ncnn.dropout` | scale（默认 1.0） | 推理时 scale=1.0 为恒等 |
 | `Softmax` | `ncnn.softmax` | axis | |
-| `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 当前支持纯 depthwise、静态 FP32；不是通用 group conv |
+| `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 当前支持纯 depthwise、静态 FP32 和融合 ReLU；不是通用 group conv |
 | `Deconvolution` | `ncnn.deconvolution` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, output_pad_bottom/right, has_bias | 静态 FP32 2x2 stride-2 子集；可选 bias 和融合 ReLU |
 | `Padding` | `ncnn.padding` | top, bottom, left, right, value | FP32 constant spatial padding；支持动态 H/W |
 | `Interp` | `ncnn.interp` | height_scale, width_scale | FP32 rank-3 nearest、正整数倍；支持静态或动态 H/W |
 | `Sigmoid` | `ncnn.sigmoid` | 无 | 静态 FP32 |
 | `HardSigmoid` | `ncnn.hard_sigmoid` | alpha, beta | 静态 FP32 |
 | `HardSwish` | `ncnn.hard_swish` | alpha, beta | 静态 FP32 |
-| `Reshape` | `ncnn.reshape` | static shape | 支持静态 shape、单个 `-1` 和 `0` 复制对应输入维度 |
+| `Reshape` | `ncnn.reshape` | shape、shape_sources、shape_expression | 支持静态 shape、单个 `-1`、`0` 复制维度，以及引用单一 shape 输入并保持维序的表达式（如 `1w,1h,1c`） |
 | `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 加法/乘法；支持标量和同 rank 双向广播 |
 | `InnerProduct` | `ncnn.inner_product` | has_bias | 仅静态 FP32，输入按元素展平 |
 | `ShuffleChannel` | `ncnn.shuffle_channel` | group, reverse | 静态 FP32；group 必须整除通道数 |
@@ -73,11 +73,11 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 
 ### 2.3 算子级限制
 
-- **Convolution**：动态权重（param 19）、除 ReLU 外的融合激活、非零 `pad_value`（param 18）
+- **Convolution**：动态权重（param 19）、除 ReLU/Sigmoid 外的融合激活、非零 `pad_value`（param 18）
   在导入时拒绝。`int8_scale_term` 可解析但 **int8 量化卷积不会被 lowering**——残留 ncnn op
   被严格流水线拒绝。
-- **ConvolutionDepthWise**：当前只接受纯 depthwise FP32；通用 group convolution、动态权重、量化和
-  融合激活仍然拒绝；显式 padding 和 SAME_UPPER/LOWER 均支持。
+- **ConvolutionDepthWise**：当前只接受纯 depthwise FP32；支持无激活或融合 ReLU，通用 group
+  convolution、动态权重、量化和其他融合激活仍然拒绝；显式 padding 和 SAME_UPPER/LOWER 均支持。
 - **Deconvolution**：当前只支持静态 FP32、2x2 kernel、stride 2、dilation 1、零 crop/output
   padding、无显式输出 shape override；融合激活仅支持无激活或 ReLU。直接 NCNN IR lowering
   会拒绝超出 TOSA `transpose_conv2d` `out_pad` 表示范围的 crop。无激活/ReLU 携带的
@@ -90,6 +90,10 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
   `pad_mode=0`（full + tail padding）通过尾部填充计算正常支持；global 模式按 ncnn 语义忽略
   regular-only 的 padding 和 `include_pad` 参数。
 - **Softmax**：旧版 `fixbug0=0` 仅允许 `axis=0`。
+- **Reshape**：shape expression 当前支持直接引用单一输入 blob 的 `w/h/d/c` 维度，并要求输出
+  保持该输入的维序；算术、维度置换、跨输入混合、min/max 等通用表达式仍会明确拒绝。动态 expression 直接下降为
+  `tensor.dim + tensor.from_elements + tensor.reshape`。M09 的固定 `3x640x640` 产品实例已闭环；
+  整张模型的一般动态 H/W 仍受 Pooling 等更早算子的动态 shape 覆盖限制。
 - **Slice**：当前支持 `slices` 参数，不支持 `indices` 参数形式。
 - **Reduction**：当前只支持 `operation=3`（mean）；显式 axes 要求新版 `fixbug0=1`。
 - **Gemm**：仅支持 `constantA=0, constantB=1, constantC=1, transA=0, transB=1`、
@@ -282,7 +286,7 @@ DetectionOutput 当前未注册 naive override，使用 ncnn 内建层路径。
   - Dropout：identity
   - ConvolutionDepthWise：basic、非对称 stride/dilation/padding、SAME_UPPER/LOWER，及
     PP-OCRv6 small/medium 使用的 `C=96/K=7/pad=3`、`C=256/K=9/pad=4` 大核实例
-  - Reshape：静态 shape、`-1` 推断、`0` 复制输入维度
+  - Reshape：静态 shape、`-1` 推断、`0` 复制输入维度，以及 `1w,1h,1c` 引用输入动态 shape expression
   - BinaryOp：标量、channel broadcast、反向 broadcast
   - PP-OCRv6 rec 新增算子：GELU（含负尾部）、Squeeze、BatchNorm 零方差保护、
     ExpandDims 负轴、rank-2 Permute、非默认 alpha/beta Gemm、BinaryOp add、
@@ -294,9 +298,9 @@ DetectionOutput 当前未注册 naive override，使用 ncnn 内建层路径。
     同时验证最大 storage 与实际 `[count,6]` shape
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet、PP-OCRv6
-  tiny rec、tiny det、small det、medium det 和 PP-OCRv5 mobile det 与 upstream ncnn 数值对齐；
-  四个 det 模型均使用 `3x640x640` 输入并验证 `1x640x640` 概率图及重复调用一致性。tiny、
-  medium 和 v5 mobile 使用 `1e-4` 预算；small 使用独立 `3e-4` 预算，固定输入下实测最大
+  tiny rec、tiny det、small det、medium det 和 PP-OCRv5 mobile/server det 与 upstream ncnn 数值对齐；
+  五个 det 模型均使用 `3x640x640` 输入并验证 `1x640x640` 概率图及重复调用一致性。tiny、
+  medium、v5 mobile 和 v5 server 使用 `1e-4` 预算；small 使用独立 `3e-4` 预算，固定输入下实测最大
   绝对误差约 `2.256e-4`
   - 全有限输出、softmax 求和误差 ≤1e-5（PP-OCRv6 的 6906 类输出为 ≤2e-5）、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4
 
@@ -319,7 +323,7 @@ DetectionOutput 当前未注册 naive override，使用 ncnn 内建层路径。
 |---|---|
 | 算子覆盖 | 27 个计算 op 的受限实例；DetectionOutput 仅 Caffe SSD；无 PriorBox/Proposal/Yolo、通用 group conv、RNN |
 | 量化 | int8 参数可解析但不被 lowering；f16 权重可解析但端到端路径仅 f32 |
-| 形状 | 静态 shape 广泛覆盖；固定 rank 动态 extent 覆盖 identity/ReLU/Padding/Interp 等路径；动态 rank 仅一入一出 identity/ReLU rank 1..4；动态 SAME 和通用动态图仍不支持 |
+| 形状 | 静态 shape 广泛覆盖；固定 rank 动态 extent 覆盖 identity/ReLU/Padding/Interp 和保持单一输入维序的 Reshape expression；动态 rank 仅一入一出 identity/ReLU rank 1..4；动态 SAME、通用表达式和一般动态图仍不支持 |
 | 数据类型 | GenerateCAPI 支持 typed f16/bf16/f32/f64 与整数 ABI；当前 ncnn 模型数据主路径为 f32 |
 | 入口 | 一个执行入口；shape-only 动态输出另有 inference 入口；执行 ABI 按输入组、输出 data、数据依赖元数据排列 |
 | 平台 | 仅 Linux 64-bit ELF |

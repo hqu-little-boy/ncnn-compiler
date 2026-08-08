@@ -420,6 +420,59 @@ TEST_F(NcnnImporterTest, AppliesMultipleInputShapesInSourceOrder) {
                        {1, 3, mlir::ShapedType::kDynamic}));
 }
 
+TEST_F(NcnnImporterTest, ImportsReshapeShapeExpressionReferences) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "data", {}, {"data_blob"}));
+  graph.add_layer(make_layer("Input", "reference", {}, {"reference_blob"}));
+  auto reshape = make_layer(
+    "Reshape", "reshape_as", {"data_blob", "reference_blob"}, {"output"});
+  ncnn_graph::ParamDict params;
+  params.set_value(6, ncnn_graph::ParamValue::make_string("1w,1h,1c"));
+  reshape.set_params(std::move(params));
+  graph.add_layer(std::move(reshape));
+  graph.set_input_blob_names({"data_blob", "reference_blob"});
+  graph.set_output_blob_names({"output"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions options;
+  options.input_shapes = {{1, -1, -1}, {1, -1, -1}};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  auto models = imported->get().getOps<mlir::ncnn::ModelOp>();
+  ASSERT_NE(models.begin(), models.end());
+  mlir::ncnn::ModelOp model = *models.begin();
+  auto reshapes = model.getOps<mlir::ncnn::ReshapeOp>();
+  auto operation = *reshapes.begin();
+  EXPECT_EQ(operation->getNumOperands(), 2U);
+  ASSERT_TRUE(operation.getShapeExpression());
+  EXPECT_EQ(*operation.getShapeExpression(), "1w,1h,1c");
+  ASSERT_TRUE(operation.getShapeSources());
+  EXPECT_EQ(*operation.getShapeSources(),
+            (llvm::ArrayRef<int64_t>{1, 0, 1, 1, 1, 2}));
+  EXPECT_TRUE(
+    shape_is(operation.getOutput().getType(),
+             {1, mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic}));
+
+  auto layers = std::vector<ncnn_graph::Layer>(graph.get_layers().begin(),
+                                               graph.get_layers().end());
+  ncnn_graph::ParamDict reorderedParams;
+  reorderedParams.set_value(6, ncnn_graph::ParamValue::make_string("1h,1w,1c"));
+  layers[2].set_params(std::move(reorderedParams));
+  graph.set_layers(std::move(layers));
+  auto reordered = import(graph, options);
+  ASSERT_FALSE(reordered);
+  EXPECT_NE(reordered.error().get_message().find("preserve"),
+            std::string_view::npos);
+
+  layers = std::vector<ncnn_graph::Layer>(graph.get_layers().begin(),
+                                          graph.get_layers().end());
+  ncnn_graph::ParamDict invalidMask;
+  invalidMask.set_value(31, ncnn_graph::ParamValue::make_string("invalid"));
+  layers[2].set_params(std::move(invalidMask));
+  graph.set_layers(std::move(layers));
+  EXPECT_FALSE(import(graph, options));
+}
+
 TEST_F(NcnnImporterTest, RejectsInputShapeContractErrors) {
   ncnn_graph::Graph graph;
   graph.add_layer(make_layer("Input", "input", {}, {"data"}));
@@ -634,6 +687,64 @@ TEST_F(NcnnImporterTest, ImportsAsymmetricDepthwiseSpatialParameters) {
     EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("pad_left").getInt(), 1);
     EXPECT_EQ(op->getAttrOfType<mlir::IntegerAttr>("pad_right").getInt(), 2);
   });
+}
+
+TEST_F(NcnnImporterTest, ExpandsSupportedFusedConvolutionActivations) {
+  auto convolutionGraph = make_supported_graph();
+  auto layers = std::vector<ncnn_graph::Layer>(
+    convolutionGraph.get_layers().begin(), convolutionGraph.get_layers().end());
+  ncnn_graph::ParamDict convolutionParams = layers[1].get_params();
+  convolutionParams.set_value(9, ncnn_graph::ParamValue::make_int(4));
+  layers[1].set_params(std::move(convolutionParams));
+  convolutionGraph.set_layers(std::move(layers));
+  auto convolution = import(convolutionGraph);
+  ASSERT_TRUE(convolution) << convolution.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::SigmoidOp>(convolution->get()), 1);
+
+  ncnn_graph::Graph depthwiseGraph;
+  auto input = make_layer("Input", "input", {}, {"data"});
+  ncnn_graph::ParamDict inputParams;
+  inputParams.set_value(0, ncnn_graph::ParamValue::make_int(5));
+  inputParams.set_value(1, ncnn_graph::ParamValue::make_int(5));
+  inputParams.set_value(2, ncnn_graph::ParamValue::make_int(2));
+  input.set_params(std::move(inputParams));
+  depthwiseGraph.add_layer(std::move(input));
+  auto depthwise =
+    make_layer("ConvolutionDepthWise", "depthwise", {"data"}, {"output"});
+  ncnn_graph::ParamDict depthwiseParams;
+  depthwiseParams.set_value(0, ncnn_graph::ParamValue::make_int(2));
+  depthwiseParams.set_value(1, ncnn_graph::ParamValue::make_int(3));
+  depthwiseParams.set_value(4, ncnn_graph::ParamValue::make_int(1));
+  depthwiseParams.set_value(6, ncnn_graph::ParamValue::make_int(18));
+  depthwiseParams.set_value(7, ncnn_graph::ParamValue::make_int(2));
+  depthwiseParams.set_value(9, ncnn_graph::ParamValue::make_int(1));
+  depthwise.set_params(std::move(depthwiseParams));
+  depthwise.add_weight(
+    make_tensor({2, 1, 3, 3}, ncnn_graph::DataType::Float32));
+  depthwiseGraph.add_layer(std::move(depthwise));
+  depthwiseGraph.set_input_blob_names({"data"});
+  depthwiseGraph.set_output_blob_names({"output"});
+  depthwiseGraph.set_weights_loaded(true);
+  auto importedDepthwise = import(depthwiseGraph);
+  ASSERT_TRUE(importedDepthwise) << importedDepthwise.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::ReluOp>(importedDepthwise->get()), 1);
+
+  auto depthwiseLayers = std::vector<ncnn_graph::Layer>(
+    depthwiseGraph.get_layers().begin(), depthwiseGraph.get_layers().end());
+  auto invalidActivation = depthwiseLayers[1].get_params();
+  invalidActivation.set_value(9, ncnn_graph::ParamValue::make_float(1.0F));
+  depthwiseLayers[1].set_params(std::move(invalidActivation));
+  depthwiseGraph.set_layers(std::move(depthwiseLayers));
+  EXPECT_FALSE(import(depthwiseGraph));
+
+  depthwiseLayers = std::vector<ncnn_graph::Layer>(
+    depthwiseGraph.get_layers().begin(), depthwiseGraph.get_layers().end());
+  auto invalidPadValue = depthwiseLayers[1].get_params();
+  invalidPadValue.set_value(9, ncnn_graph::ParamValue::make_int(1));
+  invalidPadValue.set_value(18, ncnn_graph::ParamValue::make_int(1));
+  depthwiseLayers[1].set_params(std::move(invalidPadValue));
+  depthwiseGraph.set_layers(std::move(depthwiseLayers));
+  EXPECT_FALSE(import(depthwiseGraph));
 }
 
 TEST_F(NcnnImporterTest, DeconvolutionIgnoresReluActivationParameters) {

@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "llvm/ADT/SmallString.h"
@@ -450,7 +451,7 @@ int run(const std::vector<std::string>& command,
       auto element_type = argument_object->getString("element_type");
       auto dynamic_dim_mask = argument_object->getInteger("dynamic_dim_mask");
       if (!name || shape == nullptr || !element_type || !dynamic_dim_mask ||
-          *dynamic_dim_mask < 0) {
+          !std::in_range<std::uint32_t>(*dynamic_dim_mask)) {
         return false;
       }
       Argument argument{
@@ -485,9 +486,7 @@ int run(const std::vector<std::string>& command,
           argument.maximum_shape.push_back(*integer);
         }
       }
-      if (argument.shape.size() > 32 ||
-          static_cast<std::uint64_t>(*dynamic_dim_mask) >
-            std::numeric_limits<std::uint32_t>::max()) {
+      if (argument.shape.size() > 32) {
         return false;
       }
       std::uint32_t expected_mask = 0;
@@ -516,8 +515,9 @@ int run(const std::vector<std::string>& command,
     return std::unexpected("ABI manifest has invalid inputs or outputs");
   }
   for (const Argument& output : manifest.outputs) {
-    if (output.shape_source_input >=
-        static_cast<std::int32_t>(manifest.inputs.size())) {
+    if (output.shape_source_input >= 0 &&
+        static_cast<std::size_t>(output.shape_source_input) >=
+          manifest.inputs.size()) {
       return std::unexpected(
         "ABI manifest output has an invalid input shape "
         "source");

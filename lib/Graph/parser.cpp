@@ -141,6 +141,14 @@ std::expected<ParamValue, std::string> parse_value(std::string_view token,
     return std::unexpected("empty param value");
   }
 
+  if (!explicit_array && token.front() == '"') {
+    if (token.size() < 2 || token.back() != '"') {
+      return std::unexpected("unterminated quoted string param value");
+    }
+    return ParamValue::make_string(
+      std::string(token.substr(1, token.size() - 2)));
+  }
+
   auto elements = split_array(token);
   if (!elements) {
     return std::unexpected(elements.error());
@@ -205,9 +213,19 @@ std::expected<ParamDict, std::string> parse_layer_params(
     }
 
     std::size_t end = position;
-    while (end < tail.size() &&
-           !std::isspace(static_cast<unsigned char>(tail[end]))) {
+    bool quoted = false;
+    while (end < tail.size()) {
+      char character = tail[end];
+      if (character == '"') {
+        quoted = !quoted;
+      } else if (!quoted &&
+                 std::isspace(static_cast<unsigned char>(character))) {
+        break;
+      }
       ++end;
+    }
+    if (quoted) {
+      return std::unexpected("unterminated quoted param value");
     }
     std::string_view assignment = tail.substr(position, end - position);
     std::size_t equals = assignment.find('=');
