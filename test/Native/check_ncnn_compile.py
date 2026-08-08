@@ -114,8 +114,16 @@ def main():
     required_header_text = {
         "#include <stdint.h>",
         "#define NCNN_DYNAMIC_DIM INT64_C(-1)",
+        "#define RELU_ALL_INPUT_COUNT 1",
+        "#define RELU_ALL_OUTPUT_COUNT 1",
         "#define RELU_ALL_INPUT1_RANK 3",
+        "#define RELU_ALL_INPUT1_DIM0 INT64_C(3)",
+        "#define RELU_ALL_INPUT1_DIM1 INT64_C(4)",
+        "#define RELU_ALL_INPUT1_DIM2 INT64_C(5)",
+        "#define RELU_ALL_INPUT1_ELEMENTS UINT64_C(60)",
         "#define RELU_ALL_INPUT1_DYNAMIC_DIM_MASK UINT32_C(0x0)",
+        "#define RELU_ALL_OUTPUT1_SHAPE_DEPENDS_ON_DATA 0",
+        "int relu_all(const float *input1, float *output1);",
         "const float *input1",
         "float *output1",
     }
@@ -125,6 +133,27 @@ def main():
     if missing_header_text:
         raise RuntimeError(
             f"generated header lacks typed ABI contract: {sorted(missing_header_text)}"
+        )
+    forbidden_header_text = {
+        "void *",
+        "void*",
+        "struct ",
+        "dtype",
+        "element_type",
+        "inputs[",
+        "outputs[",
+        "descriptor",
+        "infer_output_shapes",
+        "input1_shape",
+        "input1_rank",
+    }
+    present_forbidden_text = {
+        text for text in forbidden_header_text if text in all_header
+    }
+    if present_forbidden_text:
+        raise RuntimeError(
+            "static model header contains generic or redundant ABI state: "
+            f"{sorted(present_forbidden_text)}"
         )
 
     dynamic_param = work_dir / "dynamic_identity.param"
@@ -164,8 +193,25 @@ def main():
     if dynamic_manifest["outputs"][0].get("shape_source_input") != 0:
         raise RuntimeError(f"dynamic output shape source missing: {dynamic_manifest}")
     dynamic_header = (dynamic_output / "dynamic_identity.h").read_text()
-    if "dynamic_identity_infer_output_shapes" not in dynamic_header:
-        raise RuntimeError("dynamic shape inference declaration missing")
+    required_dynamic_extent_abi = {
+        "#define DYNAMIC_IDENTITY_INPUT1_RANK 3",
+        "#define DYNAMIC_IDENTITY_INPUT1_DIM0 INT64_C(3)",
+        "#define DYNAMIC_IDENTITY_INPUT1_DIM1 NCNN_DYNAMIC_DIM",
+        "#define DYNAMIC_IDENTITY_INPUT1_DYNAMIC_DIM_MASK UINT32_C(0x6)",
+        "const int64_t input1_shape[DYNAMIC_IDENTITY_INPUT1_RANK]",
+        "int64_t output1_shape[DYNAMIC_IDENTITY_OUTPUT1_RANK]",
+        "dynamic_identity_infer_output_shapes",
+    }
+    missing_dynamic_extent_abi = {
+        text for text in required_dynamic_extent_abi if text not in dynamic_header
+    }
+    if missing_dynamic_extent_abi:
+        raise RuntimeError(
+            "fixed-rank dynamic header contract missing: "
+            f"{sorted(missing_dynamic_extent_abi)}"
+        )
+    if "input1_rank" in dynamic_header or "output1_rank" in dynamic_header:
+        raise RuntimeError("fixed-rank dynamic ABI contains redundant rank")
 
     dynamic_rank_output = work_dir / "dynamic-rank-identity"
     run(
@@ -205,6 +251,11 @@ def main():
     ).read_text()
     required_dynamic_rank_abi = {
         "#define NCNN_MAX_RANK 4",
+        "#define DYNAMIC_RANK_IDENTITY_INPUT_COUNT 1",
+        "#define DYNAMIC_RANK_IDENTITY_OUTPUT_COUNT 1",
+        "#define DYNAMIC_RANK_IDENTITY_INPUT1_RANK_MIN 1",
+        "#define DYNAMIC_RANK_IDENTITY_INPUT1_RANK_MAX 4",
+        "#define DYNAMIC_RANK_IDENTITY_OUTPUT1_SHAPE_DEPENDS_ON_DATA 0",
         "const int64_t *input1_shape, uint32_t input1_rank",
         "uint32_t output1_shape_capacity, uint32_t *output1_rank",
     }
@@ -215,6 +266,11 @@ def main():
         raise RuntimeError(
             f"dynamic rank header contract missing: {sorted(missing_dynamic_rank_abi)}"
         )
+    for forbidden in ("void *", "void*", "struct ", "dtype", "descriptor"):
+        if forbidden in dynamic_rank_header:
+            raise RuntimeError(
+                f"dynamic rank header contains generic descriptor state: {forbidden}"
+            )
 
     dynamic_debug_output = work_dir / "dynamic-debug"
     run(
@@ -334,6 +390,64 @@ def main():
         dynamic_interp_output,
         {"libdynamic_interp.so", "dynamic_interp.h"},
     )
+
+    detection_param = (
+        pathlib.Path(__file__).parent.parent
+        / "Numerical"
+        / "fixtures"
+        / "detection_output.param"
+    )
+    detection_output = work_dir / "detection-output"
+    run(
+        [
+            args.compiler,
+            detection_param,
+            "--bin",
+            dynamic_bin,
+            "--model-name",
+            "detection_output_abi",
+            "--output-dir",
+            detection_output,
+            "--emit-manifest",
+            "-O0",
+        ]
+    )
+    assert_files(
+        detection_output,
+        {
+            "libdetection_output_abi.so",
+            "detection_output_abi.h",
+            "detection_output_abi.json",
+        },
+    )
+    detection_header = (
+        detection_output / "detection_output_abi.h"
+    ).read_text()
+    required_detection_abi = {
+        "#define DETECTION_OUTPUT_ABI_INPUT_COUNT 3",
+        "#define DETECTION_OUTPUT_ABI_OUTPUT_COUNT 1",
+        "#define DETECTION_OUTPUT_ABI_OUTPUT1_RANK 2",
+        "#define DETECTION_OUTPUT_ABI_OUTPUT1_DIM0 NCNN_DYNAMIC_DIM",
+        "#define DETECTION_OUTPUT_ABI_OUTPUT1_DIM1 INT64_C(6)",
+        "#define DETECTION_OUTPUT_ABI_OUTPUT1_MAX_DIM0 INT64_C(2)",
+        "#define DETECTION_OUTPUT_ABI_OUTPUT1_MAX_DIM1 INT64_C(6)",
+        "#define DETECTION_OUTPUT_ABI_OUTPUT1_MAX_ELEMENTS UINT64_C(12)",
+        "#define DETECTION_OUTPUT_ABI_OUTPUT1_SHAPE_DEPENDS_ON_DATA 1",
+        "float *output1, int64_t *output1_shape, "
+        "uint32_t output1_shape_capacity, uint32_t *output1_rank",
+    }
+    missing_detection_abi = {
+        text for text in required_detection_abi if text not in detection_header
+    }
+    if missing_detection_abi:
+        raise RuntimeError(
+            "data-dependent header contract missing: "
+            f"{sorted(missing_detection_abi)}"
+        )
+    if "infer_output_shapes" in detection_header:
+        raise RuntimeError(
+            "data-dependent model exported a shape-only inference function"
+        )
 
     previous_header = (all_output / "relu_all.h").read_bytes()
     previous_library = (all_output / "librelu_all.so").read_bytes()

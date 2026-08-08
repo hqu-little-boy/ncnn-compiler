@@ -677,6 +677,25 @@ std::string macro_name(const Manifest& manifest,
     "typedef uint16_t ncnn_bfloat16_t;\n\n",
     guard,
     guard);
+  contents += std::format(
+    "#define {}_INPUT_COUNT {}\n"
+    "#define {}_OUTPUT_COUNT {}\n\n",
+    [&] {
+      std::string name = manifest.function;
+      std::ranges::transform(name, name.begin(), [](unsigned char character) {
+        return static_cast<char>(std::toupper(character));
+      });
+      return name;
+    }(),
+    manifest.inputs.size(),
+    [&] {
+      std::string name = manifest.function;
+      std::ranges::transform(name, name.begin(), [](unsigned char character) {
+        return static_cast<char>(std::toupper(character));
+      });
+      return name;
+    }(),
+    manifest.outputs.size());
   std::set<std::string> macros;
   for (const Argument* argument : [&] {
          std::vector<const Argument*> result;
@@ -689,11 +708,20 @@ std::string macro_name(const Manifest& manifest,
          return result;
        }()) {
     if (argument->dynamic_rank) {
-      contents += std::format("#define {} {}\n#define {} {}\n\n",
+      contents += std::format("#define {} {}\n#define {} {}\n",
                               macro_name(manifest, *argument, "rank_min"),
                               argument->rank_min,
                               macro_name(manifest, *argument, "rank_max"),
                               argument->rank_max);
+      if (std::ranges::any_of(manifest.outputs, [&](const Argument& output) {
+            return &output == argument;
+          })) {
+        contents +=
+          std::format("#define {} {}\n",
+                      macro_name(manifest, *argument, "shape_depends_on_data"),
+                      argument->shape_depends_on_data ? 1 : 0);
+      }
+      contents += "\n";
       continue;
     }
     const std::string rank_macro = macro_name(manifest, *argument, "rank");
@@ -709,7 +737,8 @@ std::string macro_name(const Manifest& manifest,
       contents += std::format(
         "#define {} {}\n",
         macro_name(manifest, *argument, std::format("dim{}", index)),
-        dimension < 0 ? "NCNN_DYNAMIC_DIM" : std::to_string(dimension));
+        dimension < 0 ? "NCNN_DYNAMIC_DIM"
+                      : std::format("INT64_C({})", dimension));
     }
     contents += std::format("#define {} UINT32_C(0x{:x})\n",
                             macro_name(manifest, *argument, "dynamic_dim_mask"),
@@ -719,8 +748,24 @@ std::string macro_name(const Manifest& manifest,
       if (!count) {
         return std::unexpected(count.error());
       }
-      contents += std::format(
-        "#define {} {}\n", macro_name(manifest, *argument, "elements"), *count);
+      contents += std::format("#define {} UINT64_C({})\n",
+                              macro_name(manifest, *argument, "elements"),
+                              *count);
+    }
+    if (argument->shape_depends_on_data) {
+      for (auto [index, dimension] : llvm::enumerate(argument->maximum_shape)) {
+        contents += std::format(
+          "#define {} INT64_C({})\n",
+          macro_name(manifest, *argument, std::format("max_dim{}", index)),
+          dimension);
+      }
+      auto count = element_count(*argument);
+      if (!count) {
+        return std::unexpected(count.error());
+      }
+      contents += std::format("#define {} UINT64_C({})\n",
+                              macro_name(manifest, *argument, "max_elements"),
+                              *count);
     }
     if (std::ranges::any_of(manifest.outputs, [&](const Argument& output) {
           return &output == argument;
@@ -766,11 +811,18 @@ std::string macro_name(const Manifest& manifest,
     }
     contents += std::format("{}{} *{}", first ? "" : ", ", *type, output.name);
     first = false;
-    if (output.shape_depends_on_data) {
-      contents += std::format(", int64_t {}_actual_shape[{}]",
-                              output.name,
-                              macro_name(manifest, output, "rank"));
+  }
+  for (const Argument& output : manifest.outputs) {
+    if (!output.shape_depends_on_data) {
+      continue;
     }
+    contents += std::format(
+      ", int64_t *{}_shape, "
+      "uint32_t {}_shape_capacity, "
+      "uint32_t *{}_rank",
+      output.name,
+      output.name,
+      output.name);
   }
   contents += ");\n";
   const bool has_dynamic_output =
@@ -1152,11 +1204,15 @@ validate_output_directory(const fs::path& output_dir,
   }
   for (const Argument& output : manifest.outputs) {
     call_arguments.push_back(output.name);
+  }
+  for (const Argument& output : manifest.outputs) {
     if (output.shape_depends_on_data) {
-      code += std::format("  int64_t {}_actual_shape[{}] = {{0}};\n",
-                          output.name,
-                          output.shape.size());
-      call_arguments.push_back(output.name + "_actual_shape");
+      code += std::format(
+        "  int64_t {}_shape[{}] = {{0}};\n", output.name, output.shape.size());
+      call_arguments.push_back(output.name + "_shape");
+      call_arguments.push_back(std::to_string(output.shape.size()));
+      code += std::format("  uint32_t {}_rank = 0;\n", output.name);
+      call_arguments.push_back("&" + output.name + "_rank");
     }
   }
   auto call = [&](std::optional<std::size_t> null_index) {

@@ -284,14 +284,33 @@ int CompiledModel::run_three_inputs_two_outputs(
   if (symbol_ == nullptr) {
     return -1;
   }
-  using Function =
-    int (*)(const float*, const float*, const float*, float*, std::int64_t*);
+  using Function = int (*)(const float*,
+                           const float*,
+                           const float*,
+                           float*,
+                           std::int64_t*,
+                           std::uint32_t,
+                           std::uint32_t*);
   static_assert(sizeof(Function) == sizeof(symbol_));
-  return std::bit_cast<Function>(symbol_)(first_input.data(),
-                                          second_input.data(),
-                                          third_input.data(),
-                                          first_output.data(),
-                                          second_output.data());
+  std::uint32_t rank = 0;
+  Function function = std::bit_cast<Function>(symbol_);
+  if (function(first_input.data(),
+               second_input.data(),
+               third_input.data(),
+               first_output.data(),
+               second_output.data(),
+               second_output.size() - 1,
+               &rank) == 0) {
+    return -3;
+  }
+  int status = function(first_input.data(),
+                        second_input.data(),
+                        third_input.data(),
+                        first_output.data(),
+                        second_output.data(),
+                        second_output.size(),
+                        &rank);
+  return status == 0 && rank != second_output.size() ? -2 : status;
 }
 
 std::vector<float> make_random_input(std::size_t size,

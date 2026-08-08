@@ -39,6 +39,7 @@ module {
 // MANIFEST-NOT: "name": "output2"
 
 // LLVM-LABEL: llvm.func @compact_positive(
-// LLVM-SAME: !llvm.ptr, %{{.*}}: !llvm.ptr, %{{.*}}: !llvm.ptr) -> i32
+// LLVM-SAME: !llvm.ptr, %{{.*}}: !llvm.ptr, %{{.*}}: !llvm.ptr, %{{.*}}: i32, %{{.*}}: !llvm.ptr) -> i32
 // LLVM: llvm.call @__ncnn_internal_compact_positive(
+// LLVM: llvm.store
 // LLVM-NOT: llvm.func @compact_positive_infer_output_shapes

@@ -151,11 +151,13 @@ def write_header(path, manifest):
             parameters.append(f"const int64_t {argument['name']}_shape[{rank}]")
     for argument in manifest["outputs"]:
         parameters.append(f"{c_type(argument)} *{argument['name']}")
+    for argument in manifest["outputs"]:
         if argument.get("shape_depends_on_data", False):
-            rank = macro_name(function, argument, "rank")
-            parameters.append(
-                f"int64_t {argument['name']}_actual_shape[{rank}]"
-            )
+            parameters.extend([
+                f"int64_t *{argument['name']}_shape",
+                f"uint32_t {argument['name']}_shape_capacity",
+                f"uint32_t *{argument['name']}_rank",
+            ])
     declaration = f"int {function}({', '.join(parameters)});"
     dynamic_outputs = [
         argument for argument in manifest["outputs"]
@@ -200,12 +202,18 @@ def write_header(path, manifest):
                 f"{argument['rank_min']}",
                 f"#define {macro_name(function, argument, 'rank_max')} "
                 f"{argument['rank_max']}",
-                "",
             ])
+            if argument in manifest["outputs"]:
+                depends = int(argument.get("shape_depends_on_data", False))
+                sizes.append(
+                    f"#define {macro_name(function, argument, 'shape_depends_on_data')} "
+                    f"{depends}"
+                )
+            sizes.append("")
             continue
         sizes.append(f"#define {macro_name(function, argument, 'rank')} {len(argument['shape'])}")
         for index, dimension in enumerate(argument["shape"]):
-            value = "NCNN_DYNAMIC_DIM" if dimension < 0 else dimension
+            value = "NCNN_DYNAMIC_DIM" if dimension < 0 else f"INT64_C({dimension})"
             sizes.append(f"#define {macro_name(function, argument, f'dim{index}')} {value}")
         mask = argument["dynamic_dim_mask"]
         sizes.append(
@@ -215,7 +223,17 @@ def write_header(path, manifest):
         if not mask:
             sizes.append(
                 f"#define {macro_name(function, argument, 'elements')} "
-                f"{element_count(argument)}"
+                f"UINT64_C({element_count(argument)})"
+            )
+        if argument.get("shape_depends_on_data", False):
+            for index, dimension in enumerate(argument["maximum_shape"]):
+                sizes.append(
+                    f"#define {macro_name(function, argument, f'max_dim{index}')} "
+                    f"INT64_C({dimension})"
+                )
+            sizes.append(
+                f"#define {macro_name(function, argument, 'max_elements')} "
+                f"UINT64_C({element_count(argument)})"
             )
         if argument in manifest["outputs"]:
             depends = int(argument.get("shape_depends_on_data", False))
@@ -230,6 +248,8 @@ def write_header(path, manifest):
         "#define NCNN_MAX_RANK 4\n\n"
         "typedef uint16_t ncnn_float16_t;\n"
         "typedef uint16_t ncnn_bfloat16_t;\n\n"
+        f"#define {function.upper()}_INPUT_COUNT {len(manifest['inputs'])}\n"
+        f"#define {function.upper()}_OUTPUT_COUNT {len(manifest['outputs'])}\n\n"
         + "\n".join(sizes)
         + "\n\n"
         "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n"
@@ -288,12 +308,18 @@ def write_harness(path, header_name, manifest):
         declarations.append(f"  if (!{argument['name']}) return 2;")
         names.append(argument["name"])
         allocated_names.append(argument["name"])
+    for argument in manifest["outputs"]:
         if argument.get("shape_depends_on_data", False):
-            declarations.append(
-                f"  int64_t {argument['name']}_actual_shape["
-                f"{len(argument['shape'])}] = {{0}};"
-            )
-            names.append(f"{argument['name']}_actual_shape")
+            declarations.extend([
+                f"  int64_t {argument['name']}_shape["
+                f"{len(argument['shape'])}] = {{0}};",
+                f"  uint32_t {argument['name']}_rank = 0;",
+            ])
+            names.extend([
+                f"{argument['name']}_shape",
+                str(len(argument["shape"])),
+                f"&{argument['name']}_rank",
+            ])
     null_checks = []
     for index in range(len(names)):
         call_arguments = names.copy()

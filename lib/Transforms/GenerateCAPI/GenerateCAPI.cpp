@@ -76,6 +76,8 @@ constexpr StringLiteral kOutputShapeSourcesAttr =
   "ncnn.c_api.output_shape_sources";
 constexpr StringLiteral kOutputShapeProgramsAttr =
   "ncnn.c_api.output_shape_programs";
+constexpr StringLiteral kShapeCarrierIndicesAttr =
+  "ncnn.c_api.shape_carrier_indices";
 constexpr StringLiteral kRankVariantNamesAttr = "ncnn.c_api.rank_variant_names";
 constexpr StringLiteral kRankVariantTypesAttr = "ncnn.c_api.rank_variant_types";
 
@@ -372,6 +374,7 @@ class GenerateCAPIPass final
 
     SmallVector<Attribute> argumentTypes;
     SmallVector<int32_t> outputIndices;
+    SmallVector<int32_t> shapeCarrierIndices;
     SmallVector<llvm::json::Object> inputManifest;
     SmallVector<llvm::json::Object> outputManifest;
     for (unsigned index = 0; index < function.getNumArguments(); ++index) {
@@ -386,6 +389,7 @@ class GenerateCAPIPass final
         outputIndices.push_back(static_cast<int32_t>(info.functionIndex));
       }
       if (info.shapeCarrier) {
+        shapeCarrierIndices.push_back(static_cast<int32_t>(info.functionIndex));
         ++outputInfoIndex;
         continue;
       }
@@ -462,6 +466,8 @@ class GenerateCAPIPass final
                             builder.getDenseI32ArrayAttr(outputShapeSources));
     getOperation()->setAttr(kOutputShapeProgramsAttr,
                             builder.getArrayAttr(outputShapePrograms));
+    getOperation()->setAttr(kShapeCarrierIndicesAttr,
+                            builder.getDenseI32ArrayAttr(shapeCarrierIndices));
     return success();
   }
 
@@ -543,9 +549,11 @@ class FinalizeCAPIPass final
       getOperation()->getAttrOfType<DenseI32ArrayAttr>(kOutputShapeSourcesAttr);
     auto outputShapePrograms =
       getOperation()->getAttrOfType<ArrayAttr>(kOutputShapeProgramsAttr);
+    auto shapeCarrierIndices = getOperation()->getAttrOfType<DenseI32ArrayAttr>(
+      kShapeCarrierIndicesAttr);
     auto internal = getOperation().lookupSymbol<LLVM::LLVMFuncOp>(internalName);
     if (!internal || !argumentTypeAttrs || !outputIndices ||
-        !outputShapeSources || !outputShapePrograms) {
+        !outputShapeSources || !outputShapePrograms || !shapeCarrierIndices) {
       getOperation().emitError("has incomplete prepared ncnn C ABI metadata");
       signalPassFailure();
       return;
@@ -559,6 +567,10 @@ class FinalizeCAPIPass final
     llvm::SmallDenseSet<unsigned> outputs;
     for (int32_t index : outputIndices.asArrayRef()) {
       outputs.insert(static_cast<unsigned>(index));
+    }
+    llvm::SmallDenseSet<unsigned> shapeCarriers;
+    for (int32_t index : shapeCarrierIndices.asArrayRef()) {
+      shapeCarriers.insert(static_cast<unsigned>(index));
     }
     SmallVector<int32_t> shapeSources(outputShapeSources.asArrayRef());
     SmallVector<SmallVector<SmallVector<int64_t>>> shapePrograms;
@@ -583,7 +595,12 @@ class FinalizeCAPIPass final
       }
     }
     for (unsigned index = 0; index < argumentTypes.size(); ++index) {
-      if (outputs.contains(index)) {
+      if (outputs.contains(index) && !shapeCarriers.contains(index)) {
+        wrapperOrder.push_back(index);
+      }
+    }
+    for (unsigned index = 0; index < argumentTypes.size(); ++index) {
+      if (shapeCarriers.contains(index)) {
         wrapperOrder.push_back(index);
       }
     }
@@ -591,11 +608,29 @@ class FinalizeCAPIPass final
     LLVMTypeConverter typeConverter(getOperation().getContext());
     auto pointerType = LLVM::LLVMPointerType::get(getOperation().getContext());
     SmallVector<Type> wrapperTypes;
+    SmallVector<bool> wrapperPointers;
+    SmallVector<unsigned> wrapperDataIndices(argumentTypes.size());
+    SmallVector<unsigned> wrapperShapeIndices(argumentTypes.size());
+    SmallVector<unsigned> wrapperCapacityIndices(argumentTypes.size());
+    SmallVector<unsigned> wrapperRankIndices(argumentTypes.size());
     for (unsigned functionIndex : wrapperOrder) {
+      wrapperDataIndices[functionIndex] = wrapperTypes.size();
       wrapperTypes.push_back(pointerType);
+      wrapperPointers.push_back(true);
       if (!outputs.contains(functionIndex) &&
           !argumentTypes[functionIndex].hasStaticShape()) {
+        wrapperShapeIndices[functionIndex] = wrapperTypes.size();
         wrapperTypes.push_back(pointerType);
+        wrapperPointers.push_back(true);
+      }
+      if (shapeCarriers.contains(functionIndex)) {
+        wrapperCapacityIndices[functionIndex] = wrapperTypes.size();
+        wrapperTypes.push_back(
+          IntegerType::get(getOperation().getContext(), 32));
+        wrapperPointers.push_back(false);
+        wrapperRankIndices[functionIndex] = wrapperTypes.size();
+        wrapperTypes.push_back(pointerType);
+        wrapperPointers.push_back(true);
       }
     }
     auto wrapperType = LLVM::LLVMFunctionType::get(
@@ -614,7 +649,10 @@ class FinalizeCAPIPass final
     Value nullPointer =
       builder.create<LLVM::ZeroOp>(internal.getLoc(), pointerType);
     Value anyNull;
-    for (Value argument : entry->getArguments()) {
+    for (auto [index, argument] : llvm::enumerate(entry->getArguments())) {
+      if (!wrapperPointers[index]) {
+        continue;
+      }
       Value isNull = builder.create<LLVM::ICmpOp>(
         internal.getLoc(), LLVM::ICmpPredicate::eq, argument, nullPointer);
       anyNull =
@@ -635,7 +673,6 @@ class FinalizeCAPIPass final
 
     builder.setInsertionPointToStart(nonNullBlock);
     Value invalidShape;
-    unsigned validationIndex = 0;
     auto i64Type = builder.getI64Type();
     auto applyShapeTransform =
       [&](Value extent, unsigned outputIndex, unsigned dimension) {
@@ -659,12 +696,11 @@ class FinalizeCAPIPass final
         return extent;
       };
     for (unsigned functionIndex : wrapperOrder) {
-      ++validationIndex;
       MemRefType type = argumentTypes[functionIndex];
       if (outputs.contains(functionIndex) || type.hasStaticShape()) {
         continue;
       }
-      Value shape = entry->getArgument(validationIndex++);
+      Value shape = entry->getArgument(wrapperShapeIndices[functionIndex]);
       for (auto [dimensionIndex, dimension] :
            llvm::enumerate(type.getShape())) {
         Value address = builder.create<LLVM::GEPOp>(
@@ -696,6 +732,22 @@ class FinalizeCAPIPass final
                          : invalid;
       }
     }
+    for (unsigned carrierIndex : shapeCarriers) {
+      Value capacity = entry->getArgument(wrapperCapacityIndices[carrierIndex]);
+      Value required = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(),
+        builder.getI32IntegerAttr(argumentTypes[carrierIndex].getShape()[0]));
+      Value valid = builder.create<LLVM::ICmpOp>(
+        internal.getLoc(), LLVM::ICmpPredicate::uge, capacity, required);
+      Value invalid = builder.create<LLVM::XOrOp>(
+        internal.getLoc(),
+        valid,
+        builder.create<LLVM::ConstantOp>(internal.getLoc(),
+                                         builder.getBoolAttr(true)));
+      invalidShape = invalidShape ? builder.create<LLVM::OrOp>(
+                                      internal.getLoc(), invalidShape, invalid)
+                                  : invalid;
+    }
     if (invalidShape) {
       builder.create<LLVM::CondBrOp>(internal.getLoc(),
                                      invalidShape,
@@ -710,10 +762,9 @@ class FinalizeCAPIPass final
     builder.setInsertionPointToStart(invokeBlock);
     SmallVector<SmallVector<Value>> unpacked(argumentTypes.size());
     SmallVector<Value> inputShapes(inputIndices.size());
-    unsigned wrapperIndex = 0;
     for (unsigned functionIndex : wrapperOrder) {
       MemRefType type = argumentTypes[functionIndex];
-      Value data = entry->getArgument(wrapperIndex++);
+      Value data = entry->getArgument(wrapperDataIndices[functionIndex]);
       MemRefDescriptor descriptor = [&] {
         if (type.hasStaticShape()) {
           return MemRefDescriptor::fromStaticShape(
@@ -728,7 +779,7 @@ class FinalizeCAPIPass final
             outputPosition - outputArgumentIndices.begin());
           shape = inputShapes[shapeSources[outputIndex]];
         } else {
-          shape = entry->getArgument(wrapperIndex++);
+          shape = entry->getArgument(wrapperShapeIndices[functionIndex]);
           auto inputPosition = llvm::find(inputIndices, functionIndex);
           inputShapes[inputPosition - inputIndices.begin()] = shape;
         }
@@ -790,6 +841,15 @@ class FinalizeCAPIPass final
                                  internal.getFunctionType(),
                                  internalName.getValue(),
                                  callArguments);
+    for (unsigned carrierIndex : shapeCarriers) {
+      Value rank = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(),
+        builder.getI32IntegerAttr(argumentTypes[carrierIndex].getShape()[0]));
+      builder.create<LLVM::StoreOp>(
+        internal.getLoc(),
+        rank,
+        entry->getArgument(wrapperRankIndices[carrierIndex]));
+    }
     Value success = builder.create<LLVM::ConstantOp>(
       internal.getLoc(), builder.getI32IntegerAttr(0));
     builder.create<LLVM::ReturnOp>(internal.getLoc(), success);
@@ -952,6 +1012,7 @@ class FinalizeCAPIPass final
     getOperation()->removeAttr(kOutputIndicesAttr);
     getOperation()->removeAttr(kOutputShapeSourcesAttr);
     getOperation()->removeAttr(kOutputShapeProgramsAttr);
+    getOperation()->removeAttr(kShapeCarrierIndicesAttr);
   }
 
  private:
