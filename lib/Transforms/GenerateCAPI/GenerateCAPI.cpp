@@ -468,6 +468,28 @@ class GenerateCAPIPass final
         if (outputShapeSources[outputInfoIndex] >= 0) {
           argument["shape_source_input"] = outputShapeSources[outputInfoIndex];
         }
+        if (!info.type.hasStaticShape() && !dataDependent) {
+          auto programs =
+            dyn_cast<ArrayAttr>(outputShapePrograms[outputInfoIndex]);
+          if (!programs) {
+            return function.emitOpError(
+              "has no serialized dynamic output shape program");
+          }
+          llvm::json::Array serializedPrograms;
+          for (Attribute program : programs) {
+            auto values = dyn_cast<DenseI64ArrayAttr>(program);
+            if (!values) {
+              return function.emitOpError(
+                "has an invalid serialized output shape program");
+            }
+            llvm::json::Array serialized;
+            for (int64_t value : values.asArrayRef()) {
+              serialized.push_back(value);
+            }
+            serializedPrograms.push_back(std::move(serialized));
+          }
+          argument["shape_program"] = std::move(serializedPrograms);
+        }
         ++outputInfoIndex;
       }
       (info.output ? outputManifest : inputManifest)
@@ -687,6 +709,18 @@ class FinalizeCAPIPass final
         wrapperTypes.push_back(pointerType);
         wrapperPointers.push_back(true);
       }
+    }
+    for (unsigned functionIndex : wrapperOrder) {
+      if (outputs.contains(functionIndex) &&
+          !argumentTypes[functionIndex].hasStaticShape() &&
+          !shapeCarriers.contains(functionIndex)) {
+        wrapperCapacityIndices[functionIndex] = wrapperTypes.size();
+        wrapperTypes.push_back(
+          IntegerType::get(getOperation().getContext(), 64));
+        wrapperPointers.push_back(false);
+      }
+    }
+    for (unsigned functionIndex : wrapperOrder) {
       if (shapeCarriers.contains(functionIndex)) {
         wrapperCapacityIndices[functionIndex] = wrapperTypes.size();
         wrapperTypes.push_back(
@@ -708,6 +742,14 @@ class FinalizeCAPIPass final
     Block* nonNullBlock = &wrapper.getBody().emplaceBlock();
     Block* invokeBlock = &wrapper.getBody().emplaceBlock();
     Block* errorBlock = &wrapper.getBody().emplaceBlock();
+    Block* shapeErrorBlock = &wrapper.getBody().emplaceBlock();
+    Block* constraintErrorBlock = &wrapper.getBody().emplaceBlock();
+    Block* overflowErrorBlock = &wrapper.getBody().emplaceBlock();
+    Block* capacityErrorBlock = &wrapper.getBody().emplaceBlock();
+    Block* shapeValidBlock = &wrapper.getBody().emplaceBlock();
+    Block* constraintValidBlock = &wrapper.getBody().emplaceBlock();
+    Block* arithmeticValidBlock = &wrapper.getBody().emplaceBlock();
+    Block* outputShapeValidBlock = &wrapper.getBody().emplaceBlock();
 
     builder.setInsertionPointToStart(entry);
     Value nullPointer =
@@ -734,29 +776,78 @@ class FinalizeCAPIPass final
     Value failure = builder.create<LLVM::ConstantOp>(
       internal.getLoc(), builder.getI32IntegerAttr(1));
     builder.create<LLVM::ReturnOp>(internal.getLoc(), failure);
+    auto emitStatus = [&](Block* block, int32_t status) {
+      builder.setInsertionPointToStart(block);
+      Value value = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getI32IntegerAttr(status));
+      builder.create<LLVM::ReturnOp>(internal.getLoc(), value);
+    };
+    emitStatus(shapeErrorBlock, 2);
+    emitStatus(constraintErrorBlock, 3);
+    emitStatus(overflowErrorBlock, 4);
+    builder.setInsertionPointToStart(capacityErrorBlock);
+    Value capacityFailure = builder.create<LLVM::ConstantOp>(
+      internal.getLoc(), builder.getI32IntegerAttr(5));
+    builder.create<LLVM::ReturnOp>(internal.getLoc(), capacityFailure);
 
     builder.setInsertionPointToStart(nonNullBlock);
     Value invalidShape;
+    Value invalidOutputShape;
+    Value invalidConstraint;
+    Value arithmeticInvalid;
     auto i64Type = builder.getI64Type();
+    auto overflowResultType = LLVM::LLVMStructType::getLiteral(
+      getOperation().getContext(), {i64Type, builder.getI1Type()});
+    auto mergeFlag = [&](Value current, Value next) {
+      return current
+               ? builder.create<LLVM::OrOp>(internal.getLoc(), current, next)
+               : next;
+    };
+    auto checkedMultiply = [&](Value lhs, Value rhs) {
+      Value result = builder.create<LLVM::UMulWithOverflowOp>(
+        internal.getLoc(), overflowResultType, lhs, rhs);
+      Value value = builder.create<LLVM::ExtractValueOp>(
+        internal.getLoc(), result, ArrayRef<int64_t>{0});
+      Value overflow = builder.create<LLVM::ExtractValueOp>(
+        internal.getLoc(), result, ArrayRef<int64_t>{1});
+      return std::pair<Value, Value>{value, overflow};
+    };
     auto applyShapeTransform =
       [&](Value extent, unsigned outputIndex, unsigned dimension) {
+        Value overflow;
         const DimensionExpr& expression = shapePrograms[outputIndex][dimension];
         for (ShapeInstruction instruction : expression.getInstructions()) {
           const int64_t operand = instruction.operand;
           Value value = builder.create<LLVM::ConstantOp>(
             internal.getLoc(), builder.getI64IntegerAttr(operand));
           if (instruction.opcode == ShapeOpcode::Add) {
-            extent =
-              builder.create<LLVM::AddOp>(internal.getLoc(), extent, value);
+            Value result = builder.create<LLVM::SAddWithOverflowOp>(
+              internal.getLoc(), overflowResultType, extent, value);
+            extent = builder.create<LLVM::ExtractValueOp>(
+              internal.getLoc(), result, ArrayRef<int64_t>{0});
+            overflow =
+              mergeFlag(overflow,
+                        builder.create<LLVM::ExtractValueOp>(
+                          internal.getLoc(), result, ArrayRef<int64_t>{1}));
           } else if (instruction.opcode == ShapeOpcode::Multiply) {
-            extent =
-              builder.create<LLVM::MulOp>(internal.getLoc(), extent, value);
+            Value result = builder.create<LLVM::SMulWithOverflowOp>(
+              internal.getLoc(), overflowResultType, extent, value);
+            extent = builder.create<LLVM::ExtractValueOp>(
+              internal.getLoc(), result, ArrayRef<int64_t>{0});
+            overflow =
+              mergeFlag(overflow,
+                        builder.create<LLVM::ExtractValueOp>(
+                          internal.getLoc(), result, ArrayRef<int64_t>{1}));
           } else {
             extent =
               builder.create<LLVM::SDivOp>(internal.getLoc(), extent, value);
           }
         }
-        return extent;
+        if (!overflow) {
+          overflow = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(), builder.getBoolAttr(false));
+        }
+        return std::pair<Value, Value>{extent, overflow};
       };
     for (unsigned functionIndex : wrapperOrder) {
       MemRefType type = argumentTypes[functionIndex];
@@ -764,6 +855,8 @@ class FinalizeCAPIPass final
         continue;
       }
       Value shape = entry->getArgument(wrapperShapeIndices[functionIndex]);
+      Value inputElements = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getI64IntegerAttr(1));
       for (auto [dimensionIndex, dimension] :
            llvm::enumerate(type.getShape())) {
         Value address = builder.create<LLVM::GEPOp>(
@@ -793,6 +886,9 @@ class FinalizeCAPIPass final
                          ? builder.create<LLVM::OrOp>(
                              internal.getLoc(), invalidShape, invalid)
                          : invalid;
+        auto multiplied = checkedMultiply(inputElements, size);
+        inputElements = multiplied.first;
+        arithmeticInvalid = mergeFlag(arithmeticInvalid, multiplied.second);
         const auto inputIndex = static_cast<unsigned>(
           llvm::find(inputIndices, functionIndex) - inputIndices.begin());
         for (DimConstraintAttr constraint : constraintsByInput[inputIndex]) {
@@ -819,10 +915,73 @@ class FinalizeCAPIPass final
             constraintValid,
             builder.create<LLVM::ConstantOp>(internal.getLoc(),
                                              builder.getBoolAttr(true)));
-          invalidShape = builder.create<LLVM::OrOp>(
-            internal.getLoc(), invalidShape, constraintInvalid);
+          invalidConstraint = mergeFlag(invalidConstraint, constraintInvalid);
         }
       }
+      const unsigned elementBytes =
+        type.getElementType().getIntOrFloatBitWidth() / 8;
+      auto inputBytes = checkedMultiply(
+        inputElements,
+        builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getI64IntegerAttr(elementBytes)));
+      arithmeticInvalid = mergeFlag(arithmeticInvalid, inputBytes.second);
+    }
+    Value capacityInvalid;
+    for (auto [outputIndex, functionIndex] :
+         llvm::enumerate(outputArgumentIndices)) {
+      MemRefType type = argumentTypes[functionIndex];
+      if (type.hasStaticShape() || shapeCarriers.contains(functionIndex)) {
+        continue;
+      }
+      Value sourceShape = entry->getArgument(
+        wrapperShapeIndices[inputIndices[shapeSources[outputIndex]]]);
+      Value required = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getI64IntegerAttr(1));
+      for (auto [dimensionIndex, dimension] :
+           llvm::enumerate(type.getShape())) {
+        Value extent;
+        if (ShapedType::isDynamic(dimension)) {
+          Value address = builder.create<LLVM::GEPOp>(
+            internal.getLoc(),
+            pointerType,
+            i64Type,
+            sourceShape,
+            ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimensionIndex)});
+          extent =
+            builder.create<LLVM::LoadOp>(internal.getLoc(), i64Type, address);
+          auto transformed =
+            applyShapeTransform(extent, outputIndex, dimensionIndex);
+          extent = transformed.first;
+          arithmeticInvalid = mergeFlag(arithmeticInvalid, transformed.second);
+        } else {
+          extent = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(), builder.getI64IntegerAttr(dimension));
+        }
+        Value nonPositive = builder.create<LLVM::ICmpOp>(
+          internal.getLoc(),
+          LLVM::ICmpPredicate::sle,
+          extent,
+          builder.create<LLVM::ConstantOp>(internal.getLoc(),
+                                           builder.getI64IntegerAttr(0)));
+        Value invalid = nonPositive;
+        invalidOutputShape = mergeFlag(invalidOutputShape, invalid);
+        auto multiplied = checkedMultiply(required, extent);
+        required = multiplied.first;
+        arithmeticInvalid = mergeFlag(arithmeticInvalid, multiplied.second);
+      }
+      Value capacity =
+        entry->getArgument(wrapperCapacityIndices[functionIndex]);
+      Value insufficient = builder.create<LLVM::ICmpOp>(
+        internal.getLoc(), LLVM::ICmpPredicate::ugt, required, capacity);
+      capacityInvalid = mergeFlag(capacityInvalid, insufficient);
+      const unsigned elementBytes =
+        argumentTypes[functionIndex].getElementType().getIntOrFloatBitWidth() /
+        8;
+      auto byteCount = checkedMultiply(
+        required,
+        builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getI64IntegerAttr(elementBytes)));
+      arithmeticInvalid = mergeFlag(arithmeticInvalid, byteCount.second);
     }
     for (unsigned carrierIndex : shapeCarriers) {
       Value capacity = entry->getArgument(wrapperCapacityIndices[carrierIndex]);
@@ -840,16 +999,60 @@ class FinalizeCAPIPass final
                                       internal.getLoc(), invalidShape, invalid)
                                   : invalid;
     }
-    if (invalidShape) {
-      builder.create<LLVM::CondBrOp>(internal.getLoc(),
-                                     invalidShape,
-                                     errorBlock,
-                                     ValueRange{},
-                                     invokeBlock,
-                                     ValueRange{});
-    } else {
-      builder.create<LLVM::BrOp>(internal.getLoc(), ValueRange{}, invokeBlock);
+    if (!capacityInvalid) {
+      capacityInvalid = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getBoolAttr(false));
     }
+    if (!invalidShape) {
+      invalidShape = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getBoolAttr(false));
+    }
+    if (!invalidConstraint) {
+      invalidConstraint = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getBoolAttr(false));
+    }
+    if (!arithmeticInvalid) {
+      arithmeticInvalid = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getBoolAttr(false));
+    }
+    if (!invalidOutputShape) {
+      invalidOutputShape = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getBoolAttr(false));
+    }
+    builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                   invalidShape,
+                                   shapeErrorBlock,
+                                   ValueRange{},
+                                   shapeValidBlock,
+                                   ValueRange{});
+    builder.setInsertionPointToStart(shapeValidBlock);
+    builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                   invalidConstraint,
+                                   constraintErrorBlock,
+                                   ValueRange{},
+                                   constraintValidBlock,
+                                   ValueRange{});
+    builder.setInsertionPointToStart(constraintValidBlock);
+    builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                   arithmeticInvalid,
+                                   overflowErrorBlock,
+                                   ValueRange{},
+                                   arithmeticValidBlock,
+                                   ValueRange{});
+    builder.setInsertionPointToStart(arithmeticValidBlock);
+    builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                   invalidOutputShape,
+                                   shapeErrorBlock,
+                                   ValueRange{},
+                                   outputShapeValidBlock,
+                                   ValueRange{});
+    builder.setInsertionPointToStart(outputShapeValidBlock);
+    builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                   capacityInvalid,
+                                   capacityErrorBlock,
+                                   ValueRange{},
+                                   invokeBlock,
+                                   ValueRange{});
 
     builder.setInsertionPointToStart(invokeBlock);
     SmallVector<SmallVector<Value>> unpacked(argumentTypes.size());
@@ -901,7 +1104,8 @@ class FinalizeCAPIPass final
                 llvm::find(outputArgumentIndices, functionIndex);
               auto outputIndex = static_cast<unsigned>(
                 outputPosition - outputArgumentIndices.begin());
-              size = applyShapeTransform(size, outputIndex, dimensionIndex);
+              size =
+                applyShapeTransform(size, outputIndex, dimensionIndex).first;
             }
             sizes.push_back(size);
           }
@@ -914,8 +1118,7 @@ class FinalizeCAPIPass final
              ++reverseIndex) {
           unsigned dimensionIndex = type.getRank() - reverseIndex - 1;
           result.setStride(builder, internal.getLoc(), dimensionIndex, stride);
-          stride = builder.create<LLVM::MulOp>(
-            internal.getLoc(), stride, sizes[dimensionIndex]);
+          stride = checkedMultiply(stride, sizes[dimensionIndex]).first;
         }
         return result;
       }();
@@ -972,6 +1175,12 @@ class FinalizeCAPIPass final
       Block* shapeEntry = shapeFunction.addEntryBlock(builder);
       Block* shapeSuccess = &shapeFunction.getBody().emplaceBlock();
       Block* shapeError = &shapeFunction.getBody().emplaceBlock();
+      Block* shapeInvalidError = &shapeFunction.getBody().emplaceBlock();
+      Block* shapeConstraintError = &shapeFunction.getBody().emplaceBlock();
+      Block* shapeOverflowError = &shapeFunction.getBody().emplaceBlock();
+      Block* shapeValid = &shapeFunction.getBody().emplaceBlock();
+      Block* shapeConstraintValid = &shapeFunction.getBody().emplaceBlock();
+      Block* shapeArithmeticValid = &shapeFunction.getBody().emplaceBlock();
       Block* shapeReturn = &shapeFunction.getBody().emplaceBlock();
       builder.setInsertionPointToStart(shapeEntry);
       Value shapeNullPointer =
@@ -996,14 +1205,28 @@ class FinalizeCAPIPass final
       Value shapeFailure = builder.create<LLVM::ConstantOp>(
         internal.getLoc(), builder.getI32IntegerAttr(1));
       builder.create<LLVM::ReturnOp>(internal.getLoc(), shapeFailure);
+      auto emitShapeStatus = [&](Block* block, int32_t status) {
+        builder.setInsertionPointToStart(block);
+        Value value = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getI32IntegerAttr(status));
+        builder.create<LLVM::ReturnOp>(internal.getLoc(), value);
+      };
+      emitShapeStatus(shapeInvalidError, 2);
+      emitShapeStatus(shapeConstraintError, 3);
+      emitShapeStatus(shapeOverflowError, 4);
       builder.setInsertionPointToStart(shapeSuccess);
       SmallVector<Value> shapeInputs(inputIndices.size());
       unsigned shapeArgumentIndex = 0;
       Value shapeInvalid;
+      Value outputShapeInvalid;
+      Value shapeConstraintInvalid;
+      Value shapeArithmeticInvalid;
       for (auto [inputIndex, functionIndex] : llvm::enumerate(inputIndices)) {
         if (!argumentTypes[functionIndex].hasStaticShape()) {
           Value inputShape = shapeEntry->getArgument(shapeArgumentIndex++);
           shapeInputs[inputIndex] = inputShape;
+          Value inputElements = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(), builder.getI64IntegerAttr(1));
           for (auto [dimensionIndex, dimension] :
                llvm::enumerate(argumentTypes[functionIndex].getShape())) {
             Value address = builder.create<LLVM::GEPOp>(
@@ -1033,6 +1256,10 @@ class FinalizeCAPIPass final
                              ? builder.create<LLVM::OrOp>(
                                  internal.getLoc(), shapeInvalid, invalid)
                              : invalid;
+            auto multiplied = checkedMultiply(inputElements, extent);
+            inputElements = multiplied.first;
+            shapeArithmeticInvalid =
+              mergeFlag(shapeArithmeticInvalid, multiplied.second);
             for (DimConstraintAttr constraint :
                  constraintsByInput[inputIndex]) {
               if (constraint.getDim() != dimensionIndex) {
@@ -1059,10 +1286,20 @@ class FinalizeCAPIPass final
                 constraintValid,
                 builder.create<LLVM::ConstantOp>(internal.getLoc(),
                                                  builder.getBoolAttr(true)));
-              shapeInvalid = builder.create<LLVM::OrOp>(
-                internal.getLoc(), shapeInvalid, constraintInvalid);
+              shapeConstraintInvalid =
+                mergeFlag(shapeConstraintInvalid, constraintInvalid);
             }
           }
+          const unsigned elementBytes = argumentTypes[functionIndex]
+                                          .getElementType()
+                                          .getIntOrFloatBitWidth() /
+                                        8;
+          auto inputBytes = checkedMultiply(
+            inputElements,
+            builder.create<LLVM::ConstantOp>(
+              internal.getLoc(), builder.getI64IntegerAttr(elementBytes)));
+          shapeArithmeticInvalid =
+            mergeFlag(shapeArithmeticInvalid, inputBytes.second);
         }
       }
       for (auto [outputIndex, functionIndex] :
@@ -1073,6 +1310,8 @@ class FinalizeCAPIPass final
         }
         Value destination = shapeEntry->getArgument(shapeArgumentIndex++);
         Value source = shapeInputs[shapeSources[outputIndex]];
+        Value outputElements = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getI64IntegerAttr(1));
         for (unsigned dimension = 0; dimension < type.getRank(); ++dimension) {
           Value sourceAddress = builder.create<LLVM::GEPOp>(
             internal.getLoc(),
@@ -1090,7 +1329,11 @@ class FinalizeCAPIPass final
           if (ShapedType::isDynamic(type.getShape()[dimension])) {
             extent = builder.create<LLVM::LoadOp>(
               internal.getLoc(), i64Type, sourceAddress);
-            extent = applyShapeTransform(extent, outputIndex, dimension);
+            auto transformed =
+              applyShapeTransform(extent, outputIndex, dimension);
+            extent = transformed.first;
+            shapeArithmeticInvalid =
+              mergeFlag(shapeArithmeticInvalid, transformed.second);
           } else {
             extent = builder.create<LLVM::ConstantOp>(
               internal.getLoc(),
@@ -1109,15 +1352,61 @@ class FinalizeCAPIPass final
             positive,
             builder.create<LLVM::ConstantOp>(internal.getLoc(),
                                              builder.getBoolAttr(true)));
-          shapeInvalid = shapeInvalid
-                           ? builder.create<LLVM::OrOp>(
-                               internal.getLoc(), shapeInvalid, invalid)
-                           : invalid;
+          outputShapeInvalid = mergeFlag(outputShapeInvalid, invalid);
+          auto multiplied = checkedMultiply(outputElements, extent);
+          outputElements = multiplied.first;
+          shapeArithmeticInvalid =
+            mergeFlag(shapeArithmeticInvalid, multiplied.second);
         }
+        const unsigned elementBytes =
+          type.getElementType().getIntOrFloatBitWidth() / 8;
+        auto outputBytes = checkedMultiply(
+          outputElements,
+          builder.create<LLVM::ConstantOp>(
+            internal.getLoc(), builder.getI64IntegerAttr(elementBytes)));
+        shapeArithmeticInvalid =
+          mergeFlag(shapeArithmeticInvalid, outputBytes.second);
+      }
+      if (!shapeInvalid) {
+        shapeInvalid = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getBoolAttr(false));
+      }
+      if (!shapeConstraintInvalid) {
+        shapeConstraintInvalid = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getBoolAttr(false));
+      }
+      if (!shapeArithmeticInvalid) {
+        shapeArithmeticInvalid = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getBoolAttr(false));
+      }
+      if (!outputShapeInvalid) {
+        outputShapeInvalid = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getBoolAttr(false));
       }
       builder.create<LLVM::CondBrOp>(internal.getLoc(),
                                      shapeInvalid,
-                                     shapeError,
+                                     shapeInvalidError,
+                                     ValueRange{},
+                                     shapeValid,
+                                     ValueRange{});
+      builder.setInsertionPointToStart(shapeValid);
+      builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                     shapeConstraintInvalid,
+                                     shapeConstraintError,
+                                     ValueRange{},
+                                     shapeConstraintValid,
+                                     ValueRange{});
+      builder.setInsertionPointToStart(shapeConstraintValid);
+      builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                     shapeArithmeticInvalid,
+                                     shapeOverflowError,
+                                     ValueRange{},
+                                     shapeArithmeticValid,
+                                     ValueRange{});
+      builder.setInsertionPointToStart(shapeArithmeticValid);
+      builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                     outputShapeInvalid,
+                                     shapeInvalidError,
                                      ValueRange{},
                                      shapeReturn,
                                      ValueRange{});
@@ -1166,11 +1455,16 @@ class FinalizeCAPIPass final
     auto i32Type = builder.getI32Type();
     auto i64Type = builder.getI64Type();
     auto statusType = LLVM::LLVMFunctionType::get(
-      i32Type, {pointerType, pointerType, i32Type, pointerType}, false);
+      i32Type,
+      {pointerType, pointerType, i32Type, pointerType, i64Type},
+      false);
     auto wrapper = builder.create<LLVM::LLVMFuncOp>(
       location, exportName.getValue(), statusType, LLVM::Linkage::External);
     Block* entry = wrapper.addEntryBlock(builder);
     Block* error = &wrapper.getBody().emplaceBlock();
+    Block* invalid = &wrapper.getBody().emplaceBlock();
+    Block* overflowError = &wrapper.getBody().emplaceBlock();
+    Block* capacityError = &wrapper.getBody().emplaceBlock();
     SmallVector<Block*, 4> dispatch;
     SmallVector<Block*, 4> invoke;
     for (unsigned rank = 0; rank < 4; ++rank) {
@@ -1198,6 +1492,24 @@ class FinalizeCAPIPass final
       location, anyNull, error, ValueRange{}, dispatch.front(), ValueRange{});
     builder.setInsertionPointToStart(error);
     builder.create<LLVM::ReturnOp>(location, constantI32(1));
+    builder.setInsertionPointToStart(invalid);
+    builder.create<LLVM::ReturnOp>(location, constantI32(2));
+    builder.setInsertionPointToStart(overflowError);
+    builder.create<LLVM::ReturnOp>(location, constantI32(4));
+    builder.setInsertionPointToStart(capacityError);
+    builder.create<LLVM::ReturnOp>(location, constantI32(5));
+
+    auto overflowResultType =
+      LLVM::LLVMStructType::getLiteral(context, {i64Type, builder.getI1Type()});
+    auto checkedMultiply = [&](Value lhs, Value rhs) {
+      Value result = builder.create<LLVM::UMulWithOverflowOp>(
+        location, overflowResultType, lhs, rhs);
+      Value value = builder.create<LLVM::ExtractValueOp>(
+        location, result, ArrayRef<int64_t>{0});
+      Value overflow = builder.create<LLVM::ExtractValueOp>(
+        location, result, ArrayRef<int64_t>{1});
+      return std::pair<Value, Value>{value, overflow};
+    };
 
     LLVMTypeConverter converter(context);
     auto makeDescriptor = [&](MemRefType type, Value data, Value shape) {
@@ -1242,10 +1554,12 @@ class FinalizeCAPIPass final
                                      matches,
                                      invoke[index],
                                      ValueRange{},
-                                     index == 3 ? error : dispatch[index + 1],
+                                     index == 3 ? invalid : dispatch[index + 1],
                                      ValueRange{});
       builder.setInsertionPointToStart(invoke[index]);
       Value invalidExtent;
+      Value arithmeticOverflow;
+      Value required = constantI64(1);
       for (unsigned dimension = 0; dimension < rank; ++dimension) {
         Value address = builder.create<LLVM::GEPOp>(
           location,
@@ -1259,10 +1573,44 @@ class FinalizeCAPIPass final
         invalidExtent = invalidExtent ? builder.create<LLVM::OrOp>(
                                           location, invalidExtent, invalid)
                                       : invalid;
+        auto multiplied = checkedMultiply(required, extent);
+        required = multiplied.first;
+        arithmeticOverflow =
+          arithmeticOverflow
+            ? builder.create<LLVM::OrOp>(
+                location, arithmeticOverflow, multiplied.second)
+            : multiplied.second;
       }
+      auto byteCount = checkedMultiply(
+        required,
+        constantI64(types[index].getElementType().getIntOrFloatBitWidth() / 8));
+      arithmeticOverflow = builder.create<LLVM::OrOp>(
+        location, arithmeticOverflow, byteCount.second);
       Block* call = &wrapper.getBody().emplaceBlock();
-      builder.create<LLVM::CondBrOp>(
-        location, invalidExtent, error, ValueRange{}, call, ValueRange{});
+      Block* extentValid = &wrapper.getBody().emplaceBlock();
+      Block* arithmeticValid = &wrapper.getBody().emplaceBlock();
+      builder.create<LLVM::CondBrOp>(location,
+                                     invalidExtent,
+                                     invalid,
+                                     ValueRange{},
+                                     extentValid,
+                                     ValueRange{});
+      builder.setInsertionPointToStart(extentValid);
+      builder.create<LLVM::CondBrOp>(location,
+                                     arithmeticOverflow,
+                                     overflowError,
+                                     ValueRange{},
+                                     arithmeticValid,
+                                     ValueRange{});
+      builder.setInsertionPointToStart(arithmeticValid);
+      Value insufficient = builder.create<LLVM::ICmpOp>(
+        location, LLVM::ICmpPredicate::ugt, required, entry->getArgument(4));
+      builder.create<LLVM::CondBrOp>(location,
+                                     insufficient,
+                                     capacityError,
+                                     ValueRange{},
+                                     call,
+                                     ValueRange{});
       builder.setInsertionPointToStart(call);
       SmallVector<Value> arguments = makeDescriptor(
         types[index], entry->getArgument(0), entry->getArgument(1));
@@ -1288,6 +1636,8 @@ class FinalizeCAPIPass final
       LLVM::Linkage::External);
     Block* inferEntry = infer.addEntryBlock(builder);
     Block* inferError = &infer.getBody().emplaceBlock();
+    Block* inferInvalidShape = &infer.getBody().emplaceBlock();
+    Block* inferRankError = &infer.getBody().emplaceBlock();
     Block* inferCopy = &infer.getBody().emplaceBlock();
     builder.setInsertionPointToStart(inferEntry);
     Value inferNull = builder.create<LLVM::ZeroOp>(location, pointerType);
@@ -1315,18 +1665,27 @@ class FinalizeCAPIPass final
                                    LLVM::ICmpPredicate::ult,
                                    inferEntry->getArgument(3),
                                    inferEntry->getArgument(1));
-    inferInvalid = builder.create<LLVM::OrOp>(location, inferInvalid, rankLow);
-    inferInvalid = builder.create<LLVM::OrOp>(location, inferInvalid, rankHigh);
-    inferInvalid =
-      builder.create<LLVM::OrOp>(location, inferInvalid, capacitySmall);
+    Value invalidRank = builder.create<LLVM::OrOp>(location, rankLow, rankHigh);
+    invalidRank =
+      builder.create<LLVM::OrOp>(location, invalidRank, capacitySmall);
+    Value nullInvalid = inferInvalid;
     builder.create<LLVM::CondBrOp>(location,
-                                   inferInvalid,
+                                   nullInvalid,
                                    inferError,
                                    ValueRange{},
-                                   inferCopy,
+                                   inferInvalidShape,
                                    ValueRange{});
     builder.setInsertionPointToStart(inferError);
     builder.create<LLVM::ReturnOp>(location, constantI32(1));
+    builder.setInsertionPointToStart(inferInvalidShape);
+    builder.create<LLVM::CondBrOp>(location,
+                                   invalidRank,
+                                   inferRankError,
+                                   ValueRange{},
+                                   inferCopy,
+                                   ValueRange{});
+    builder.setInsertionPointToStart(inferRankError);
+    builder.create<LLVM::ReturnOp>(location, constantI32(2));
     builder.setInsertionPointToStart(inferCopy);
     for (unsigned dimension = 0; dimension < 4; ++dimension) {
       Value active = builder.create<LLVM::ICmpOp>(
@@ -1356,7 +1715,7 @@ class FinalizeCAPIPass final
       Value invalid = builder.create<LLVM::ICmpOp>(
         location, LLVM::ICmpPredicate::sle, extent, constantI64(0));
       builder.create<LLVM::CondBrOp>(
-        location, invalid, inferError, ValueRange{}, next, ValueRange{});
+        location, invalid, inferRankError, ValueRange{}, next, ValueRange{});
       builder.setInsertionPointToStart(next);
     }
     builder.create<LLVM::StoreOp>(

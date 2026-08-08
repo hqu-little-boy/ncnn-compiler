@@ -152,6 +152,12 @@ def write_header(path, manifest):
     for argument in manifest["outputs"]:
         parameters.append(f"{c_type(argument)} *{argument['name']}")
     for argument in manifest["outputs"]:
+        if (
+            (argument.get("dynamic_rank") or argument["dynamic_dim_mask"])
+            and not argument.get("shape_depends_on_data", False)
+        ):
+            parameters.append(f"uint64_t {argument['name']}_capacity")
+    for argument in manifest["outputs"]:
         if argument.get("shape_depends_on_data", False):
             parameters.extend([
                 f"int64_t *{argument['name']}_shape",
@@ -253,7 +259,13 @@ def write_header(path, manifest):
     path.write_text(
         f"#ifndef {guard}\n#define {guard}\n\n#include <stdint.h>\n\n"
         "#define NCNN_DYNAMIC_DIM INT64_C(-1)\n"
-        "#define NCNN_MAX_RANK 4\n\n"
+        "#define NCNN_MAX_RANK 4\n"
+        "#define NCNN_STATUS_SUCCESS 0\n"
+        "#define NCNN_STATUS_NULL_POINTER 1\n"
+        "#define NCNN_STATUS_INVALID_SHAPE 2\n"
+        "#define NCNN_STATUS_CONSTRAINT_VIOLATION 3\n"
+        "#define NCNN_STATUS_SHAPE_ARITHMETIC_OVERFLOW 4\n"
+        "#define NCNN_STATUS_OUTPUT_CAPACITY_INSUFFICIENT 5\n\n"
         "typedef uint16_t ncnn_float16_t;\n"
         "typedef uint16_t ncnn_bfloat16_t;\n\n"
         f"#define {function.upper()}_INPUT_COUNT {len(manifest['inputs'])}\n"
@@ -293,7 +305,7 @@ def write_harness(path, header_name, manifest):
             f"    if ({function}_infer_output_shapes(input1_shape, rank, "
             "output1_shape, NCNN_MAX_RANK, &output1_rank) != 0) return 6;\n"
             "    if (output1_rank != rank) return 7;\n"
-            f"    if ({function}(input1, input1_shape, rank, output1) != 0) "
+            f"    if ({function}(input1, input1_shape, rank, output1, 16) != 0) "
             "return 4;\n"
             "    size_t count = 1;\n"
             "    for (uint32_t i = 0; i < rank; ++i) count *= 2;\n"

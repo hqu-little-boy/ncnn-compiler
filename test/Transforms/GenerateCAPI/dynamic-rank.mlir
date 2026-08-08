@@ -13,7 +13,7 @@ module {
 // MANIFEST: "rank_max": 4
 // MANIFEST: "rank_min": 1
 // LLVM-LABEL: llvm.func @dynamic_rank(
-// LLVM-SAME: !llvm.ptr, %{{.*}}: !llvm.ptr, %{{.*}}: i32, %{{.*}}: !llvm.ptr) -> i32
+// LLVM-SAME: !llvm.ptr, %{{.*}}: !llvm.ptr, %{{.*}}: i32, %{{.*}}: !llvm.ptr, %{{.*}}: i64) -> i32
 // LLVM: llvm.call @__ncnn_internal_dynamic_rank_rank1
 // LLVM: llvm.call @__ncnn_internal_dynamic_rank_rank2
 // LLVM: llvm.call @__ncnn_internal_dynamic_rank_rank3

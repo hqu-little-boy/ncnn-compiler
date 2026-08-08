@@ -6,7 +6,7 @@ module {
   func.func @model(
       %input: memref<3x?x?xf32>,
       %output: memref<3x?x?xf32> {bufferize.result,
-        ncnn.shape_program = [array<i64>, array<i64>, array<i64>],
+        ncnn.shape_program = [array<i64>, array<i64: 0, 1, 1, 2>, array<i64>],
         ncnn.shape_source_input = 0 : i32})
       attributes {llvm.emit_c_interface, ncnn.entry_point,
         ncnn.shape_constraints = [
@@ -23,12 +23,16 @@ module {
 // MANIFEST: "minimum": 32
 // MANIFEST: "multiple_of": 32
 // MANIFEST: "name": "output1"
+// MANIFEST: "shape_program": [
 // MANIFEST: "shape_source_input": 0
 
 // LLVM-LABEL: llvm.func @dynamic_identity(
-// LLVM-SAME: !llvm.ptr, %{{.*}}: !llvm.ptr, %{{.*}}: !llvm.ptr) -> i32
+// LLVM-SAME: %{{.*}}: !llvm.ptr, %{{.*}}: !llvm.ptr, %{{.*}}: !llvm.ptr, %{{.*}}: i64) -> i32
 // LLVM: llvm.icmp "sge"
 // LLVM: llvm.srem
+// LLVM: llvm.intr.sadd.with.overflow
+// LLVM: llvm.intr.smul.with.overflow
+// LLVM: llvm.intr.umul.with.overflow
 // LLVM: llvm.call @__ncnn_internal_dynamic_identity(
 // LLVM-LABEL: llvm.func @dynamic_identity_infer_output_shapes(
 // LLVM-SAME: !llvm.ptr, %{{.*}}: !llvm.ptr) -> i32

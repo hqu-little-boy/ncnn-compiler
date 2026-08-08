@@ -394,8 +394,12 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
             return model.emitOpError(
               "output shape dimensions require multiple source inputs");
           }
-          programs.push_back(
-            rewriter.getDenseI64ArrayAttr(dimension.serialize()));
+          DimensionExpr identity(dimension.getInputIndex(),
+                                 dimension.getInputDimension());
+          programs.push_back(rewriter.getDenseI64ArrayAttr(
+            dimension.equivalentUnder(shapeConstraints, identity)
+              ? identity.serialize()
+              : dimension.serialize()));
         }
         function.setResultAttr(functionResultIndex,
                                "ncnn.shape_program",

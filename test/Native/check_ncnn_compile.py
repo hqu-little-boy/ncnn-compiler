@@ -195,6 +195,8 @@ def main():
     )
     if dynamic_manifest["outputs"][0].get("shape_source_input") != 0:
         raise RuntimeError(f"dynamic output shape source missing: {dynamic_manifest}")
+    if dynamic_manifest["outputs"][0].get("shape_program") != [[], [], []]:
+        raise RuntimeError(f"dynamic output shape program missing: {dynamic_manifest}")
     expected_constraints = [
         {"dimension": 1, "minimum": 32, "multiple_of": 32},
         {"dimension": 2, "minimum": 32, "multiple_of": 32},
@@ -210,6 +212,8 @@ def main():
         "const int64_t input1_shape[DYNAMIC_IDENTITY_INPUT1_RANK]",
         "int64_t output1_shape[DYNAMIC_IDENTITY_OUTPUT1_RANK]",
         "dynamic_identity_infer_output_shapes",
+        "uint64_t output1_capacity",
+        "#define NCNN_STATUS_OUTPUT_CAPACITY_INSUFFICIENT 5",
         "#define DYNAMIC_IDENTITY_INPUT1_DIM1_MINIMUM INT64_C(32)",
         "#define DYNAMIC_IDENTITY_INPUT1_DIM1_MULTIPLE_OF INT64_C(32)",
     }
@@ -234,6 +238,7 @@ def main():
         float_pointer,
         ctypes.POINTER(ctypes.c_int64),
         float_pointer,
+        ctypes.c_uint64,
     ]
     dynamic_function.restype = ctypes.c_int
     infer_shapes = dynamic_library.dynamic_identity_infer_output_shapes
@@ -245,17 +250,27 @@ def main():
     valid_shape = shape_type(3, 32, 64)
     invalid_small = shape_type(3, 31, 64)
     invalid_multiple = shape_type(3, 32, 33)
+    invalid_zero = shape_type(3, 0, 64)
+    overflow_shape = shape_type(3, 9223372036854775776, 32)
     input_data = (ctypes.c_float * (3 * 32 * 64))()
     output_data = (ctypes.c_float * (3 * 32 * 64))()
     output_shape = shape_type()
-    if dynamic_function(input_data, valid_shape, output_data) != 0:
+    if dynamic_function(input_data, valid_shape, output_data, len(output_data)) != 0:
         raise RuntimeError("valid constrained dynamic shape was rejected")
     if infer_shapes(valid_shape, output_shape) != 0:
         raise RuntimeError("valid constrained shape inference was rejected")
-    if dynamic_function(input_data, invalid_small, output_data) == 0:
+    if dynamic_function(input_data, invalid_small, output_data, len(output_data)) != 3:
         raise RuntimeError("shape below minimum was accepted")
-    if infer_shapes(invalid_multiple, output_shape) == 0:
+    if infer_shapes(invalid_multiple, output_shape) != 3:
         raise RuntimeError("non-multiple shape was accepted")
+    if infer_shapes(invalid_zero, output_shape) != 2:
+        raise RuntimeError("invalid zero extent returned the wrong status")
+    if infer_shapes(overflow_shape, output_shape) != 4:
+        raise RuntimeError("shape element-count overflow returned the wrong status")
+    if infer_shapes(None, output_shape) != 1:
+        raise RuntimeError("NULL shape returned the wrong status")
+    if dynamic_function(input_data, valid_shape, output_data, len(output_data) - 1) != 5:
+        raise RuntimeError("insufficient dynamic output capacity was accepted")
 
     malformed_constraint = subprocess.run(
         [
@@ -334,6 +349,7 @@ def main():
         "#define DYNAMIC_RANK_IDENTITY_INPUT1_RANK_MAX 4",
         "#define DYNAMIC_RANK_IDENTITY_OUTPUT1_SHAPE_DEPENDS_ON_DATA 0",
         "const int64_t *input1_shape, uint32_t input1_rank",
+        "uint64_t output1_capacity",
         "uint32_t output1_shape_capacity, uint32_t *output1_rank",
     }
     missing_dynamic_rank_abi = required_dynamic_rank_abi - {

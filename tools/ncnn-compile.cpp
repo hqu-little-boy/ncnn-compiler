@@ -183,6 +183,7 @@ struct Argument {
   std::uint32_t rank_min;
   std::uint32_t rank_max;
   std::vector<DimensionConstraint> dimension_constraints;
+  std::vector<std::vector<std::int64_t>> shape_program;
 };
 
 struct Manifest {
@@ -484,7 +485,8 @@ int run(const std::vector<std::string>& command,
           argument_object->getInteger("rank_min").value_or(0)),
         .rank_max = static_cast<std::uint32_t>(
           argument_object->getInteger("rank_max").value_or(0)),
-        .dimension_constraints = {}};
+        .dimension_constraints = {},
+        .shape_program = {}};
       for (llvm::json::Value& dimension : *shape) {
         auto integer = dimension.getAsInteger();
         if (!integer || *integer < -1) {
@@ -524,6 +526,23 @@ int run(const std::vector<std::string>& command,
             {.dimension = static_cast<std::uint32_t>(*dimension),
              .minimum = *minimum,
              .multiple_of = *multiple});
+        }
+      }
+      if (auto* programs = argument_object->getArray("shape_program")) {
+        for (llvm::json::Value& programValue : *programs) {
+          auto* program = programValue.getAsArray();
+          if (program == nullptr) {
+            return false;
+          }
+          std::vector<std::int64_t> instructions;
+          for (llvm::json::Value& instruction : *program) {
+            auto integer = instruction.getAsInteger();
+            if (!integer) {
+              return false;
+            }
+            instructions.push_back(*integer);
+          }
+          argument.shape_program.push_back(std::move(instructions));
         }
       }
       if (argument.shape.size() > 32) {
@@ -580,6 +599,11 @@ int run(const std::vector<std::string>& command,
         output.shape_source_input < 0 && !output.shape_depends_on_data) {
       return std::unexpected(
         "ABI manifest dynamic output has no input shape source");
+    }
+    if (!output.shape_depends_on_data && output.dynamic_dim_mask != 0 &&
+        output.shape_program.size() != output.shape.size()) {
+      return std::unexpected(
+        "ABI manifest dynamic output has an invalid shape program");
     }
   }
   manifest.function = c_identifier(manifest.function);
@@ -681,6 +705,17 @@ int run(const std::vector<std::string>& command,
       if (argument.shape_source_input >= 0) {
         object["shape_source_input"] = argument.shape_source_input;
       }
+      if (!argument.shape_program.empty()) {
+        llvm::json::Array programs;
+        for (const auto& program : argument.shape_program) {
+          llvm::json::Array instructions;
+          for (std::int64_t instruction : program) {
+            instructions.push_back(instruction);
+          }
+          programs.push_back(std::move(instructions));
+        }
+        object["shape_program"] = std::move(programs);
+      }
       result.push_back(std::move(object));
     }
     return result;
@@ -732,7 +767,13 @@ std::string macro_name(const Manifest& manifest,
   std::string contents = std::format(
     "#ifndef {}\n#define {}\n\n#include <stdint.h>\n\n"
     "#define NCNN_DYNAMIC_DIM INT64_C(-1)\n"
-    "#define NCNN_MAX_RANK 4\n\n"
+    "#define NCNN_MAX_RANK 4\n"
+    "#define NCNN_STATUS_SUCCESS 0\n"
+    "#define NCNN_STATUS_NULL_POINTER 1\n"
+    "#define NCNN_STATUS_INVALID_SHAPE 2\n"
+    "#define NCNN_STATUS_CONSTRAINT_VIOLATION 3\n"
+    "#define NCNN_STATUS_SHAPE_ARITHMETIC_OVERFLOW 4\n"
+    "#define NCNN_STATUS_OUTPUT_CAPACITY_INSUFFICIENT 5\n\n"
     "typedef uint16_t ncnn_float16_t;\n"
     "typedef uint16_t ncnn_bfloat16_t;\n\n",
     guard,
@@ -884,6 +925,13 @@ std::string macro_name(const Manifest& manifest,
     }
     contents += std::format("{}{} *{}", first ? "" : ", ", *type, output.name);
     first = false;
+  }
+  for (const Argument& output : manifest.outputs) {
+    if (output.shape_depends_on_data ||
+        (!output.dynamic_rank && output.dynamic_dim_mask == 0)) {
+      continue;
+    }
+    contents += std::format(", uint64_t {}_capacity", output.name);
   }
   for (const Argument& output : manifest.outputs) {
     if (!output.shape_depends_on_data) {
@@ -1149,23 +1197,25 @@ validate_output_directory(const fs::path& output_dir,
       "    if (output1_rank != rank) return 7;\n"
       "    for (uint32_t i = 0; i < rank; ++i) if (output1_shape[i] != 2) "
       "return 8;\n"
-      "    if ({}(input1, input1_shape, rank, output1) != 0) return 4;\n"
-      "    if ({}(input1, input1_shape, rank, output1) != 0) return 9;\n"
+      "    if ({}(input1, input1_shape, rank, output1, 16) != 0) return 4;\n"
+      "    if ({}(input1, input1_shape, rank, output1, 16) != 0) return 9;\n"
       "    size_t count = element_count(input1_shape, rank);\n"
       "    for (size_t i = 0; i < count; ++i) if (output1[i] != input1[i]) "
       "return 13;\n"
       "  }}\n"
-      "  if ({}(input1, input1_shape, 0, output1) == 0) return 10;\n"
-      "  if ({}(input1, input1_shape, 5, output1) == 0) return 11;\n"
+      "  if ({}(input1, input1_shape, 0, output1, 16) == 0) return 10;\n"
+      "  if ({}(input1, input1_shape, 5, output1, 16) == 0) return 11;\n"
       "  if ({}_infer_output_shapes(input1_shape, 4, output1_shape, 3, "
       "&output1_rank) == 0) return 12;\n"
-      "  if ({}(NULL, input1_shape, 1, output1) == 0) return 3;\n"
-      "  if ({}(input1, NULL, 1, output1) == 0) return 3;\n"
-      "  if ({}(input1, input1_shape, 1, NULL) == 0) return 3;\n"
+      "  if ({}(NULL, input1_shape, 1, output1, 16) == 0) return 3;\n"
+      "  if ({}(input1, NULL, 1, output1, 16) == 0) return 3;\n"
+      "  if ({}(input1, input1_shape, 1, NULL, 16) == 0) return 3;\n"
+      "  if ({}(input1, input1_shape, 4, output1, 15) != 5) return 14;\n"
       "  return 0;\n}}\n",
       *input_type,
       *output_type,
       *input_type,
+      manifest.function,
       manifest.function,
       manifest.function,
       manifest.function,
@@ -1262,6 +1312,8 @@ validate_output_directory(const fs::path& output_dir,
                           output.name,
                           output.name,
                           output.shape.size());
+      code += std::format(
+        "  uint64_t {}_capacity = {}_count;\n", output.name, output.name);
     } else {
       auto count = element_count(output);
       if (!count) {
@@ -1290,6 +1342,12 @@ validate_output_directory(const fs::path& output_dir,
   }
   for (const Argument& output : manifest.outputs) {
     call_arguments.push_back(output.name);
+  }
+  for (const Argument& output : manifest.outputs) {
+    if (output.shape_depends_on_data || output.dynamic_dim_mask == 0) {
+      continue;
+    }
+    call_arguments.push_back(output.name + "_capacity");
   }
   for (const Argument& output : manifest.outputs) {
     if (output.shape_depends_on_data) {
@@ -1323,11 +1381,32 @@ validate_output_directory(const fs::path& output_dir,
       output.name);
   }
   for (std::size_t index = 0; index < call_arguments.size(); ++index) {
+    if (call_arguments[index].ends_with("_capacity")) {
+      continue;
+    }
     code += std::format(
       "  if ({} == 0) {{ fprintf(stderr, \"ABI verification failed: NULL "
       "argument {} was accepted\\n\"); return 3; }}\n",
       call(index),
       call_arguments[index]);
+  }
+  for (const Argument& output : manifest.outputs) {
+    if (output.shape_depends_on_data || output.dynamic_dim_mask == 0) {
+      continue;
+    }
+    std::vector<std::string> insufficientArguments = call_arguments;
+    auto capacity =
+      std::ranges::find(insufficientArguments, output.name + "_capacity");
+    *capacity = output.name + "_capacity - 1";
+    std::string insufficientCall = manifest.function + "(";
+    for (std::size_t index = 0; index < insufficientArguments.size(); ++index) {
+      insufficientCall += index == 0 ? "" : ", ";
+      insufficientCall += insufficientArguments[index];
+    }
+    insufficientCall += ")";
+    code += std::format(
+      "  if ({} != NCNN_STATUS_OUTPUT_CAPACITY_INSUFFICIENT) return 14;\n",
+      insufficientCall);
   }
   for (const Argument& input : manifest.inputs) {
     code += std::format("  free({});\n", input.name);

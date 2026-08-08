@@ -27,5 +27,5 @@ module {
 // LLVM: llvm.icmp "sgt"
 // LLVM: llvm.icmp "eq"
 // LLVM: llvm.cond_br
-// LLVM: llvm.mul
+// LLVM: llvm.intr.umul.with.overflow
 // LLVM: llvm.call @__ncnn_internal_dynamic_typed(
