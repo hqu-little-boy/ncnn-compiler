@@ -56,7 +56,8 @@ ncnn-mlir-driver [options] <input .param file>
 |------|------|------|
 | `<input>`（位置参数，必填） | ncnn 网络结构文件 `.param` | — |
 | `--bin=<path>` | 权重文件 `.bin` | 由 `<input>` 把末尾 `.param` 换成 `.bin` 推导 |
-| `--input-shape=<CxHxW>` | 为唯一且尺寸省略的 `Input` 提供静态 shape | 无 |
+| `--input-shape=<CxHxW>` | 可重复；extent 为正整数或 `?`，按 Input source order 匹配 | 无 |
+| `--input-shape=*` | 受限动态 rank 1..4；必须是唯一 occurrence | 无 |
 | `-o <path>` | 产物输出路径，`-` 写到 stdout | `-`（stdout） |
 | `--emit=<stage>` | 选择要发出的阶段（见下） | `mlir` |
 | `--verify` | 对导入的 MLIR 模块跑校验器 | 开 |
@@ -85,13 +86,21 @@ USAGE: ncnn-mlir-driver [options] <input .param file>
 
 OPTIONS:
 
+Generic Options:
+
+  --help                  - Display available options (--help-hidden for more)
+  --help-list             - Display list of available options (--help-list-hidden for more)
+  --version               - Display the version of this program
+
 ncnn-mlir-driver options:
-  --bin=<path>    - Weight file (.bin). Defaults to <input> with .param replaced by .bin
-  --emit=<value>  - Select the stage to emit:
-    =parsed-graph -   Raw parsed ncnn graph (param + bound weights)
-    =mlir         -   MLIR module in the ncnn dialect (default)
-  -o <path>       - Output file. '-' writes to stdout (default)
-  --verify        - Re-verify the imported MLIR module (default: on)
+
+  --bin=<path>            - Weight file (.bin). Defaults to <input> with .param replaced by .bin
+  --emit=<value>          - Select the stage to emit:
+    =parsed-graph         -   Raw parsed ncnn graph (param + bound weights)
+    =mlir                 -   MLIR module in the ncnn dialect (default)
+  --input-shape=<shape|*> - Input shape override as CxHxW; '?' is a dynamic extent, and '*' requests dynamic rank 1..4
+  -o <path>               - Output file. '-' writes to stdout (default)
+  --verify                - Re-verify the imported MLIR module (default: on)
 ```
 
 ---
@@ -134,9 +143,9 @@ module {
 - **权重**被抬成 `ncnn.const`（`%cst`=卷积核 `[O,I,H,W]`、`%cst_0`=bias `[O]`），
   作为 `ncnn.convolution` 的操作数。
 - **ncnn 数字参数**变成具名强类型属性（`kernel_h`、`stride_h`、`pad_*`、`has_bias`…）。
-- **每个值带推断出的 ranked shape/元素类型**；当前导入路径生成静态类型，例如
-  `tensor<64x113x113xf32>`。动态 extent/rank 需要对应 importer、shape analysis 和 lowering
-  实现，不能由 CLI shape 字符串单独获得。
+- **每个值带推断出的 ranked shape/元素类型**。传统模型通常生成静态类型；`?` 可保留固定
+  rank 动态 extent，`*` 为受限模型生成 rank 1..4 specialization。具体算子仍须有对应动态
+  shape inference 和 lowering，不能由 ABI 支持推导为任意动态图均可编译。
 - **来源溯源**保留在 `ncnn.name` / `ncnn.source_layer` discardable 属性里。
 
 MLIR 模块格式详见 [ncnn-ir-format.md](ncnn-ir-format.md)。
@@ -148,16 +157,20 @@ MLIR 模块格式详见 [ncnn-ir-format.md](ncnn-ir-format.md)。
   --bin=test/third_party/ncnn/examples/squeezenet_v1.1.bin
 ```
 
-### 3.3 查看原始解析图
+### 3.3 指定动态或省略的 Input shape
 
-为唯一且省略尺寸的 `Input` 提供 shape 时使用：
+固定 shape 或固定 rank 动态 extent：
 
 ```bash
 ./build/tools/ncnn-mlir-driver model.param --input-shape=3x224x224
+./build/tools/ncnn-mlir-driver model.param --input-shape=3x?x?
 ```
 
-值必须是恰好三个正整数 `CxHxW`（`x`/`X` 均可）。模型必须恰好有一个 `Input`，且
-`.param` 未给出该 Input 的尺寸；不能用该选项覆盖已有尺寸或表达多个输入 shape。
+多输入时重复指定，数量必须等于全部 Input 数量，并按 source-layer 顺序绑定。已有静态尺寸的
+Input 不会被改写，但仍占一个条目。`--input-shape=*` 必须独占，只支持一个未声明尺寸的 Input、
+一个输出以及 identity/ReLU shape-preserving 图，并生成 rank 1..4 specialization。
+
+### 3.4 查看原始解析图
 
 ```bash
 ./build/tools/ncnn-mlir-driver --emit=parsed-graph test/third_party/ncnn/examples/squeezenet_v1.1.param
@@ -180,7 +193,7 @@ layers:
 参数按 ncnn 原生 key（`{0=227 1=227 2=3}` 即 Input 的 `w=227 h=227 c=3`），
 `w=[...]` 是绑定的权重张量形状。格式详见 [parsed-graph-format.md](parsed-graph-format.md)。
 
-### 3.4 写到文件 / 管道
+### 3.5 写到文件 / 管道
 
 ```bash
 ./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param -o /tmp/squeezenet.mlir
@@ -189,7 +202,7 @@ layers:
   | ./build/bin/ncnn-mlir-opt   # 再用 opt 做一次 round-trip 校验
 ```
 
-### 3.5 关闭校验
+### 3.6 关闭校验
 
 ```bash
 ./build/tools/ncnn-mlir-driver test/third_party/ncnn/examples/squeezenet_v1.1.param --verify=false
@@ -312,8 +325,10 @@ model/
 ```
 
 可用 `--model-name` 覆盖模型名，使用 `-o/--output-dir` 覆盖输出目录，使用 `--bin` 覆盖权重
-路径。公共函数参数顺序是全部输入后全部输出。每个输入在头文件中声明为 `const float *`，每个
-输出声明为 `float *`，并生成对应元素数量宏。任一参数为空返回 1且不执行模型，成功返回 0。
+路径。公共函数参数顺序是全部输入 tensor 参数组、全部输出数据指针、数据依赖输出元数据。
+元素类型由 C 指针类型表达；当前 ncnn 模型数据主路径为 f32。静态 tensor 只传 data，固定 rank
+动态输入追加 shape，受限动态 rank 再追加 rank。只有静态元素数可知时才生成 `ELEMENTS`；
+数据依赖输出生成 `MAX_DIMn/MAX_ELEMENTS`。参数契约失败返回 1，成功返回 0。
 
 `--emit` 用于保留调试所需的中间 MLIR，可重复指定或使用逗号分隔：
 
@@ -364,13 +379,14 @@ CMake 构建后入口位于 `build/tools/ncnn-compile`。执行 `cmake --install
 SqueezeNet 默认接口为：
 
 ```c
-#define SQUEEZENET_V1_1_INPUT1_ELEMENTS 154587
-#define SQUEEZENET_V1_1_OUTPUT1_ELEMENTS 1000
+#define SQUEEZENET_V1_1_INPUT1_ELEMENTS UINT64_C(154587)
+#define SQUEEZENET_V1_1_OUTPUT1_ELEMENTS UINT64_C(1000)
 int squeezenet_v1_1(const float *input1, float *output1);
 ```
 
-动态库只导出模型名函数；内部模型为 private，不生成 `_mlir_ciface_*`。当前 ABI 要求所有输入
-输出都是非空、调用方持有、native-endian、连续的 float 数组；第一版只定义错误码 1为空指针。
+动态库导出模型执行函数；存在 shape-only 动态输出时还导出 `<model>_infer_output_shapes`。内部
+模型为 private，不生成 `_mlir_ciface_*`。输入输出由调用方持有，采用 native-endian 连续数组；
+错误码 1 表示空指针或 shape/rank/capacity 契约失败。
 
 ---
 

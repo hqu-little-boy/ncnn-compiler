@@ -83,11 +83,13 @@ NCNN_OPENMP / NCNN_THREADS / NCNN_VULKAN
 
 ncnn 仍会根据 `NCNN_TARGET_ARCH=x86` 注册 x86 Layer 类，其中可能包含 packed kernel。运行时
 `use_packing_layout=false` 也不等同于“使用 naive Layer”。本项目因此在加载 param 前，通过
-`Net::register_custom_layer()` 覆盖当前测试涉及的内建层，并由
-`create_layer_naive()` 创建 reference Layer。
+`Net::register_custom_layer()` 覆盖多数测试涉及的内建层，并由 `create_layer_naive()` 创建
+reference Layer。DetectionOutput 当前是明确例外：fixture 使用 ncnn 内建层路径，尚未注册
+naive override。
 
-新增算子 numerical test 时，必须把该层加入 naive creator 注册表。否则测试结果可能依赖宿主
-CPU、ncnn 架构实现或 sanitizer build，违背 reference 可重复性的目标。
+新增算子 numerical test 时，应优先把该层加入 naive creator 注册表；无法提供 override 时必须
+像 DetectionOutput 一样明确例外。否则测试结果可能依赖宿主 CPU、ncnn 架构实现或 sanitizer
+build，违背 reference 可重复性的目标。
 
 编译期和运行期仍需同时关闭：
 
@@ -177,13 +179,14 @@ SAME_UPPER/LOWER 与 tail；Concat 的 rank-3 正负 axis；Softmax 的 rank-3 �
 三路 Split 输出经过多级 consumer 的拓扑。`ConvolutionDepthWise` 当前支持独立的纯 depthwise
 静态 FP32 子集；这不等于支持通用 group convolution、动态权重、量化或融合激活。
 
-完整 26 个计算 op 的集合，以及包含 `Input` 在内的 27 个 importer source layer type，能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
+完整 27 个计算 op 的集合，以及包含 `Input` 在内的 28 个 importer source layer type，能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
 为准；本节只列 numerical fixture 已覆盖的参数组合。
 
 ## 9. 多输入、多输出 ABI 必须实际调用，不能只检查 manifest
 
-公共 C ABI 的顺序固定为全部输入 tensor 参数组，然后全部输出数据指针。当前静态 fixture 的
-输入组只有数据指针；固定-rank动态输入还会在数据指针后携带 shape。内部 wrapper 再恢复模型
+公共 C ABI 的顺序固定为全部输入 tensor 参数组、全部输出数据指针，然后是数据依赖输出的
+shape/capacity/rank。当前静态 fixture 的输入组只有数据指针；固定-rank 动态输入还会在数据
+指针后携带 shape，动态 rank 再携带 rank。内部 wrapper 再恢复模型
 函数原始参数顺序。Concat 和 Split 是最小的静态 ABI 回归用例：
 
 ```c
@@ -204,6 +207,10 @@ ABI 结构（manifest/头文件的数量、顺序、shape、元素宏）。
 
 不要用一个固定的一入一出函数指针调用所有模型。C++ 调错函数指针签名是未定义行为，即使在某个
 ABI 上暂时能工作。
+
+数据依赖输出测试必须按 `MAX_ELEMENTS` 分配 data buffer，检查执行入口返回的 actual shape/rank，
+并只比较逻辑前缀。`shape_capacity` 的单位是可写 extent 数量，不是 data buffer 元素数量；这类
+输出不应调用普通 shape-only inference。
 
 ## 10. 简单 routing op 也可能引入新的系统符号
 
@@ -243,13 +250,13 @@ Split lowering 最终可能被优化成 `memcpy`。因此它虽然没有数学�
 - 通过 `add_subdirectory` 构建的 ncnn reference；
 - 动态加载和输入/输出桥接。
 
-但当前 `ncnn-compile` 直接调用 clang，源码没有 sanitizer 专用转发选项；生成的模型 `.so`
-本身并未被 sanitizer instrument。测试进程带 ASan 不等于动态库内部
+`ncnn-compile` 可通过可重复的 `--clang-arg` 和 `--linker-arg` 传递 sanitizer 参数，但生成的
+模型 `.so` 默认并未被 sanitizer instrument。测试进程带 ASan 不等于动态库内部
 每个访问都已插桩。
 
-若要求 sanitizer 覆盖生成模型，必须给 `ncnn-compile` 增加可重复的 compile/link flag 参数，并验证
-最终 `.so` 确实包含 sanitizer runtime/instrumentation；不能只看 CTest 运行在
-`build-sanitize` 目录。
+若要求 sanitizer 覆盖生成模型，必须验证最终 `.so` 确实包含 sanitizer
+runtime/instrumentation；严格 undefined-symbol 和 DT_NEEDED 审计也可能拒绝 sanitizer runtime，
+因此参数透传本身不等于受支持的 sanitizer 发布契约。
 
 ## 13. 把 ncnn 作为 submodule 接入时的 CMake 问题
 

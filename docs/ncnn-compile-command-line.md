@@ -33,21 +33,21 @@ model/
 └── libmodel.so
 ```
 
-当前产品模型路径生成静态模型的 C ABI 入口，并为每个 tensor 定义 rank、维度、动态维 mask
-和静态元素数量宏。例如：
+静态模型生成最简 C ABI 入口，并为每个 fixed-rank tensor 定义 rank、维度和动态维 mask；仅当
+元素数可静态确定时生成 `ELEMENTS` 宏。例如：
 
 ```c
 #define MODEL_INPUT1_RANK 3
-#define MODEL_INPUT1_DIM0 3
-#define MODEL_INPUT1_DIM1 227
-#define MODEL_INPUT1_DIM2 227
+#define MODEL_INPUT1_DIM0 INT64_C(3)
+#define MODEL_INPUT1_DIM1 INT64_C(227)
+#define MODEL_INPUT1_DIM2 INT64_C(227)
 #define MODEL_INPUT1_DYNAMIC_DIM_MASK UINT32_C(0x0)
-#define MODEL_INPUT1_ELEMENTS 154587
+#define MODEL_INPUT1_ELEMENTS UINT64_C(154587)
 
 #define MODEL_OUTPUT1_RANK 1
-#define MODEL_OUTPUT1_DIM0 1000
+#define MODEL_OUTPUT1_DIM0 INT64_C(1000)
 #define MODEL_OUTPUT1_DYNAMIC_DIM_MASK UINT32_C(0x0)
-#define MODEL_OUTPUT1_ELEMENTS 1000
+#define MODEL_OUTPUT1_ELEMENTS UINT64_C(1000)
 #define MODEL_OUTPUT1_SHAPE_DEPENDS_ON_DATA 0
 
 int model(const float *input1, float *output1);
@@ -56,10 +56,10 @@ int model(const float *input1, float *output1);
 输入参数排在输出参数之前。输入声明为 `const float *`，输出声明为 `float *`。调用成功返回
 `0`；任一输入或输出为空指针时返回非零错误码。
 
-ABI pass 和头文件生成器已经使用模型专用 typed 参数，并支持为固定-rank动态输入追加 shape
-参数；wrapper 会验证 shape、构造运行时 memref size/stride。当前 ncnn importer、算子 lowering
-和产品测试仍只产生静态 f32 模型。动态输出需要的 `<model>_infer_output_shapes`、数据依赖输出
-和动态 rank 分派尚未实现，因此不能作为产品命令行能力使用。完整目标见
+ABI pass 和头文件生成器使用模型专用 typed 参数。固定 rank 动态 extent 追加 shape，shape-only
+动态输出通过 `<model>_infer_output_shapes` 查询；DetectionOutput 等有界数据依赖输出按最大容量
+分配，并由执行入口返回实际 shape/rank。`--input-shape=*` 还支持 rank 1 至 4 的受限动态 rank
+identity/ReLU 模型。该能力不代表任意算子、多输入或多输出动态图均受支持。完整契约见
 [`dynamic-rank-c-abi.md`](../../docs/dynamic-rank-c-abi.md)。
 
 ## 2. 输入和输出
@@ -158,17 +158,40 @@ dist/resnet/
 有效产物。成功重编译会以完整的新产物集替换旧目录，因此本次不再请求的中间 MLIR 文件会消失。
 如果输出目录含有不属于 `ncnn-compile` 的文件，driver 会在编译前拒绝执行，且不会删除该文件。
 
-### 2.5 `--input-shape=<CxHxW>`
+### 2.5 `--input-shape=<CxHxW|*>`
 
-为 `Input` 层省略尺寸的模型提供当前静态产品路径所需的编译期输入形状。值必须恰好包含三个正整数，分隔符为 `x`
-或 `X`，顺序为 ncnn 原生的 `C x H x W`。模型必须恰好有一个 `Input` 层且该层省略尺寸；
-该选项不能改写 `.param` 中已有尺寸，也不能为多输入模型分别提供 shape。动态 rank/extent
-属于生成 C ABI 的运行时 shape 参数，不使用该选项表达。格式或使用条件不
-满足时编译失败。
+固定 rank 形式恰好包含三个 extent，分隔符为 `x` 或 `X`，顺序为 ncnn 原生的
+`C x H x W`。extent 可以是正整数，也可以是 `?`；`?` 表示该维在执行时由 C ABI shape
+参数提供。
 
 ```bash
 ncnn-compile model.param --input-shape=3x224x224
 ```
+
+动态空间 extent：
+
+```bash
+ncnn-compile model.param --input-shape=3x?x?
+```
+
+该选项可重复。只要提供了 fixed-rank override，数量必须等于模型的全部 `Input` 层数，并按
+source-layer 顺序匹配。已有静态尺寸的 Input 不会被改写，但仍占一个对应条目：
+
+```bash
+ncnn-compile multi_input.param \
+  --input-shape=3x?x? \
+  --input-shape=1x32x?
+```
+
+真正动态 rank 使用 `*`：
+
+```bash
+ncnn-compile relu.param --input-shape=*
+```
+
+`*` 必须是唯一一个 `--input-shape`，模型必须只有一个未声明尺寸的 Input 和一个输出，且当前
+计算图只允许 shape-preserving identity/ReLU。编译器生成 rank 1、2、3、4 四个 ranked
+specialization 和公共 rank dispatcher；不使用 unranked memref。
 
 ## 3. 优化和调试信息
 
@@ -281,7 +304,7 @@ model/
 └── libmodel.so
 ```
 
-manifest 描述导出函数以及输入、输出的名称和 shape。例如：
+manifest 描述导出函数以及输入、输出的名称、shape、元素类型和动态维。例如：
 
 ```json
 {
@@ -289,17 +312,25 @@ manifest 描述导出函数以及输入、输出的名称和 shape。例如：
   "inputs": [
     {
       "name": "input1",
-      "shape": [3, 227, 227]
+      "shape": [3, 227, 227],
+      "element_type": "f32",
+      "dynamic_dim_mask": 0
     }
   ],
   "outputs": [
     {
       "name": "output1",
-      "shape": [1000]
+      "shape": [1000],
+      "element_type": "f32",
+      "dynamic_dim_mask": 0
     }
   ]
 }
 ```
+
+固定 rank 动态 extent 用 `-1` 和 `dynamic_dim_mask` 表示。数据依赖输出还包含
+`maximum_shape` 和 `shape_depends_on_data: true`；受限动态 rank 参数使用 `dynamic_rank`、
+`rank_min` 和 `rank_max`。值为 false 的 `shape_depends_on_data` 可省略。
 
 manifest 默认只是生成头文件所需的内部临时产物，不会发布。以下情况适合显式开启：
 
@@ -467,7 +498,7 @@ ncnn-compile model.param \
 需要向实际 linker 传参时，通常使用 `-Wl,` 前缀。driver 自身已经加入严格链接选项，确保：
 
 - 没有未解析的非预期符号。
-- 只导出模型入口函数。
+- 只导出模型执行入口，以及存在 shape-only 动态输出时的 `<model>_infer_output_shapes`。
 - 不生成非确定性的 build ID。
 - 最终库只依赖允许的系统库和函数。
 
@@ -514,6 +545,9 @@ ncnn-compile model.param --verify-execution
 - 模型入口在零初始化输入上返回成功。
 - 输出元素是有限浮点数。
 - 任意输入或输出为空指针时，接口返回错误。
+
+动态模型还会按 manifest 构造运行时 shape；shape-only 输出先调用 inference 再分配，数据依赖
+输出按 `MAX_ELEMENTS` 分配并读取 actual shape/rank，受限动态 rank 路径还检查合法和非法 rank。
 
 该选项只适用于生成库可以在当前宿主执行的情况。交叉编译到不同架构时不要启用。例如，在
 x86-64 主机上生成 AArch64 动态库时，driver 可以完成编译和静态审计，但无法直接运行 AArch64

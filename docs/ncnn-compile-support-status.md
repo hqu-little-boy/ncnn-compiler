@@ -30,10 +30,10 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 | `ncnn.const` | 来自 `.bin` 的权重常量 |
 | `ncnn.output` | 标记导出输出 blob |
 
-### 2.2 计算 op（当前方言/导入集合，共 26 项）
+### 2.2 计算 op（当前方言/导入集合，共 27 项）
 
-下表是当前完整的 26 个计算 op 集合。Importer 当前注册 27 个 source layer type，包含
-`Input` 和下表 26 个计算层。表中“支持”只表示对应受限实例可导入并通过产品
+下表是当前完整的 27 个计算 op 集合。Importer 当前注册 28 个 source layer type，包含
+`Input` 和下表 27 个计算层。表中“支持”只表示对应受限实例可导入并通过产品
 strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言权威定义是
 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td)，导入权威是
 `lib/Importer/NCNNImporter.cpp` 的 `importers()`；最终能力还须满足
@@ -50,8 +50,8 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | `Softmax` | `ncnn.softmax` | axis | |
 | `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 当前支持纯 depthwise、静态 FP32；不是通用 group conv |
 | `Deconvolution` | `ncnn.deconvolution` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, output_pad_bottom/right, has_bias | 静态 FP32 2x2 stride-2 子集；可选 bias 和融合 ReLU |
-| `Padding` | `ncnn.padding` | top, bottom, left, right, value | 静态 FP32 constant spatial padding |
-| `Interp` | `ncnn.interp` | height_scale, width_scale | 静态 FP32 nearest、正整数倍上采样 |
+| `Padding` | `ncnn.padding` | top, bottom, left, right, value | FP32 constant spatial padding；支持动态 H/W |
+| `Interp` | `ncnn.interp` | height_scale, width_scale | FP32 rank-3 nearest、正整数倍；支持静态或动态 H/W |
 | `Sigmoid` | `ncnn.sigmoid` | 无 | 静态 FP32 |
 | `HardSigmoid` | `ncnn.hard_sigmoid` | alpha, beta | 静态 FP32 |
 | `HardSwish` | `ncnn.hard_swish` | alpha, beta | 静态 FP32 |
@@ -67,6 +67,7 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | `ExpandDims` | `ncnn.expand_dims` | axes | 显式静态 axes |
 | `Permute` | `ncnn.permute` | permutation | 当前 importer 支持 rank-2 |
 | `Gemm` | `ncnn.gemm` | alpha, beta | 动态 A、转置常量 B、行偏置 FP32 子集 |
+| `DetectionOutput` | `ncnn.detection_output` | num_class, nms_threshold, nms_top_k, keep_top_k, confidence_threshold, variance_x/y/w/h | Caffe SSD 三输入 FP32 子集；bounded 数据依赖输出 |
 
 导入器（`lib/Importer/NCNNImporter.cpp`）对上述以外的层类型返回 `unsupported layer type` 错误。
 
@@ -83,7 +84,8 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
   activation params 按 ncnn 语义忽略，`weight_data_size` 必须与实际权重元素数一致。
 - **Padding**：仅支持 spatial constant padding，不支持 per-channel padding data 或其他 padding mode。
 - **Interp**：仅支持 `resize_type=1` 的 nearest 模式、`align_corner=0` 和正整数倍 scale；显式输出
-  shape 必须与 scale 推导结果一致。scale 受 TOSA 上限 2048 约束，输出空间维度必须小于 16384。
+  shape 必须与 scale 推导结果一致。静态实例可走 TOSA resize；动态 H/W 直接 lower 为
+  `tensor.dim + tensor.empty + linalg.generic`。
 - **Pooling**：`mode=Adaptive` 和 regular `Average + include_pad=1` **不会被 lowering**（残留 → 拒绝）。
   `pad_mode=0`（full + tail padding）通过尾部填充计算正常支持；global 模式按 ncnn 语义忽略
   regular-only 的 padding 和 `include_pad` 参数。
@@ -92,6 +94,19 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 - **Reduction**：当前只支持 `operation=3`（mean）；显式 axes 要求新版 `fixbug0=1`。
 - **Gemm**：仅支持 `constantA=0, constantB=1, constantC=1, transA=0, transB=1`、
   `broadcast_type_C=4` 的 FP32 子集；不支持量化、packing 和输出转置。
+- **DetectionOutput**：仅支持 Caffe-style SSD，要求三个静态 FP32 输入且满足 location、confidence、
+  priorbox 的元素数关系；拒绝 MXNet `num_class=-233`。每行是
+  `[label, confidence, xmin, ymin, xmax, ymax]`，最大 storage 为
+  `[maximum_detections, 6]`，实际 shape 为 `[count, 6]`：
+
+  ```text
+  maximum_detections =
+    min(keep_top_k, (num_class - 1) * min(nms_top_k, num_prior))
+  ```
+
+  `PriorBox`、`Proposal`、`YoloDetectionOutput` 和 `Yolov3DetectionOutput` 尚未支持。
+  当前 Caffe lowering 从 priorbox 输入第二行开头读取 4 个 variance，并对所有 prior 复用；
+  op 上保留的 `variance_x/y/w/h` 属性仅参与合法性校验，不覆盖该输入数据。
 
 ### 2.4 算子扩展一致性契约
 
@@ -135,10 +150,10 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | 阶段 | Pass / 工具 | 作用 |
 |---|---|---|
 | 解析 | `ncnn_graph::Graph::load` | 解析 `.param`（magic `7767517`）和 `.bin` 为 parsed-graph |
-| 导入 | `ncnn_importer::import_graph` | 提升为类型化 MLIR SSA DAG，通过 op 的 `InferTypeOpInterface` 执行静态形状推断 |
+| 导入 | `ncnn_importer::import_graph` | 提升为类型化 MLIR SSA DAG，通过 op 的 `InferTypeOpInterface` 执行 ranked shape inference |
 | 模型→函数 | `convert-ncnn-model-to-func` | Full dialect conversion：移动模型 region，建立 `func.func` + `arith.constant`，不 clone SSA 图 |
 | 规范化 | `normalize-ncnn` | 两阶段校验/提交：SAME padding 校验由 `TypeSwitch` 分派，提交由 typed `OpRewritePattern` 完成；Split 由标准 folder/canonicalize 消除 |
-| ncnn→TOSA | `convert-ncnn-to-tosa` | MLIR dialect conversion patterns + CHW/NHWC 双向 materialization；标准 GELU 使用可 bufferize 的 `linalg.map + math.erfc` |
+| ncnn→目标 IR | `convert-ncnn-to-tosa` | 大多数算子生成 TOSA；动态 Interp 和 DetectionOutput 等白名单实例直接生成 Linalg/SCF/Tensor/Arith |
 | TOSA→Linalg | 上游 `addTosaToLinalgPasses` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith |
 | Linalg→MemRef | `bufferize-ncnn` + `buffer-results-to-out-params` | One-Shot Bufferize，输出提升为 caller-owned 参数 |
 | C API 生成 | `generate-ncnn-c-api` | 准备 bare-pointer ABI 元数据，通过 MLIR `SymbolTable` 重命名内部函数并更新全部符号引用 |
@@ -168,7 +183,7 @@ adaptive pooling、average include-pad 和尚未分配目标路径的 ncnn op �
 |---|---|---|
 | parsed-graph | 自定义文本 | 调试用，不被下游消费 |
 | ncnn 方言 | MLIR 文本 | `ncnn.model` + 类型化 SSA 值 |
-| TOSA | MLIR 文本 | 上游 TOSA 为主；标准 GELU 同时含 Linalg/Math |
+| TOSA | MLIR 文本 | 上游 TOSA 为主；动态 Interp、DetectionOutput、标准 GELU 可同时含 Linalg/SCF/Tensor/Arith/Math |
 | Linalg | MLIR 文本 | tensor + Linalg/Arith/Math |
 | MemRef | MLIR 文本 | bufferized，caller-owned output，void return |
 | C API | MLIR 文本 | 附加 bare-pointer ABI 元数据 |
@@ -195,25 +210,28 @@ adaptive pooling、average include-pad 和尚未分配目标路径的 ncnn op �
 int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 ```
 
-- 所有输入 tensor 参数组在前，输出数据指针在后；输入参数组为 `data`、可选 `shape`。
+- 所有输入 tensor 参数组在前，输出数据指针在后；输入参数组为 `data`、可选 `shape`、可选 `rank`。
 - 元素类型由 C 指针类型表达。ABI 层支持 f16、bf16、f32、f64 以及 8/16/32/64 位有符号、
   无符号整数；当前 ncnn 产品模型路径仍只产生 f32 tensor。
-- 完全静态 tensor 省略 shape；固定-rank动态输入增加 `const int64_t shape[RANK]`。
+- 完全静态 tensor 省略 shape/rank；固定-rank 动态输入增加 `const int64_t shape[RANK]`；动态
+  rank 输入增加 shape 和 rank。
 - 调用方拥有所有 buffer；数据为 contiguous、native-endian。动态输入 shape 的静态维必须匹配
   头文件宏，动态维必须大于 0。
-- 返回 0 表示成功；任一指针为 NULL 返回 1。
-- 当前产品实现和默认测试覆盖静态 shape；可用 `--input-shape=CxHxW` 补齐恰好一个且尺寸
-  省略的 Input，不能覆盖已声明尺寸或表达多输入 shape。
-- ABI pass 已能为固定-rank动态输入构造运行时 memref descriptor，但 importer 和算子 lowering
-  尚未形成动态模型全链。动态输出、独立 shape inference、数据依赖输出和动态 rank 分派仍未
-  实现；不得宣称当前产品动态库已支持动态 shape。设计规范见
+- 返回 0 表示成功；NULL pointer、非法 shape/rank 或 shape metadata capacity 不足返回 1。
+- `--input-shape=CxHxW` 可重复，按 Input source-layer 顺序绑定；extent 可为正整数或 `?`。
+- shape-only 动态输出由 `<model>_infer_output_shapes` 返回，调用方据此分配 output buffer。
+- 数据依赖输出由执行入口返回 actual shape/rank，并接收 shape metadata capacity；调用方按
+  `MAX_DIMn`/`MAX_ELEMENTS` 分配最大 data buffer。shape capacity 是元数据数组容量，不是 data
+  buffer 容量。
+- `--input-shape=*` 支持 rank 1 至 4 的受限 specialization，当前仅单输入、单输出、
+  shape-preserving identity/ReLU；不表示一般多输入/多输出动态 rank 已实现。完整契约见
   [`dynamic-rank-c-abi.md`](../../docs/dynamic-rank-c-abi.md)。
 
 ### 5.3 链接约束
 
 - 使用 `-nostdlib`、`-Wl,-z,defs`、`--no-undefined`、版本脚本。
 - 允许的未定义符号仅限：`erfcf`、`erff`、`expf`、`powf`、`free`、`malloc`、`memcpy`、`memset`。
-- 仅导出模型入口函数符号。
+- 仅导出模型执行入口，以及存在 shape-only 动态输出时的 `<model>_infer_output_shapes`。
 - 禁止出现：`memrefCopy`、`runner_utils`、`RunnerUtils`、`ncnn_runtime`。
 
 ---
@@ -250,7 +268,9 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 
 ### 7.3 数值黄金测试
 
-`test/Numerical/`：将编译产物 `.so` 的输出与上游 ncnn **naive 标量 CPU 参考**对比。
+`test/Numerical/`：将编译产物 `.so` 的输出与 vendored upstream ncnn runtime 对比。多数被测层
+通过 `create_layer_naive()` override 并关闭 packing、SIMD、线程、Winograd/SGEMM 等优化；
+DetectionOutput 当前未注册 naive override，使用 ncnn 内建层路径。
 
 - `operators/supported_ops_test.cpp`：覆盖支持算子的参数矩阵，包括：
   - Convolution：basic、no-bias、dilated、asymmetric padding/stride、SAME_UPPER/LOWER
@@ -264,12 +284,14 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
     PP-OCRv6 small/medium 使用的 `C=96/K=7/pad=3`、`C=256/K=9/pad=4` 大核实例
   - Reshape：静态 shape、`-1` 推断、`0` 复制输入维度
   - BinaryOp：标量、channel broadcast、反向 broadcast
-   - PP-OCRv6 rec 新增算子：GELU（含负尾部）、Squeeze、BatchNorm 零方差保护、
-     ExpandDims 负轴、rank-2 Permute、非默认 alpha/beta Gemm、BinaryOp add、
-     rank-3 输入融合 ReLU InnerProduct
-   - PP-OCRv6 det 新增算子：恒等及四边非对称 constant Padding；恒等、2 倍、H/W 非对称
-     3/4 倍和 8 倍 nearest Interp；带 bias/融合 ReLU、无 bias 及真实 tiny head `I=16/O=1`
-     的 Deconvolution；Sigmoid 概率范围、极值截断和 NaN 传播语义；权重加载另覆盖正式 FP32 tag
+  - PP-OCRv6 rec 新增算子：GELU（含负尾部）、Squeeze、BatchNorm 零方差保护、
+    ExpandDims 负轴、rank-2 Permute、非默认 alpha/beta Gemm、BinaryOp add、
+    rank-3 输入融合 ReLU InnerProduct
+  - PP-OCRv6 det 新增算子：恒等及四边非对称 constant Padding；恒等、2 倍、H/W 非对称
+    3/4 倍和 8 倍 nearest Interp；带 bias/融合 ReLU、无 bias 及真实 tiny head `I=16/O=1`
+    的 Deconvolution；Sigmoid 概率范围、极值截断和 NaN 传播语义；权重加载另覆盖正式 FP32 tag
+  - DetectionOutput：Caffe SSD decode、confidence filtering、逐类 top-k、IoU NMS、全局 top-k，
+    同时验证最大 storage 与实际 `[count,6]` shape
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet、PP-OCRv6
   tiny rec、tiny det、small det、medium det 和 PP-OCRv5 mobile det 与 upstream ncnn 数值对齐；
@@ -295,11 +317,11 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 
 | 类别 | 限制 |
 |---|---|
-| 算子覆盖 | SqueezeNet、PP-LCNet、AngleNet、PP-OCRv6 tiny rec/tiny det/small det/medium det、PP-OCRv5 mobile det 所需子集；无通用 group conv、RNN，Interp/Padding/Deconvolution 仅支持表中静态子集 |
+| 算子覆盖 | 27 个计算 op 的受限实例；DetectionOutput 仅 Caffe SSD；无 PriorBox/Proposal/Yolo、通用 group conv、RNN |
 | 量化 | int8 参数可解析但不被 lowering；f16 权重可解析但端到端路径仅 f32 |
-| 形状 | 当前已验证产品路径为静态 shape；动态 extent/rank 已有目标 ABI 设计，仍需全链实现与默认测试 |
-| 数据类型 | ABI 仅 f32 |
-| 入口 | 一个导出函数；可有多个输入和多个输出，ABI 按“全部输入后全部输出”排列 |
+| 形状 | 静态 shape 广泛覆盖；固定 rank 动态 extent 覆盖 identity/ReLU/Padding/Interp 等路径；动态 rank 仅一入一出 identity/ReLU rank 1..4；动态 SAME 和通用动态图仍不支持 |
+| 数据类型 | GenerateCAPI 支持 typed f16/bf16/f32/f64 与整数 ABI；当前 ncnn 模型数据主路径为 f32 |
+| 入口 | 一个执行入口；shape-only 动态输出另有 inference 入口；执行 ABI 按输入组、输出 data、数据依赖元数据排列 |
 | 平台 | 仅 Linux 64-bit ELF |
 | GPU/NPU | 无，仅 CPU（LLVM 后端） |
 | 图优化 | 无算子融合、无常量折叠 |
@@ -314,7 +336,7 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 | Op 形状推断/验证 | `lib/Dialect/NCNN/IR/NCNNOps.cpp` |
 | 图解析/数据模型 | `lib/Graph/graph.cpp`、`lib/Graph/parser.cpp` |
 | 导入器（层接受） | `lib/Importer/NCNNImporter.cpp`、`lib/Importer/ImporterInternal.hpp` |
-| 导入器（算子族实现） | `lib/Importer/Import{Input,Convolution,Pooling,Activation,Tensor}.cpp` |
+| 导入器（算子族实现） | `lib/Importer/Import{Input,Convolution,Pooling,Activation,Tensor,Ops,Detection}.cpp` |
 | 模型→函数转换 | `lib/Conversion/NCNNToFunc/NCNNToFunc.cpp` |
 | 规范化 | `lib/Transforms/NormalizeNCNN/NormalizeNCNN.cpp` |
 | ncnn→TOSA 转换 | `lib/Conversion/NCNNToTosa/NCNNToTosa.cpp` |

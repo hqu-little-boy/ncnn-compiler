@@ -64,8 +64,9 @@ tensor/memref，调用方拥有 input/output buffer，函数只释放内部临�
 `ncnn-memref-to-llvm-pipeline` 将 Linalg copy 和计算统一降为 loops，再完成
 Affine/SCF/Math/Arith/MemRef/Func/CF 到 LLVM dialect 的转换，因此不会引入外部
 `memrefCopy` runtime 符号。若模块经过 `generate-ncnn-c-api`，该 pipeline 还会在 Func→LLVM
-后生成裸指针 wrapper：公共参数顺序固定为全部输入后全部输出，内部再按原函数参数顺序组装
-静态连续 memref descriptor。模型实现被改为 private，任一空指针返回 1，成功返回 0。
+后生成模型专用 typed wrapper：公共参数顺序固定为全部输入参数组、全部输出数据指针、数据依赖
+输出元数据。wrapper 为静态或动态 ranked tensor 构造连续 memref descriptor，并可执行 rank
+1..4 dispatch 或返回 actual shape。模型实现被改为 private；参数契约失败返回 1，成功返回 0。
 
 与 parsed-graph 的关键区别：**parsed-graph 是保留 ncnn 文件语义的线性层视图，ncnn 方言模块
 是类型化的 SSA DAG**。parsed-graph 不是下游 IR，也不提供完整的中间值 shape inference。
@@ -79,9 +80,9 @@ Affine/SCF/Math/Arith/MemRef/Func/CF 到 LLVM dialect 的转换，因此不会�
 - **参数字典 → 强类型属性**：ncnn 的 `{0=64 1=3 …}` 数字 key 解析成
   `ncnn.convolution {kernel_h=3, kernel_w=3, stride_h=2, …}` 这样的具名强类型属性
   （`I64Attr` / `BoolAttr` / `F32Attr`）。
-- **shape inference**：每个值都带推断出的 ranked shape 与元素类型；当前 importer 生成静态
-  类型（例如 `tensor<64x113x113xf32>`），动态 extent/rank 需要扩展 shape propagation 和
-  downstream lowering。
+- **shape inference**：每个值都带推断出的 ranked shape 与元素类型。传统模型通常为静态 extent；
+  `--input-shape` 的 `?` 可保留动态 extent，`*` 为受限模型生成 rank 1..4 ranked specialization。
+  动态值能否继续下降取决于具体算子支持。
   conv/pool/concat 实现 `InferTensorTypeAdaptor`，importer 通过标准 `inferReturnTypes` 获取结果，
   `InferTypeOpInterface` 用相同实现精确复核声明类型。
 
@@ -134,7 +135,7 @@ module {
 ## 4. 算子与属性
 
 模型边界由 `ncnn.model`、`ncnn.input`、`ncnn.const`、`ncnn.output` 表示。当前计算 op 共
-26 个；权威集合是 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td) 的
+27 个；权威集合是 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td) 的
 TableGen 定义，完整能力矩阵见 [ncnn-compile-support-status.md](ncnn-compile-support-status.md)。
 下表 7 项只是 SqueezeNet 示例实际使用的计算 op：
 
@@ -147,6 +148,10 @@ TableGen 定义，完整能力矩阵见 [ncnn-compile-support-status.md](ncnn-co
 | `ncnn.concat` | ≥2 个输入 | `axis` | 1 个张量 |
 | `ncnn.dropout` | input | `scale`（默认 1.0；推理期恒等/缩放） | 1 个（同类型） |
 | `ncnn.softmax` | input | `axis` | 1 个（同类型） |
+
+`ncnn.detection_output` 是特殊的双结果计算 op：第一个结果是
+`tensor<maximum_detections x 6 x f32>` bounded storage，第二个 `tensor<2xi64>` 携带实际
+`[count,6]` shape。第二个结果不对应额外的 source top blob。
 
 每个算子还带两个 **discardable 属性**用于溯源：`ncnn.name`（ncnn 层名）、
 `ncnn.source_layer`（来自 parsed-graph 的第几层）。
@@ -190,7 +195,8 @@ tensor encoding；带 encoding 的 tensor 会在方言校验阶段被明确拒�
 
 - `relu` / `dropout` / `softmax`：`SameOperandsAndResultType`（结果类型 = 输入类型）。
 - `split`：所有结果 = 输入类型（个数 = 输出 blob 数，≥2）。
-- `convolution` / `pooling` / `concat`：通过 `InferTensorTypeAdaptor` 实现
+- `convolution` / `pooling` / `concat` / `reshape` / `detection_output` 等通过
+  `InferTensorTypeAdaptor` 实现
   `inferReturnTypeComponents`，在构建时计算结果形状（conv 输出 `[O, H_out, W_out]`、pool
   按 regular/global/adaptive、concat 沿 `axis` 求和）。标准 `InferTypeOpInterface` verifier
   会重算并与声明的结果类型精确比对，不一致即报错；importer 不维护额外的公开推断入口。
@@ -198,6 +204,10 @@ tensor encoding；带 encoding 的 tensor 会在方言校验阶段被明确拒�
 conv 输出尺寸公式（显式 pad）：
 `extent = dilation*(kernel-1)+1`；`out = 1 + (in + pad_before + pad_after - extent)/stride`。
 SAME（`-233`/`-234`）：`out = 1 + (in-1)/stride`。
+
+显式非负 padding 的 Convolution 可传播动态 H/W；动态 nearest Interp 以运行时 H/W 乘静态
+scale；DetectionOutput 根据输入和 top-k 参数推导最大 storage，实际行数由执行时 shape carrier
+返回。动态 SAME padding 仍未实现。
 
 ---
 
