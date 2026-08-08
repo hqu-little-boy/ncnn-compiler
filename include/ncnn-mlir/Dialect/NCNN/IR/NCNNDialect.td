@@ -14,6 +14,7 @@ def NCNN_Dialect : Dialect {
   let name = "ncnn";
   let cppNamespace = "::mlir::ncnn";
   let summary = "High-level dialect mirroring ncnn layers.";
+  let useDefaultAttributePrinterParser = 1;
   let description =
     [{
     The `ncnn` dialect represents ncnn network layers as a typed SSA graph.

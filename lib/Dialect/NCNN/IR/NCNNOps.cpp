@@ -961,6 +961,7 @@ FailureOr<RankedTensorType> computeReductionResult(
 LogicalResult ModelOp::verifyRegions() {
   Block& body = getBody().front();
   llvm::StringSet<> inputBlobs;
+  SmallVector<InputOp> inputs;
   bool hasOutput = false;
   for (Operation& operation : body) {
     if (operation.getDialect() != getOperation()->getDialect()) {
@@ -971,11 +972,40 @@ LogicalResult ModelOp::verifyRegions() {
         return input.emitOpError("duplicates input blob '")
                << input.getBlobName() << "'";
       }
+      inputs.push_back(input);
     }
     hasOutput = hasOutput || llvm::isa<OutputOp>(operation);
   }
   if (!hasOutput) {
     return emitOpError("requires at least one ncnn.output");
+  }
+  auto constraints =
+    getOperation()->getAttrOfType<ArrayAttr>("ncnn.shape_constraints");
+  if (!constraints) {
+    return success();
+  }
+  std::set<std::pair<uint32_t, uint32_t>> constrainedDimensions;
+  for (Attribute attribute : constraints) {
+    auto constraint = dyn_cast<DimConstraintAttr>(attribute);
+    if (!constraint) {
+      return emitOpError("shape_constraints must contain dim constraints");
+    }
+    if (constraint.getInput() >= inputs.size()) {
+      return emitOpError("shape constraint input is out of range");
+    }
+    auto type = cast<RankedTensorType>(
+      inputs[constraint.getInput()].getOutput().getType());
+    if (constraint.getDim() >= static_cast<uint32_t>(type.getRank())) {
+      return emitOpError("shape constraint dimension is out of range");
+    }
+    if (!type.isDynamicDim(constraint.getDim())) {
+      return emitOpError("shape constraint requires a dynamic dimension");
+    }
+    if (!constrainedDimensions
+           .insert({constraint.getInput(), constraint.getDim()})
+           .second) {
+      return emitOpError("shape constraint dimension is duplicated");
+    }
   }
   return success();
 }

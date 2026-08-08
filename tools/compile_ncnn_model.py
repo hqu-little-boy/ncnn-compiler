@@ -220,6 +220,14 @@ def write_header(path, manifest):
             f"#define {macro_name(function, argument, 'dynamic_dim_mask')} "
             f"UINT32_C(0x{mask:x})"
         )
+        for constraint in argument.get("dimension_constraints", []):
+            dimension = constraint["dimension"]
+            sizes.extend([
+                f"#define {macro_name(function, argument, f'dim{dimension}_minimum')} "
+                f"INT64_C({constraint['minimum']})",
+                f"#define {macro_name(function, argument, f'dim{dimension}_multiple_of')} "
+                f"INT64_C({constraint['multiple_of']})",
+            ])
         if not mask:
             sizes.append(
                 f"#define {macro_name(function, argument, 'elements')} "
@@ -392,6 +400,7 @@ def main():
     parser.add_argument("--bin")
     parser.add_argument("--model-name")
     parser.add_argument("--input-shape", action="append", default=[])
+    parser.add_argument("--input-dim-constraint", action="append", default=[])
     parser.add_argument("-o", "--output-dir")
     parser.add_argument(
         "--emit",
@@ -489,6 +498,8 @@ def main():
     driver_command = [args.driver, param_path, "--bin", bin_path]
     for input_shape in args.input_shape:
         driver_command.append(f"--input-shape={input_shape}")
+    for constraint in args.input_dim_constraint:
+        driver_command.append(f"--input-dim-constraint={constraint}")
     driver_command.extend(["-o", ncnn_ir])
     run(driver_command)
     run([args.opt, "--ncnn-to-tosa-pipeline", ncnn_ir, "-o", tosa_ir])

@@ -11,6 +11,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
+#include "ncnn-mlir/Support/ShapeProgram.hpp"
 
 namespace mlir::ncnn {
 
@@ -20,18 +21,14 @@ namespace mlir::ncnn {
 namespace {
 
 struct ShapeTransform {
-  unsigned inputIndex;
-  SmallVector<SmallVector<int64_t>> programs;
+  SmallVector<DimensionExpr> dimensions;
 };
-
-enum class ShapeOpcode : int64_t { Add = 0, Multiply = 1, Divide = 2 };
 
 void appendInstruction(ShapeTransform& transform,
                        unsigned dimension,
                        ShapeOpcode opcode,
                        int64_t operand) {
-  transform.programs[dimension].push_back(static_cast<int64_t>(opcode));
-  transform.programs[dimension].push_back(operand);
+  transform.dimensions[dimension].append(opcode, operand);
 }
 
 class ConvertModel final : public OpConversionPattern<ModelOp> {
@@ -76,6 +73,9 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
       FunctionType::get(model.getContext(), inputTypes, outputTypes));
     function->setAttr("ncnn.entry_point", rewriter.getUnitAttr());
     function->setAttr("llvm.emit_c_interface", rewriter.getUnitAttr());
+    if (Attribute constraints = model->getAttr("ncnn.shape_constraints")) {
+      function->setAttr("ncnn.shape_constraints", constraints);
+    }
     if (Attribute rank = model->getAttr("ncnn.rank_variant")) {
       function->setAttr("ncnn.rank_variant", rank);
       function->setAttr("ncnn.dynamic_rank", rewriter.getUnitAttr());
@@ -97,9 +97,14 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
     DenseMap<Value, ShapeTransform> shapeTransforms;
     for (auto [inputIndex, input] : llvm::enumerate(inputs)) {
       auto type = cast<RankedTensorType>(input.getOutput().getType());
-      shapeTransforms[input.getOutput()] = {
-        .inputIndex = static_cast<unsigned>(inputIndex),
-        .programs = SmallVector<SmallVector<int64_t>>(type.getRank())};
+      SmallVector<DimensionExpr> dimensions;
+      dimensions.reserve(type.getRank());
+      for (int64_t dimension = 0; dimension < type.getRank(); ++dimension) {
+        dimensions.emplace_back(static_cast<unsigned>(inputIndex),
+                                static_cast<unsigned>(dimension));
+      }
+      shapeTransforms[input.getOutput()] = {.dimensions =
+                                              std::move(dimensions)};
     }
     for (Operation& operation : model.getBody().front()) {
       if (operation.getNumOperands() == 0 || operation.getNumResults() == 0) {
@@ -197,13 +202,20 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
       }
       auto transform = shapeTransforms.find(output.getInput());
       if (transform != shapeTransforms.end()) {
-        function.setResultAttr(resultIndex,
-                               "ncnn.shape_source_input",
-                               rewriter.getI32IntegerAttr(static_cast<int32_t>(
-                                 transform->second.inputIndex)));
+        function.setResultAttr(
+          resultIndex,
+          "ncnn.shape_source_input",
+          rewriter.getI32IntegerAttr(static_cast<int32_t>(
+            transform->second.dimensions.front().getInputIndex())));
         SmallVector<Attribute> programs;
-        for (ArrayRef<int64_t> program : transform->second.programs) {
-          programs.push_back(rewriter.getDenseI64ArrayAttr(program));
+        for (const DimensionExpr& dimension : transform->second.dimensions) {
+          if (dimension.getInputIndex() !=
+              transform->second.dimensions.front().getInputIndex()) {
+            return model.emitOpError(
+              "output shape dimensions require multiple source inputs");
+          }
+          programs.push_back(
+            rewriter.getDenseI64ArrayAttr(dimension.serialize()));
         }
         function.setResultAttr(
           resultIndex, "ncnn.shape_program", rewriter.getArrayAttr(programs));

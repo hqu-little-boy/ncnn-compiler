@@ -53,3 +53,16 @@ func.func @encoded_convolution(%input: tensor<2x4x4xf32, "test.encoding">, %weig
   %result = ncnn.convolution %input, %weight {dilation_h = 1 : i64, dilation_w = 1 : i64, has_bias = false, kernel_h = 1 : i64, kernel_w = 1 : i64, pad_bottom = 0 : i64, pad_left = 0 : i64, pad_right = 0 : i64, pad_top = 0 : i64, stride_h = 1 : i64, stride_w = 1 : i64} : (tensor<2x4x4xf32, "test.encoding">, tensor<3x2x1x1xf32>) -> tensor<3x4x4xf32>
   return
 }
+
+// -----
+
+// expected-error@+1 {{'ncnn.model' op shape constraint requires a dynamic dimension}}
+ncnn.model @static_constraint attributes {
+  ncnn.shape_constraints = [
+    #ncnn.dim_constraint<input = 0, dim = 1, min = 32, multiple_of = 32>
+  ]
+} {
+  %input = ncnn.input {blob_name = "input", layer_name = "input"}
+    : tensor<3x32x?xf32>
+  ncnn.output %input {blob_name = "output"} : tensor<3x32x?xf32>
+}

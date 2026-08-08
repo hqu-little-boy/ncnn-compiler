@@ -193,6 +193,21 @@ ncnn-compile relu.param --input-shape=*
 计算图只允许 shape-preserving identity/ReLU。编译器生成 rank 1、2、3、4 四个 ranked
 specialization 和公共 rank dispatcher；不使用 unranked memref。
 
+### 2.6 `--input-dim-constraint=<INPUT:DIM:min=N,multiple=N>`
+
+为 fixed-rank 动态输入维增加运行时约束。该选项可重复，例如：
+
+```bash
+ncnn-compile model.param \
+  --input-shape=3x?x? \
+  --input-dim-constraint=0:1:min=32,multiple=32 \
+  --input-dim-constraint=0:2:min=32,multiple=32
+```
+
+`INPUT` 是按 source-layer 顺序排列的 Input 索引，`DIM` 使用 CHW 维序。约束只能指向 `?`
+动态维；索引越界、重复约束、非正 minimum/multiple 或静态维约束都会在编译阶段拒绝。生成的
+执行入口和 `<model>_infer_output_shapes` 都会在调用模型前检查 minimum 和整除条件。
+
 ## 3. 优化和调试信息
 
 ### 3.1 `-O0`、`-O1`、`-O2`、`-O3`
@@ -331,6 +346,10 @@ manifest 描述导出函数以及输入、输出的名称、shape、元素类型
 固定 rank 动态 extent 用 `-1` 和 `dynamic_dim_mask` 表示。数据依赖输出还包含
 `maximum_shape` 和 `shape_depends_on_data: true`；受限动态 rank 参数使用 `dynamic_rank`、
 `rank_min` 和 `rank_max`。值为 false 的 `shape_depends_on_data` 可省略。
+
+带约束的动态输入还包含 `dimension_constraints`，每项提供 `dimension`、`minimum` 和
+`multiple_of`。生成头文件同时提供 `<MODEL>_<INPUT>_DIM<N>_MINIMUM` 与
+`<MODEL>_<INPUT>_DIM<N>_MULTIPLE_OF` 宏。
 
 manifest 默认只是生成头文件所需的内部临时产物，不会发布。以下情况适合显式开启：
 

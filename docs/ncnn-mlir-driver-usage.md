@@ -58,6 +58,7 @@ ncnn-mlir-driver [options] <input .param file>
 | `--bin=<path>` | 权重文件 `.bin` | 由 `<input>` 把末尾 `.param` 换成 `.bin` 推导 |
 | `--input-shape=<CxHxW>` | 可重复；extent 为正整数或 `?`，按 Input source order 匹配 | 无 |
 | `--input-shape=*` | 受限动态 rank 1..4；必须是唯一 occurrence | 无 |
+| `--input-dim-constraint=<INPUT:DIM:min=N,multiple=N>` | 可重复；约束 fixed-rank 动态输入维 | 无 |
 | `-o <path>` | 产物输出路径，`-` 写到 stdout | `-`（stdout） |
 | `--emit=<stage>` | 选择要发出的阶段（见下） | `mlir` |
 | `--verify` | 对导入的 MLIR 模块跑校验器 | 开 |
@@ -164,11 +165,19 @@ MLIR 模块格式详见 [ncnn-ir-format.md](ncnn-ir-format.md)。
 ```bash
 ./build/tools/ncnn-mlir-driver model.param --input-shape=3x224x224
 ./build/tools/ncnn-mlir-driver model.param --input-shape=3x?x?
+./build/tools/ncnn-mlir-driver model.param \
+  --input-shape=3x?x? \
+  --input-dim-constraint=0:1:min=32,multiple=32 \
+  --input-dim-constraint=0:2:min=32,multiple=32
 ```
 
 多输入时重复指定，数量必须等于全部 Input 数量，并按 source-layer 顺序绑定。已有静态尺寸的
 Input 不会被改写，但仍占一个条目。`--input-shape=*` 必须独占，只支持一个未声明尺寸的 Input、
 一个输出以及 identity/ReLU shape-preserving 图，并生成 rank 1..4 specialization。
+
+维度约束以 `#ncnn.dim_constraint` 结构化属性保存在 `ncnn.shape_constraints` 中，只允许指向
+动态维。`convert-ncnn-model-to-func` 会将该属性传播到入口函数，后续 C ABI wrapper 和
+shape inference wrapper 使用同一约束。
 
 ### 3.4 查看原始解析图
 

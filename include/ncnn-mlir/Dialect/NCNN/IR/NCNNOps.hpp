@@ -14,6 +14,7 @@
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
+#include "ncnn-mlir/Dialect/NCNN/IR/NCNNAttrs.hpp"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNDialect.hpp"
 
 namespace mlir::ncnn {

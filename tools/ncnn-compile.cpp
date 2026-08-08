@@ -62,6 +62,13 @@ llvm::cl::list<std::string> g_input_shapes(
   llvm::cl::value_desc("CxHxW"),
   llvm::cl::ZeroOrMore,
   llvm::cl::cat(g_category));
+llvm::cl::list<std::string> g_input_dim_constraints(
+  "input-dim-constraint",
+  llvm::cl::desc("Dynamic input dimension constraint as "
+                 "INPUT:DIM:min=N,multiple=N; repeat as needed"),
+  llvm::cl::value_desc("constraint"),
+  llvm::cl::ZeroOrMore,
+  llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_output_dir("output-dir",
                                         llvm::cl::desc("Output directory"),
                                         llvm::cl::value_desc("path"),
@@ -159,6 +166,12 @@ llvm::cl::opt<std::string> g_expected_undefined("expected-undefined",
                                                 llvm::cl::cat(g_category));
 
 struct Argument {
+  struct DimensionConstraint {
+    std::uint32_t dimension;
+    std::int64_t minimum;
+    std::int64_t multiple_of;
+  };
+
   std::string name;
   std::vector<std::int64_t> shape;
   std::vector<std::int64_t> maximum_shape;
@@ -169,6 +182,7 @@ struct Argument {
   bool dynamic_rank;
   std::uint32_t rank_min;
   std::uint32_t rank_max;
+  std::vector<DimensionConstraint> dimension_constraints;
 };
 
 struct Manifest {
@@ -469,7 +483,8 @@ int run(const std::vector<std::string>& command,
         .rank_min = static_cast<std::uint32_t>(
           argument_object->getInteger("rank_min").value_or(0)),
         .rank_max = static_cast<std::uint32_t>(
-          argument_object->getInteger("rank_max").value_or(0))};
+          argument_object->getInteger("rank_max").value_or(0)),
+        .dimension_constraints = {}};
       for (llvm::json::Value& dimension : *shape) {
         auto integer = dimension.getAsInteger();
         if (!integer || *integer < -1) {
@@ -486,6 +501,31 @@ int run(const std::vector<std::string>& command,
           argument.maximum_shape.push_back(*integer);
         }
       }
+      if (auto* constraints =
+            argument_object->getArray("dimension_constraints")) {
+        std::set<std::uint32_t> constrainedDimensions;
+        for (llvm::json::Value& constraintValue : *constraints) {
+          auto* constraint = constraintValue.getAsObject();
+          if (constraint == nullptr) {
+            return false;
+          }
+          auto dimension = constraint->getInteger("dimension");
+          auto minimum = constraint->getInteger("minimum");
+          auto multiple = constraint->getInteger("multiple_of");
+          if (!dimension || !minimum || !multiple ||
+              !std::in_range<std::uint32_t>(*dimension) || *minimum <= 0 ||
+              *multiple <= 0 ||
+              !constrainedDimensions
+                 .insert(static_cast<std::uint32_t>(*dimension))
+                 .second) {
+            return false;
+          }
+          argument.dimension_constraints.push_back(
+            {.dimension = static_cast<std::uint32_t>(*dimension),
+             .minimum = *minimum,
+             .multiple_of = *multiple});
+        }
+      }
       if (argument.shape.size() > 32) {
         return false;
       }
@@ -496,6 +536,14 @@ int run(const std::vector<std::string>& command,
         }
       }
       if (argument.dynamic_dim_mask != expected_mask) {
+        return false;
+      }
+      if (std::ranges::any_of(
+            argument.dimension_constraints,
+            [&](const Argument::DimensionConstraint& constraint) {
+              return constraint.dimension >= argument.shape.size() ||
+                     argument.shape[constraint.dimension] != -1;
+            })) {
         return false;
       }
       if (argument.shape_source_input < -1) {
@@ -603,6 +651,18 @@ int run(const std::vector<std::string>& command,
       object["shape"] = std::move(shape);
       object["element_type"] = argument.element_type;
       object["dynamic_dim_mask"] = argument.dynamic_dim_mask;
+      if (!argument.dimension_constraints.empty()) {
+        llvm::json::Array constraints;
+        for (const Argument::DimensionConstraint& constraint :
+             argument.dimension_constraints) {
+          llvm::json::Object constraintObject;
+          constraintObject["dimension"] = constraint.dimension;
+          constraintObject["minimum"] = constraint.minimum;
+          constraintObject["multiple_of"] = constraint.multiple_of;
+          constraints.push_back(std::move(constraintObject));
+        }
+        object["dimension_constraints"] = std::move(constraints);
+      }
       if (!argument.maximum_shape.empty()) {
         llvm::json::Array maximum_shape;
         for (std::int64_t dimension : argument.maximum_shape) {
@@ -743,6 +803,19 @@ std::string macro_name(const Manifest& manifest,
     contents += std::format("#define {} UINT32_C(0x{:x})\n",
                             macro_name(manifest, *argument, "dynamic_dim_mask"),
                             argument->dynamic_dim_mask);
+    for (const Argument::DimensionConstraint& constraint :
+         argument->dimension_constraints) {
+      contents += std::format(
+        "#define {} INT64_C({})\n#define {} INT64_C({})\n",
+        macro_name(manifest,
+                   *argument,
+                   std::format("dim{}_minimum", constraint.dimension)),
+        constraint.minimum,
+        macro_name(manifest,
+                   *argument,
+                   std::format("dim{}_multiple_of", constraint.dimension)),
+        constraint.multiple_of);
+    }
     if (argument->dynamic_dim_mask == 0) {
       auto count = element_count(*argument);
       if (!count) {
@@ -1110,9 +1183,22 @@ validate_output_directory(const fs::path& output_dir,
       code += std::format(
         "  int64_t {}_shape[{}] = {{", input.name, input.shape.size());
       for (std::size_t index = 0; index < input.shape.size(); ++index) {
-        code += std::format("{}{}",
-                            index == 0 ? "" : ", ",
-                            input.shape[index] < 0 ? 2 : input.shape[index]);
+        int64_t dynamicExtent = 2;
+        auto constraint =
+          std::ranges::find(input.dimension_constraints,
+                            static_cast<std::uint32_t>(index),
+                            &Argument::DimensionConstraint::dimension);
+        if (constraint != input.dimension_constraints.end()) {
+          dynamicExtent = constraint->minimum;
+          const int64_t remainder = dynamicExtent % constraint->multiple_of;
+          if (remainder != 0) {
+            dynamicExtent += constraint->multiple_of - remainder;
+          }
+        }
+        code += std::format(
+          "{}{}",
+          index == 0 ? "" : ", ",
+          input.shape[index] < 0 ? dynamicExtent : input.shape[index]);
       }
       code += "};\n";
       code += std::format("  size_t {}_count = element_count({}_shape, {});\n",
@@ -1406,6 +1492,9 @@ int main(int argc, char** argv) {
     driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()};
   for (const std::string& input_shape : g_input_shapes) {
     driver_command.push_back("--input-shape=" + input_shape);
+  }
+  for (const std::string& constraint : g_input_dim_constraints) {
+    driver_command.push_back("--input-dim-constraint=" + constraint);
   }
   if (int status = run(driver_command)) {
     return status;

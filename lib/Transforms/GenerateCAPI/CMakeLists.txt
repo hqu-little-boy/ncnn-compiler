@@ -8,6 +8,7 @@ target_include_directories(GenerateCAPI PUBLIC
     ${PROJECT_BINARY_DIR}/include
     ${MLIR_INCLUDE_DIRS})
 target_link_libraries(GenerateCAPI PUBLIC
+    NCNNDialect
     MLIRFuncDialect
     MLIRIR
     MLIRLLVMCommonConversion

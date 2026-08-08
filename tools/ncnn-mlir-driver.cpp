@@ -63,6 +63,14 @@ llvm::cl::list<std::string> g_input_shapes(
   llvm::cl::ZeroOrMore,
   llvm::cl::cat(g_driver_category));
 
+llvm::cl::list<std::string> g_input_dim_constraints(
+  "input-dim-constraint",
+  llvm::cl::desc("Dynamic input dimension constraint as "
+                 "INPUT:DIM:min=N,multiple=N"),
+  llvm::cl::value_desc("constraint"),
+  llvm::cl::ZeroOrMore,
+  llvm::cl::cat(g_driver_category));
+
 // 产物阶段。后续 tosa/linalg/llvm/library 等阶段接入这同一个枚举即可。
 enum class EmitStage { ParsedGraph, Mlir };
 
@@ -149,6 +157,61 @@ std::optional<std::vector<std::int64_t>> parse_input_shape(
   return shape;
 }
 
+std::optional<ncnn_importer::InputDimConstraint> parse_input_dim_constraint(
+  std::string_view text) {
+  auto parseInteger = [](std::string_view token, auto& value) {
+    auto parsed =
+      std::from_chars(token.data(), token.data() + token.size(), value);
+    return !token.empty() && parsed.ec == std::errc{} &&
+           parsed.ptr == token.data() + token.size();
+  };
+  const std::size_t firstColon = text.find(':');
+  const std::size_t secondColon = text.find(':', firstColon + 1);
+  if (firstColon == std::string_view::npos ||
+      secondColon == std::string_view::npos) {
+    return std::nullopt;
+  }
+  ncnn_importer::InputDimConstraint result{};
+  if (!parseInteger(text.substr(0, firstColon), result.input) ||
+      !parseInteger(text.substr(firstColon + 1, secondColon - firstColon - 1),
+                    result.dimension)) {
+    return std::nullopt;
+  }
+  bool sawMinimum = false;
+  bool sawMultiple = false;
+  std::string_view fields = text.substr(secondColon + 1);
+  while (!fields.empty()) {
+    const std::size_t comma = fields.find(',');
+    const std::string_view field = fields.substr(0, comma);
+    const std::size_t equals = field.find('=');
+    if (equals == std::string_view::npos) {
+      return std::nullopt;
+    }
+    const std::string_view name = field.substr(0, equals);
+    const std::string_view value = field.substr(equals + 1);
+    if (name == "min" && !sawMinimum) {
+      sawMinimum = parseInteger(value, result.minimum);
+      if (!sawMinimum || result.minimum <= 0) {
+        return std::nullopt;
+      }
+    } else if (name == "multiple" && !sawMultiple) {
+      sawMultiple = parseInteger(value, result.multiple_of);
+      if (!sawMultiple || result.multiple_of <= 0) {
+        return std::nullopt;
+      }
+    } else {
+      return std::nullopt;
+    }
+    if (comma == std::string_view::npos) {
+      break;
+    }
+    fields.remove_prefix(comma + 1);
+  }
+  return sawMinimum && sawMultiple
+           ? std::optional<ncnn_importer::InputDimConstraint>(result)
+           : std::nullopt;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -199,6 +262,15 @@ int main(int argc, char** argv) {
       return 1;
     }
     import_options.input_shapes.push_back(std::move(*parsed_shape));
+  }
+  for (const std::string& constraint : g_input_dim_constraints) {
+    auto parsed = parse_input_dim_constraint(constraint);
+    if (!parsed) {
+      llvm::errs() << "error: --input-dim-constraint must be "
+                      "INPUT:DIM:min=N,multiple=N with positive values\n";
+      return 1;
+    }
+    import_options.input_dim_constraints.push_back(*parsed);
   }
   auto imported =
     ncnn_importer::import_graph(*decoded, context, import_options);

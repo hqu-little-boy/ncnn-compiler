@@ -127,6 +127,8 @@ module {
 ```
 
 - **`ncnn.input`**对应 ncnn `Input` 层，形状 `[C,H,W]`。
+- fixed-rank 动态输入可以在 `ncnn.model` 上携带 `ncnn.shape_constraints`，元素为结构化
+  `#ncnn.dim_constraint<input, dim, min, multiple_of>` 属性；约束只允许指向动态维。
 - **`ncnn.output`**对应 `graph.output_blob_names` 选择的导出 blob。
 - 计算层和权重都由 `ncnn.*` 算子表示，尚未建立函数 ABI。
 

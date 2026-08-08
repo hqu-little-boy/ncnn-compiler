@@ -223,6 +223,8 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
   头文件宏，动态维必须大于 0。
 - 返回 0 表示成功；NULL pointer、非法 shape/rank 或 shape metadata capacity 不足返回 1。
 - `--input-shape=CxHxW` 可重复，按 Input source-layer 顺序绑定；extent 可为正整数或 `?`。
+- `--input-dim-constraint=INPUT:DIM:min=N,multiple=N` 可重复，为 fixed-rank 动态输入维添加
+  结构化 minimum/multiple 约束；执行和 shape inference 入口都会校验，manifest/header 同步公开。
 - shape-only 动态输出由 `<model>_infer_output_shapes` 返回，调用方据此分配 output buffer。
 - 数据依赖输出由执行入口返回 actual shape/rank，并接收 shape metadata capacity；调用方按
   `MAX_DIMn`/`MAX_ELEMENTS` 分配最大 data buffer。shape capacity 是元数据数组容量，不是 data

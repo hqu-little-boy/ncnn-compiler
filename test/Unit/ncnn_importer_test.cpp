@@ -353,6 +353,23 @@ TEST_F(NcnnImporterTest, ImportsDynamicInputShapeOverride) {
   auto type = result_type_by_name(imported->get(), "input");
   ASSERT_TRUE(type);
   EXPECT_TRUE(shape_is(type, {4, mlir::ShapedType::kDynamic, 8}));
+
+  options.input_dim_constraints = {
+    {.input = 0, .dimension = 1, .minimum = 32, .multiple_of = 32}};
+  imported = import(graph, options);
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  auto models = imported->get().getOps<mlir::ncnn::ModelOp>();
+  ASSERT_NE(models.begin(), models.end());
+  mlir::ncnn::ModelOp model = *models.begin();
+  auto constraints =
+    model->getAttrOfType<mlir::ArrayAttr>("ncnn.shape_constraints");
+  ASSERT_TRUE(constraints);
+  ASSERT_EQ(constraints.size(), 1U);
+  auto constraint = mlir::cast<mlir::ncnn::DimConstraintAttr>(constraints[0]);
+  EXPECT_EQ(constraint.getInput(), 0U);
+  EXPECT_EQ(constraint.getDim(), 1U);
+  EXPECT_EQ(constraint.getMin(), 32);
+  EXPECT_EQ(constraint.getMultipleOf(), 32);
 }
 
 TEST_F(NcnnImporterTest, ImportsDynamicRankSpecializations) {

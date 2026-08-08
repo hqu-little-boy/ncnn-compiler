@@ -18,6 +18,15 @@ namespace ncnn_importer {
 using InputShape = std::vector<std::int64_t>;
 inline constexpr std::int64_t kDynamicExtent = -1;
 
+struct InputDimConstraint {
+  std::uint32_t input;
+  std::uint32_t dimension;
+  std::int64_t minimum;
+  std::int64_t multiple_of;
+
+  bool operator==(const InputDimConstraint&) const = default;
+};
+
 // 导入错误的结构化上下文，对应原 ncnn_frontend::ImportError。
 class ImportError {
  public:
@@ -48,6 +57,9 @@ struct ImportOptions {
 
   // One shape per Input layer, in source-layer order.
   std::vector<InputShape> input_shapes;
+
+  // Runtime constraints for dynamic input dimensions.
+  std::vector<InputDimConstraint> input_dim_constraints;
 
   // Import one specialization for each logical ncnn rank in [1, 4].
   bool dynamic_rank = false;

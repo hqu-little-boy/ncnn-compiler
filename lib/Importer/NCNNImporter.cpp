@@ -386,6 +386,21 @@ const std::string& ImportContext::captured_diagnostic() const noexcept {
 ImportResult ImportContext::prepare_model() {
   model_ = builder_.create<mlir::ncnn::ModelOp>(
     builder_.getUnknownLoc(), builder_.getStringAttr("model"));
+  if (!options_.input_dim_constraints.empty()) {
+    llvm::SmallVector<mlir::Attribute> constraints;
+    constraints.reserve(options_.input_dim_constraints.size());
+    for (const InputDimConstraint& constraint :
+         options_.input_dim_constraints) {
+      constraints.push_back(
+        mlir::ncnn::DimConstraintAttr::get(context_,
+                                           constraint.input,
+                                           constraint.dimension,
+                                           constraint.minimum,
+                                           constraint.multiple_of));
+    }
+    model_->setAttr("ncnn.shape_constraints",
+                    builder_.getArrayAttr(constraints));
+  }
   if (options_.rank_specialization) {
     const std::uint32_t rank = *options_.rank_specialization;
     model_.setSymName(std::format("model_rank{}", rank));
@@ -468,7 +483,8 @@ std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> import_graph(
   const ImportOptions& options) {
   if (options.dynamic_rank) {
     if (graph.layer_count_of("Input") != 1 || options.input_shape ||
-        !options.input_shapes.empty() || options.rank_specialization) {
+        !options.input_shapes.empty() || options.rank_specialization ||
+        !options.input_dim_constraints.empty()) {
       return std::unexpected(ImportError(
         0,
         "Input",

@@ -1,4 +1,5 @@
 import argparse
+import ctypes
 import json
 import pathlib
 import shutil
@@ -174,6 +175,8 @@ def main():
             "--output-dir",
             dynamic_output,
             "--input-shape=3x?x?",
+            "--input-dim-constraint=0:1:min=32,multiple=32",
+            "--input-dim-constraint=0:2:min=32,multiple=32",
             "--emit-manifest",
             "--verify-execution",
             "-O0",
@@ -192,6 +195,12 @@ def main():
     )
     if dynamic_manifest["outputs"][0].get("shape_source_input") != 0:
         raise RuntimeError(f"dynamic output shape source missing: {dynamic_manifest}")
+    expected_constraints = [
+        {"dimension": 1, "minimum": 32, "multiple_of": 32},
+        {"dimension": 2, "minimum": 32, "multiple_of": 32},
+    ]
+    if dynamic_manifest["inputs"][0].get("dimension_constraints") != expected_constraints:
+        raise RuntimeError(f"dynamic input constraints missing: {dynamic_manifest}")
     dynamic_header = (dynamic_output / "dynamic_identity.h").read_text()
     required_dynamic_extent_abi = {
         "#define DYNAMIC_IDENTITY_INPUT1_RANK 3",
@@ -201,6 +210,8 @@ def main():
         "const int64_t input1_shape[DYNAMIC_IDENTITY_INPUT1_RANK]",
         "int64_t output1_shape[DYNAMIC_IDENTITY_OUTPUT1_RANK]",
         "dynamic_identity_infer_output_shapes",
+        "#define DYNAMIC_IDENTITY_INPUT1_DIM1_MINIMUM INT64_C(32)",
+        "#define DYNAMIC_IDENTITY_INPUT1_DIM1_MULTIPLE_OF INT64_C(32)",
     }
     missing_dynamic_extent_abi = {
         text for text in required_dynamic_extent_abi if text not in dynamic_header
@@ -212,6 +223,72 @@ def main():
         )
     if "input1_rank" in dynamic_header or "output1_rank" in dynamic_header:
         raise RuntimeError("fixed-rank dynamic ABI contains redundant rank")
+
+    dynamic_library = ctypes.CDLL(
+        str(dynamic_output / "libdynamic_identity.so")
+    )
+    shape_type = ctypes.c_int64 * 3
+    float_pointer = ctypes.POINTER(ctypes.c_float)
+    dynamic_function = dynamic_library.dynamic_identity
+    dynamic_function.argtypes = [
+        float_pointer,
+        ctypes.POINTER(ctypes.c_int64),
+        float_pointer,
+    ]
+    dynamic_function.restype = ctypes.c_int
+    infer_shapes = dynamic_library.dynamic_identity_infer_output_shapes
+    infer_shapes.argtypes = [
+        ctypes.POINTER(ctypes.c_int64),
+        ctypes.POINTER(ctypes.c_int64),
+    ]
+    infer_shapes.restype = ctypes.c_int
+    valid_shape = shape_type(3, 32, 64)
+    invalid_small = shape_type(3, 31, 64)
+    invalid_multiple = shape_type(3, 32, 33)
+    input_data = (ctypes.c_float * (3 * 32 * 64))()
+    output_data = (ctypes.c_float * (3 * 32 * 64))()
+    output_shape = shape_type()
+    if dynamic_function(input_data, valid_shape, output_data) != 0:
+        raise RuntimeError("valid constrained dynamic shape was rejected")
+    if infer_shapes(valid_shape, output_shape) != 0:
+        raise RuntimeError("valid constrained shape inference was rejected")
+    if dynamic_function(input_data, invalid_small, output_data) == 0:
+        raise RuntimeError("shape below minimum was accepted")
+    if infer_shapes(invalid_multiple, output_shape) == 0:
+        raise RuntimeError("non-multiple shape was accepted")
+
+    malformed_constraint = subprocess.run(
+        [
+            args.driver,
+            dynamic_param,
+            "--bin",
+            dynamic_bin,
+            "--input-shape=3x?x?",
+            "--input-dim-constraint=0:1:min=32",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if malformed_constraint.returncode == 0 or "must be" not in malformed_constraint.stderr:
+        raise RuntimeError(
+            f"malformed dimension constraint was not rejected: {malformed_constraint.stderr}"
+        )
+    static_constraint = subprocess.run(
+        [
+            args.driver,
+            dynamic_param,
+            "--bin",
+            dynamic_bin,
+            "--input-shape=3x32x?",
+            "--input-dim-constraint=0:1:min=32,multiple=32",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if static_constraint.returncode == 0 or "dynamic dimension" not in static_constraint.stderr:
+        raise RuntimeError(
+            f"static dimension constraint was not rejected: {static_constraint.stderr}"
+        )
 
     dynamic_rank_output = work_dir / "dynamic-rank-identity"
     run(

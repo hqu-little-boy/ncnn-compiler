@@ -19,6 +19,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/FileUtilities.h"
+#include "ncnn-mlir/Dialect/NCNN/IR/NCNNAttrs.hpp"
+#include "ncnn-mlir/Support/ShapeProgram.hpp"
 
 namespace mlir::ncnn {
 
@@ -78,6 +80,8 @@ constexpr StringLiteral kOutputShapeProgramsAttr =
   "ncnn.c_api.output_shape_programs";
 constexpr StringLiteral kShapeCarrierIndicesAttr =
   "ncnn.c_api.shape_carrier_indices";
+constexpr StringLiteral kInputShapeConstraintsAttr =
+  "ncnn.c_api.input_shape_constraints";
 constexpr StringLiteral kRankVariantNamesAttr = "ncnn.c_api.rank_variant_names";
 constexpr StringLiteral kRankVariantTypesAttr = "ncnn.c_api.rank_variant_types";
 
@@ -298,6 +302,27 @@ class GenerateCAPIPass final
     }
     SmallVector<int32_t> outputShapeSources;
     SmallVector<Attribute> outputShapePrograms;
+    auto shapeConstraints =
+      function->getAttrOfType<ArrayAttr>("ncnn.shape_constraints");
+    SmallVector<SmallVector<DimConstraintAttr>> constraintsByInput(
+      inputs.size());
+    if (shapeConstraints) {
+      llvm::SmallDenseSet<std::pair<uint32_t, uint32_t>> constrained;
+      for (Attribute attribute : shapeConstraints) {
+        auto constraint = dyn_cast<DimConstraintAttr>(attribute);
+        if (!constraint || constraint.getInput() >= inputs.size() ||
+            constraint.getDim() >=
+              static_cast<uint32_t>(
+                inputs[constraint.getInput()].type.getRank()) ||
+            !inputs[constraint.getInput()].type.isDynamicDim(
+              constraint.getDim()) ||
+            !constrained.insert({constraint.getInput(), constraint.getDim()})
+               .second) {
+          return function.emitOpError("has invalid input shape constraints");
+        }
+        constraintsByInput[constraint.getInput()].push_back(constraint);
+      }
+    }
     for (const ArgumentInfo& output : outputs) {
       if (output.shapeCarrier) {
         outputShapeSources.push_back(-1);
@@ -420,6 +445,20 @@ class GenerateCAPIPass final
         }
       }
       argument["dynamic_dim_mask"] = dynamicDimMask;
+      if (!info.output) {
+        llvm::json::Array constraints;
+        for (DimConstraintAttr constraint :
+             constraintsByInput[inputManifest.size()]) {
+          llvm::json::Object object;
+          object["dimension"] = constraint.getDim();
+          object["minimum"] = constraint.getMin();
+          object["multiple_of"] = constraint.getMultipleOf();
+          constraints.push_back(std::move(object));
+        }
+        if (!constraints.empty()) {
+          argument["dimension_constraints"] = std::move(constraints);
+        }
+      }
       if (info.output) {
         const bool dataDependent = info.dataDependentDimMask != 0;
         argument["shape_depends_on_data"] = dataDependent;
@@ -455,6 +494,7 @@ class GenerateCAPIPass final
     function.setPrivate();
     function->removeAttr("llvm.emit_c_interface");
     function->removeAttr("ncnn.entry_point");
+    function->removeAttr("ncnn.shape_constraints");
     Builder builder(function.getContext());
     getOperation()->setAttr(kExportNameAttr, builder.getStringAttr(exportName));
     getOperation()->setAttr(kInternalNameAttr,
@@ -469,6 +509,10 @@ class GenerateCAPIPass final
                             builder.getArrayAttr(outputShapePrograms));
     getOperation()->setAttr(kShapeCarrierIndicesAttr,
                             builder.getDenseI32ArrayAttr(shapeCarrierIndices));
+    getOperation()->setAttr(kInputShapeConstraintsAttr,
+                            shapeConstraints
+                              ? static_cast<Attribute>(shapeConstraints)
+                              : builder.getArrayAttr({}));
     return success();
   }
 
@@ -552,9 +596,12 @@ class FinalizeCAPIPass final
       getOperation()->getAttrOfType<ArrayAttr>(kOutputShapeProgramsAttr);
     auto shapeCarrierIndices = getOperation()->getAttrOfType<DenseI32ArrayAttr>(
       kShapeCarrierIndicesAttr);
+    auto inputShapeConstraints =
+      getOperation()->getAttrOfType<ArrayAttr>(kInputShapeConstraintsAttr);
     auto internal = getOperation().lookupSymbol<LLVM::LLVMFuncOp>(internalName);
     if (!internal || !argumentTypeAttrs || !outputIndices ||
-        !outputShapeSources || !outputShapePrograms || !shapeCarrierIndices) {
+        !outputShapeSources || !outputShapePrograms || !shapeCarrierIndices ||
+        !inputShapeConstraints) {
       getOperation().emitError("has incomplete prepared ncnn C ABI metadata");
       signalPassFailure();
       return;
@@ -574,12 +621,22 @@ class FinalizeCAPIPass final
       shapeCarriers.insert(static_cast<unsigned>(index));
     }
     SmallVector<int32_t> shapeSources(outputShapeSources.asArrayRef());
-    SmallVector<SmallVector<SmallVector<int64_t>>> shapePrograms;
-    for (Attribute output : outputShapePrograms) {
-      SmallVector<SmallVector<int64_t>> dimensions;
-      for (Attribute dimension : cast<ArrayAttr>(output)) {
-        dimensions.emplace_back(
+    SmallVector<SmallVector<DimensionExpr>> shapePrograms;
+    for (auto [outputIndex, output] : llvm::enumerate(outputShapePrograms)) {
+      SmallVector<DimensionExpr> dimensions;
+      auto sourceInput = static_cast<unsigned>(shapeSources[outputIndex]);
+      for (auto [dimensionIndex, dimension] :
+           llvm::enumerate(cast<ArrayAttr>(output))) {
+        auto expression = DimensionExpr::deserialize(
+          sourceInput,
+          static_cast<unsigned>(dimensionIndex),
           cast<DenseI64ArrayAttr>(dimension).asArrayRef());
+        if (!expression) {
+          getOperation().emitError("has invalid serialized shape program");
+          signalPassFailure();
+          return;
+        }
+        dimensions.push_back(std::move(*expression));
       }
       shapePrograms.push_back(std::move(dimensions));
     }
@@ -588,6 +645,12 @@ class FinalizeCAPIPass final
     for (unsigned index = 0; index < argumentTypes.size(); ++index) {
       (outputs.contains(index) ? outputArgumentIndices : inputIndices)
         .push_back(index);
+    }
+    SmallVector<SmallVector<DimConstraintAttr>> constraintsByInput(
+      inputIndices.size());
+    for (Attribute attribute : inputShapeConstraints) {
+      auto constraint = cast<DimConstraintAttr>(attribute);
+      constraintsByInput[constraint.getInput()].push_back(constraint);
     }
     SmallVector<unsigned> wrapperOrder;
     for (unsigned index = 0; index < argumentTypes.size(); ++index) {
@@ -677,16 +740,15 @@ class FinalizeCAPIPass final
     auto i64Type = builder.getI64Type();
     auto applyShapeTransform =
       [&](Value extent, unsigned outputIndex, unsigned dimension) {
-        ArrayRef<int64_t> program = shapePrograms[outputIndex][dimension];
-        for (unsigned index = 0; index < program.size(); index += 2) {
-          const int64_t opcode = program[index];
-          const int64_t operand = program[index + 1];
+        const DimensionExpr& expression = shapePrograms[outputIndex][dimension];
+        for (ShapeInstruction instruction : expression.getInstructions()) {
+          const int64_t operand = instruction.operand;
           Value value = builder.create<LLVM::ConstantOp>(
             internal.getLoc(), builder.getI64IntegerAttr(operand));
-          if (opcode == 0) {
+          if (instruction.opcode == ShapeOpcode::Add) {
             extent =
               builder.create<LLVM::AddOp>(internal.getLoc(), extent, value);
-          } else if (opcode == 1) {
+          } else if (instruction.opcode == ShapeOpcode::Multiply) {
             extent =
               builder.create<LLVM::MulOp>(internal.getLoc(), extent, value);
           } else {
@@ -731,6 +793,35 @@ class FinalizeCAPIPass final
                          ? builder.create<LLVM::OrOp>(
                              internal.getLoc(), invalidShape, invalid)
                          : invalid;
+        const auto inputIndex = static_cast<unsigned>(
+          llvm::find(inputIndices, functionIndex) - inputIndices.begin());
+        for (DimConstraintAttr constraint : constraintsByInput[inputIndex]) {
+          if (constraint.getDim() != dimensionIndex) {
+            continue;
+          }
+          Value minimum = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(), builder.getI64IntegerAttr(constraint.getMin()));
+          Value aboveMinimum = builder.create<LLVM::ICmpOp>(
+            internal.getLoc(), LLVM::ICmpPredicate::sge, size, minimum);
+          Value multiple = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(),
+            builder.getI64IntegerAttr(constraint.getMultipleOf()));
+          Value remainder =
+            builder.create<LLVM::SRemOp>(internal.getLoc(), size, multiple);
+          Value zero = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(), builder.getI64IntegerAttr(0));
+          Value divisible = builder.create<LLVM::ICmpOp>(
+            internal.getLoc(), LLVM::ICmpPredicate::eq, remainder, zero);
+          Value constraintValid = builder.create<LLVM::AndOp>(
+            internal.getLoc(), aboveMinimum, divisible);
+          Value constraintInvalid = builder.create<LLVM::XOrOp>(
+            internal.getLoc(),
+            constraintValid,
+            builder.create<LLVM::ConstantOp>(internal.getLoc(),
+                                             builder.getBoolAttr(true)));
+          invalidShape = builder.create<LLVM::OrOp>(
+            internal.getLoc(), invalidShape, constraintInvalid);
+        }
       }
     }
     for (unsigned carrierIndex : shapeCarriers) {
@@ -942,6 +1033,35 @@ class FinalizeCAPIPass final
                              ? builder.create<LLVM::OrOp>(
                                  internal.getLoc(), shapeInvalid, invalid)
                              : invalid;
+            for (DimConstraintAttr constraint :
+                 constraintsByInput[inputIndex]) {
+              if (constraint.getDim() != dimensionIndex) {
+                continue;
+              }
+              Value minimum = builder.create<LLVM::ConstantOp>(
+                internal.getLoc(),
+                builder.getI64IntegerAttr(constraint.getMin()));
+              Value aboveMinimum = builder.create<LLVM::ICmpOp>(
+                internal.getLoc(), LLVM::ICmpPredicate::sge, extent, minimum);
+              Value multiple = builder.create<LLVM::ConstantOp>(
+                internal.getLoc(),
+                builder.getI64IntegerAttr(constraint.getMultipleOf()));
+              Value remainder = builder.create<LLVM::SRemOp>(
+                internal.getLoc(), extent, multiple);
+              Value zero = builder.create<LLVM::ConstantOp>(
+                internal.getLoc(), builder.getI64IntegerAttr(0));
+              Value divisible = builder.create<LLVM::ICmpOp>(
+                internal.getLoc(), LLVM::ICmpPredicate::eq, remainder, zero);
+              Value constraintValid = builder.create<LLVM::AndOp>(
+                internal.getLoc(), aboveMinimum, divisible);
+              Value constraintInvalid = builder.create<LLVM::XOrOp>(
+                internal.getLoc(),
+                constraintValid,
+                builder.create<LLVM::ConstantOp>(internal.getLoc(),
+                                                 builder.getBoolAttr(true)));
+              shapeInvalid = builder.create<LLVM::OrOp>(
+                internal.getLoc(), shapeInvalid, constraintInvalid);
+            }
           }
         }
       }
@@ -1014,6 +1134,7 @@ class FinalizeCAPIPass final
     getOperation()->removeAttr(kOutputShapeSourcesAttr);
     getOperation()->removeAttr(kOutputShapeProgramsAttr);
     getOperation()->removeAttr(kShapeCarrierIndicesAttr);
+    getOperation()->removeAttr(kInputShapeConstraintsAttr);
   }
 
  private:
