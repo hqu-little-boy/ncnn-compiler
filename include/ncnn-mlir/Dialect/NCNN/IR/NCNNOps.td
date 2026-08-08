@@ -142,10 +142,10 @@ def NCNN_ConvolutionDepthWiseOp
 
 def NCNN_DeconvolutionOp
   : NCNN_LayerOp<"deconvolution", [InferTensorTypeAdaptor]> {
-  let summary = "Static FP32 ncnn transposed convolution.";
+  let summary = "FP32 ncnn transposed convolution with static weights.";
   let description =
     [{
-    Operands use ncnn's static model layout: input `[I,H,W]`, weight
+    Operands use ncnn's model layout: input `[I,H,W]`, static weight
     `[O,I,K_h,K_w]`, and optional bias `[O]`. The result is `[O,H_out,W_out]`.
   }];
   let arguments = (ins NCNN_RankedTensor:$input,

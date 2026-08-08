@@ -24,6 +24,23 @@ struct ShapeTransform {
   SmallVector<DimensionExpr> dimensions;
 };
 
+SmallVector<ShapeConstraint> getShapeConstraints(ModelOp model) {
+  SmallVector<ShapeConstraint> result;
+  auto constraints = model->getAttrOfType<ArrayAttr>("ncnn.shape_constraints");
+  if (!constraints) {
+    return result;
+  }
+  result.reserve(constraints.size());
+  for (Attribute attribute : constraints) {
+    auto constraint = cast<DimConstraintAttr>(attribute);
+    result.push_back({.inputIndex = constraint.getInput(),
+                      .inputDimension = constraint.getDim(),
+                      .minimum = constraint.getMin(),
+                      .multipleOf = constraint.getMultipleOf()});
+  }
+  return result;
+}
+
 void appendInstruction(ShapeTransform& transform,
                        unsigned dimension,
                        ShapeOpcode opcode,
@@ -95,6 +112,7 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
       }
     }
     DenseMap<Value, ShapeTransform> shapeTransforms;
+    SmallVector<ShapeConstraint> shapeConstraints = getShapeConstraints(model);
     for (auto [inputIndex, input] : llvm::enumerate(inputs)) {
       auto type = cast<RankedTensorType>(input.getOutput().getType());
       SmallVector<DimensionExpr> dimensions;
@@ -136,7 +154,8 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
             auto reshapeSource =
               shapeTransforms.find(operation.getOperand(sourceOperand));
             if (reshapeSource != shapeTransforms.end()) {
-              shapeTransforms[result] = reshapeSource->second;
+              ShapeTransform reshapeTransform = reshapeSource->second;
+              shapeTransforms[result] = std::move(reshapeTransform);
             }
           }
           continue;
@@ -162,36 +181,163 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           appendInstruction(
             transform, 2, ShapeOpcode::Multiply, interp.getWidthScale());
           shapeTransforms[result] = std::move(transform);
-        } else if (auto convolution = dyn_cast<ConvolutionOp>(operation)) {
-          if (convolution.getPadTopAttr().getInt() < 0 ||
-              convolution.getPadBottomAttr().getInt() < 0 ||
-              convolution.getPadLeftAttr().getInt() < 0 ||
-              convolution.getPadRightAttr().getInt() < 0) {
+        } else if (isa<ConvolutionOp, ConvolutionDepthWiseOp>(operation)) {
+          const int64_t kernelH =
+            operation.getAttrOfType<IntegerAttr>("kernel_h").getInt();
+          const int64_t kernelW =
+            operation.getAttrOfType<IntegerAttr>("kernel_w").getInt();
+          const int64_t dilationH =
+            operation.getAttrOfType<IntegerAttr>("dilation_h").getInt();
+          const int64_t dilationW =
+            operation.getAttrOfType<IntegerAttr>("dilation_w").getInt();
+          const int64_t strideH =
+            operation.getAttrOfType<IntegerAttr>("stride_h").getInt();
+          const int64_t strideW =
+            operation.getAttrOfType<IntegerAttr>("stride_w").getInt();
+          const int64_t padTop =
+            operation.getAttrOfType<IntegerAttr>("pad_top").getInt();
+          const int64_t padBottom =
+            operation.getAttrOfType<IntegerAttr>("pad_bottom").getInt();
+          const int64_t padLeft =
+            operation.getAttrOfType<IntegerAttr>("pad_left").getInt();
+          const int64_t padRight =
+            operation.getAttrOfType<IntegerAttr>("pad_right").getInt();
+          if (padTop < 0 || padBottom < 0 || padLeft < 0 || padRight < 0) {
+            const bool same = (padTop == -233 || padTop == -234) &&
+                              padBottom == padTop && padLeft == padTop &&
+                              padRight == padTop;
+            if (!same || strideH != 1 || strideW != 1) {
+              continue;
+            }
+            shapeTransforms[result] = std::move(transform);
             continue;
           }
-          const int64_t effectiveH =
-            (convolution.getDilationH() * (convolution.getKernelH() - 1)) + 1;
-          const int64_t effectiveW =
-            (convolution.getDilationW() * (convolution.getKernelW() - 1)) + 1;
+          const int64_t effectiveH = (dilationH * (kernelH - 1)) + 1;
+          const int64_t effectiveW = (dilationW * (kernelW - 1)) + 1;
           appendInstruction(
-            transform,
-            1,
-            ShapeOpcode::Add,
-            convolution.getPadTop() + convolution.getPadBottom() - effectiveH);
-          appendInstruction(
-            transform, 1, ShapeOpcode::Divide, convolution.getStrideH());
+            transform, 1, ShapeOpcode::Add, padTop + padBottom - effectiveH);
+          appendInstruction(transform, 1, ShapeOpcode::Divide, strideH);
           appendInstruction(transform, 1, ShapeOpcode::Add, 1);
           appendInstruction(
-            transform,
-            2,
-            ShapeOpcode::Add,
-            convolution.getPadLeft() + convolution.getPadRight() - effectiveW);
-          appendInstruction(
-            transform, 2, ShapeOpcode::Divide, convolution.getStrideW());
+            transform, 2, ShapeOpcode::Add, padLeft + padRight - effectiveW);
+          appendInstruction(transform, 2, ShapeOpcode::Divide, strideW);
           appendInstruction(transform, 2, ShapeOpcode::Add, 1);
           shapeTransforms[result] = std::move(transform);
+        } else if (auto pooling = dyn_cast<PoolingOp>(operation)) {
+          if (pooling.getMode() != static_cast<int64_t>(PoolMode::Regular)) {
+            continue;
+          }
+          if (pooling.getPadMode() == 0 &&
+              (pooling.getStrideH() != 1 || pooling.getStrideW() != 1)) {
+            continue;
+          }
+          if (pooling.getPadMode() == 2 || pooling.getPadMode() == 3) {
+            appendInstruction(transform, 1, ShapeOpcode::Add, -1);
+            appendInstruction(
+              transform, 1, ShapeOpcode::Divide, pooling.getStrideH());
+            appendInstruction(transform, 1, ShapeOpcode::Add, 1);
+            appendInstruction(transform, 2, ShapeOpcode::Add, -1);
+            appendInstruction(
+              transform, 2, ShapeOpcode::Divide, pooling.getStrideW());
+            appendInstruction(transform, 2, ShapeOpcode::Add, 1);
+          } else {
+            appendInstruction(transform,
+                              1,
+                              ShapeOpcode::Add,
+                              pooling.getPadTop() + pooling.getPadBottom() -
+                                pooling.getKernelH());
+            appendInstruction(
+              transform, 1, ShapeOpcode::Divide, pooling.getStrideH());
+            appendInstruction(transform, 1, ShapeOpcode::Add, 1);
+            appendInstruction(transform,
+                              2,
+                              ShapeOpcode::Add,
+                              pooling.getPadLeft() + pooling.getPadRight() -
+                                pooling.getKernelW());
+            appendInstruction(
+              transform, 2, ShapeOpcode::Divide, pooling.getStrideW());
+            appendInstruction(transform, 2, ShapeOpcode::Add, 1);
+          }
+          shapeTransforms[result] = std::move(transform);
+        } else if (auto deconvolution = dyn_cast<DeconvolutionOp>(operation)) {
+          const int64_t heightOffset =
+            (deconvolution.getDilationH() * (deconvolution.getKernelH() - 1)) +
+            1 + deconvolution.getOutputPadBottom() - deconvolution.getPadTop() -
+            deconvolution.getPadBottom() - deconvolution.getStrideH();
+          const int64_t widthOffset =
+            (deconvolution.getDilationW() * (deconvolution.getKernelW() - 1)) +
+            1 + deconvolution.getOutputPadRight() - deconvolution.getPadLeft() -
+            deconvolution.getPadRight() - deconvolution.getStrideW();
+          appendInstruction(
+            transform, 1, ShapeOpcode::Multiply, deconvolution.getStrideH());
+          appendInstruction(transform, 1, ShapeOpcode::Add, heightOffset);
+          appendInstruction(
+            transform, 2, ShapeOpcode::Multiply, deconvolution.getStrideW());
+          appendInstruction(transform, 2, ShapeOpcode::Add, widthOffset);
+          shapeTransforms[result] = std::move(transform);
+        } else if (auto concat = dyn_cast<ConcatOp>(operation)) {
+          if (concat.getAxis() != 0) {
+            if (!resultType.hasStaticShape()) {
+              return concat.emitOpError(
+                "dynamic symbolic shape proof only supports channel concat");
+            }
+            continue;
+          }
+          for (Value input : concat.getInputs().drop_front()) {
+            auto candidate = shapeTransforms.find(input);
+            if (candidate == shapeTransforms.end()) {
+              return concat.emitOpError(
+                "cannot prove dynamic concat input shapes equal");
+            }
+            for (unsigned dimension : {1U, 2U}) {
+              if (!ShapedType::isDynamic(resultType.getShape()[dimension])) {
+                continue;
+              }
+              if (!transform.dimensions[dimension].equivalentUnder(
+                    shapeConstraints,
+                    candidate->second.dimensions[dimension])) {
+                return concat.emitOpError()
+                       << "cannot prove input dimension " << dimension
+                       << " equal under input shape constraints";
+              }
+            }
+          }
+          shapeTransforms[result] = std::move(transform);
+        } else if (auto binary = dyn_cast<BinaryOp>(operation)) {
+          if (resultType.hasStaticShape()) {
+            continue;
+          }
+          if (binary.getWithScalar()) {
+            shapeTransforms[result] = std::move(transform);
+            continue;
+          }
+          auto candidate = shapeTransforms.find(binary.getInputs()[1]);
+          if (candidate == shapeTransforms.end()) {
+            return binary.emitOpError(
+              "cannot prove dynamic binary input shapes broadcastable");
+          }
+          auto firstType =
+            cast<RankedTensorType>(binary.getInputs()[0].getType());
+          auto secondType =
+            cast<RankedTensorType>(binary.getInputs()[1].getType());
+          for (unsigned dimension = 0; dimension < 3; ++dimension) {
+            if (firstType.getShape()[dimension] == 1) {
+              transform.dimensions[dimension] =
+                candidate->second.dimensions[dimension];
+            } else if (secondType.getShape()[dimension] != 1 &&
+                       ShapedType::isDynamic(
+                         resultType.getShape()[dimension]) &&
+                       !transform.dimensions[dimension].equivalentUnder(
+                         shapeConstraints,
+                         candidate->second.dimensions[dimension])) {
+              return binary.emitOpError()
+                     << "cannot prove input dimension " << dimension
+                     << " equal under input shape constraints";
+            }
+          }
+          shapeTransforms[result] = std::move(transform);
         } else if (result.getType() == operation.getOperand(0).getType()) {
-          shapeTransforms[result] = source->second;
+          shapeTransforms[result] = std::move(transform);
         }
       }
     }

@@ -232,22 +232,22 @@ FailureOr<RankedTensorType> computeDeconvResult(
     return emitOptionalError(location, message);
   };
   if (!input || !weight || !input.getElementType().isF32() ||
-      !weight.getElementType().isF32() || !input.hasStaticShape() ||
-      !weight.hasStaticShape() || input.getRank() != 3 ||
-      weight.getRank() != 4) {
+      !weight.getElementType().isF32() || !weight.hasStaticShape() ||
+      input.getRank() != 3 || weight.getRank() != 4) {
     return fail(
-      "Deconvolution requires static FP32 input [I,H,W] and weight "
+      "Deconvolution requires FP32 input [I,H,W] and static weight "
       "[O,I,K_h,K_w]");
   }
-  if (weight.getShape()[1] != input.getShape()[0] ||
+  if (ShapedType::isDynamic(input.getShape()[0]) ||
+      weight.getShape()[1] != input.getShape()[0] ||
       weight.getShape()[2] != kernelH || weight.getShape()[3] != kernelW) {
     return fail(
       "Deconvolution input channels or kernel attributes do not "
       "match weight");
   }
   for (int64_t dimension : input.getShape()) {
-    if (dimension <= 0) {
-      return fail("Deconvolution input dimensions must be positive");
+    if (!ShapedType::isDynamic(dimension) && dimension <= 0) {
+      return fail("Deconvolution input dimensions must be positive or dynamic");
     }
   }
   if (kernelH <= 0 || kernelW <= 0 || strideH <= 0 || strideW <= 0 ||
@@ -276,6 +276,9 @@ FailureOr<RankedTensorType> computeDeconvResult(
                             int64_t padBefore,
                             int64_t padAfter,
                             int64_t outputPad) -> FailureOr<int64_t> {
+    if (ShapedType::isDynamic(inputSize)) {
+      return ShapedType::kDynamic;
+    }
     auto result = checkedMultiply(inputSize - 1, stride);
     auto extent = checkedMultiply(kernel - 1, dilation);
     if (failed(result) || failed(extent)) {
@@ -441,9 +444,6 @@ FailureOr<int64_t> inferRegularDimension(int64_t input,
                                          int64_t padMode,
                                          const Twine& name,
                                          std::optional<Location> location) {
-  if (input <= 0) {
-    return emitOptionalError(location, name, " input must be positive");
-  }
   if (kernel <= 0) {
     return emitOptionalError(location, name, " kernel must be positive");
   }
@@ -452,6 +452,12 @@ FailureOr<int64_t> inferRegularDimension(int64_t input,
   }
   if (padBefore < 0 || padAfter < 0) {
     return emitOptionalError(location, name, " padding must be non-negative");
+  }
+  if (ShapedType::isDynamic(input)) {
+    return ShapedType::kDynamic;
+  }
+  if (input <= 0) {
+    return emitOptionalError(location, name, " input must be positive");
   }
   if (padMode == 2 || padMode == 3) {
     return 1 + ((input - 1) / stride);
@@ -503,9 +509,12 @@ FailureOr<RankedTensorType> computePoolResult(std::optional<Location> location,
     return fail("pooling kind is invalid");
   }
   ArrayRef<int64_t> inShape = input.getShape();
-  for (int64_t dim : inShape) {
-    if (dim <= 0) {
-      return fail("pooling input dimensions must be positive");
+  if (ShapedType::isDynamic(inShape[0]) || inShape[0] <= 0) {
+    return fail("pooling input channels must be static and positive");
+  }
+  for (int64_t dim : inShape.drop_front()) {
+    if (!ShapedType::isDynamic(dim) && dim <= 0) {
+      return fail("pooling spatial dimensions must be positive or dynamic");
     }
   }
   Type elem = input.getElementType();
@@ -515,7 +524,8 @@ FailureOr<RankedTensorType> computePoolResult(std::optional<Location> location,
   if (mode == PoolMode::Adaptive) {
     const int64_t outputHeight = kernelH == -233 ? inShape[1] : kernelH;
     const int64_t outputWidth = kernelW == -233 ? inShape[2] : kernelW;
-    if (outputHeight <= 0 || outputWidth <= 0) {
+    if ((!ShapedType::isDynamic(outputHeight) && outputHeight <= 0) ||
+        (!ShapedType::isDynamic(outputWidth) && outputWidth <= 0)) {
       return fail("adaptive pooling output dimensions must be positive");
     }
     return RankedTensorType::get(
@@ -585,9 +595,19 @@ FailureOr<RankedTensorType> computeConcatResult(
       if (dimension == axis) {
         continue;
       }
-      if (operand.getShape()[dimension] != first.getShape()[dimension]) {
+      const int64_t current = shape[dimension];
+      const int64_t candidate = operand.getShape()[dimension];
+      if (!ShapedType::isDynamic(current) &&
+          !ShapedType::isDynamic(candidate) && current != candidate) {
         return fail("Concat non-axis dimensions must match");
       }
+      if (ShapedType::isDynamic(current) || ShapedType::isDynamic(candidate)) {
+        shape[dimension] = ShapedType::kDynamic;
+      }
+    }
+    if (ShapedType::isDynamic(shape[axis]) || operand.isDynamicDim(axis)) {
+      shape[axis] = ShapedType::kDynamic;
+      continue;
     }
     FailureOr<int64_t> sum =
       checkedAdd(shape[static_cast<std::size_t>(axis)],
@@ -767,25 +787,23 @@ FailureOr<RankedTensorType> computeBinaryResult(
     return emitOptionalError(
       location, "BinaryOp inputs must have matching rank and element type");
   }
-  if ((!first.hasStaticShape() || !second.hasStaticShape()) &&
-      first != second) {
-    return emitOptionalError(
-      location,
-      "dynamic BinaryOp inputs must have identical ranked tensor types");
-  }
+  SmallVector<int64_t> shape;
+  shape.reserve(first.getRank());
   for (int64_t i = 0; i < first.getRank(); ++i) {
-    if (first.getShape()[i] != 1 && second.getShape()[i] != 1 &&
-        second.getShape()[i] != first.getShape()[i]) {
+    const int64_t left = first.getShape()[i];
+    const int64_t right = second.getShape()[i];
+    if (left == 1) {
+      shape.push_back(right);
+    } else if (right == 1) {
+      shape.push_back(left);
+    } else if (ShapedType::isDynamic(left) || ShapedType::isDynamic(right)) {
+      shape.push_back(ShapedType::kDynamic);
+    } else if (left == right) {
+      shape.push_back(left);
+    } else {
       return emitOptionalError(location,
                                "BinaryOp input shapes are not broadcastable");
     }
-  }
-  if (!first.hasStaticShape()) {
-    return first;
-  }
-  SmallVector<int64_t> shape(first.getShape().begin(), first.getShape().end());
-  for (int64_t i = 0; i < first.getRank(); ++i) {
-    shape[i] = std::max(shape[i], second.getShape()[i]);
   }
   return RankedTensorType::get(shape, first.getElementType());
 }
@@ -1064,6 +1082,7 @@ LogicalResult ConvolutionDepthWiseOp::inferReturnTypeComponents(
   auto weight = llvm::dyn_cast<RankedTensorType>(adaptor.getWeight().getType());
   if (!input || !weight || input.getRank() != 3 || weight.getRank() != 4 ||
       !input.getElementType().isF32() || !weight.getElementType().isF32() ||
+      !weight.hasStaticShape() || ShapedType::isDynamic(input.getShape()[0]) ||
       weight.getShape()[1] != 1 ||
       weight.getShape()[0] != input.getShape()[0]) {
     return emitOptionalError(
@@ -1201,9 +1220,8 @@ LogicalResult DetectionOutputOp::inferReturnTypeComponents(
 
 LogicalResult SigmoidOp::verify() {
   auto input = dyn_cast<RankedTensorType>(getInput().getType());
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
-      input.getRank() != 3) {
-    return emitOpError("input must be a static FP32 CHW tensor");
+  if (!input || !input.getElementType().isF32() || input.getRank() != 3) {
+    return emitOpError("input must be an FP32 CHW tensor");
   }
   return success();
 }

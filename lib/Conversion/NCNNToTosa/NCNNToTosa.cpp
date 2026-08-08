@@ -230,6 +230,20 @@ FailureOr<SmallVector<int64_t>> getPoolPadding(PoolingOp operation) {
 
   auto input = cast<RankedTensorType>(operation.getInput().getType());
   auto output = cast<RankedTensorType>(operation.getOutput().getType());
+  const bool dynamicSpatial = input.isDynamicDim(1) || input.isDynamicDim(2);
+  if (dynamicSpatial) {
+    if (operation.getPadMode() == 0 &&
+        (operation.getStrideH() != 1 || operation.getStrideW() != 1)) {
+      operation.emitOpError(
+        "dynamic tail pooling requires unit spatial strides");
+      return failure();
+    }
+    if (top < 0 || bottom < 0 || left < 0 || right < 0) {
+      operation.emitOpError("pool padding must be non-negative");
+      return failure();
+    }
+    return SmallVector<int64_t>{top, bottom, left, right};
+  }
   auto calculateTrailingPadding =
     [&](StringRef dimension,
         int64_t outputSize,
@@ -513,7 +527,7 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
       return failure();
     }
     RankedTensorType pooledType = outputType;
-    if (!global) {
+    if (!global && inputType.hasStaticShape()) {
       const int64_t pooledHeight =
         ((inputType.getShape()[1] + (*padding)[0] + (*padding)[1] - kernel[0]) /
          stride[0]) +
@@ -878,11 +892,11 @@ class ConvertDeconvolution final : public ConversionPattern {
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
     if (operands.size() < 2 || operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
+        !isRankedF32Tensor(operation->getOperand(0).getType()) ||
         !isStaticF32Tensor(operation->getOperand(1).getType()) ||
-        !isStaticF32Tensor(operation->getResult(0).getType())) {
+        !isRankedF32Tensor(operation->getResult(0).getType())) {
       return operation->emitOpError(
-        "supports static f32 input, weight, and result tensors only");
+        "supports ranked f32 input/result and static f32 weight tensors only");
     }
     auto sourceInput =
       cast<RankedTensorType>(operation->getOperand(0).getType());
@@ -939,12 +953,20 @@ class ConvertDeconvolution final : public ConversionPattern {
       return operation->emitOpError(
         "crop exceeds the TOSA transpose_conv2d out_pad range");
     }
-    const int64_t expectedH = ((sourceInput.getShape()[1] - 1) * *strideH) +
-                              kernelH + outPad[0] + outPad[1];
-    const int64_t expectedW = ((sourceInput.getShape()[2] - 1) * *strideW) +
-                              kernelW + outPad[2] + outPad[3];
-    if (expectedH != sourceOutput.getShape()[1] ||
-        expectedW != sourceOutput.getShape()[2]) {
+    const bool dynamicSpatial =
+      sourceInput.isDynamicDim(1) || sourceInput.isDynamicDim(2);
+    const int64_t expectedH = dynamicSpatial
+                                ? ShapedType::kDynamic
+                                : ((sourceInput.getShape()[1] - 1) * *strideH) +
+                                    kernelH + outPad[0] + outPad[1];
+    const int64_t expectedW = dynamicSpatial
+                                ? ShapedType::kDynamic
+                                : ((sourceInput.getShape()[2] - 1) * *strideW) +
+                                    kernelW + outPad[2] + outPad[3];
+    if ((!sourceInput.isDynamicDim(1) &&
+         expectedH != sourceOutput.getShape()[1]) ||
+        (!sourceInput.isDynamicDim(2) &&
+         expectedW != sourceOutput.getShape()[2])) {
       return operation->emitOpError(
         "stride, padding, and output padding do not match result shape");
     }
@@ -1026,9 +1048,9 @@ class ConvertSigmoid final : public ConversionPattern {
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
     if (operands.size() != 1 || operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
-        !isStaticF32Tensor(operation->getResult(0).getType())) {
-      return operation->emitOpError("supports one static f32 tensor only");
+        !isRankedF32Tensor(operation->getOperand(0).getType()) ||
+        !isRankedF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("supports one ranked f32 tensor only");
     }
     auto type = cast<RankedTensorType>(operands.front().getType());
     Value clamped = rewriter.create<tosa::ClampOp>(
@@ -1103,10 +1125,10 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
     if (operands.size() < 2 || operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operands[0].getType()) ||
+        !isRankedF32Tensor(operation->getOperand(0).getType()) ||
         !isStaticF32Tensor(operands[1].getType())) {
       return operation->emitOpError(
-        "supports static f32 input and weight tensors only");
+        "supports ranked f32 input and static f32 weight tensors only");
     }
     auto inputType = cast<RankedTensorType>(operands[0].getType());
     auto weightType = cast<RankedTensorType>(operands[1].getType());
@@ -1196,18 +1218,22 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
         trailing += strideValue - remainder;
       }
     };
-    adjustTrailingPadding(inputType.getShape()[1],
-                          weightType.getShape()[2],
-                          (*stride)[0],
-                          (*dilation)[0],
-                          pad[0],
-                          pad[1]);
-    adjustTrailingPadding(inputType.getShape()[2],
-                          weightType.getShape()[3],
-                          (*stride)[1],
-                          (*dilation)[1],
-                          pad[2],
-                          pad[3]);
+    const bool dynamicSpatial =
+      inputType.isDynamicDim(1) || inputType.isDynamicDim(2);
+    if (!dynamicSpatial) {
+      adjustTrailingPadding(inputType.getShape()[1],
+                            weightType.getShape()[2],
+                            (*stride)[0],
+                            (*dilation)[0],
+                            pad[0],
+                            pad[1]);
+      adjustTrailingPadding(inputType.getShape()[2],
+                            weightType.getShape()[3],
+                            (*stride)[1],
+                            (*dilation)[1],
+                            pad[2],
+                            pad[3]);
+    }
     Value inputZero =
       createSplat(rewriter,
                   operation->getLoc(),
@@ -1219,18 +1245,23 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
                   RankedTensorType::get({1}, weightType.getElementType()),
                   0.0);
     auto outputType = getNHWCType(sourceOutput);
-    int64_t effectiveH = ((weightType.getShape()[2] - 1) * (*dilation)[0]) + 1;
-    int64_t effectiveW = ((weightType.getShape()[3] - 1) * (*dilation)[1]) + 1;
-    int64_t paddedHeight =
-      ((inputType.getShape()[1] + pad[0] + pad[1] - effectiveH) /
-       (*stride)[0]) +
-      1;
-    int64_t paddedWidth =
-      ((inputType.getShape()[2] + pad[2] + pad[3] - effectiveW) /
-       (*stride)[1]) +
-      1;
-    auto paddedOutputType = RankedTensorType::get(
-      {1, paddedHeight, paddedWidth, outputs}, sourceOutput.getElementType());
+    auto paddedOutputType = outputType;
+    if (!dynamicSpatial) {
+      int64_t effectiveH =
+        ((weightType.getShape()[2] - 1) * (*dilation)[0]) + 1;
+      int64_t effectiveW =
+        ((weightType.getShape()[3] - 1) * (*dilation)[1]) + 1;
+      int64_t paddedHeight =
+        ((inputType.getShape()[1] + pad[0] + pad[1] - effectiveH) /
+         (*stride)[0]) +
+        1;
+      int64_t paddedWidth =
+        ((inputType.getShape()[2] + pad[2] + pad[3] - effectiveW) /
+         (*stride)[1]) +
+        1;
+      paddedOutputType = RankedTensorType::get(
+        {1, paddedHeight, paddedWidth, outputs}, sourceOutput.getElementType());
+    }
     Value result =
       rewriter.create<tosa::DepthwiseConv2DOp>(operation->getLoc(),
                                                paddedOutputType,

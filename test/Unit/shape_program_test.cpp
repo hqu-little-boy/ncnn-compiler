@@ -50,4 +50,26 @@ TEST(ShapeProgramTest, DeserializesValidatedInstructions) {
     0, 0, llvm::ArrayRef<int64_t>{4, 1}));
 }
 
+TEST(ShapeProgramTest, ProvesEquivalentConstrainedExpressions) {
+  mlir::ncnn::DimensionExpr pooled(0, 1);
+  pooled.append(mlir::ncnn::ShapeOpcode::Add, 1);
+  pooled.append(mlir::ncnn::ShapeOpcode::Add, -2);
+  pooled.append(mlir::ncnn::ShapeOpcode::Divide, 1);
+  pooled.append(mlir::ncnn::ShapeOpcode::Add, 1);
+
+  mlir::ncnn::DimensionExpr identity(0, 1);
+  EXPECT_TRUE(pooled.equivalentUnder({}, identity));
+
+  mlir::ncnn::DimensionExpr quarterThenDouble(0, 1);
+  quarterThenDouble.append(mlir::ncnn::ShapeOpcode::Divide, 4);
+  quarterThenDouble.append(mlir::ncnn::ShapeOpcode::Multiply, 2);
+  mlir::ncnn::DimensionExpr half(0, 1);
+  half.append(mlir::ncnn::ShapeOpcode::Divide, 2);
+
+  llvm::SmallVector<mlir::ncnn::ShapeConstraint> constraints{
+    {.inputIndex = 0, .inputDimension = 1, .minimum = 32, .multipleOf = 32}};
+  EXPECT_TRUE(quarterThenDouble.equivalentUnder(constraints, half));
+  EXPECT_FALSE(quarterThenDouble.equivalentUnder({}, half));
+}
+
 }  // namespace

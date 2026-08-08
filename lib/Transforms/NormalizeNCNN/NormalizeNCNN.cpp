@@ -45,7 +45,24 @@ FailureOr<ExplicitPadding> computeSamePadding(int64_t input,
   }
   const int64_t required = ((output - 1) * stride) + extent;
   const int64_t total = required > input ? required - input : 0;
-  const int64_t before = sameLower ? (total + 1) / 2 : total / 2;
+  const int64_t before = sameLower ? (total / 2) + (total % 2) : total / 2;
+  return ExplicitPadding{.before = before, .after = total - before};
+}
+
+FailureOr<ExplicitPadding> resolveSamePadding(int64_t input,
+                                              int64_t kernel,
+                                              int64_t stride,
+                                              int64_t dilation,
+                                              bool sameLower) {
+  if (!ShapedType::isDynamic(input)) {
+    return computeSamePadding(input, kernel, stride, dilation, sameLower);
+  }
+  if (kernel <= 0 || stride != 1 || dilation <= 0 ||
+      kernel - 1 > std::numeric_limits<int64_t>::max() / dilation) {
+    return failure();
+  }
+  const int64_t total = dilation * (kernel - 1);
+  const int64_t before = sameLower ? (total / 2) + (total % 2) : total / 2;
   return ExplicitPadding{.before = before, .after = total - before};
 }
 
@@ -281,19 +298,20 @@ class NormalizeNCNNPass final
     auto input = cast<RankedTensorType>(operation.getInput().getType());
     const bool sameLower = pad == -234;
     FailureOr<ExplicitPadding> height =
-      computeSamePadding(input.getShape()[1],
+      resolveSamePadding(input.getShape()[1],
                          operation.getKernelH(),
                          operation.getStrideH(),
                          operation.getDilationH(),
                          sameLower);
     FailureOr<ExplicitPadding> width =
-      computeSamePadding(input.getShape()[2],
+      resolveSamePadding(input.getShape()[2],
                          operation.getKernelW(),
                          operation.getStrideW(),
                          operation.getDilationW(),
                          sameLower);
     if (failed(height) || failed(width)) {
-      operation.emitOpError("cannot resolve static SAME padding");
+      operation.emitOpError(
+        "cannot resolve SAME padding; dynamic dimensions require stride 1");
       return WalkResult::interrupt();
     }
     explicitPadding[operation] = {

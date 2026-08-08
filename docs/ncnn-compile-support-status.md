@@ -225,6 +225,10 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 - `--input-shape=CxHxW` 可重复，按 Input source-layer 顺序绑定；extent 可为正整数或 `?`。
 - `--input-dim-constraint=INPUT:DIM:min=N,multiple=N` 可重复，为 fixed-rank 动态输入维添加
   结构化 minimum/multiple 约束；执行和 shape inference 入口都会校验，manifest/header 同步公开。
+- 阶段二已支持 regular Pooling、纯 Depthwise Convolution、Deconvolution、Sigmoid 的动态
+  H/W shape inference 和 NCNN-to-TOSA lowering；动态 `SAME` 仅支持对应 stride 为 1。
+- Concat/Binary 动态空间维必须由输入约束下的符号 shape program 证明相等或可广播，否则编译
+  失败。当前完整动态 M09 仍受上游 `TosaToLinalg` 对动态 `tosa.transpose_conv2d` 的限制。
 - shape-only 动态输出由 `<model>_infer_output_shapes` 返回，调用方据此分配 output buffer。
 - 数据依赖输出由执行入口返回 actual shape/rank，并接收 shape metadata capacity；调用方按
   `MAX_DIMn`/`MAX_ELEMENTS` 分配最大 data buffer。shape capacity 是元数据数组容量，不是 data

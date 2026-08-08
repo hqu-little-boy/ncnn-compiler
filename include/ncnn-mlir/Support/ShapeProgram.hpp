@@ -20,6 +20,13 @@ struct ShapeInstruction {
   bool operator==(const ShapeInstruction&) const = default;
 };
 
+struct ShapeConstraint {
+  unsigned inputIndex;
+  unsigned inputDimension;
+  int64_t minimum;
+  int64_t multipleOf;
+};
+
 class DimensionExpr {
  public:
   DimensionExpr(unsigned inputIndex, unsigned inputDimension)
@@ -94,6 +101,15 @@ class DimensionExpr {
            instructions_ == other.instructions_;
   }
 
+  bool equivalentUnder(llvm::ArrayRef<ShapeConstraint> constraints,
+                       const DimensionExpr& other) const {
+    if (inputIndex_ != other.inputIndex_ ||
+        inputDimension_ != other.inputDimension_) {
+      return false;
+    }
+    return canonical(constraints) == other.canonical(constraints);
+  }
+
   std::expected<int64_t, std::string> evaluateChecked(int64_t extent) const {
     for (ShapeInstruction instruction : instructions_) {
       int64_t result = 0;
@@ -129,6 +145,59 @@ class DimensionExpr {
   }
 
  private:
+  struct CanonicalForm {
+    int64_t coefficient;
+    int64_t offset;
+    int64_t divisor;
+
+    bool operator==(const CanonicalForm&) const = default;
+  };
+
+  CanonicalForm canonical(llvm::ArrayRef<ShapeConstraint> constraints) const {
+    int64_t coefficient = 1;
+    int64_t offset = 0;
+    int64_t divisor = 1;
+    int64_t modulus = 1;
+    for (const ShapeConstraint& constraint : constraints) {
+      if (constraint.inputIndex == inputIndex_ &&
+          constraint.inputDimension == inputDimension_) {
+        modulus = constraint.multipleOf;
+        break;
+      }
+    }
+    coefficient = modulus;
+    for (ShapeInstruction instruction : instructions_) {
+      if (instruction.opcode == ShapeOpcode::Add) {
+        int64_t term = 0;
+        if (!llvm::MulOverflow(instruction.operand, divisor, term) &&
+            !llvm::AddOverflow(offset, term, offset)) {
+          continue;
+        }
+      } else if (instruction.opcode == ShapeOpcode::Multiply) {
+        if (!llvm::MulOverflow(coefficient, instruction.operand, coefficient) &&
+            !llvm::MulOverflow(offset, instruction.operand, offset)) {
+          continue;
+        }
+      } else if (instruction.opcode == ShapeOpcode::Divide) {
+        const int64_t d = instruction.operand;
+        int64_t combined = 0;
+        if (!llvm::MulOverflow(divisor, d, combined)) {
+          divisor = combined;
+          if (coefficient % divisor == 0) {
+            coefficient /= divisor;
+            offset = llvm::divideFloorSigned(offset, divisor);
+            divisor = 1;
+          }
+          continue;
+        }
+      }
+      return {.coefficient = std::numeric_limits<int64_t>::min(),
+              .offset = 0,
+              .divisor = 0};
+    }
+    return {.coefficient = coefficient, .offset = offset, .divisor = divisor};
+  }
+
   unsigned inputIndex_;
   unsigned inputDimension_;
   llvm::SmallVector<ShapeInstruction> instructions_;
