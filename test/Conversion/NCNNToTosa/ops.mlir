@@ -109,9 +109,14 @@ func.func @ppocr_rec_ops(%arg0: tensor<2x1x3xf32>) -> tensor<3x4xf32> {
 // CHECK-LABEL: func.func @ppocr_rec_ops
 // CHECK: linalg.map
 // CHECK: math.erfc
-// CHECK: tosa.reshape {{.*}} -> tensor<2x3xf32>
-// CHECK: tosa.pow
-// CHECK: tosa.transpose {{.*}}perms = array<i32: 1, 0>
+// CHECK: %[[SQUEEZED:.*]] = tosa.reshape {{.*}} -> tensor<2x3xf32>
+// CHECK: %[[INVERSE_STD:.*]] = tosa.pow
+// CHECK: %[[SAFE_INVERSE_STD:.*]] = tosa.select {{.*}}, {{.*}}, %[[INVERSE_STD]]
+// CHECK: %[[NORMALIZED_SCALE:.*]] = tosa.mul {{.*}}, %[[SAFE_INVERSE_STD]],
+// CHECK: %[[NORMALIZED:.*]] = tosa.add {{.*}} -> tensor<2x3xf32>
+// CHECK: %[[EXPANDED:.*]] = tosa.reshape %[[NORMALIZED]], {{.*}} -> tensor<2x1x3xf32>
+// CHECK: %[[SQUEEZED_AGAIN:.*]] = tosa.reshape {{.*}} -> tensor<2x3xf32>
+// CHECK: tosa.transpose %[[SQUEEZED_AGAIN]] {perms = array<i32: 1, 0>}
 // CHECK: tosa.matmul
 // CHECK: tosa.add
 // CHECK: return

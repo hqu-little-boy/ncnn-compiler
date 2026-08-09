@@ -437,6 +437,32 @@ TEST_F(NcnnImporterTest, AppliesMultipleInputShapesInSourceOrder) {
                        {1, 3, mlir::ShapedType::kDynamic}));
 }
 
+TEST_F(NcnnImporterTest, PreservesStaticAndDynamicInputsInSourceOrder) {
+  ncnn_graph::Graph graph;
+  auto first = make_layer("Input", "first", {}, {"first_blob"});
+  ncnn_graph::ParamDict firstParams;
+  firstParams.set_value(0, ncnn_graph::ParamValue::make_int(5));
+  firstParams.set_value(1, ncnn_graph::ParamValue::make_int(4));
+  firstParams.set_value(2, ncnn_graph::ParamValue::make_int(3));
+  first.set_params(std::move(firstParams));
+  graph.add_layer(std::move(first));
+  graph.add_layer(make_layer("Input", "second", {}, {"second_blob"}));
+  graph.set_input_blob_names({"first_blob", "second_blob"});
+  graph.set_output_blob_names({"first_blob", "second_blob"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions options;
+  options.input_shapes = {{9, -1, 9}, {1, -1, 8}};
+  options.input_dim_constraints = {
+    {.input = 1, .dimension = 1, .minimum = 4, .multiple_of = 2}};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  EXPECT_TRUE(
+    shape_is(result_type_by_name(imported->get(), "first"), {3, 4, 5}));
+  EXPECT_TRUE(shape_is(result_type_by_name(imported->get(), "second"),
+                       {1, mlir::ShapedType::kDynamic, 8}));
+}
+
 TEST_F(NcnnImporterTest, ImportsReshapeShapeExpressionReferences) {
   ncnn_graph::Graph graph;
   graph.add_layer(make_layer("Input", "data", {}, {"data_blob"}));

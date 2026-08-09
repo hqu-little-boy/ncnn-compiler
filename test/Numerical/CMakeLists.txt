@@ -100,6 +100,16 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     set(${name}_LIBRARY ${library} PARENT_SCOPE)
 endfunction()
 
+function(ncnn_add_compiled_shape_pair
+         name param_file bin_file static_shape dynamic_shape)
+    ncnn_add_compiled_fixture(
+        ${name}_static ${param_file} ${bin_file} ${static_shape})
+    ncnn_add_compiled_fixture(
+        ${name}_dynamic ${param_file} ${bin_file} ${dynamic_shape} ${ARGN})
+    set(${name}_static_LIBRARY ${${name}_static_LIBRARY} PARENT_SCOPE)
+    set(${name}_dynamic_LIBRARY ${${name}_dynamic_LIBRARY} PARENT_SCOPE)
+endfunction()
+
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fixtures)
 set(empty_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/empty.bin)
 set(convolution_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution.bin)
@@ -497,15 +507,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_compiled_shape_pair(
     pp_ocrv5_server_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin
-    3x640x640)
-ncnn_add_compiled_fixture(
-    pp_ocrv5_server_det_dynamic
-    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param
-    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin
+    3x640x640
     3x?x?
     0:1:min=32,multiple=32
     0:2:min=32,multiple=32)
@@ -606,8 +612,9 @@ add_dependencies(compile_pp_ocrv6_tiny_det compile_pp_ocrv6_tiny_rec)
 add_dependencies(compile_pp_ocrv6_small_det compile_pp_ocrv6_tiny_det)
 add_dependencies(compile_pp_ocrv6_medium_det compile_pp_ocrv6_small_det)
 add_dependencies(compile_pp_ocrv5_mobile_det compile_pp_ocrv6_medium_det)
-add_dependencies(compile_pp_ocrv5_server_det compile_pp_ocrv5_mobile_det)
-add_dependencies(compile_pp_ocrv5_server_det_dynamic compile_pp_ocrv5_server_det)
+add_dependencies(compile_pp_ocrv5_server_det_static compile_pp_ocrv5_mobile_det)
+add_dependencies(compile_pp_ocrv5_server_det_dynamic
+                 compile_pp_ocrv5_server_det_static)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -618,8 +625,7 @@ target_link_libraries(numerical_test_support PUBLIC ncnn GTest::gtest)
 add_executable(numerical_tests
     operators/supported_ops_test.cpp
     models/squeezenet_test.cpp
-    models/pp_lcnet_test.cpp
-    models/dynamic_pp_ocr_test.cpp)
+    models/pp_lcnet_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
     numerical_test_support
     GTest::gtest_main
@@ -751,10 +757,7 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV5_MOBILE_DET_LIBRARY_PATH="${pp_ocrv5_mobile_det_LIBRARY}"
     PP_OCRV5_SERVER_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
     PP_OCRV5_SERVER_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
-    PP_OCRV5_SERVER_DET_LIBRARY_PATH="${pp_ocrv5_server_det_LIBRARY}"
-    PP_OCRV5_SERVER_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
-    PP_OCRV5_SERVER_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
-    PP_OCRV5_SERVER_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_server_det_dynamic_LIBRARY}")
+    PP_OCRV5_SERVER_DET_STATIC_LIBRARY_PATH="${pp_ocrv5_server_det_static_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
@@ -765,8 +768,28 @@ add_dependencies(numerical_tests compile_pp_ocrv6_tiny_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_small_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det)
-add_dependencies(numerical_tests compile_pp_ocrv5_server_det)
-add_dependencies(numerical_tests compile_pp_ocrv5_server_det_dynamic)
+add_dependencies(numerical_tests compile_pp_ocrv5_server_det_static)
+
+add_executable(numerical_dynamic_tests
+    models/dynamic_pp_ocr_test.cpp)
+target_link_libraries(numerical_dynamic_tests PRIVATE
+    numerical_test_support
+    GTest::gtest_main
+    ${CMAKE_DL_LIBS})
+target_compile_definitions(numerical_dynamic_tests PRIVATE
+    GTEST_HAS_CXXABI_H_=0
+    PP_OCRV5_SERVER_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
+    PP_OCRV5_SERVER_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
+    PP_OCRV5_SERVER_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_server_det_dynamic_LIBRARY}")
+add_dependencies(numerical_dynamic_tests compile_pp_ocrv5_server_det_dynamic)
 
 gtest_discover_tests(numerical_tests
-    PROPERTIES LABELS "numerical;golden" TIMEOUT 900 RUN_SERIAL TRUE)
+    PROPERTIES
+        LABELS numerical-static-baseline
+        TIMEOUT 900
+        RUN_SERIAL TRUE)
+gtest_discover_tests(numerical_dynamic_tests
+    PROPERTIES
+        LABELS numerical-dynamic
+        TIMEOUT 900
+        RUN_SERIAL TRUE)

@@ -17,6 +17,7 @@
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 #include "ncnn-mlir/Graph/graph.hpp"
 #include "ncnn-mlir/Importer/NCNNImporter.hpp"
+#include "ncnn-mlir/Support/ShapeMode.hpp"
 
 namespace ncnn_importer::detail {
 
@@ -59,6 +60,7 @@ class ImportContext {
   mlir::OpBuilder& builder() noexcept;
   const std::optional<ncnn_importer::InputShape>& input_shape() const noexcept;
   const std::vector<ncnn_importer::InputShape>& input_shapes() const noexcept;
+  mlir::ncnn::ShapeMode shape_mode(bool has_dynamic_input) const noexcept;
   std::optional<ncnn_importer::InputShape> next_input_shape() noexcept;
   std::expected<mlir::Value, ImportError> find_blob(const LayerContext& context,
                                                     std::string_view name);

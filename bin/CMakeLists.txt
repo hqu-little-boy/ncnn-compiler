@@ -24,6 +24,7 @@ target_link_libraries(ncnn-mlir-opt PRIVATE
     NCNNPipelines
     NormalizeNCNN
     VerifyBufferizedModel
+    VerifyModelShapeContracts
     VerifyNoNCNNOps
     VerifyNoTosaOps
     ${dialect_libs}

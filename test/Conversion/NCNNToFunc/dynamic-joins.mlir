@@ -14,8 +14,12 @@ module {
     %quarter = ncnn.convolution %input, %quarter_weight {dilation_h = 1 : i64, dilation_w = 1 : i64, has_bias = false, kernel_h = 1 : i64, kernel_w = 1 : i64, pad_bottom = 0 : i64, pad_left = 0 : i64, pad_right = 0 : i64, pad_top = 0 : i64, stride_h = 4 : i64, stride_w = 4 : i64} : (tensor<3x?x?xf32>, tensor<8x3x1x1xf32>) -> tensor<8x?x?xf32>
     %upsampled = ncnn.interp %quarter {height_scale = 2 : i64, width_scale = 2 : i64} : (tensor<8x?x?xf32>) -> tensor<8x?x?xf32>
     %sum = ncnn.binary %half, %upsampled {op_type = 0 : i64, scalar = 0.000000e+00 : f32, with_scalar = false} : (tensor<8x?x?xf32>, tensor<8x?x?xf32>) -> tensor<8x?x?xf32>
-    %concat = ncnn.concat %half, %upsampled {axis = 0 : i64} : (tensor<8x?x?xf32>, tensor<8x?x?xf32>) -> tensor<16x?x?xf32>
-    ncnn.output %concat {blob_name = "output"} : tensor<16x?x?xf32>
+    %pointwise_weight = ncnn.const {name = "pointwise.weight", value = dense<0.000000e+00> : tensor<8x8x1x1xf32>} : tensor<8x8x1x1xf32>
+    %pointwise = ncnn.convolution %half, %pointwise_weight {dilation_h = 1 : i64, dilation_w = 1 : i64, has_bias = false, kernel_h = 1 : i64, kernel_w = 1 : i64, pad_bottom = 0 : i64, pad_left = 0 : i64, pad_right = 0 : i64, pad_top = 0 : i64, stride_h = 1 : i64, stride_w = 1 : i64} : (tensor<8x?x?xf32>, tensor<8x8x1x1xf32>) -> tensor<8x?x?xf32>
+    %depthwise_weight = ncnn.const {name = "depthwise.weight", value = dense<0.000000e+00> : tensor<8x1x5x5xf32>} : tensor<8x1x5x5xf32>
+    %depthwise = ncnn.convolution_depthwise %pointwise, %depthwise_weight {dilation_h = 1 : i64, dilation_w = 1 : i64, has_bias = false, kernel_h = 5 : i64, kernel_w = 5 : i64, pad_bottom = 2 : i64, pad_left = 2 : i64, pad_right = 2 : i64, pad_top = 2 : i64, stride_h = 1 : i64, stride_w = 1 : i64} : (tensor<8x?x?xf32>, tensor<8x1x5x5xf32>) -> tensor<8x?x?xf32>
+    %concat = ncnn.concat %half, %upsampled, %depthwise {axis = 0 : i64} : (tensor<8x?x?xf32>, tensor<8x?x?xf32>, tensor<8x?x?xf32>) -> tensor<24x?x?xf32>
+    ncnn.output %concat {blob_name = "output"} : tensor<24x?x?xf32>
   }
 }
 

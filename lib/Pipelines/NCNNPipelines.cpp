@@ -27,6 +27,7 @@
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
+#include "ncnn-mlir/Transforms/VerifyModelShapeContracts/VerifyModelShapeContracts.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoTosaOps/VerifyNoTosaOps.hpp"
 
@@ -67,6 +68,7 @@ void buildNCNNLinalgToMemRefPipeline(OpPassManager& passManager) {
   bufferization::buildBufferDeallocationPipeline(passManager,
                                                  deallocationOptions);
   passManager.addPass(createVerifyBufferizedModelPass());
+  passManager.addPass(createVerifyModelShapeContractsPass());
 }
 
 void buildNCNNMemRefToLLVMPipeline(OpPassManager& passManager) {

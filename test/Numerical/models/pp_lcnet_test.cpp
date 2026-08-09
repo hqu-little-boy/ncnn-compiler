@@ -264,8 +264,8 @@ TEST(NumericalModel, PPOCRv5ServerDetMatchesNcnn) {
   ASSERT_TRUE(expected.has_value()) << expected.error();
   ASSERT_EQ(expected->size(), kOutputElements);
 
-  CompiledModel compiled(PP_OCRV5_SERVER_DET_LIBRARY_PATH,
-                         "pp_ocrv5_server_det");
+  CompiledModel compiled(PP_OCRV5_SERVER_DET_STATIC_LIBRARY_PATH,
+                         "pp_ocrv5_server_det_static");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(kOutputElements);
   ASSERT_EQ(compiled.run(input, actual), 0);

@@ -13,6 +13,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     NCNNToTosa
     NormalizeNCNN
     VerifyBufferizedModel
+    VerifyModelShapeContracts
     VerifyNoNCNNOps
     VerifyNoTosaOps
     MLIRFuncDialect

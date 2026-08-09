@@ -36,11 +36,13 @@ ImportResult import_input(ImportContext& importer,
   };
   if (dimensions_omitted && shape_override) {
     const auto& shape = *shape_override;
-    const bool specialized_dynamic_rank =
-      importer.input_shapes().size() == 1 && !shape.empty() &&
-      shape.size() <= 4 && std::ranges::all_of(shape, [](std::int64_t extent) {
+    const bool has_dynamic_input =
+      std::ranges::any_of(shape, [](std::int64_t extent) {
         return extent == ncnn_importer::kDynamicExtent;
       });
+    const bool specialized_dynamic_rank =
+      importer.shape_mode(has_dynamic_input) ==
+      mlir::ncnn::ShapeMode::DynamicRankSpecialization;
     if ((!specialized_dynamic_rank && shape.size() != 3) ||
         !std::ranges::all_of(shape, valid_extent)) {
       return std::unexpected(

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "targets": {
+    "x86_64-pc-linux-gnu": {
+      "relu_all": {
+        "exports": [
+          "relu_all"
+        ],
+        "files": {
+          "librelu_all.so": 13720,
+          "relu_all.h": 1217,
+          "relu_all.json": 371
+        },
+        "manifest": {
+          "function": "relu_all",
+          "inputs": [
+            {
+              "dynamic_dim_mask": 0,
+              "element_type": "f32",
+              "name": "input1",
+              "shape": [
+                3,
+                4,
+                5
+              ]
+            }
+          ],
+          "outputs": [
+            {
+              "dynamic_dim_mask": 0,
+              "element_type": "f32",
+              "name": "output1",
+              "shape": [
+                3,
+                4,
+                5
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

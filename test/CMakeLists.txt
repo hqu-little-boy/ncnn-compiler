@@ -69,7 +69,7 @@ add_test(NAME squeezenet-shared-library
         --emit-manifest
         --verify-execution)
 set_tests_properties(squeezenet-shared-library PROPERTIES
-    LABELS "native;integration"
+    LABELS "native;integration;static-baseline"
     RUN_SERIAL TRUE
     TIMEOUT 180)
 
@@ -86,8 +86,9 @@ add_test(NAME ncnn-compile-cli
         --build-dir ${CMAKE_BINARY_DIR}
         --param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/relu.param
         --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
+        --static-baseline ${CMAKE_CURRENT_SOURCE_DIR}/Native/static_artifact_baseline.json
         --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/ncnn-compile-cli)
 set_tests_properties(ncnn-compile-cli PROPERTIES
-    LABELS "native;integration;cli"
+    LABELS "native;integration;cli;static-baseline"
     RUN_SERIAL TRUE
     TIMEOUT 180)

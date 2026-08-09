@@ -1,4 +1,5 @@
 // RUN: ncnn-mlir-opt --generate-ncnn-c-api='export-name=dynamic_rank manifest-path=%t.json' %s -o %t.mlir
+// RUN: ncnn-mlir-opt --verify-ncnn-model-shape-contracts %s -o /dev/null
 // RUN: FileCheck %s --check-prefix=MANIFEST < %t.json
 // RUN: ncnn-mlir-opt --ncnn-memref-to-llvm-pipeline %t.mlir | FileCheck %s --check-prefix=LLVM
 

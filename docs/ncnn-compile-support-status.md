@@ -314,6 +314,11 @@ DetectionOutput 当前未注册 naive override，使用 ncnn 内建层路径。
 
 - `squeezenet-shared-library`：完整编译 + `--verify-execution`
 - `ncnn-compile-cli`：CLI 契约测试
+- 静态基线通过 `ctest -L static-baseline` 独立执行，覆盖 27 个计算 op 的静态
+  lowering/数值测试、SqueezeNet、PP-LCNet、PP-OCR，以及固定 target 的导出符号、
+  manifest、header 和共享库产物大小。静态产物不得导出 `_infer_output_shapes`。
+- 动态数值测试编译为独立的 `numerical_dynamic_tests`，通过 `ctest -L dynamic`
+  执行；静态与动态测试不共享测试源或 expected。
 
 ### 7.5 未覆盖（明确排除）
 

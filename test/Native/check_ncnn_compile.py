@@ -19,6 +19,47 @@ def assert_files(directory, expected):
         )
 
 
+def assert_static_artifact_baseline(directory, nm, target, baseline_path):
+    baseline = json.loads(baseline_path.read_text())
+    if baseline.get("schema_version") != 1:
+        raise RuntimeError(f"unsupported static artifact baseline: {baseline_path}")
+    target_baseline = baseline.get("targets", {}).get(target)
+    if target_baseline is None:
+        raise RuntimeError(f"static artifact baseline has no target {target}")
+    expected = target_baseline["relu_all"]
+
+    manifest = json.loads((directory / "relu_all.json").read_text())
+    if manifest != expected["manifest"]:
+        raise RuntimeError(
+            f"static manifest changed: actual={manifest} "
+            f"expected={expected['manifest']}"
+        )
+
+    nm_output = run(
+        [nm, "-D", "--defined-only", directory / "librelu_all.so"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    exports = sorted(
+        line.split()[-1] for line in nm_output.splitlines() if line.split()
+    )
+    if exports != expected["exports"]:
+        raise RuntimeError(
+            f"static exports changed: actual={exports} expected={expected['exports']}"
+        )
+    if any(symbol.endswith("_infer_output_shapes") for symbol in exports):
+        raise RuntimeError("static artifact exports dynamic output shape inference")
+
+    sizes = {
+        name: (directory / name).stat().st_size for name in expected["files"]
+    }
+    if sizes != expected["files"]:
+        raise RuntimeError(
+            f"static artifact sizes changed: actual={sizes} "
+            f"expected={expected['files']}"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
@@ -32,6 +73,7 @@ def main():
     parser.add_argument("--build-dir", required=True)
     parser.add_argument("--param", required=True)
     parser.add_argument("--bin", required=True)
+    parser.add_argument("--static-baseline", type=pathlib.Path, required=True)
     parser.add_argument("--work-dir", required=True)
     args = parser.parse_args()
 
@@ -104,6 +146,9 @@ def main():
             "model.capi.mlir",
             "model.llvm.mlir",
         },
+    )
+    assert_static_artifact_baseline(
+        all_output, args.nm, native_target, args.static_baseline
     )
     manifest = json.loads((all_output / "relu_all.json").read_text())
     if manifest["function"] != "relu_all" or not manifest["inputs"]:

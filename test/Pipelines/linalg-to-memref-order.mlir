@@ -7,3 +7,4 @@ module {}
 // CHECK: ownership-based-buffer-deallocation{{.*}}private-function-dynamic-ownership=false
 // CHECK: bufferization-lower-deallocations
 // CHECK: verify-bufferized-model
+// CHECK: verify-ncnn-model-shape-contracts

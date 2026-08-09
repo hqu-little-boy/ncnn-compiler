@@ -322,6 +322,12 @@ const std::vector<ncnn_importer::InputShape>& ImportContext::input_shapes()
   return options_.input_shapes;
 }
 
+mlir::ncnn::ShapeMode ImportContext::shape_mode(
+  bool has_dynamic_input) const noexcept {
+  return mlir::ncnn::classifyShapeMode(options_.rank_specialization.has_value(),
+                                      has_dynamic_input);
+}
+
 std::optional<ncnn_importer::InputShape>
 ImportContext::next_input_shape() noexcept {
   if (options_.input_shapes.empty()) {

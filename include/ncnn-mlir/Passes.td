@@ -52,6 +52,12 @@ def VerifyBufferizedModelPass
   let dependentDialects = ["memref::MemRefDialect"];
 }
 
+def VerifyModelShapeContractsPass
+    : Pass<"verify-ncnn-model-shape-contracts", "mlir::ModuleOp"> {
+  let summary = "Verify final static and dynamic ncnn model shape contracts";
+  let dependentDialects = ["func::FuncDialect", "memref::MemRefDialect"];
+}
+
 def VerifyNoNCNNOpsPass : Pass<"verify-no-ncnn-ops", "mlir::ModuleOp"> {
   let summary = "Fail if any ncnn dialect operation remains";
 }

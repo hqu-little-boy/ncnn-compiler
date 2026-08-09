@@ -145,8 +145,19 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
         auto inputType =
           dyn_cast<RankedTensorType>(operation.getOperand(0).getType());
         auto resultType = dyn_cast<RankedTensorType>(result.getType());
-        if (!inputType || !resultType || inputType.getRank() != 3 ||
-            resultType.getRank() != 3) {
+        if (!inputType || !resultType) {
+          continue;
+        }
+        auto source = shapeTransforms.find(operation.getOperand(0));
+        if (inputType.getRank() == resultType.getRank() &&
+            isa<ReluOp, SigmoidOp, SplitOp>(operation)) {
+          if (source != shapeTransforms.end()) {
+            ShapeTransform propagated = source->second;
+            shapeTransforms[result] = std::move(propagated);
+          }
+          continue;
+        }
+        if (inputType.getRank() != 3 || resultType.getRank() != 3) {
           continue;
         }
         if (auto reshape = dyn_cast<ReshapeOp>(operation);
@@ -173,14 +184,12 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           }
           continue;
         }
-        auto source = shapeTransforms.find(operation.getOperand(0));
+        source = shapeTransforms.find(operation.getOperand(0));
         if (source == shapeTransforms.end()) {
           continue;
         }
         ShapeTransform transform = source->second;
-        if (isa<ReluOp, SigmoidOp, SplitOp>(operation)) {
-          shapeTransforms[result] = std::move(transform);
-        } else if (auto padding = dyn_cast<PaddingOp>(operation)) {
+        if (auto padding = dyn_cast<PaddingOp>(operation)) {
           appendInstruction(transform,
                             1,
                             ShapeOpcode::Add,
@@ -235,14 +244,18 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           }
           const int64_t effectiveH = (dilationH * (kernelH - 1)) + 1;
           const int64_t effectiveW = (dilationW * (kernelW - 1)) + 1;
-          appendInstruction(
-            transform, 1, ShapeOpcode::Add, padTop + padBottom - effectiveH);
-          appendInstruction(transform, 1, ShapeOpcode::Divide, strideH);
-          appendInstruction(transform, 1, ShapeOpcode::Add, 1);
-          appendInstruction(
-            transform, 2, ShapeOpcode::Add, padLeft + padRight - effectiveW);
-          appendInstruction(transform, 2, ShapeOpcode::Divide, strideW);
-          appendInstruction(transform, 2, ShapeOpcode::Add, 1);
+          if (strideH != 1 || padTop + padBottom != effectiveH - 1) {
+            appendInstruction(
+              transform, 1, ShapeOpcode::Add, padTop + padBottom - effectiveH);
+            appendInstruction(transform, 1, ShapeOpcode::Divide, strideH);
+            appendInstruction(transform, 1, ShapeOpcode::Add, 1);
+          }
+          if (strideW != 1 || padLeft + padRight != effectiveW - 1) {
+            appendInstruction(
+              transform, 2, ShapeOpcode::Add, padLeft + padRight - effectiveW);
+            appendInstruction(transform, 2, ShapeOpcode::Divide, strideW);
+            appendInstruction(transform, 2, ShapeOpcode::Add, 1);
+          }
           shapeTransforms[result] = std::move(transform);
         } else if (auto pooling = dyn_cast<PoolingOp>(operation)) {
           if (pooling.getMode() != static_cast<int64_t>(PoolMode::Regular)) {

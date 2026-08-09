@@ -12,12 +12,14 @@ func.func @activations_binary(%arg0: tensor<4x3x3xf32>, %scale: tensor<4x1x1xf32
 // CHECK: %[[SCALE_T:.*]] = tosa.transpose %arg1 {perms = array<i32: 1, 2, 0>}
 // CHECK: %[[SCALE:.*]] = tosa.reshape %[[SCALE_T]]
 // CHECK-SAME: -> tensor<1x1x1x4xf32>
-// CHECK: tosa.mul
-// CHECK: tosa.add
-// CHECK: tosa.clamp
-// CHECK: tosa.clamp
-// CHECK: tosa.mul
-// CHECK: tosa.mul {{.*}}, %[[SCALE]]
+// CHECK: %[[HARD_SIGMOID_MUL:.*]] = tosa.mul
+// CHECK: %[[HARD_SIGMOID_ADD:.*]] = tosa.add %[[HARD_SIGMOID_MUL]],
+// CHECK: %[[HARD_SIGMOID:.*]] = tosa.clamp %[[HARD_SIGMOID_ADD]]
+// CHECK: %[[HARD_SWISH_MUL:.*]] = tosa.mul %[[HARD_SIGMOID]],
+// CHECK: %[[HARD_SWISH_ADD:.*]] = tosa.add %[[HARD_SWISH_MUL]],
+// CHECK: %[[HARD_SWISH_GATE:.*]] = tosa.clamp %[[HARD_SWISH_ADD]]
+// CHECK: %[[HARD_SWISH:.*]] = tosa.mul %[[HARD_SIGMOID]], %[[HARD_SWISH_GATE]],
+// CHECK: tosa.mul %[[HARD_SWISH]], %[[SCALE]]
 
 func.func @depthwise(%arg0: tensor<4x5x5xf32>) -> tensor<4x5x5xf32> {
   %weight = arith.constant dense<1.000000e+00> : tensor<4x1x3x3xf32>
