@@ -3,8 +3,8 @@
 #include <array>
 #include <cstdint>
 
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -55,8 +55,7 @@ LogicalResult verifyStaticFunction(func::FuncOp function) {
     }
     for (Region& region : operation->getRegions()) {
       for (Block& block : region) {
-        if (llvm::any_of(block.getArgumentTypes(),
-                         hasDynamicTensorOrMemRef)) {
+        if (llvm::any_of(block.getArgumentTypes(), hasDynamicTensorOrMemRef)) {
           operation->emitOpError(
             "static shape route contains a dynamic region argument");
           return WalkResult::interrupt();
@@ -76,9 +75,8 @@ LogicalResult verifyShapeProgram(func::FuncOp function,
     outputIndex, "ncnn.shape_source_input");
   if (!source || source.getInt() < 0 ||
       static_cast<std::size_t>(source.getInt()) >= inputIndices.size()) {
-    return function.emitOpError()
-           << "dynamic output " << outputIndex
-           << " has no valid input shape source";
+    return function.emitOpError() << "dynamic output " << outputIndex
+                                  << " has no valid input shape source";
   }
   auto inputType = dyn_cast<MemRefType>(
     function.getArgumentTypes()[inputIndices[source.getInt()]]);
@@ -89,28 +87,25 @@ LogicalResult verifyShapeProgram(func::FuncOp function,
            << " shape source must be a dynamic input of the same rank";
   }
 
-  auto program = function.getArgAttrOfType<ArrayAttr>(outputIndex,
-                                                       "ncnn.shape_program");
+  auto program =
+    function.getArgAttrOfType<ArrayAttr>(outputIndex, "ncnn.shape_program");
   if (!program ||
       program.size() != static_cast<std::size_t>(outputType.getRank())) {
-    return function.emitOpError()
-           << "dynamic output " << outputIndex
-           << " has no complete shape program";
+    return function.emitOpError() << "dynamic output " << outputIndex
+                                  << " has no complete shape program";
   }
   for (Attribute dimension : program) {
     auto instructions = dyn_cast<DenseI64ArrayAttr>(dimension);
     if (!instructions || instructions.size() % 2 != 0) {
-      return function.emitOpError()
-             << "dynamic output " << outputIndex
-             << " has an invalid shape program";
+      return function.emitOpError() << "dynamic output " << outputIndex
+                                    << " has an invalid shape program";
     }
     ArrayRef<int64_t> values = instructions.asArrayRef();
     for (unsigned index = 0; index < values.size(); index += 2) {
       if (values[index] < 0 || values[index] > 2 ||
           (values[index] == 2 && values[index + 1] <= 0)) {
-        return function.emitOpError()
-               << "dynamic output " << outputIndex
-               << " has an invalid shape program";
+        return function.emitOpError() << "dynamic output " << outputIndex
+                                      << " has an invalid shape program";
       }
     }
   }
@@ -118,16 +113,15 @@ LogicalResult verifyShapeProgram(func::FuncOp function,
 }
 
 LogicalResult verifyDataDependentOutput(func::FuncOp function,
-                                         unsigned outputIndex,
-                                         MemRefType outputType,
-                                         uint64_t mask) {
+                                        unsigned outputIndex,
+                                        MemRefType outputType,
+                                        uint64_t mask) {
   if (outputType.getRank() > 32) {
     return function.emitOpError()
            << "output " << outputIndex
            << " has an invalid data-dependent shape contract";
   }
-  const uint64_t validMask =
-    (UINT64_C(1) << outputType.getRank()) - 1;
+  const uint64_t validMask = (UINT64_C(1) << outputType.getRank()) - 1;
   if (!outputType.hasStaticShape() || (mask & ~validMask) != 0 ||
       function.getArgAttr(outputIndex, "ncnn.shape_source_input") ||
       function.getArgAttr(outputIndex, "ncnn.shape_program")) {
@@ -136,9 +130,8 @@ LogicalResult verifyDataDependentOutput(func::FuncOp function,
            << " has an invalid data-dependent shape contract";
   }
   if (outputIndex + 1 >= function.getNumArguments()) {
-    return function.emitOpError()
-           << "data-dependent output " << outputIndex
-           << " has no shape carrier";
+    return function.emitOpError() << "data-dependent output " << outputIndex
+                                  << " has no shape carrier";
   }
   auto carrierType =
     dyn_cast<MemRefType>(function.getArgumentTypes()[outputIndex + 1]);
@@ -148,9 +141,8 @@ LogicalResult verifyDataDependentOutput(func::FuncOp function,
       !carrierType.getElementType().isInteger(64) ||
       carrierType.getRank() != 1 ||
       carrierType.getShape()[0] != outputType.getRank()) {
-    return function.emitOpError()
-           << "data-dependent output " << outputIndex
-           << " has an invalid shape carrier";
+    return function.emitOpError() << "data-dependent output " << outputIndex
+                                  << " has an invalid shape carrier";
   }
   return success();
 }
@@ -179,7 +171,7 @@ LogicalResult verifyDynamicRankFunction(func::FuncOp function,
       "memref");
   }
   auto program = function.getArgAttrOfType<ArrayAttr>(outputIndices.front(),
-                                                       "ncnn.shape_program");
+                                                      "ncnn.shape_program");
   if (failed(verifyShapeProgram(
         function, outputIndices.front(), output, inputIndices))) {
     return failure();

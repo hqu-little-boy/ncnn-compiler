@@ -6,10 +6,10 @@
 #include <cstdint>
 #include <limits>
 #include <string>
-#include <sys/resource.h>
 #include <vector>
 
 #include "gtest/gtest.h"
+#include <sys/resource.h>
 
 namespace ncnn_compiler::test {
 namespace {
@@ -47,7 +47,7 @@ std::array<std::int64_t, 3> expected_output_shape(const DynamicCase& shape) {
 }
 
 void record_peak_rss() {
-  struct rusage usage {};
+  struct rusage usage{};
   ASSERT_EQ(getrusage(RUSAGE_SELF, &usage), 0);
   ::testing::Test::RecordProperty("peak_rss_kib",
                                   std::to_string(usage.ru_maxrss));
@@ -65,47 +65,40 @@ TEST(NumericalDynamicModel, PPOCRv5ServerDetMatchesNcnnAcrossShapes) {
     const auto input_dimensions = input_shape(shape);
     const auto output_dimensions = expected_output_shape(shape);
     const std::size_t input_elements = element_count(shape);
-    const std::size_t output_elements =
-      static_cast<std::size_t>(shape.height) *
-      static_cast<std::size_t>(shape.width);
-    const std::vector<float> input =
-      make_random_input(input_elements,
-                        static_cast<std::uint32_t>((shape.height * 131) +
-                                                   shape.width),
-                        -0.01F,
-                        0.01F);
-    std::array<std::int64_t, 3> inferred_shape {};
+    const std::size_t output_elements = static_cast<std::size_t>(shape.height) *
+                                        static_cast<std::size_t>(shape.width);
+    const std::vector<float> input = make_random_input(
+      input_elements,
+      static_cast<std::uint32_t>((shape.height * 131) + shape.width),
+      -0.01F,
+      0.01F);
+    std::array<std::int64_t, 3> inferred_shape{};
     ASSERT_EQ(infer.infer_dynamic(input_dimensions, inferred_shape), kSuccess);
     EXPECT_EQ(inferred_shape, output_dimensions);
 
-    const ReferenceModel reference(PP_OCRV5_SERVER_DET_DYNAMIC_PARAM_PATH,
-                                   PP_OCRV5_SERVER_DET_DYNAMIC_BIN_PATH,
-                                   "in0",
-                                   "out0",
-                                   TensorShape(shape.width,
-                                               static_cast<int>(shape.height),
-                                               3));
+    const ReferenceModel reference(
+      PP_OCRV5_SERVER_DET_DYNAMIC_PARAM_PATH,
+      PP_OCRV5_SERVER_DET_DYNAMIC_BIN_PATH,
+      "in0",
+      "out0",
+      TensorShape(shape.width, static_cast<int>(shape.height), 3));
     const auto expected = run_ncnn_reference(reference, input);
     ASSERT_TRUE(expected.has_value()) << expected.error();
     ASSERT_EQ(expected->size(), output_elements);
 
     std::vector<float> actual(output_elements);
-    ASSERT_EQ(compiled.run_dynamic(input,
-                                   input_dimensions,
-                                   actual,
-                                   output_elements),
-              kSuccess);
+    ASSERT_EQ(
+      compiled.run_dynamic(input, input_dimensions, actual, output_elements),
+      kSuccess);
     EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F));
     EXPECT_TRUE(std::ranges::all_of(actual, [](float value) {
       return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
     }));
 
     std::vector<float> repeated(output_elements);
-    ASSERT_EQ(compiled.run_dynamic(input,
-                                   input_dimensions,
-                                   repeated,
-                                   output_elements),
-              kSuccess);
+    ASSERT_EQ(
+      compiled.run_dynamic(input, input_dimensions, repeated, output_elements),
+      kSuccess);
     EXPECT_EQ(repeated, actual);
   }
   record_peak_rss();
@@ -161,9 +154,8 @@ TEST(NumericalDynamicModel, PPOCRv5ServerDetSupportsAlternatingShapes) {
        }}) {
     const auto dimensions = input_shape(shape);
     const std::vector<float> input(element_count(shape), 0.001F);
-    const std::size_t output_elements =
-      static_cast<std::size_t>(shape.height) *
-      static_cast<std::size_t>(shape.width);
+    const std::size_t output_elements = static_cast<std::size_t>(shape.height) *
+                                        static_cast<std::size_t>(shape.width);
     std::vector<float> output(output_elements);
     EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, output.size()),
               kSuccess);
