@@ -1,0 +1,4 @@
+7767517
+2 3
+Input input 0 1 data 0=0 1=0 2=0
+Slice slice_dynamic 1 2 data left right -23300=2,2,-233 1=0

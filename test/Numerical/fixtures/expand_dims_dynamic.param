@@ -1,0 +1,5 @@
+7767517
+3 3
+Input input 0 1 data 0=0 1=0 2=0
+Squeeze squeeze 1 1 data matrix -23303=1,0
+ExpandDims expand_dims_dynamic 1 1 matrix output -23303=1,0

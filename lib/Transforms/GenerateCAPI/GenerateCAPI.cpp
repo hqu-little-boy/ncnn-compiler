@@ -363,7 +363,6 @@ class GenerateCAPIPass final
       }
       if (!output.type.hasStaticShape() &&
           (source < 0 || static_cast<std::size_t>(source) >= inputs.size() ||
-           inputs[source].type.getRank() != output.type.getRank() ||
            inputs[source].type.hasStaticShape())) {
         return function.emitOpError()
                << "output " << output.functionIndex
@@ -375,13 +374,21 @@ class GenerateCAPIPass final
       if (!output.type.hasStaticShape() &&
           (!program ||
            program.size() != static_cast<std::size_t>(output.type.getRank()) ||
-           llvm::any_of(program, [](Attribute dimension) {
+           llvm::any_of(program, [&](Attribute dimension) {
              auto instructions = dyn_cast<DenseI64ArrayAttr>(dimension);
              if (!instructions || instructions.size() % 2 != 0) {
                return true;
              }
              ArrayRef<int64_t> values = instructions.asArrayRef();
-             for (unsigned index = 0; index < values.size(); index += 2) {
+             unsigned start = 0;
+             if (!values.empty() && values[0] == 3) {
+               if (values[1] < 0 ||
+                   values[1] >= inputs[source].type.getRank()) {
+                 return true;
+               }
+               start = 2;
+             }
+             for (unsigned index = start; index < values.size(); index += 2) {
                if (values[index] < 0 || values[index] > 2 ||
                    (values[index] == 2 && values[index + 1] <= 0)) {
                  return true;
@@ -643,6 +650,12 @@ class FinalizeCAPIPass final
       shapeCarriers.insert(static_cast<unsigned>(index));
     }
     SmallVector<int32_t> shapeSources(outputShapeSources.asArrayRef());
+    SmallVector<unsigned> inputIndices;
+    SmallVector<unsigned> outputArgumentIndices;
+    for (unsigned index = 0; index < argumentTypes.size(); ++index) {
+      (outputs.contains(index) ? outputArgumentIndices : inputIndices)
+        .push_back(index);
+    }
     SmallVector<SmallVector<DimensionExpr>> shapePrograms;
     for (auto [outputIndex, output] : llvm::enumerate(outputShapePrograms)) {
       SmallVector<DimensionExpr> dimensions;
@@ -658,15 +671,16 @@ class FinalizeCAPIPass final
           signalPassFailure();
           return;
         }
+        if (expression->getInputDimension() >=
+            static_cast<unsigned>(
+              argumentTypes[inputIndices[sourceInput]].getRank())) {
+          getOperation().emitError("has out-of-range shape source dimension");
+          signalPassFailure();
+          return;
+        }
         dimensions.push_back(std::move(*expression));
       }
       shapePrograms.push_back(std::move(dimensions));
-    }
-    SmallVector<unsigned> inputIndices;
-    SmallVector<unsigned> outputArgumentIndices;
-    for (unsigned index = 0; index < argumentTypes.size(); ++index) {
-      (outputs.contains(index) ? outputArgumentIndices : inputIndices)
-        .push_back(index);
     }
     SmallVector<SmallVector<DimConstraintAttr>> constraintsByInput(
       inputIndices.size());
@@ -941,12 +955,14 @@ class FinalizeCAPIPass final
            llvm::enumerate(type.getShape())) {
         Value extent;
         if (ShapedType::isDynamic(dimension)) {
+          const unsigned sourceDimension =
+            shapePrograms[outputIndex][dimensionIndex].getInputDimension();
           Value address = builder.create<LLVM::GEPOp>(
             internal.getLoc(),
             pointerType,
             i64Type,
             sourceShape,
-            ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimensionIndex)});
+            ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(sourceDimension)});
           extent =
             builder.create<LLVM::LoadOp>(internal.getLoc(), i64Type, address);
           auto transformed =
@@ -1067,12 +1083,13 @@ class FinalizeCAPIPass final
         }
 
         Value shape;
+        std::optional<unsigned> outputIndex;
         if (outputs.contains(functionIndex)) {
           auto* outputPosition =
             llvm::find(outputArgumentIndices, functionIndex);
-          auto outputIndex = static_cast<unsigned>(
-            outputPosition - outputArgumentIndices.begin());
-          shape = inputShapes[shapeSources[outputIndex]];
+          outputIndex = static_cast<unsigned>(outputPosition -
+                                              outputArgumentIndices.begin());
+          shape = inputShapes[shapeSources[*outputIndex]];
         } else {
           shape = entry->getArgument(wrapperShapeIndices[functionIndex]);
           auto* inputPosition = llvm::find(inputIndices, functionIndex);
@@ -1091,12 +1108,16 @@ class FinalizeCAPIPass final
             sizes.push_back(builder.create<LLVM::ConstantOp>(
               internal.getLoc(), builder.getI64IntegerAttr(dimension)));
           } else {
+            const unsigned sourceDimension =
+              outputIndex ? shapePrograms[*outputIndex][dimensionIndex]
+                              .getInputDimension()
+                          : dimensionIndex;
             Value address = builder.create<LLVM::GEPOp>(
               internal.getLoc(),
               pointerType,
               i64Type,
               shape,
-              ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimensionIndex)});
+              ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(sourceDimension)});
             Value size =
               builder.create<LLVM::LoadOp>(internal.getLoc(), i64Type, address);
             if (outputs.contains(functionIndex)) {
@@ -1313,12 +1334,14 @@ class FinalizeCAPIPass final
         Value outputElements = builder.create<LLVM::ConstantOp>(
           internal.getLoc(), builder.getI64IntegerAttr(1));
         for (unsigned dimension = 0; dimension < type.getRank(); ++dimension) {
+          const unsigned sourceDimension =
+            shapePrograms[outputIndex][dimension].getInputDimension();
           Value sourceAddress = builder.create<LLVM::GEPOp>(
             internal.getLoc(),
             pointerType,
             i64Type,
             source,
-            ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimension)});
+            ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(sourceDimension)});
           Value destinationAddress = builder.create<LLVM::GEPOp>(
             internal.getLoc(),
             pointerType,

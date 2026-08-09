@@ -149,6 +149,30 @@ Value reshapeValue(OpBuilder& builder,
   return {builder.create<tosa::ReshapeOp>(location, outputType, input, shape)};
 }
 
+Value reshapeValue(OpBuilder& builder,
+                   Location location,
+                   Value input,
+                   RankedTensorType outputType,
+                   ArrayRef<std::optional<unsigned>> sourceDimensions) {
+  SmallVector<Value> dimensions;
+  dimensions.reserve(outputType.getRank());
+  for (auto [index, extent] : llvm::enumerate(outputType.getShape())) {
+    if (ShapedType::isDynamic(extent)) {
+      dimensions.push_back(builder.create<tensor::DimOp>(
+        location, input, *sourceDimensions[index]));
+    } else {
+      dimensions.push_back(
+        builder.create<arith::ConstantIndexOp>(location, extent));
+    }
+  }
+  auto shapeType =
+    RankedTensorType::get({outputType.getRank()}, builder.getIndexType());
+  Value shape =
+    builder.create<tensor::FromElementsOp>(location, shapeType, dimensions);
+  return {
+    builder.create<tensor::ReshapeOp>(location, outputType, input, shape)};
+}
+
 Value restoreNCNNLayout(OpBuilder& builder,
                         Location location,
                         Value input,
@@ -1490,16 +1514,47 @@ class ConvertShapeChange final : public ConversionPattern {
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
     if (operands.size() != 1 || operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
-        !isStaticF32Tensor(operation->getResult(0).getType())) {
-      return operation->emitOpError("supports one static f32 tensor only");
+        !isRankedF32Tensor(operation->getOperand(0).getType()) ||
+        !isRankedF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("supports one ranked f32 tensor only");
     }
     auto inputType = cast<RankedTensorType>(operation->getOperand(0).getType());
     auto outputType = cast<RankedTensorType>(operation->getResult(0).getType());
     Value input = restoreNCNNLayout(
       rewriter, operation->getLoc(), operands.front(), inputType);
-    Value reshaped =
-      reshapeValue(rewriter, operation->getLoc(), input, outputType);
+    Value reshaped;
+    if (inputType.hasStaticShape() && outputType.hasStaticShape()) {
+      reshaped = reshapeValue(rewriter, operation->getLoc(), input, outputType);
+    } else {
+      SmallVector<std::optional<unsigned>> sourceDimensions(
+        outputType.getRank());
+      if (auto expand = dyn_cast<ExpandDimsOp>(operation)) {
+        llvm::SmallDenseSet<int64_t> axes;
+        for (int64_t axis : expand.getAxes()) {
+          axes.insert(axis < 0 ? axis + outputType.getRank() : axis);
+        }
+        unsigned sourceDimension = 0;
+        for (int64_t axis = 0; axis < outputType.getRank(); ++axis) {
+          if (!axes.contains(axis)) {
+            sourceDimensions[axis] = sourceDimension++;
+          }
+        }
+      } else {
+        auto squeeze = cast<SqueezeOp>(operation);
+        llvm::SmallDenseSet<int64_t> axes;
+        for (int64_t axis : squeeze.getAxes()) {
+          axes.insert(axis < 0 ? axis + inputType.getRank() : axis);
+        }
+        unsigned outputDimension = 0;
+        for (int64_t axis = 0; axis < inputType.getRank(); ++axis) {
+          if (!axes.contains(axis)) {
+            sourceDimensions[outputDimension++] = axis;
+          }
+        }
+      }
+      reshaped = reshapeValue(
+        rewriter, operation->getLoc(), input, outputType, sourceDimensions);
+    }
     rewriter.replaceOp(
       operation,
       convertNCNNLayout(rewriter, operation->getLoc(), reshaped, outputType));
@@ -1675,8 +1730,24 @@ class ConvertGemm final : public OpConversionPattern<GemmOp> {
     const int64_t n = weightType.getShape()[0];
     auto matrixInputType =
       RankedTensorType::get({1, m, k}, inputType.getElementType());
-    Value input = reshapeValue(
-      rewriter, operation.getLoc(), adaptor.getInput(), matrixInputType);
+    Value input;
+    if (inputType.hasStaticShape()) {
+      input = reshapeValue(
+        rewriter, operation.getLoc(), adaptor.getInput(), matrixInputType);
+    } else {
+      SmallVector<ReassociationIndices> reassociation = {{0, 1}, {2}};
+      SmallVector<OpFoldResult> outputShape;
+      outputShape.push_back(rewriter.getIndexAttr(1));
+      Value dynamicM = rewriter.create<tensor::DimOp>(
+        operation.getLoc(), adaptor.getInput(), 0);
+      outputShape.push_back(dynamicM);
+      outputShape.push_back(rewriter.getIndexAttr(k));
+      input = rewriter.create<tensor::ExpandShapeOp>(operation.getLoc(),
+                                                     matrixInputType,
+                                                     adaptor.getInput(),
+                                                     reassociation,
+                                                     outputShape);
+    }
     auto matrixWeightType =
       RankedTensorType::get({1, n, k}, weightType.getElementType());
     Value weight = reshapeValue(
@@ -1714,9 +1785,14 @@ class ConvertGemm final : public OpConversionPattern<GemmOp> {
       result = rewriter.create<tosa::MulOp>(
         operation.getLoc(), matrixOutputType, result, alpha, shift);
     }
-    rewriter.replaceOp(
-      operation,
-      reshapeValue(rewriter, operation.getLoc(), result, outputType));
+    if (outputType.hasStaticShape()) {
+      result = reshapeValue(rewriter, operation.getLoc(), result, outputType);
+    } else {
+      SmallVector<ReassociationIndices> reassociation = {{0, 1}, {2}};
+      result = rewriter.create<tensor::CollapseShapeOp>(
+        operation.getLoc(), outputType, result, reassociation);
+    }
+    rewriter.replaceOp(operation, result);
     return success();
   }
 };
@@ -1978,12 +2054,36 @@ class ConvertSlice final : public OpConversionPattern<SliceOp> {
                           : sourceResultType;
       SmallVector<int64_t> start(inputType.getRank(), 0);
       start[axis] = offset;
-      results.push_back(rewriter.create<tosa::SliceOp>(
-        operation.getLoc(),
-        resultType,
-        adaptor.getInput(),
-        createShape(rewriter, operation.getLoc(), start),
-        createShape(rewriter, operation.getLoc(), resultType.getShape())));
+      if (inputType.hasStaticShape()) {
+        results.push_back(rewriter.create<tosa::SliceOp>(
+          operation.getLoc(),
+          resultType,
+          adaptor.getInput(),
+          createShape(rewriter, operation.getLoc(), start),
+          createShape(rewriter, operation.getLoc(), resultType.getShape())));
+      } else {
+        SmallVector<OpFoldResult> offsets(inputType.getRank(),
+                                          rewriter.getIndexAttr(0));
+        SmallVector<OpFoldResult> sizes;
+        SmallVector<OpFoldResult> strides(inputType.getRank(),
+                                          rewriter.getIndexAttr(1));
+        offsets[axis] = rewriter.getIndexAttr(offset);
+        for (auto [dimension, extent] :
+             llvm::enumerate(resultType.getShape())) {
+          sizes.push_back(
+            ShapedType::isDynamic(extent)
+              ? OpFoldResult(rewriter.create<tensor::DimOp>(
+                  operation.getLoc(), adaptor.getInput(), dimension))
+              : OpFoldResult(rewriter.getIndexAttr(extent)));
+        }
+        results.push_back(
+          rewriter.create<tensor::ExtractSliceOp>(operation.getLoc(),
+                                                  resultType,
+                                                  adaptor.getInput(),
+                                                  offsets,
+                                                  sizes,
+                                                  strides));
+      }
       offset += resultType.getShape()[axis];
     }
     rewriter.replaceOp(operation, results);
@@ -2002,7 +2102,7 @@ class ConvertReduction final : public OpConversionPattern<ReductionOp> {
     auto sourceInput = cast<RankedTensorType>(operation.getInput().getType());
     auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
     if (operation.getKind() != 3 || !inputType.getElementType().isF32()) {
-      return operation.emitOpError("only static f32 mean is supported");
+      return operation.emitOpError("only f32 mean is supported");
     }
     SmallVector<int64_t> sourceAxes;
     if (operation.getReduceAll()) {
@@ -2010,7 +2110,9 @@ class ConvertReduction final : public OpConversionPattern<ReductionOp> {
         sourceAxes.push_back(axis);
       }
     } else {
-      llvm::append_range(sourceAxes, operation.getAxes());
+      for (int64_t axis : operation.getAxes()) {
+        sourceAxes.push_back(axis < 0 ? axis + sourceInput.getRank() : axis);
+      }
     }
     SmallVector<uint32_t> axes;
     int64_t reducedElements = 1;
@@ -2050,8 +2152,46 @@ class ConvertReduction final : public OpConversionPattern<ReductionOp> {
     auto convertedOutputType =
       outputType.getRank() == 3 ? getNHWCType(outputType) : outputType;
     if (reducedType != convertedOutputType) {
-      result =
-        reshapeValue(rewriter, operation.getLoc(), result, convertedOutputType);
+      if (convertedOutputType.hasStaticShape()) {
+        result = reshapeValue(
+          rewriter, operation.getLoc(), result, convertedOutputType);
+      } else {
+        llvm::SmallDenseSet<int64_t> reducedSourceAxes(sourceAxes.begin(),
+                                                       sourceAxes.end());
+        SmallVector<int64_t> retainedSourceAxes;
+        SmallVector<unsigned> retainedPhysicalAxes;
+        for (int64_t sourceAxis = 0; sourceAxis < sourceInput.getRank();
+             ++sourceAxis) {
+          if (!reducedSourceAxes.contains(sourceAxis)) {
+            retainedSourceAxes.push_back(sourceAxis);
+            retainedPhysicalAxes.push_back(
+              convertAxis(sourceAxis, sourceInput.getRank()));
+          }
+        }
+        SmallVector<unsigned> physicalOrder(retainedPhysicalAxes);
+        llvm::sort(physicalOrder);
+        SmallVector<int64_t> physicalShape;
+        SmallVector<std::optional<unsigned>> sourceDimensions;
+        for (unsigned physicalAxis : physicalOrder) {
+          physicalShape.push_back(reducedType.getShape()[physicalAxis]);
+          sourceDimensions.push_back(physicalAxis);
+        }
+        auto physicalType = RankedTensorType::get(
+          physicalShape, convertedOutputType.getElementType());
+        result = reshapeValue(
+          rewriter, operation.getLoc(), result, physicalType, sourceDimensions);
+        SmallVector<int32_t> permutation;
+        for (int64_t sourceAxis : retainedSourceAxes) {
+          unsigned physicalAxis =
+            convertAxis(sourceAxis, sourceInput.getRank());
+          permutation.push_back(static_cast<int32_t>(
+            llvm::find(physicalOrder, physicalAxis) - physicalOrder.begin()));
+        }
+        if (!llvm::is_sorted(permutation)) {
+          result = rewriter.create<tosa::TransposeOp>(
+            operation.getLoc(), convertedOutputType, result, permutation);
+        }
+      }
     }
     rewriter.replaceOp(operation, result);
     return success();

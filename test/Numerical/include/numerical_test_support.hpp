@@ -83,8 +83,16 @@ class CompiledModel final {
                   std::span<const std::int64_t> input_shape,
                   std::span<float> output,
                   std::uint64_t output_capacity) const;
+  int run_dynamic_two_outputs(std::span<const float> input,
+                              std::span<const std::int64_t> input_shape,
+                              std::span<float> first_output,
+                              std::span<float> second_output) const;
   int infer_dynamic(std::span<const std::int64_t> input_shape,
                     std::span<std::int64_t> output_shape) const;
+  int infer_dynamic_two_outputs(
+    std::span<const std::int64_t> input_shape,
+    std::span<std::int64_t> first_output_shape,
+    std::span<std::int64_t> second_output_shape) const;
   int run_two_outputs(std::span<const float> input,
                       std::span<float> first_output,
                       std::span<float> second_output) const;

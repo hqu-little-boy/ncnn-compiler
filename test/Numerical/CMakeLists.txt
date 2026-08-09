@@ -537,6 +537,47 @@ ncnn_add_compiled_fixture(
     0:1:min=1,multiple=1
     0:2:min=1,multiple=1)
 ncnn_add_compiled_fixture(
+    squeeze_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/squeeze_dynamic.param
+    ${empty_bin}
+    1x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    permute_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/permute_dynamic.param
+    ${empty_bin}
+    1x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    expand_dims_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/expand_dims_dynamic.param
+    ${empty_bin}
+    1x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    reduction_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reduction_dynamic.param
+    ${empty_bin}
+    ?x4x?
+    0:0:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    gemm_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gemm_dynamic.param
+    ${gemm_bin}
+    2x1x?
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    slice_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slice_dynamic.param
+    ${empty_bin}
+    4x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
     detection_output
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/detection_output.param
     ${empty_bin})
@@ -677,6 +718,12 @@ set(numerical_fixture_targets
     compile_softmax_dynamic
     compile_batch_norm_dynamic
     compile_shuffle_channel_dynamic
+    compile_squeeze_dynamic
+    compile_permute_dynamic
+    compile_expand_dims_dynamic
+    compile_reduction_dynamic
+    compile_gemm_dynamic
+    compile_slice_dynamic
     compile_detection_output)
 list(LENGTH numerical_fixture_targets numerical_fixture_target_count)
 math(EXPR numerical_fixture_last_index "${numerical_fixture_target_count} - 1")
@@ -879,6 +926,13 @@ target_compile_definitions(numerical_dynamic_operator_tests PRIVATE
     SOFTMAX_DYNAMIC_LIBRARY_PATH="${softmax_dynamic_LIBRARY}"
     BATCH_NORM_DYNAMIC_LIBRARY_PATH="${batch_norm_dynamic_LIBRARY}"
     SHUFFLE_CHANNEL_DYNAMIC_LIBRARY_PATH="${shuffle_channel_dynamic_LIBRARY}"
+    SQUEEZE_DYNAMIC_LIBRARY_PATH="${squeeze_dynamic_LIBRARY}"
+    PERMUTE_DYNAMIC_LIBRARY_PATH="${permute_dynamic_LIBRARY}"
+    EXPAND_DIMS_DYNAMIC_LIBRARY_PATH="${expand_dims_dynamic_LIBRARY}"
+    REDUCTION_DYNAMIC_LIBRARY_PATH="${reduction_dynamic_LIBRARY}"
+    GEMM_DYNAMIC_LIBRARY_PATH="${gemm_dynamic_LIBRARY}"
+    SLICE_DYNAMIC_LIBRARY_PATH="${slice_dynamic_LIBRARY}"
+    GEMM_BIN_PATH="${gemm_bin}"
     BATCH_NORM_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/fixtures/batch_norm.bin")
 add_dependencies(numerical_dynamic_operator_tests
     compile_relu_dynamic
@@ -891,7 +945,13 @@ add_dependencies(numerical_dynamic_operator_tests
     compile_dropout_dynamic
     compile_softmax_dynamic
     compile_batch_norm_dynamic
-    compile_shuffle_channel_dynamic)
+    compile_shuffle_channel_dynamic
+    compile_squeeze_dynamic
+    compile_permute_dynamic
+    compile_expand_dims_dynamic
+    compile_reduction_dynamic
+    compile_gemm_dynamic
+    compile_slice_dynamic)
 
 add_executable(numerical_dynamic_tests
     models/dynamic_pp_ocr_test.cpp)
@@ -914,7 +974,7 @@ gtest_discover_tests(numerical_tests
 gtest_discover_tests(numerical_dynamic_tests
     PROPERTIES
         LABELS numerical-dynamic
-        TIMEOUT 900
+        TIMEOUT 3600
         RUN_SERIAL TRUE)
 gtest_discover_tests(numerical_dynamic_operator_tests
     PROPERTIES

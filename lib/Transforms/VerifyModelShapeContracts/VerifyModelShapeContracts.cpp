@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <utility>
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -80,11 +81,9 @@ LogicalResult verifyShapeProgram(func::FuncOp function,
   }
   auto inputType = dyn_cast<MemRefType>(
     function.getArgumentTypes()[inputIndices[source.getInt()]]);
-  if (!inputType || inputType.hasStaticShape() ||
-      inputType.getRank() != outputType.getRank()) {
-    return function.emitOpError()
-           << "dynamic output " << outputIndex
-           << " shape source must be a dynamic input of the same rank";
+  if (!inputType || inputType.hasStaticShape()) {
+    return function.emitOpError() << "dynamic output " << outputIndex
+                                  << " shape source must be a dynamic input";
   }
 
   auto program =
@@ -94,14 +93,29 @@ LogicalResult verifyShapeProgram(func::FuncOp function,
     return function.emitOpError() << "dynamic output " << outputIndex
                                   << " has no complete shape program";
   }
-  for (Attribute dimension : program) {
+  for (auto [dimensionIndex, dimension] : llvm::enumerate(program)) {
     auto instructions = dyn_cast<DenseI64ArrayAttr>(dimension);
     if (!instructions || instructions.size() % 2 != 0) {
       return function.emitOpError() << "dynamic output " << outputIndex
                                     << " has an invalid shape program";
     }
     ArrayRef<int64_t> values = instructions.asArrayRef();
-    for (unsigned index = 0; index < values.size(); index += 2) {
+    unsigned sourceDimension = dimensionIndex;
+    unsigned start = 0;
+    if (!values.empty() && values[0] == 3) {
+      if (values[1] < 0 || values[1] >= inputType.getRank()) {
+        return function.emitOpError()
+               << "dynamic output " << outputIndex
+               << " has an invalid shape source dimension";
+      }
+      sourceDimension = static_cast<unsigned>(values[1]);
+      start = 2;
+    }
+    if (std::cmp_greater_equal(sourceDimension, inputType.getRank())) {
+      return function.emitOpError() << "dynamic output " << outputIndex
+                                    << " has an invalid shape source dimension";
+    }
+    for (unsigned index = start; index < values.size(); index += 2) {
       if (values[index] < 0 || values[index] > 2 ||
           (values[index] == 2 && values[index + 1] <= 0)) {
         return function.emitOpError() << "dynamic output " << outputIndex

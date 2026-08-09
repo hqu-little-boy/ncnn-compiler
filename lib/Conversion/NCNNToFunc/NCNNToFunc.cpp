@@ -1,6 +1,7 @@
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 
 #include <memory>
+#include <set>
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -166,9 +167,6 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           }
           continue;
         }
-        if (inputType.getRank() != 3 || resultType.getRank() != 3) {
-          continue;
-        }
         if (auto reshape = dyn_cast<ReshapeOp>(operation);
             reshape && reshape.getShapeSources()) {
           ArrayRef<int64_t> sources = *reshape.getShapeSources();
@@ -198,6 +196,94 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           continue;
         }
         ShapeTransform transform = source->second;
+        if (transform.dimensions.empty()) {
+          continue;
+        }
+        if (auto permute = dyn_cast<PermuteOp>(operation)) {
+          SmallVector<DimensionExpr> dimensions;
+          dimensions.reserve(resultType.getRank());
+          for (int64_t axis : permute.getPermutation()) {
+            dimensions.push_back(transform.dimensions[axis]);
+          }
+          shapeTransforms[result] = {.dimensions = std::move(dimensions)};
+          continue;
+        }
+        if (auto expand = dyn_cast<ExpandDimsOp>(operation)) {
+          std::set<int64_t> axes;
+          for (int64_t axis : expand.getAxes()) {
+            axes.insert(axis < 0 ? axis + resultType.getRank() : axis);
+          }
+          SmallVector<DimensionExpr> dimensions;
+          dimensions.reserve(resultType.getRank());
+          unsigned inputDimension = 0;
+          for (int64_t axis = 0; axis < resultType.getRank(); ++axis) {
+            dimensions.push_back(axes.contains(axis)
+                                   ? transform.dimensions.front()
+                                   : transform.dimensions[inputDimension++]);
+          }
+          shapeTransforms[result] = {.dimensions = std::move(dimensions)};
+          continue;
+        }
+        if (auto squeeze = dyn_cast<SqueezeOp>(operation)) {
+          std::set<int64_t> axes;
+          for (int64_t axis : squeeze.getAxes()) {
+            axes.insert(axis < 0 ? axis + inputType.getRank() : axis);
+          }
+          SmallVector<DimensionExpr> dimensions;
+          for (int64_t axis = 0; axis < inputType.getRank(); ++axis) {
+            if (!axes.contains(axis)) {
+              dimensions.push_back(transform.dimensions[axis]);
+            }
+          }
+          if (dimensions.empty()) {
+            dimensions.push_back(transform.dimensions.front());
+          }
+          shapeTransforms[result] = {.dimensions = std::move(dimensions)};
+          continue;
+        }
+        if (auto reduction = dyn_cast<ReductionOp>(operation)) {
+          std::set<int64_t> axes;
+          if (reduction.getReduceAll()) {
+            for (int64_t axis = 0; axis < inputType.getRank(); ++axis) {
+              axes.insert(axis);
+            }
+          } else {
+            for (int64_t axis : reduction.getAxes()) {
+              axes.insert(axis < 0 ? axis + inputType.getRank() : axis);
+            }
+          }
+          SmallVector<DimensionExpr> dimensions;
+          for (int64_t axis = 0; axis < inputType.getRank(); ++axis) {
+            if (!axes.contains(axis)) {
+              dimensions.push_back(transform.dimensions[axis]);
+            } else if (reduction.getKeepdims()) {
+              dimensions.push_back(transform.dimensions.front());
+            }
+          }
+          if (dimensions.empty()) {
+            dimensions.push_back(transform.dimensions.front());
+          }
+          shapeTransforms[result] = {.dimensions = std::move(dimensions)};
+          continue;
+        }
+        if (isa<GemmOp>(operation)) {
+          shapeTransforms[result] = {
+            .dimensions = {transform.dimensions[0], transform.dimensions[0]}};
+          continue;
+        }
+        if (auto slice = dyn_cast<SliceOp>(operation)) {
+          int64_t axis = slice.getAxis();
+          if (axis < 0) {
+            axis += inputType.getRank();
+          }
+          SmallVector<DimensionExpr> dimensions = transform.dimensions;
+          dimensions[axis] = transform.dimensions.front();
+          shapeTransforms[result] = {.dimensions = std::move(dimensions)};
+          continue;
+        }
+        if (inputType.getRank() != 3 || resultType.getRank() != 3) {
+          continue;
+        }
         if (auto padding = dyn_cast<PaddingOp>(operation)) {
           appendInstruction(transform,
                             1,
@@ -410,7 +496,8 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           rewriter.getI32IntegerAttr(static_cast<int32_t>(
             transform->second.dimensions.front().getInputIndex())));
         SmallVector<Attribute> programs;
-        for (const DimensionExpr& dimension : transform->second.dimensions) {
+        for (auto [dimensionIndex, dimension] :
+             llvm::enumerate(transform->second.dimensions)) {
           if (dimension.getInputIndex() !=
               transform->second.dimensions.front().getInputIndex()) {
             return model.emitOpError(
@@ -420,8 +507,8 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
                                  dimension.getInputDimension());
           programs.push_back(rewriter.getDenseI64ArrayAttr(
             dimension.equivalentUnder(shapeConstraints, identity)
-              ? identity.serialize()
-              : dimension.serialize()));
+              ? identity.serialize(dimensionIndex)
+              : dimension.serialize(dimensionIndex)));
         }
         function.setResultAttr(functionResultIndex,
                                "ncnn.shape_program",

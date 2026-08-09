@@ -11,7 +11,12 @@
 
 namespace mlir::ncnn {
 
-enum class ShapeOpcode : int64_t { Add = 0, Multiply = 1, Divide = 2 };
+enum class ShapeOpcode : int64_t {
+  Add = 0,
+  Multiply = 1,
+  Divide = 2,
+  SourceDimension = 3
+};
 
 struct ShapeInstruction {
   ShapeOpcode opcode;
@@ -39,8 +44,17 @@ class DimensionExpr {
     if (program.size() % 2 != 0) {
       return std::unexpected("shape program must contain opcode/operand pairs");
     }
+    std::size_t start = 0;
+    if (!program.empty() &&
+        program.front() == static_cast<int64_t>(ShapeOpcode::SourceDimension)) {
+      if (program[1] < 0) {
+        return std::unexpected("shape source dimension must be non-negative");
+      }
+      inputDimension = static_cast<unsigned>(program[1]);
+      start = 2;
+    }
     DimensionExpr result(inputIndex, inputDimension);
-    for (std::size_t index = 0; index < program.size(); index += 2) {
+    for (std::size_t index = start; index < program.size(); index += 2) {
       if (program[index] < static_cast<int64_t>(ShapeOpcode::Add) ||
           program[index] > static_cast<int64_t>(ShapeOpcode::Divide)) {
         return std::unexpected("shape program opcode is invalid");
@@ -141,6 +155,16 @@ class DimensionExpr {
       result.push_back(static_cast<int64_t>(instruction.opcode));
       result.push_back(instruction.operand);
     }
+    return result;
+  }
+
+  llvm::SmallVector<int64_t> serialize(unsigned outputDimension) const {
+    llvm::SmallVector<int64_t> result;
+    if (inputDimension_ != outputDimension) {
+      result.push_back(static_cast<int64_t>(ShapeOpcode::SourceDimension));
+      result.push_back(inputDimension_);
+    }
+    llvm::append_range(result, serialize());
     return result;
   }
 

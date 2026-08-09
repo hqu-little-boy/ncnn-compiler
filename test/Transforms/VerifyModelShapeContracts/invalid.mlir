@@ -25,7 +25,7 @@ module {
 // -----
 
 module {
-  // expected-error@+1 {{dynamic output 2 shape source must be a dynamic input of the same rank}}
+  // expected-error@+1 {{dynamic output 2 shape source must be a dynamic input}}
   func.func @static_source(
       %static_input: memref<4xf32>,
       %dynamic_input: memref<?xf32>,

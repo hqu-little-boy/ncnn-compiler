@@ -683,8 +683,8 @@ FailureOr<RankedTensorType> computeSqueezeResult(
   std::optional<Location> location,
   RankedTensorType input,
   ArrayRef<int64_t> requestedAxes) {
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape()) {
-    return emitOptionalError(location, "Squeeze input must be static f32");
+  if (!input || !input.getElementType().isF32()) {
+    return emitOptionalError(location, "Squeeze input must be ranked f32");
   }
   std::set<int64_t> axes;
   for (int64_t axis : requestedAxes) {
@@ -715,8 +715,8 @@ FailureOr<RankedTensorType> computeExpandDimsResult(
   std::optional<Location> location,
   RankedTensorType input,
   ArrayRef<int64_t> requestedAxes) {
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape()) {
-    return emitOptionalError(location, "ExpandDims input must be static f32");
+  if (!input || !input.getElementType().isF32()) {
+    return emitOptionalError(location, "ExpandDims input must be ranked f32");
   }
   const int64_t outputRank = input.getRank() + requestedAxes.size();
   std::set<int64_t> axes;
@@ -741,10 +741,10 @@ FailureOr<RankedTensorType> computePermuteResult(
   std::optional<Location> location,
   RankedTensorType input,
   ArrayRef<int64_t> permutation) {
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
+  if (!input || !input.getElementType().isF32() ||
       static_cast<int64_t>(permutation.size()) != input.getRank()) {
     return emitOptionalError(
-      location, "Permute requires a static f32 input and one axis per rank");
+      location, "Permute requires a ranked f32 input and one axis per rank");
   }
   std::set<int64_t> axes;
   SmallVector<int64_t> shape;
@@ -871,10 +871,15 @@ FailureOr<RankedTensorType> computeGemmResult(std::optional<Location> location,
   if (!input || !weight || !bias || !input.getElementType().isF32() ||
       !weight.getElementType().isF32() || !bias.getElementType().isF32() ||
       input.getRank() != 2 || weight.getRank() != 2 || bias.getRank() != 1 ||
+      ShapedType::isDynamic(input.getShape()[1]) ||
+      ShapedType::isDynamic(weight.getShape()[0]) ||
+      ShapedType::isDynamic(weight.getShape()[1]) ||
+      ShapedType::isDynamic(bias.getShape()[0]) ||
       input.getShape()[1] != weight.getShape()[1] ||
       bias.getShape()[0] != weight.getShape()[0]) {
     return emitOptionalError(
-      location, "Gemm expects input [M,K], weight [N,K], and bias [N]");
+      location,
+      "Gemm expects input [M,K], weight [N,K], and bias [N] with static K/N");
   }
   return RankedTensorType::get({input.getShape()[0], weight.getShape()[0]},
                                input.getElementType());
@@ -886,8 +891,8 @@ LogicalResult inferSliceResults(
   ArrayRef<int64_t> requestedSlices,
   int64_t axis,
   SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape()) {
-    return emitOptionalError(location, "Slice input must be static f32");
+  if (!input || !input.getElementType().isF32()) {
+    return emitOptionalError(location, "Slice input must be ranked f32");
   }
   if (requestedSlices.size() < 2) {
     return emitOptionalError(location, "Slice requires at least two slices");
@@ -900,6 +905,9 @@ LogicalResult inferSliceResults(
     return emitOptionalError(location, "Slice axis is outside input rank");
   }
   const int64_t extent = input.getShape()[axis];
+  if (ShapedType::isDynamic(extent)) {
+    return emitOptionalError(location, "Slice axis must have static extent");
+  }
   int64_t consumed = 0;
   for (std::size_t index = 0; index < requestedSlices.size(); ++index) {
     int64_t size = requestedSlices[index];
@@ -931,8 +939,8 @@ FailureOr<RankedTensorType> computeReductionResult(
   bool reduceAll,
   ArrayRef<int64_t> axes,
   bool keepDims) {
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape()) {
-    return emitOptionalError(location, "Reduction input must be static f32");
+  if (!input || !input.getElementType().isF32()) {
+    return emitOptionalError(location, "Reduction input must be ranked f32");
   }
   if (operation != 3) {
     return emitOptionalError(location, "Reduction only supports mean");
@@ -956,6 +964,12 @@ FailureOr<RankedTensorType> computeReductionResult(
         return emitOptionalError(location,
                                  "Reduction axes must be unique and in range");
       }
+    }
+  }
+  for (int64_t axis : reducedAxes) {
+    if (ShapedType::isDynamic(input.getShape()[axis])) {
+      return emitOptionalError(location,
+                               "Reduction axes must have static extents");
     }
   }
   SmallVector<int64_t> shape;

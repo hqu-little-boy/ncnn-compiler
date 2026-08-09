@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -163,6 +164,163 @@ TEST(NumericalDynamicOperator, ShuffleChannelMatchesNcnnAcrossShapes) {
                           SHUFFLE_CHANNEL_DYNAMIC_LIBRARY_PATH,
                           "shuffle_channel_dynamic",
                           4);
+}
+
+TEST(NumericalDynamicOperator, AxisTransformsMatchNcnnAcrossShapes) {
+  for (const Case shape : kCases) {
+    const std::array<std::int64_t, 3> dimensions{1, shape.height, shape.width};
+    const std::size_t elements = shape.height * shape.width;
+    const std::vector<float> input =
+      make_random_input(elements, 0xA815U, -2.0F, 2.0F);
+    const ReferenceModel squeezeReference(
+      fixture_path("squeeze_dynamic"),
+      NUMERICAL_EMPTY_BIN_PATH,
+      "data",
+      "output",
+      TensorShape(shape.width, shape.height, 1));
+    const auto squeezed = run_ncnn_reference(squeezeReference, input);
+    ASSERT_TRUE(squeezed.has_value()) << squeezed.error();
+
+    for (const auto& [library, symbol, expectedShape] :
+         {std::tuple{SQUEEZE_DYNAMIC_LIBRARY_PATH,
+                     "squeeze_dynamic",
+                     std::array<std::int64_t, 2>{shape.height, shape.width}},
+          std::tuple{PERMUTE_DYNAMIC_LIBRARY_PATH,
+                     "permute_dynamic",
+                     std::array<std::int64_t, 2>{shape.width, shape.height}}}) {
+      CompiledModel compiled(library, symbol);
+      ASSERT_TRUE(compiled.valid()) << compiled.error();
+      CompiledModel infer(library,
+                          std::string(symbol) + "_infer_output_shapes");
+      ASSERT_TRUE(infer.valid()) << infer.error();
+      std::array<std::int64_t, 2> inferred{};
+      ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
+      EXPECT_EQ(inferred, expectedShape);
+      std::vector<float> actual(elements);
+      ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+                kSuccess);
+      if (std::string_view(symbol) == "squeeze_dynamic") {
+        EXPECT_TRUE(compare_values(actual, *squeezed, 0.0F));
+      } else {
+        const ReferenceModel reference(
+          fixture_path("permute_dynamic"),
+          NUMERICAL_EMPTY_BIN_PATH,
+          "data",
+          "output",
+          TensorShape(shape.width, shape.height, 1));
+        const auto expected = run_ncnn_reference(reference, input);
+        ASSERT_TRUE(expected.has_value()) << expected.error();
+        EXPECT_TRUE(compare_values(actual, *expected, 0.0F));
+      }
+    }
+
+    CompiledModel expanded(EXPAND_DIMS_DYNAMIC_LIBRARY_PATH,
+                           "expand_dims_dynamic");
+    ASSERT_TRUE(expanded.valid()) << expanded.error();
+    CompiledModel infer(EXPAND_DIMS_DYNAMIC_LIBRARY_PATH,
+                        "expand_dims_dynamic_infer_output_shapes");
+    ASSERT_TRUE(infer.valid()) << infer.error();
+    std::array<std::int64_t, 3> expandedShape{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, expandedShape), kSuccess);
+    EXPECT_EQ(expandedShape, dimensions);
+    std::vector<float> actual(elements);
+    ASSERT_EQ(expanded.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *squeezed, 0.0F));
+  }
+}
+
+TEST(NumericalDynamicOperator, ReductionMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(REDUCTION_DYNAMIC_LIBRARY_PATH, "reduction_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  CompiledModel infer(REDUCTION_DYNAMIC_LIBRARY_PATH,
+                      "reduction_dynamic_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+  for (const Case shape : kCases) {
+    const std::array<std::int64_t, 3> dimensions{shape.height, 4, shape.width};
+    const std::array<std::int64_t, 2> expectedShape{shape.height, shape.width};
+    const std::vector<float> input =
+      make_random_input(4U * shape.height * shape.width, 0x5EDU, -2.0F, 2.0F);
+    std::array<std::int64_t, 2> inferred{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
+    EXPECT_EQ(inferred, expectedShape);
+    const ReferenceModel reference(fixture_path("reduction_dynamic"),
+                                   NUMERICAL_EMPTY_BIN_PATH,
+                                   "data",
+                                   "output",
+                                   TensorShape(shape.width, 4, shape.height));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    std::vector<float> actual(shape.height * shape.width);
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
+  }
+}
+
+TEST(NumericalDynamicOperator, GemmDynamicMMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(GEMM_DYNAMIC_LIBRARY_PATH, "gemm_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  CompiledModel infer(GEMM_DYNAMIC_LIBRARY_PATH,
+                      "gemm_dynamic_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+  for (const Case shape : kCases) {
+    const std::array<std::int64_t, 3> dimensions{2, 1, shape.height};
+    const std::array<std::int64_t, 2> expectedShape{shape.height, 4};
+    const std::vector<float> input =
+      make_random_input(2U * shape.height, 0x6E44U, -2.0F, 2.0F);
+    std::array<std::int64_t, 2> inferred{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
+    EXPECT_EQ(inferred, expectedShape);
+    const ReferenceModel reference(fixture_path("gemm_dynamic"),
+                                   GEMM_BIN_PATH,
+                                   "data",
+                                   "output",
+                                   TensorShape(shape.height, 1, 2));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    std::vector<float> actual(4U * shape.height);
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
+  }
+}
+
+TEST(NumericalDynamicOperator, FixedSliceMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(SLICE_DYNAMIC_LIBRARY_PATH, "slice_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  CompiledModel infer(SLICE_DYNAMIC_LIBRARY_PATH,
+                      "slice_dynamic_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+  for (const Case shape : kCases) {
+    const std::array<std::int64_t, 3> dimensions{4, shape.height, shape.width};
+    const std::array<std::int64_t, 3> expectedShape{
+      2, shape.height, shape.width};
+    const std::vector<float> input =
+      make_random_input(4U * shape.height * shape.width, 0x511CEU, -2.0F, 2.0F);
+    std::array<std::int64_t, 3> leftShape{};
+    std::array<std::int64_t, 3> rightShape{};
+    ASSERT_EQ(
+      infer.infer_dynamic_two_outputs(dimensions, leftShape, rightShape),
+      kSuccess);
+    EXPECT_EQ(leftShape, expectedShape);
+    EXPECT_EQ(rightShape, expectedShape);
+    const ReferenceInput referenceInput(
+      "data", TensorShape(shape.width, shape.height, 4), input);
+    constexpr std::array<std::string_view, 2> kOutputs{"left", "right"};
+    const auto expected = run_ncnn_reference(fixture_path("slice_dynamic"),
+                                             NUMERICAL_EMPTY_BIN_PATH,
+                                             std::span(&referenceInput, 1),
+                                             kOutputs);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    const std::size_t elements = 2U * shape.height * shape.width;
+    std::vector<float> left(elements);
+    std::vector<float> right(elements);
+    ASSERT_EQ(compiled.run_dynamic_two_outputs(input, dimensions, left, right),
+              kSuccess);
+    EXPECT_TRUE(compare_values(left, (*expected)[0], 0.0F));
+    EXPECT_TRUE(compare_values(right, (*expected)[1], 0.0F));
+  }
 }
 
 TEST(NumericalDynamicOperator, RejectsInsufficientCapacity) {

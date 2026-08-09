@@ -265,16 +265,53 @@ int CompiledModel::run_dynamic(std::span<const float> input,
     input.data(), input_shape.data(), output.data(), output_capacity);
 }
 
+int CompiledModel::run_dynamic_two_outputs(
+  std::span<const float> input,
+  std::span<const std::int64_t> input_shape,
+  std::span<float> first_output,
+  std::span<float> second_output) const {
+  if (symbol_ == nullptr || input_shape.size() != 3) {
+    return -1;
+  }
+  using Function = int (*)(const float*,
+                           const std::int64_t*,
+                           float*,
+                           float*,
+                           std::uint64_t,
+                           std::uint64_t);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(input.data(),
+                                          input_shape.data(),
+                                          first_output.data(),
+                                          second_output.data(),
+                                          first_output.size(),
+                                          second_output.size());
+}
+
 int CompiledModel::infer_dynamic(std::span<const std::int64_t> input_shape,
                                  std::span<std::int64_t> output_shape) const {
-  if (symbol_ == nullptr || input_shape.size() != 3 ||
-      output_shape.size() != 3) {
+  if (symbol_ == nullptr || input_shape.size() != 3 || output_shape.empty()) {
     return -1;
   }
   using Function = int (*)(const std::int64_t*, std::int64_t*);
   static_assert(sizeof(Function) == sizeof(symbol_));
   return std::bit_cast<Function>(symbol_)(input_shape.data(),
                                           output_shape.data());
+}
+
+
+int CompiledModel::infer_dynamic_two_outputs(
+  std::span<const std::int64_t> input_shape,
+  std::span<std::int64_t> first_output_shape,
+  std::span<std::int64_t> second_output_shape) const {
+  if (symbol_ == nullptr || input_shape.size() != 3 ||
+      first_output_shape.empty() || second_output_shape.empty()) {
+    return -1;
+  }
+  using Function = int (*)(const std::int64_t*, std::int64_t*, std::int64_t*);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(
+    input_shape.data(), first_output_shape.data(), second_output_shape.data());
 }
 
 int CompiledModel::run_two_outputs(std::span<const float> input,
