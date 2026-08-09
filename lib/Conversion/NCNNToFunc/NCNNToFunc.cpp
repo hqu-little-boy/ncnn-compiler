@@ -150,7 +150,16 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
         }
         auto source = shapeTransforms.find(operation.getOperand(0));
         if (inputType.getRank() == resultType.getRank() &&
-            isa<ReluOp, SigmoidOp, SplitOp>(operation)) {
+            isa<ReluOp,
+                SigmoidOp,
+                SplitOp,
+                HardSigmoidOp,
+                HardSwishOp,
+                GELUOp,
+                DropoutOp,
+                SoftmaxOp,
+                BatchNormOp,
+                ShuffleChannelOp>(operation)) {
           if (source != shapeTransforms.end()) {
             ShapeTransform propagated = source->second;
             shapeTransforms[result] = std::move(propagated);

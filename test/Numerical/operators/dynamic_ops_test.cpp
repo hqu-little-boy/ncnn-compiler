@@ -110,6 +110,61 @@ TEST(NumericalDynamicOperator, InterpMatchesNcnnAcrossShapes) {
   }
 }
 
+TEST(NumericalDynamicOperator, HardActivationsMatchNcnnAcrossShapes) {
+  expect_dynamic_identity("hard_sigmoid_dynamic",
+                          HARD_SIGMOID_DYNAMIC_LIBRARY_PATH,
+                          "hard_sigmoid_dynamic",
+                          3);
+  expect_dynamic_identity("hard_swish_dynamic",
+                          HARD_SWISH_DYNAMIC_LIBRARY_PATH,
+                          "hard_swish_dynamic",
+                          3);
+}
+
+TEST(NumericalDynamicOperator, GeluDropoutAndSoftmaxMatchNcnnAcrossShapes) {
+  expect_dynamic_identity(
+    "gelu_dynamic", GELU_DYNAMIC_LIBRARY_PATH, "gelu_dynamic", 3);
+  expect_dynamic_identity(
+    "dropout_dynamic", DROPOUT_DYNAMIC_LIBRARY_PATH, "dropout_dynamic", 3);
+  expect_dynamic_identity(
+    "softmax_dynamic", SOFTMAX_DYNAMIC_LIBRARY_PATH, "softmax_dynamic", 3);
+}
+
+TEST(NumericalDynamicOperator, BatchNormMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(BATCH_NORM_DYNAMIC_LIBRARY_PATH, "batch_norm_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  CompiledModel infer(BATCH_NORM_DYNAMIC_LIBRARY_PATH,
+                      "batch_norm_dynamic_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+  for (const Case shape : kCases) {
+    const std::array<std::int64_t, 3> dimensions{3, shape.height, shape.width};
+    const std::size_t elements = 3U * shape.height * shape.width;
+    const std::vector<float> input =
+      make_random_input(elements, 0xBADD00U, -2.0F, 2.0F);
+    std::array<std::int64_t, 3> inferred{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
+    EXPECT_EQ(inferred, dimensions);
+    const ReferenceModel reference(fixture_path("batch_norm_dynamic"),
+                                   BATCH_NORM_BIN_PATH,
+                                   "data",
+                                   "output",
+                                   TensorShape(shape.width, shape.height, 3));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    std::vector<float> actual(elements);
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 1.0e-5F));
+  }
+}
+
+TEST(NumericalDynamicOperator, ShuffleChannelMatchesNcnnAcrossShapes) {
+  expect_dynamic_identity("shuffle_channel",
+                          SHUFFLE_CHANNEL_DYNAMIC_LIBRARY_PATH,
+                          "shuffle_channel_dynamic",
+                          4);
+}
+
 TEST(NumericalDynamicOperator, RejectsInsufficientCapacity) {
   CompiledModel compiled(RELU_DYNAMIC_LIBRARY_PATH, "relu_dynamic");
   ASSERT_TRUE(compiled.valid()) << compiled.error();

@@ -845,10 +845,12 @@ FailureOr<RankedTensorType> computeBatchNormResult(
   std::optional<Location> location,
   RankedTensorType input,
   ValueRange parameters) {
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
-      input.getRank() < 1 || parameters.size() != 4) {
-    return emitOptionalError(location,
-                             "BatchNorm requires a static ranked f32 input");
+  if (!input || !input.getElementType().isF32() || input.getRank() < 1 ||
+      ShapedType::isDynamic(input.getShape()[0]) || input.getShape()[0] <= 0 ||
+      parameters.size() != 4) {
+    return emitOptionalError(
+      location,
+      "BatchNorm requires a ranked f32 input with static positive channels");
   }
   const int64_t channels = input.getShape()[0];
   for (Value parameter : parameters) {
@@ -1400,10 +1402,10 @@ LogicalResult GemmOp::inferReturnTypeComponents(
 
 LogicalResult ShuffleChannelOp::verify() {
   auto input = llvm::dyn_cast<RankedTensorType>(getInput().getType());
-  if (!input || !input.getElementType().isF32() || !input.hasStaticShape() ||
-      input.getRank() != 3 || input.getShape()[0] <= 0) {
+  if (!input || !input.getElementType().isF32() || input.getRank() != 3 ||
+      ShapedType::isDynamic(input.getShape()[0]) || input.getShape()[0] <= 0) {
     return emitOpError(
-      "input must be a static positive-channel CHW f32 tensor");
+      "input must be a positive-channel CHW f32 tensor with static channels");
   }
   if (getGroup() <= 0 || input.getShape()[0] % getGroup() != 0) {
     return emitOpError("group must be positive and divide channel count");

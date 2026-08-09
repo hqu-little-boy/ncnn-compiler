@@ -71,6 +71,33 @@ Value createI8Zero(OpBuilder& builder, Location location) {
   return result;
 }
 
+SmallVector<OpFoldResult> getDynamicSizes(OpBuilder& builder,
+                                          Location location,
+                                          Value source,
+                                          RankedTensorType type) {
+  SmallVector<OpFoldResult> sizes;
+  for (auto [index, extent] : llvm::enumerate(type.getShape())) {
+    sizes.push_back(
+      ShapedType::isDynamic(extent)
+        ? OpFoldResult(builder.create<tensor::DimOp>(location, source, index))
+        : OpFoldResult(builder.getIndexAttr(extent)));
+  }
+  return sizes;
+}
+
+SmallVector<Value> getDynamicSizeValues(OpBuilder& builder,
+                                        Location location,
+                                        Value source,
+                                        RankedTensorType type) {
+  SmallVector<Value> sizes;
+  for (auto [index, extent] : llvm::enumerate(type.getShape())) {
+    if (ShapedType::isDynamic(extent)) {
+      sizes.push_back(builder.create<tensor::DimOp>(location, source, index));
+    }
+  }
+  return sizes;
+}
+
 RankedTensorType getBroadcastScalarType(RankedTensorType type) {
   SmallVector<int64_t> shape(type.getRank(), 1);
   return RankedTensorType::get(shape, type.getElementType());
@@ -688,8 +715,11 @@ class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
     Value input = adaptor.getInput();
     auto type = cast<RankedTensorType>(input.getType());
     auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
-    const uint32_t axis =
-      convertAxis(operation.getAxis(), sourceType.getRank());
+    int64_t sourceAxis = operation.getAxis();
+    if (sourceAxis < 0) {
+      sourceAxis += sourceType.getRank();
+    }
+    const uint32_t axis = convertAxis(sourceAxis, sourceType.getRank());
     SmallVector<int64_t> reducedShape(type.getShape());
     reducedShape[axis] = 1;
     auto reducedType =
@@ -1173,8 +1203,9 @@ class ConvertHardActivation final : public ConversionPattern {
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
     if (operands.size() != 1 || operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operands.front().getType())) {
-      return operation->emitOpError("supports one static f32 tensor only");
+        !isRankedF32Tensor(operands.front().getType()) ||
+        !isRankedF32Tensor(operation->getResult(0).getType())) {
+      return operation->emitOpError("supports one ranked f32 tensor only");
     }
     Value input = operands.front();
     auto type = cast<RankedTensorType>(input.getType());
@@ -1522,7 +1553,10 @@ class ConvertGELU final : public OpConversionPattern<GELUOp> {
       Value scaled = rewriter.create<tosa::MulOp>(
         operation.getLoc(), type, adaptor.getInput(), inverseSqrtTwo, shift);
       Value init = rewriter.create<tensor::EmptyOp>(
-        operation.getLoc(), type.getShape(), type.getElementType());
+        operation.getLoc(),
+        type.getShape(),
+        type.getElementType(),
+        getDynamicSizeValues(rewriter, operation.getLoc(), scaled, type));
       auto erfc = rewriter.create<linalg::MapOp>(
         operation.getLoc(),
         ValueRange{scaled},
@@ -1867,7 +1901,7 @@ class ConvertShuffleChannel final
     ConversionPatternRewriter& rewriter) const final {
     auto type = dyn_cast<RankedTensorType>(adaptor.getInput().getType());
     if (!type || type.getRank() != 4 || !type.getElementType().isF32()) {
-      return operation.emitOpError("requires a static CHW f32 input");
+      return operation.emitOpError("requires a rank-4 NHWC f32 input");
     }
     const int64_t channels = type.getShape()[3];
     const int64_t group = operation.getReverse()
@@ -1882,8 +1916,20 @@ class ConvertShuffleChannel final
                                               group,
                                               channels / group},
                                              type.getElementType());
-    Value grouped = reshapeValue(
-      rewriter, operation.getLoc(), adaptor.getInput(), groupedType);
+    Value grouped;
+    if (type.hasStaticShape()) {
+      grouped = reshapeValue(
+        rewriter, operation.getLoc(), adaptor.getInput(), groupedType);
+    } else {
+      SmallVector<ReassociationIndices> reassociation = {{0}, {1}, {2}, {3, 4}};
+      grouped = rewriter.create<tensor::ExpandShapeOp>(
+        operation.getLoc(),
+        groupedType,
+        adaptor.getInput(),
+        reassociation,
+        getDynamicSizes(
+          rewriter, operation.getLoc(), adaptor.getInput(), groupedType));
+    }
     auto shuffledType = RankedTensorType::get({type.getShape()[0],
                                                type.getShape()[1],
                                                type.getShape()[2],
@@ -1895,8 +1941,15 @@ class ConvertShuffleChannel final
                                          shuffledType,
                                          grouped,
                                          ArrayRef<int32_t>{0, 1, 2, 4, 3});
-    rewriter.replaceOp(
-      operation, reshapeValue(rewriter, operation.getLoc(), shuffled, type));
+    Value restored;
+    if (type.hasStaticShape()) {
+      restored = reshapeValue(rewriter, operation.getLoc(), shuffled, type);
+    } else {
+      SmallVector<ReassociationIndices> reassociation = {{0}, {1}, {2}, {3, 4}};
+      restored = rewriter.create<tensor::CollapseShapeOp>(
+        operation.getLoc(), type, shuffled, reassociation);
+    }
+    rewriter.replaceOp(operation, restored);
     return success();
   }
 };

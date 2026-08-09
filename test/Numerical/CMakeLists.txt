@@ -488,6 +488,55 @@ ncnn_add_compiled_fixture(
     0:1:min=1,multiple=1
     0:2:min=1,multiple=1)
 ncnn_add_compiled_fixture(
+    hard_sigmoid_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hard_sigmoid_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    hard_swish_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hard_swish_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    gelu_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gelu_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    dropout_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/dropout_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    softmax_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/softmax_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    batch_norm_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/batch_norm_dynamic.param
+    ${CMAKE_CURRENT_BINARY_DIR}/fixtures/batch_norm.bin
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    shuffle_channel_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/shuffle_channel_dynamic.param
+    ${empty_bin}
+    4x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
     detection_output
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/detection_output.param
     ${empty_bin})
@@ -621,6 +670,13 @@ set(numerical_fixture_targets
     compile_sigmoid_dynamic
     compile_padding_dynamic
     compile_interp_dynamic
+    compile_hard_sigmoid_dynamic
+    compile_hard_swish_dynamic
+    compile_gelu_dynamic
+    compile_dropout_dynamic
+    compile_softmax_dynamic
+    compile_batch_norm_dynamic
+    compile_shuffle_channel_dynamic
     compile_detection_output)
 list(LENGTH numerical_fixture_targets numerical_fixture_target_count)
 math(EXPR numerical_fixture_last_index "${numerical_fixture_target_count} - 1")
@@ -815,12 +871,27 @@ target_compile_definitions(numerical_dynamic_operator_tests PRIVATE
     RELU_DYNAMIC_LIBRARY_PATH="${relu_dynamic_LIBRARY}"
     SIGMOID_DYNAMIC_LIBRARY_PATH="${sigmoid_dynamic_LIBRARY}"
     PADDING_DYNAMIC_LIBRARY_PATH="${padding_dynamic_LIBRARY}"
-    INTERP_DYNAMIC_LIBRARY_PATH="${interp_dynamic_LIBRARY}")
+    INTERP_DYNAMIC_LIBRARY_PATH="${interp_dynamic_LIBRARY}"
+    HARD_SIGMOID_DYNAMIC_LIBRARY_PATH="${hard_sigmoid_dynamic_LIBRARY}"
+    HARD_SWISH_DYNAMIC_LIBRARY_PATH="${hard_swish_dynamic_LIBRARY}"
+    GELU_DYNAMIC_LIBRARY_PATH="${gelu_dynamic_LIBRARY}"
+    DROPOUT_DYNAMIC_LIBRARY_PATH="${dropout_dynamic_LIBRARY}"
+    SOFTMAX_DYNAMIC_LIBRARY_PATH="${softmax_dynamic_LIBRARY}"
+    BATCH_NORM_DYNAMIC_LIBRARY_PATH="${batch_norm_dynamic_LIBRARY}"
+    SHUFFLE_CHANNEL_DYNAMIC_LIBRARY_PATH="${shuffle_channel_dynamic_LIBRARY}"
+    BATCH_NORM_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/fixtures/batch_norm.bin")
 add_dependencies(numerical_dynamic_operator_tests
     compile_relu_dynamic
     compile_sigmoid_dynamic
     compile_padding_dynamic
-    compile_interp_dynamic)
+    compile_interp_dynamic
+    compile_hard_sigmoid_dynamic
+    compile_hard_swish_dynamic
+    compile_gelu_dynamic
+    compile_dropout_dynamic
+    compile_softmax_dynamic
+    compile_batch_norm_dynamic
+    compile_shuffle_channel_dynamic)
 
 add_executable(numerical_dynamic_tests
     models/dynamic_pp_ocr_test.cpp)

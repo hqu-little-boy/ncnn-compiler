@@ -1,0 +1,4 @@
+7767517
+2 2
+Input input 0 1 data 0=0 1=0 2=0
+BatchNorm batch_norm_dynamic 1 1 data output 0=3 1=0.0

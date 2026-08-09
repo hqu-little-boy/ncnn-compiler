@@ -62,13 +62,13 @@ module {
 // -----
 
 module {
-  ncnn.model @same_type_is_not_provenance {
+  ncnn.model @same_type_is_provenance {
     %input = ncnn.input {blob_name = "data", layer_name = "input"} : tensor<4x?x?xf32>
     %output = ncnn.hard_sigmoid %input {alpha = 2.000000e-01 : f32, beta = 5.000000e-01 : f32} : (tensor<4x?x?xf32>) -> tensor<4x?x?xf32>
     ncnn.output %output {blob_name = "output"} : tensor<4x?x?xf32>
   }
 }
 
-// CHECK-LABEL: func.func @same_type_is_not_provenance
-// CHECK-NOT: ncnn.shape_program
-// CHECK: ncnn.hard_sigmoid
+// CHECK-LABEL: func.func @same_type_is_provenance
+// CHECK-SAME: ncnn.shape_program = [array<i64>, array<i64>, array<i64>]
+// CHECK-SAME: ncnn.shape_source_input = 0 : i32
