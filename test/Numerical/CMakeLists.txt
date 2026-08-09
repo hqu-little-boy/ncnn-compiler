@@ -460,6 +460,34 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    relu_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/relu_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    sigmoid_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    padding_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/padding_dynamic.param
+    ${empty_bin}
+    2x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    interp_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp_dynamic.param
+    ${empty_bin}
+    4x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
     detection_output
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/detection_output.param
     ${empty_bin})
@@ -589,6 +617,10 @@ set(numerical_fixture_targets
     compile_deconvolution_no_bias
     compile_deconvolution_tiny_head
     compile_sigmoid
+    compile_relu_dynamic
+    compile_sigmoid_dynamic
+    compile_padding_dynamic
+    compile_interp_dynamic
     compile_detection_output)
 list(LENGTH numerical_fixture_targets numerical_fixture_target_count)
 math(EXPR numerical_fixture_last_index "${numerical_fixture_target_count} - 1")
@@ -770,6 +802,26 @@ add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_det_static)
 
+add_executable(numerical_dynamic_operator_tests
+    operators/dynamic_ops_test.cpp)
+target_link_libraries(numerical_dynamic_operator_tests PRIVATE
+    numerical_test_support
+    GTest::gtest_main
+    ${CMAKE_DL_LIBS})
+target_compile_definitions(numerical_dynamic_operator_tests PRIVATE
+    GTEST_HAS_CXXABI_H_=0
+    NUMERICAL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    NUMERICAL_EMPTY_BIN_PATH="${empty_bin}"
+    RELU_DYNAMIC_LIBRARY_PATH="${relu_dynamic_LIBRARY}"
+    SIGMOID_DYNAMIC_LIBRARY_PATH="${sigmoid_dynamic_LIBRARY}"
+    PADDING_DYNAMIC_LIBRARY_PATH="${padding_dynamic_LIBRARY}"
+    INTERP_DYNAMIC_LIBRARY_PATH="${interp_dynamic_LIBRARY}")
+add_dependencies(numerical_dynamic_operator_tests
+    compile_relu_dynamic
+    compile_sigmoid_dynamic
+    compile_padding_dynamic
+    compile_interp_dynamic)
+
 add_executable(numerical_dynamic_tests
     models/dynamic_pp_ocr_test.cpp)
 target_link_libraries(numerical_dynamic_tests PRIVATE
@@ -789,6 +841,11 @@ gtest_discover_tests(numerical_tests
         TIMEOUT 900
         RUN_SERIAL TRUE)
 gtest_discover_tests(numerical_dynamic_tests
+    PROPERTIES
+        LABELS numerical-dynamic
+        TIMEOUT 900
+        RUN_SERIAL TRUE)
+gtest_discover_tests(numerical_dynamic_operator_tests
     PROPERTIES
         LABELS numerical-dynamic
         TIMEOUT 900
