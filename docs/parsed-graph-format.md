@@ -1,7 +1,7 @@
 # parsed-graph 产物格式说明
 
 > 对应 `ncnn-mlir-driver --emit=parsed-graph` 的文本产物。
-> 源码：`compiler/lib/Graph/graph.cpp` 的 `ncnn_graph::Graph::dump()`。
+> 源码：`lib/Graph/graph.cpp` 的 `ncnn_graph::Graph::dump()`（相对 `compiler/`）。
 > 上游流水线见 [ncnn-mlir-driver-usage.md](ncnn-mlir-driver-usage.md)。
 
 ## 1. 这是什么阶段

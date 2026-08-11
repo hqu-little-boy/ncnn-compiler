@@ -97,8 +97,9 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
   `shape_zero_sources` 明确每个 `0` 映射的输入维；只允许单个 `-1`，缺失维的 `0` 明确拒绝。
   shape expression 当前支持直接引用单一输入 blob 的 `w/h/d/c` 维度，并要求输出
   保持该输入的维序；算术、维度置换、跨输入混合、min/max 等通用表达式仍会明确拒绝。动态 expression 直接下降为
-  `tensor.dim + tensor.from_elements + tensor.reshape`。M09 的固定 `3x640x640` 产品实例已闭环；
-  整张模型的一般动态 H/W 仍受 Pooling 等更早算子的动态 shape 覆盖限制。
+  `tensor.dim + tensor.from_elements + tensor.reshape`。M09 的固定 `3x640x640` 和受 minimum/
+  multiple-of 约束的 `3x?x?` 产品实例均已完成跨 shape 数值闭环；这不表示任意 expression
+  语法、任意模型或无约束动态尺寸均受支持。
 - **Slice**：当前支持 `slices` 参数，不支持 `indices` 参数形式。切分轴动态时要求最后一片为
   `-233`，显式片大小仍静态精确，按序遇到的 `-233` 片保守推断为动态；静态切分轴仍严格校验
   所有片完整消费该轴。
@@ -187,7 +188,7 @@ ncnn 原生使用 **CHW** 布局（卷积权重 `[O,I,H,W]`）。C ABI 保持 CH
 或残留 ncnn op 的边界按需转回 CHW，不改变函数签名。
 
 该转换采用部分转换契约：可 lowering 的 ncnn op 必须由 pattern 消除；int8 convolution、
-adaptive pooling、average include-pad 和尚未分配目标路径的 ncnn op 可以残留。单 pass 成功
+regular average include-pad 和尚未分配目标路径的 ncnn op 可以残留。单 pass 成功
 不表示已经得到纯 TOSA，严格 pipeline 最后通过 `verify-no-ncnn-ops` 拒绝任何残留。转换失败时
 由 MLIR conversion driver 处理 rewrite 失败，不通过 clone 整个 module 实现事务性。
 
@@ -233,7 +234,8 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
   rank 输入增加 shape 和 rank。
 - 调用方拥有所有 buffer；数据为 contiguous、native-endian。动态输入 shape 的静态维必须匹配
   头文件宏，动态维必须大于 0。
-- 返回 0 表示成功；NULL pointer、非法 shape/rank 或 shape metadata capacity 不足返回 1。
+- 生成头文件定义六种状态：`0` success、`1` null pointer、`2` invalid shape、`3` constraint
+  violation、`4` shape arithmetic overflow、`5` output capacity insufficient。
 - `--input-shape=CxHxW` 可重复，按 Input source-layer 顺序绑定；extent 可为正整数或 `?`。
 - `--input-dim-constraint=INPUT:DIM:min=N,multiple=N` 可重复，为 fixed-rank 动态输入维添加
   结构化 minimum/multiple 约束；执行和 shape inference 入口都会校验，manifest/header 同步公开。
@@ -241,8 +243,10 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
   H/W shape inference 和 NCNN-to-TOSA lowering；动态 `SAME` 仅支持对应 stride 为 1。
 - Concat 非拼接动态维与 Binary 非静态-1 广播维必须由输入约束下的符号 shape program 证明
   等价，否则编译失败；Concat 拼接轴使用 V2 加法表达式，Binary 输出广播维可使用 V2 Max。
-  当前完整动态 M09 仍受上游 `TosaToLinalg` 对动态 `tosa.transpose_conv2d` 的限制。
-- shape-only 动态输出由 `<model>_infer_output_shapes` 返回，调用方据此分配 output buffer。
+  完整动态 M09 已通过约束 shape、容量、溢出、重复调用和交替 shape 测试；其他模型仍须逐算子
+  验证下游动态 lowering 能力。
+- shape-only 动态输出由 `<model>_infer_output_shapes` 返回，调用方据此分配 output buffer；执行
+  入口为每个此类输出接收 `uint64_t capacity`，单位是 data buffer 元素数。
 - 数据依赖输出由执行入口返回 actual shape/rank，并接收 shape metadata capacity；调用方按
   `MAX_DIMn`/`MAX_ELEMENTS` 分配最大 data buffer。shape capacity 是元数据数组容量，不是 data
   buffer 容量。
@@ -327,10 +331,11 @@ DetectionOutput 当前未注册 naive override，使用 ncnn 内建层路径。
 
 - `squeezenet-shared-library`：完整编译 + `--verify-execution`
 - `ncnn-compile-cli`：CLI 契约测试
-- 静态基线通过 `ctest -L static-baseline` 独立执行，覆盖 27 个计算 op 的静态
+- 静态数值基线通过 `ctest -L numerical-static-baseline` 独立执行，覆盖 27 个计算 op 的静态
   lowering/数值测试、SqueezeNet、PP-LCNet、PP-OCR，以及固定 target 的导出符号、
-  manifest、header 和共享库产物大小。静态产物不得导出 `_infer_output_shapes`。
-- 动态数值测试编译为独立的 `numerical_dynamic_tests`，通过 `ctest -L dynamic`
+  manifest、header 和共享库产物大小。静态产物不得导出 `_infer_output_shapes`；原生 artifact/CLI
+  基线另使用 `static-baseline` label。
+- 动态数值测试编译为独立的 `numerical_dynamic_tests`，通过 `ctest -L numerical-dynamic`
   执行；另有动态算子测试覆盖 global/adaptive pooling、Reshape `0/-1`、Slice `-233` 和
   InnerProduct 动态 M，并在多个运行时 shape 上与 ncnn 对齐。静态与动态测试不共享 expected。
 

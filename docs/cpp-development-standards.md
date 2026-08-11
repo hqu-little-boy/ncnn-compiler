@@ -478,8 +478,11 @@ cmake --build compiler/build-sanitize --parallel
 ctest --test-dir compiler/build-sanitize --output-on-failure
 ```
 
-sanitizer 构建的 numerical fixture 仍由 CMake 测试实际调用 `ncnn-compile`；生成的模型
-`.so` 默认不带 ASan/UBSan 插桩，sanitizer 主要覆盖 harness、reference 和动态库边界桥接。
+sanitizer 构建的 numerical fixture 仍由 CMake 测试实际调用 `ncnn-compile`。fixture 检测到
+`CMAKE_CXX_FLAGS` 中的 sanitizer 后，会自动通过 `--clang-arg` 和 `--linker-arg` 为生成模型
+传递匹配的 `-fsanitize=`，因此 harness、reference、动态库边界和模型 `.so` 均受覆盖。直接
+手工调用 `ncnn-compile` 时仍须显式传递这些参数；driver 只放行对应 sanitizer 符号族和 runtime
+`DT_NEEDED`，并拒绝缺少所需 runtime 依赖的 `.so`。
 
 Sanitizer 报告、崩溃、未定义行为或测试失败均为阻断问题，不能只根据最终进程返回值
 忽略诊断。

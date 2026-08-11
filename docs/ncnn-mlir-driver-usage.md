@@ -334,10 +334,13 @@ model/
 ```
 
 可用 `--model-name` 覆盖模型名，使用 `-o/--output-dir` 覆盖输出目录，使用 `--bin` 覆盖权重
-路径。公共函数参数顺序是全部输入 tensor 参数组、全部输出数据指针、数据依赖输出元数据。
+路径。公共函数参数顺序是全部输入 tensor 参数组、全部输出数据指针、shape-only 动态输出 data
+capacity、数据依赖输出元数据。
 元素类型由 C 指针类型表达；当前 ncnn 模型数据主路径为 f32。静态 tensor 只传 data，固定 rank
 动态输入追加 shape，受限动态 rank 再追加 rank。只有静态元素数可知时才生成 `ELEMENTS`；
-数据依赖输出生成 `MAX_DIMn/MAX_ELEMENTS`。参数契约失败返回 1，成功返回 0。
+shape-only 动态输出的执行入口追加以 data 元素数计的 `uint64_t capacity`，数据依赖输出生成
+`MAX_DIMn/MAX_ELEMENTS` 并追加以 extent 数量计的 shape capacity。状态码 `0..5` 分别表示成功、
+空指针、非法 shape、约束违反、shape 算术溢出和输出容量不足。
 
 `--emit` 用于保留调试所需的中间 MLIR，可重复指定或使用逗号分隔：
 
@@ -395,7 +398,7 @@ int squeezenet_v1_1(const float *input1, float *output1);
 
 动态库导出模型执行函数；存在 shape-only 动态输出时还导出 `<model>_infer_output_shapes`。内部
 模型为 private，不生成 `_mlir_ciface_*`。输入输出由调用方持有，采用 native-endian 连续数组；
-错误码 1 表示空指针或 shape/rank/capacity 契约失败。
+错误码由生成头文件中的 `NCNN_STATUS_*` 宏定义，而不是统一返回 1。
 
 ---
 
@@ -411,5 +414,5 @@ int squeezenet_v1_1(const float *input1, float *output1);
 - Python 调试流水线：`compiler/tools/compile_ncnn_model.py`（快速验证阶段和观察中间过程）
 - 算子数值适配避坑指南：`compiler/docs/operator-numerical-validation-guide.md`
 - SqueezeNet pipeline 测试：`compiler/test/Pipelines/squeezenet-m2.mlir`
-- 解析器/数据模型：`compiler/lib/Graph/`（`ncnn_graph` 库）
+- 解析器/数据模型：`lib/Graph/`（`ncnn_graph` 库）
 - 构建配置：各目录 `CMakeLists.txt`（顶层 `compiler/CMakeLists.txt`）

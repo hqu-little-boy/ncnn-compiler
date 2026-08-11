@@ -62,6 +62,11 @@ ABI pass 和头文件生成器使用模型专用 typed 参数。固定 rank 动�
 identity/ReLU 模型。该能力不代表任意算子、多输入或多输出动态图均受支持。完整契约见
 [`dynamic-rank-c-abi.md`](../../docs/dynamic-rank-c-abi.md)。
 
+生成头文件统一定义 `NCNN_STATUS_SUCCESS` 到
+`NCNN_STATUS_OUTPUT_CAPACITY_INSUFFICIENT` 六种状态（值 `0..5`）。shape-only 动态输出的执行
+入口还接收 `uint64_t <output>_capacity`，单位是 output data buffer 的元素数；数据依赖输出的
+`uint32_t <output>_shape_capacity` 则是 shape 数组可写的 extent 数量。
+
 ## 2. 输入和输出
 
 ### 2.1 `<input .param file>`

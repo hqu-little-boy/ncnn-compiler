@@ -64,9 +64,11 @@ tensor/memref，调用方拥有 input/output buffer，函数只释放内部临�
 `ncnn-memref-to-llvm-pipeline` 将 Linalg copy 和计算统一降为 loops，再完成
 Affine/SCF/Math/Arith/MemRef/Func/CF 到 LLVM dialect 的转换，因此不会引入外部
 `memrefCopy` runtime 符号。若模块经过 `generate-ncnn-c-api`，该 pipeline 还会在 Func→LLVM
-后生成模型专用 typed wrapper：公共参数顺序固定为全部输入参数组、全部输出数据指针、数据依赖
-输出元数据。wrapper 为静态或动态 ranked tensor 构造连续 memref descriptor，并可执行 rank
-1..4 dispatch 或返回 actual shape。模型实现被改为 private；参数契约失败返回 1，成功返回 0。
+后生成模型专用 typed wrapper：公共参数顺序固定为全部输入参数组、全部输出数据指针、shape-only
+动态输出 data capacity、数据依赖输出元数据。wrapper 为静态或动态 ranked tensor 构造连续
+memref descriptor，并可执行 rank
+1..4 dispatch 或返回 actual shape。模型实现被改为 private；公共 wrapper 用状态码 `0..5`
+区分成功、空指针、非法 shape、约束违反、shape 算术溢出和输出容量不足。
 
 与 parsed-graph 的关键区别：**parsed-graph 是保留 ncnn 文件语义的线性层视图，ncnn 方言模块
 是类型化的 SSA DAG**。parsed-graph 不是下游 IR，也不提供完整的中间值 shape inference。
@@ -129,6 +131,9 @@ module {
 - **`ncnn.input`**对应 ncnn `Input` 层，形状 `[C,H,W]`。
 - fixed-rank 动态输入可以在 `ncnn.model` 上携带 `ncnn.shape_constraints`，元素为结构化
   `#ncnn.dim_constraint<input, dim, min, multiple_of>` 属性；约束只允许指向动态维。
+- 函数化后，动态输出维的 provenance 存为 `ncnn.shape_program`。简单单来源表达式使用 V1
+  opcode/operand 对；复合或多输入表达式使用 V2 前缀树，支持 Constant、InputDim、Add、
+  Multiply、FloorDiv、CeilDiv 和 Max。V2 节点已携带输入索引，不设置 `shape_source_input`。
 - **`ncnn.output`**对应 `graph.output_blob_names` 选择的导出 blob。
 - 计算层和权重都由 `ncnn.*` 算子表示，尚未建立函数 ABI。
 
@@ -209,7 +214,8 @@ SAME（`-233`/`-234`）：`out = 1 + (in-1)/stride`。
 
 显式非负 padding 的 Convolution 可传播动态 H/W；动态 nearest Interp 以运行时 H/W 乘静态
 scale；DetectionOutput 根据输入和 top-k 参数推导最大 storage，实际行数由执行时 shape carrier
-返回。动态 SAME padding 仍未实现。
+返回。动态 SAME 在对应 stride 为 1 时可直接化为零显式 padding；stride 大于 1 时仍无法在
+静态 `pad` 属性中表达运行时分配，编译器会拒绝。
 
 ---
 

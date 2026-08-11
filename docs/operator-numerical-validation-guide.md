@@ -184,8 +184,8 @@ SAME_UPPER/LOWER 与 tail；Concat 的 rank-3 正负 axis；Softmax 的 rank-3 �
 
 ## 9. 多输入、多输出 ABI 必须实际调用，不能只检查 manifest
 
-公共 C ABI 的顺序固定为全部输入 tensor 参数组、全部输出数据指针，然后是数据依赖输出的
-shape/capacity/rank。当前静态 fixture 的输入组只有数据指针；固定-rank 动态输入还会在数据
+公共 C ABI 的顺序固定为全部输入 tensor 参数组、全部输出数据指针、shape-only 动态输出的 data
+capacity，然后是数据依赖输出的 shape/capacity/rank。当前静态 fixture 的输入组只有数据指针；固定-rank 动态输入还会在数据
 指针后携带 shape，动态 rank 再携带 rank。内部 wrapper 再恢复模型
 函数原始参数顺序。Concat 和 Split 是最小的静态 ABI 回归用例：
 
@@ -211,6 +211,10 @@ ABI 上暂时能工作。
 数据依赖输出测试必须按 `MAX_ELEMENTS` 分配 data buffer，检查执行入口返回的 actual shape/rank，
 并只比较逻辑前缀。`shape_capacity` 的单位是可写 extent 数量，不是 data buffer 元素数量；这类
 输出不应调用普通 shape-only inference。
+
+shape-only 动态输出则相反：测试先调用 inference 入口得到 shape，再按元素数分配 data buffer，
+并把该元素数作为执行入口的 `uint64_t output_capacity`。少一个元素应稳定返回
+`NCNN_STATUS_OUTPUT_CAPACITY_INSUFFICIENT`。
 
 ## 10. 简单 routing op 也可能引入新的系统符号
 
@@ -248,15 +252,18 @@ Split lowering 最终可能被优化成 `memcpy`。因此它虽然没有数学�
 - GTest harness；
 - 本地 test support；
 - 通过 `add_subdirectory` 构建的 ncnn reference；
-- 动态加载和输入/输出桥接。
+- 动态加载和输入/输出桥接；
+- 由 numerical CMake fixture 自动传递 sanitizer 编译/链接参数后生成的模型 `.so`。
 
-`ncnn-compile` 可通过可重复的 `--clang-arg` 和 `--linker-arg` 传递 sanitizer 参数，但生成的
-模型 `.so` 默认并未被 sanitizer instrument。测试进程带 ASan 不等于动态库内部
-每个访问都已插桩。
+直接调用 `ncnn-compile` 时，生成模型不会仅因 driver 自身位于 sanitizer build 中就自动插桩，
+调用方仍须通过可重复的 `--clang-arg` 和 `--linker-arg` 传递 sanitizer 参数。当前 numerical
+CMake fixture 检测到 `CMAKE_CXX_FLAGS` 中的 sanitizer 后会自动补齐这些参数，因此按本文示例
+配置的 sanitizer numerical test 会同时覆盖生成模型。
 
-若要求 sanitizer 覆盖生成模型，必须验证最终 `.so` 确实包含 sanitizer
-runtime/instrumentation；严格 undefined-symbol 和 DT_NEEDED 审计也可能拒绝 sanitizer runtime，
-因此参数透传本身不等于受支持的 sanitizer 发布契约。
+若要求 sanitizer 覆盖生成模型，编译与链接都必须传递匹配的 `-fsanitize=` 选项，并验证最终
+`.so` 确实包含 instrumentation。`ncnn-compile` 只允许与所选 address/undefined sanitizer
+匹配的 `__asan_*`、`__ubsan_*`、`__sanitizer_*` 符号族及 `libasan`/`libubsan`（或对应
+Clang runtime）`DT_NEEDED`；若存在 sanitizer 符号却缺少对应 runtime 依赖，产物审计失败。
 
 ## 13. 把 ncnn 作为 submodule 接入时的 CMake 问题
 
