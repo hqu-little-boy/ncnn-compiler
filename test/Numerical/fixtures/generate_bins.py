@@ -21,6 +21,7 @@ sizes = {
     "convolution_depthwise_same_upper": (18, 0),
     "convolution_depthwise_same_lower": (18, 0),
     "inner_product": (24, 3),
+    "inner_product_dynamic_m": (12, 3),
     "inner_product_fused_relu": (24, 4),
     "deconvolution": (16, 2),
     "deconvolution_no_bias": (24, 0),

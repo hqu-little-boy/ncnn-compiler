@@ -9,10 +9,10 @@ func.func @squeeze_dynamic_axis(%input: tensor<?x?x?xf32>) {
 
 // -----
 
-func.func @slice_dynamic_axis(%input: tensor<?x?x?xf32>) {
-  // expected-error@+2 {{Slice axis must have static extent}}
+func.func @slice_invalid_size(%input: tensor<?x?x?xf32>) {
+  // expected-error@+2 {{Slice dynamic axis requires a trailing -233 remainder slice}}
   // expected-error@+1 {{'ncnn.slice' op failed to infer returned types}}
-  %0, %1 = ncnn.slice %input {axis = 0 : i64, slices = array<i64: 2, 2>} : (tensor<?x?x?xf32>) -> (tensor<2x?x?xf32>, tensor<2x?x?xf32>)
+  %0, %1 = ncnn.slice %input {axis = 0 : i64, slices = array<i64: 2, -2>} : (tensor<?x?x?xf32>) -> (tensor<2x?x?xf32>, tensor<?x?x?xf32>)
   return
 }
 

@@ -323,6 +323,160 @@ TEST(NumericalDynamicOperator, FixedSliceMatchesNcnnAcrossShapes) {
   }
 }
 
+TEST(NumericalDynamicOperator, GlobalPoolingMatchesNcnnAcrossShapes) {
+  for (const auto& [fixture, library, symbol, tolerance] :
+       {std::tuple{"pooling_global_max_dynamic",
+                   POOLING_GLOBAL_MAX_DYNAMIC_LIBRARY_PATH,
+                   "pooling_global_max_dynamic",
+                   0.0F},
+        std::tuple{"pooling_global_average_dynamic",
+                   POOLING_GLOBAL_AVERAGE_DYNAMIC_LIBRARY_PATH,
+                   "pooling_global_average_dynamic",
+                   1.0e-6F}}) {
+    CompiledModel compiled(library, symbol);
+    ASSERT_TRUE(compiled.valid()) << compiled.error();
+    for (const Case shape : kCases) {
+      const std::array<std::int64_t, 3> dimensions{
+        3, shape.height, shape.width};
+      const std::vector<float> input = make_random_input(
+        3U * shape.height * shape.width, 0x610BA1U, -2.0F, 2.0F);
+      const ReferenceModel reference(fixture_path(fixture),
+                                     NUMERICAL_EMPTY_BIN_PATH,
+                                     "data",
+                                     "output",
+                                     TensorShape(shape.width, shape.height, 3));
+      const auto expected = run_ncnn_reference(reference, input);
+      ASSERT_TRUE(expected.has_value()) << expected.error();
+      std::vector<float> actual(3);
+      ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+                kSuccess);
+      EXPECT_TRUE(compare_values(actual, *expected, tolerance));
+    }
+  }
+}
+
+TEST(NumericalDynamicOperator, AdaptivePoolingMatchesNcnnAcrossShapes) {
+  for (const auto& [fixture, library, symbol, tolerance] :
+       {std::tuple{"pooling_adaptive_max_dynamic",
+                   POOLING_ADAPTIVE_MAX_DYNAMIC_LIBRARY_PATH,
+                   "pooling_adaptive_max_dynamic",
+                   0.0F},
+        std::tuple{"pooling_adaptive_average_dynamic",
+                   POOLING_ADAPTIVE_AVERAGE_DYNAMIC_LIBRARY_PATH,
+                   "pooling_adaptive_average_dynamic",
+                   1.0e-6F}}) {
+    CompiledModel compiled(library, symbol);
+    ASSERT_TRUE(compiled.valid()) << compiled.error();
+    for (const Case shape : kCases) {
+      const std::array<std::int64_t, 3> dimensions{
+        3, shape.height, shape.width};
+      const std::vector<float> input = make_random_input(
+        3U * shape.height * shape.width, 0xADA771U, -2.0F, 2.0F);
+      const ReferenceModel reference(fixture_path(fixture),
+                                     NUMERICAL_EMPTY_BIN_PATH,
+                                     "data",
+                                     "output",
+                                     TensorShape(shape.width, shape.height, 3));
+      const auto expected = run_ncnn_reference(reference, input);
+      ASSERT_TRUE(expected.has_value()) << expected.error();
+      const std::size_t outputElements =
+        std::string_view(fixture) == "pooling_adaptive_max_dynamic"
+          ? 6U * shape.width
+          : 18U;
+      std::vector<float> actual(outputElements);
+      ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+                kSuccess);
+      EXPECT_TRUE(compare_values(actual, *expected, tolerance));
+    }
+  }
+}
+
+TEST(NumericalDynamicOperator, ReshapeSpecMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(RESHAPE_SPEC_DYNAMIC_LIBRARY_PATH,
+                         "reshape_spec_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  CompiledModel infer(RESHAPE_SPEC_DYNAMIC_LIBRARY_PATH,
+                      "reshape_spec_dynamic_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+  for (const std::int64_t rows : {3, 7}) {
+    const std::array<std::int64_t, 3> dimensions{1, rows, 6};
+    const std::array<std::int64_t, 2> expectedShape{rows * 2, 3};
+    const std::vector<float> input =
+      make_random_input(rows * 6U, 0x2E5A9EU, -2.0F, 2.0F);
+    std::array<std::int64_t, 2> inferred{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
+    EXPECT_EQ(inferred, expectedShape);
+    const ReferenceModel reference(fixture_path("reshape_spec_dynamic"),
+                                   NUMERICAL_EMPTY_BIN_PATH,
+                                   "data",
+                                   "output",
+                                   TensorShape(6, rows, 1));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    std::vector<float> actual(input.size());
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 0.0F));
+  }
+}
+
+TEST(NumericalDynamicOperator, OrderedSliceMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(SLICE_ORDERED_DYNAMIC_LIBRARY_PATH,
+                         "slice_ordered_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  CompiledModel infer(SLICE_ORDERED_DYNAMIC_LIBRARY_PATH,
+                      "slice_ordered_dynamic_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+  for (const std::int64_t rows : {8, 11}) {
+    const std::array<std::int64_t, 3> dimensions{1, rows, 4};
+    const std::vector<float> input =
+      make_random_input(rows * 4U, 0x511CEDU, -2.0F, 2.0F);
+    std::array<std::int64_t, 2> inferred{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
+    EXPECT_EQ(inferred, (std::array<std::int64_t, 2>{rows, 4}));
+    const ReferenceModel reference(fixture_path("slice_ordered_dynamic"),
+                                   NUMERICAL_EMPTY_BIN_PATH,
+                                   "data",
+                                   "output",
+                                   TensorShape(4, rows, 1));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    std::vector<float> actual(input.size());
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 0.0F));
+  }
+}
+
+TEST(NumericalDynamicOperator, InnerProductDynamicMMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(INNER_PRODUCT_DYNAMIC_M_LIBRARY_PATH,
+                         "inner_product_dynamic_m");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  CompiledModel infer(INNER_PRODUCT_DYNAMIC_M_LIBRARY_PATH,
+                      "inner_product_dynamic_m_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+  for (const std::int64_t rows : {3, 7}) {
+    const std::array<std::int64_t, 3> dimensions{1, rows, 4};
+    const std::array<std::int64_t, 2> expectedShape{rows, 3};
+    const std::vector<float> input =
+      make_random_input(rows * 4U, 0x1AAE2U, -2.0F, 2.0F);
+    std::array<std::int64_t, 2> inferred{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
+    EXPECT_EQ(inferred, expectedShape);
+    const ReferenceModel reference(fixture_path("inner_product_dynamic_m"),
+                                   INNER_PRODUCT_DYNAMIC_M_BIN_PATH,
+                                   "data",
+                                   "output",
+                                   TensorShape(4, rows, 1));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    std::vector<float> actual(rows * 3U);
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 1.0e-5F));
+  }
+}
+
 TEST(NumericalDynamicOperator, RejectsInsufficientCapacity) {
   CompiledModel compiled(RELU_DYNAMIC_LIBRARY_PATH, "relu_dynamic");
   ASSERT_TRUE(compiled.valid()) << compiled.error();

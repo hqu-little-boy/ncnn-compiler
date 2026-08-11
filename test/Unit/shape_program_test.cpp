@@ -90,4 +90,61 @@ TEST(ShapeProgramTest, ConsumesPowerOfTwoInputConstraint) {
   EXPECT_FALSE(fiveHalvesThenDouble.equivalentUnder({}, fourHalves));
 }
 
+TEST(ShapeProgramTest, EvaluatesV2MultiInputExpression) {
+  using mlir::ncnn::ShapeExpr;
+  using mlir::ncnn::ShapeExprOpcode;
+  auto expression =
+    ShapeExpr::binary(ShapeExprOpcode::Max,
+                      ShapeExpr::binary(ShapeExprOpcode::Add,
+                                        ShapeExpr::inputDimension(0, 1),
+                                        ShapeExpr::constant(3)),
+                      ShapeExpr::binary(ShapeExprOpcode::Multiply,
+                                        ShapeExpr::inputDimension(1, 0),
+                                        ShapeExpr::constant(2)));
+  llvm::SmallVector<int64_t> firstShape{8, 10};
+  llvm::SmallVector<int64_t> secondShape{7};
+  llvm::SmallVector<llvm::ArrayRef<int64_t>> shapes{firstShape, secondShape};
+  auto result = expression.evaluateChecked(shapes);
+  ASSERT_TRUE(result) << result.error();
+  EXPECT_EQ(*result, 14);
+
+  auto roundTrip = ShapeExpr::deserialize(expression.serialize());
+  ASSERT_TRUE(roundTrip) << roundTrip.error();
+  EXPECT_EQ(roundTrip->serialize(), expression.serialize());
+}
+
+TEST(ShapeProgramTest, EvaluatesV2FloorAndCeilDivision) {
+  using mlir::ncnn::ShapeExpr;
+  using mlir::ncnn::ShapeExprOpcode;
+  llvm::SmallVector<llvm::ArrayRef<int64_t>> shapes;
+  auto floor = ShapeExpr::binary(ShapeExprOpcode::FloorDivide,
+                                 ShapeExpr::constant(-7),
+                                 ShapeExpr::constant(3));
+  auto ceil = ShapeExpr::binary(ShapeExprOpcode::CeilDivide,
+                                ShapeExpr::constant(-7),
+                                ShapeExpr::constant(3));
+  EXPECT_EQ(floor.evaluateChecked(shapes), -3);
+  EXPECT_EQ(ceil.evaluateChecked(shapes), -2);
+  EXPECT_FALSE(ShapeExpr::binary(ShapeExprOpcode::FloorDivide,
+                                 ShapeExpr::constant(1),
+                                 ShapeExpr::constant(0))
+                 .evaluateChecked(shapes));
+}
+
+TEST(ShapeProgramTest, RejectsInvalidV2Expression) {
+  EXPECT_FALSE(
+    mlir::ncnn::ShapeExpr::deserialize(llvm::ArrayRef<int64_t>{2, 0, 1}));
+  EXPECT_FALSE(
+    mlir::ncnn::ShapeExpr::deserialize(llvm::ArrayRef<int64_t>{1, 0, 3, 0}));
+  EXPECT_FALSE(mlir::ncnn::ShapeExpr::deserialize(
+    llvm::ArrayRef<int64_t>{1, std::numeric_limits<int64_t>::max(), 0}));
+  llvm::SmallVector<int64_t> deep;
+  for (int index = 0; index < 300; ++index) {
+    deep.push_back(2);
+    deep.append({0, 1});
+  }
+  deep.append({0, 1});
+  EXPECT_FALSE(mlir::ncnn::ShapeExpr::deserialize(deep));
+}
+
 }  // namespace

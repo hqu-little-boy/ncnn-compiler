@@ -1,4 +1,4 @@
-// RUN: not ncnn-mlir-opt --ncnn-to-tosa-pipeline %s 2>&1 | FileCheck %s
+// RUN: ncnn-mlir-opt --ncnn-to-tosa-pipeline %s | FileCheck %s
 
 module {
   ncnn.model @network {
@@ -8,4 +8,6 @@ module {
   }
 }
 
-// CHECK: error: 'ncnn.pooling' op remains after lowering; op=ncnn.pooling, ncnn.name="adaptive_pool", ncnn.source_layer=7
+// CHECK-LABEL: func.func @network
+// CHECK: linalg.generic
+// CHECK-NOT: ncnn.pooling

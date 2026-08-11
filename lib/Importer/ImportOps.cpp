@@ -206,6 +206,24 @@ ImportResult import_reshape(ImportContext& importer,
     }
   }
   const auto input_shape = input_type.getShape();
+  llvm::SmallVector<int64_t> rawShape;
+  llvm::SmallVector<int64_t> zeroSources;
+  if (!expression) {
+    const int64_t raw[] = {*c, *d, *h, *w};
+    const int64_t source[] = {
+      0, 1, input_type.getRank() - 2, input_type.getRank() - 1};
+    for (int index = 0; index < 4; ++index) {
+      const int64_t dimension = raw[index];
+      if (dimension != -233) {
+        rawShape.push_back(dimension);
+        zeroSources.push_back(dimension == 0 ? source[index] : -1);
+      }
+    }
+    if (llvm::count(rawShape, -1) > 1) {
+      return std::unexpected(
+        make_error(context, "reshape allows at most one -1 dimension"));
+    }
+  }
   if (!expression && *w == 0) {
     *w = input_shape.back();
   }
@@ -240,6 +258,10 @@ ImportResult import_reshape(ImportContext& importer,
   auto& b = importer.builder();
   mlir::ncnn::ReshapeOp::Properties props;
   props.shape = b.getDenseI64ArrayAttr(shape);
+  if (!expression) {
+    props.shape_spec = b.getDenseI64ArrayAttr(rawShape);
+    props.shape_zero_sources = b.getDenseI64ArrayAttr(zeroSources);
+  }
   if (expression) {
     props.shape_sources = b.getDenseI64ArrayAttr(shapeSources);
     props.shape_expression = b.getStringAttr(expression->get());
@@ -255,6 +277,8 @@ ImportResult import_reshape(ImportContext& importer,
                                     input,
                                     mlir::ValueRange(inputs).drop_front(),
                                     props.shape,
+                                    props.shape_spec,
+                                    props.shape_zero_sources,
                                     props.shape_sources,
                                     props.shape_expression);
   importer.tag_source(op.getOperation(), context);
@@ -277,12 +301,12 @@ ImportResult import_binary_op(ImportContext& importer,
   auto type = get_int(context.layer.get_params(), 0, 0, "op_type");
   auto scalar = get_float(context.layer.get_params(), 2, 0.0F, "scalar");
   auto ws = get_int(context.layer.get_params(), 1, 0, "with_scalar");
-  if (!type || !scalar || !ws || (*type != 0 && *type != 2) ||
+  if (!type || !scalar || !ws || (*type != 0 && *type != 2 && *type != 4) ||
       (*ws != 0 && *ws != 1) ||
       ((*ws == 1) != (context.layer.get_inputs().size() == 1))) {
     return std::unexpected(make_error(
       context,
-      "BinaryOp supports add/multiply with scalar or two inputs only"));
+      "BinaryOp supports add/multiply/max with scalar or two inputs only"));
   }
   llvm::SmallVector<mlir::Value> inputs;
   for (const auto& n : context.layer.get_inputs()) {

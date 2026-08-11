@@ -71,6 +71,24 @@ Value createI8Zero(OpBuilder& builder, Location location) {
   return result;
 }
 
+Value createIndexConstant(OpBuilder& builder,
+                          Location location,
+                          int64_t value) {
+  return builder.create<arith::ConstantIndexOp>(location, value);
+}
+
+Value getTensorElementCount(OpBuilder& builder,
+                            Location location,
+                            Value value) {
+  auto type = cast<RankedTensorType>(value.getType());
+  Value count = createIndexConstant(builder, location, 1);
+  for (int64_t dimension = 0; dimension < type.getRank(); ++dimension) {
+    Value extent = builder.create<tensor::DimOp>(location, value, dimension);
+    count = builder.create<arith::MulIOp>(location, count, extent);
+  }
+  return count;
+}
+
 SmallVector<OpFoldResult> getDynamicSizes(OpBuilder& builder,
                                           Location location,
                                           Value source,
@@ -558,7 +576,181 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
     auto sourceOutput = cast<RankedTensorType>(operation.getOutput().getType());
     const bool global =
       operation.getMode() == static_cast<int64_t>(PoolMode::Global);
+    const bool adaptive =
+      operation.getMode() == static_cast<int64_t>(PoolMode::Adaptive);
+    const auto kernelH = static_cast<int64_t>(operation.getKernelH());
+    const auto kernelW = static_cast<int64_t>(operation.getKernelW());
     auto inputType = cast<RankedTensorType>(input.getType());
+    if ((global && !inputType.hasStaticShape()) || adaptive) {
+      Location location = operation.getLoc();
+      const bool maximum =
+        operation.getKind() == static_cast<int64_t>(PoolKind::Maximum);
+      Value inputH = rewriter.create<tensor::DimOp>(location, input, 1);
+      Value inputW = rewriter.create<tensor::DimOp>(location, input, 2);
+      Value inputC = rewriter.create<tensor::DimOp>(location, input, 3);
+      Value outputH;
+      Value outputW;
+      RankedTensorType runtimeOutputType;
+      if (global) {
+        runtimeOutputType = sourceOutput;
+      } else {
+        outputH = kernelH == -233
+                    ? inputH
+                    : createIndexConstant(rewriter, location, kernelH);
+        outputW = kernelW == -233
+                    ? inputW
+                    : createIndexConstant(rewriter, location, kernelW);
+        runtimeOutputType = getNHWCType(sourceOutput);
+      }
+
+      SmallVector<Value> dynamicSizes;
+      for (int64_t dimension = 0; dimension < runtimeOutputType.getRank();
+           ++dimension) {
+        if (!runtimeOutputType.isDynamicDim(dimension)) {
+          continue;
+        }
+        if (global) {
+          dynamicSizes.push_back(inputC);
+        } else if (dimension == 1) {
+          dynamicSizes.push_back(outputH);
+        } else if (dimension == 2) {
+          dynamicSizes.push_back(outputW);
+        } else {
+          dynamicSizes.push_back(inputC);
+        }
+      }
+      Value empty = rewriter.create<tensor::EmptyOp>(
+        location, runtimeOutputType, dynamicSizes);
+      AffineMap outputMap =
+        rewriter.getMultiDimIdentityMap(runtimeOutputType.getRank());
+      SmallVector<utils::IteratorType> iterators(runtimeOutputType.getRank(),
+                                                 utils::IteratorType::parallel);
+      auto result = rewriter.create<linalg::GenericOp>(
+        location,
+        runtimeOutputType,
+        ValueRange{},
+        ValueRange{empty},
+        ArrayRef<AffineMap>{outputMap},
+        iterators,
+        [&](OpBuilder& nested, Location bodyLocation, ValueRange) {
+          Value channel = nested.create<linalg::IndexOp>(
+            bodyLocation, runtimeOutputType.getRank() - 1);
+          Value heightBegin = createIndexConstant(nested, bodyLocation, 0);
+          Value heightEnd = inputH;
+          Value widthBegin = createIndexConstant(nested, bodyLocation, 0);
+          Value widthEnd = inputW;
+          if (adaptive) {
+            Value oh = nested.create<linalg::IndexOp>(bodyLocation, 1);
+            Value ow = nested.create<linalg::IndexOp>(bodyLocation, 2);
+            Value one = createIndexConstant(nested, bodyLocation, 1);
+            Type wideType = nested.getIntegerType(128);
+            auto widen = [&](Value value) {
+              return nested.create<arith::IndexCastUIOp>(
+                bodyLocation, wideType, value);
+            };
+            auto boundary = [&](Value position,
+                                Value inputExtent,
+                                Value outputExtent,
+                                bool ceiling) {
+              Value wideOutput = widen(outputExtent);
+              Value numerator = nested.create<arith::MulIOp>(
+                bodyLocation, widen(position), widen(inputExtent));
+              if (ceiling) {
+                Value wideOne = nested.create<arith::ConstantOp>(
+                  bodyLocation, nested.getIntegerAttr(wideType, 1));
+                numerator = nested.create<arith::AddIOp>(
+                  bodyLocation,
+                  numerator,
+                  nested.create<arith::SubIOp>(
+                    bodyLocation, wideOutput, wideOne));
+              }
+              Value quotient = nested.create<arith::DivUIOp>(
+                bodyLocation, numerator, wideOutput);
+              return nested.create<arith::IndexCastUIOp>(
+                bodyLocation, nested.getIndexType(), quotient);
+            };
+            Value nextH = nested.create<arith::AddIOp>(bodyLocation, oh, one);
+            Value nextW = nested.create<arith::AddIOp>(bodyLocation, ow, one);
+            if (kernelH == -233) {
+              heightBegin = oh;
+              heightEnd = nextH;
+            } else {
+              heightBegin = boundary(oh, inputH, outputH, false);
+              heightEnd = boundary(nextH, inputH, outputH, true);
+            }
+            if (kernelW == -233) {
+              widthBegin = ow;
+              widthEnd = nextW;
+            } else {
+              widthBegin = boundary(ow, inputW, outputW, false);
+              widthEnd = boundary(nextW, inputW, outputW, true);
+            }
+          }
+
+          Value initial = nested.create<arith::ConstantFloatOp>(
+            bodyLocation,
+            nested.getF32Type(),
+            APFloat(maximum ? -std::numeric_limits<float>::infinity() : 0.0F));
+          auto rows = nested.create<scf::ForOp>(
+            bodyLocation,
+            heightBegin,
+            heightEnd,
+            createIndexConstant(nested, bodyLocation, 1),
+            ValueRange{initial},
+            [&](OpBuilder& rowBuilder,
+                Location rowLocation,
+                Value row,
+                ValueRange rowState) {
+              auto columns = rowBuilder.create<scf::ForOp>(
+                rowLocation,
+                widthBegin,
+                widthEnd,
+                createIndexConstant(rowBuilder, rowLocation, 1),
+                rowState,
+                [&](OpBuilder& columnBuilder,
+                    Location columnLocation,
+                    Value column,
+                    ValueRange columnState) {
+                  Value batch =
+                    createIndexConstant(columnBuilder, columnLocation, 0);
+                  Value element = columnBuilder.create<tensor::ExtractOp>(
+                    columnLocation,
+                    input,
+                    ValueRange{batch, row, column, channel});
+                  Value accumulated =
+                    maximum ? Value(columnBuilder.create<arith::MaximumFOp>(
+                                columnLocation, columnState.front(), element))
+                            : Value(columnBuilder.create<arith::AddFOp>(
+                                columnLocation, columnState.front(), element));
+                  columnBuilder.create<scf::YieldOp>(columnLocation,
+                                                     accumulated);
+                });
+              rowBuilder.create<scf::YieldOp>(rowLocation,
+                                              columns.getResult(0));
+            });
+          Value pooled = rows.getResult(0);
+          if (!maximum) {
+            Value rowsCount = nested.create<arith::IndexCastOp>(
+              bodyLocation,
+              nested.getI64Type(),
+              nested.create<arith::SubIOp>(
+                bodyLocation, heightEnd, heightBegin));
+            Value columnsCount = nested.create<arith::IndexCastOp>(
+              bodyLocation,
+              nested.getI64Type(),
+              nested.create<arith::SubIOp>(bodyLocation, widthEnd, widthBegin));
+            Value count = nested.create<arith::MulIOp>(
+              bodyLocation, rowsCount, columnsCount);
+            Value countFloat = nested.create<arith::UIToFPOp>(
+              bodyLocation, nested.getF32Type(), count);
+            pooled =
+              nested.create<arith::DivFOp>(bodyLocation, pooled, countFloat);
+          }
+          nested.create<linalg::YieldOp>(bodyLocation, pooled);
+        });
+      rewriter.replaceOp(operation, result.getResults());
+      return success();
+    }
     RankedTensorType outputType =
       global ? RankedTensorType::get({1, 1, 1, inputType.getShape()[3]},
                                      inputType.getElementType())
@@ -695,7 +887,11 @@ class ConvertConcat final : public OpConversionPattern<ConcatOp> {
     auto sourceType = cast<RankedTensorType>(operation.getOutput().getType());
     auto outputType =
       sourceType.getRank() == 3 ? getNHWCType(sourceType) : sourceType;
-    uint32_t axis = convertAxis(operation.getAxis(), sourceType.getRank());
+    auto sourceAxis = static_cast<int64_t>(operation.getAxis());
+    if (sourceAxis < 0) {
+      sourceAxis += sourceType.getRank();
+    }
+    uint32_t axis = convertAxis(sourceAxis, sourceType.getRank());
     Value result = rewriter.create<tosa::ConcatOp>(
       operation.getLoc(), outputType, adaptor.getInputs(), axis);
     rewriter.replaceOp(operation, result);
@@ -739,7 +935,7 @@ class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
     Value input = adaptor.getInput();
     auto type = cast<RankedTensorType>(input.getType());
     auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
-    int64_t sourceAxis = operation.getAxis();
+    auto sourceAxis = static_cast<int64_t>(operation.getAxis());
     if (sourceAxis < 0) {
       sourceAxis += sourceType.getRank();
     }
@@ -1487,6 +1683,47 @@ class ConvertReshape final : public ConversionPattern {
         operation->getLoc(), shapeType, dimensions);
       reshaped = rewriter.create<tensor::ReshapeOp>(
         operation->getLoc(), outputType, input, shape);
+    } else if (auto shapeSpec =
+                 operation->getAttrOfType<DenseI64ArrayAttr>("shape_spec")) {
+      auto zeroSources =
+        operation->getAttrOfType<DenseI64ArrayAttr>("shape_zero_sources");
+      if (!zeroSources || shapeSpec.size() != outputType.getRank() ||
+          zeroSources.size() != shapeSpec.size()) {
+        return operation->emitOpError("has invalid shape_spec metadata");
+      }
+      SmallVector<Value> dimensions;
+      Value knownCount = createIndexConstant(rewriter, operation->getLoc(), 1);
+      int64_t inferredDimension = -1;
+      for (auto [index, specification] :
+           llvm::enumerate(shapeSpec.asArrayRef())) {
+        Value dimension;
+        if (specification == 0) {
+          dimension = rewriter.create<tensor::DimOp>(
+            operation->getLoc(), input, zeroSources.asArrayRef()[index]);
+        } else if (specification == -1) {
+          inferredDimension = index;
+          dimensions.push_back(Value{});
+          continue;
+        } else {
+          dimension =
+            createIndexConstant(rewriter, operation->getLoc(), specification);
+        }
+        dimensions.push_back(dimension);
+        knownCount = rewriter.create<arith::MulIOp>(
+          operation->getLoc(), knownCount, dimension);
+      }
+      Value inputCount =
+        getTensorElementCount(rewriter, operation->getLoc(), input);
+      if (inferredDimension >= 0) {
+        dimensions[inferredDimension] = rewriter.create<arith::DivUIOp>(
+          operation->getLoc(), inputCount, knownCount);
+      }
+      auto shapeType =
+        RankedTensorType::get({outputType.getRank()}, rewriter.getIndexType());
+      Value shape = rewriter.create<tensor::FromElementsOp>(
+        operation->getLoc(), shapeType, dimensions);
+      reshaped = rewriter.create<tensor::ReshapeOp>(
+        operation->getLoc(), outputType, input, shape);
     } else {
       if (operands.size() != 1 || !inputType.hasStaticShape() ||
           !outputType.hasStaticShape()) {
@@ -1906,32 +2143,53 @@ class ConvertInnerProduct final : public ConversionPattern {
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
     if (operands.size() < 2 || operation->getNumResults() != 1 ||
-        !isStaticF32Tensor(operation->getOperand(0).getType()) ||
+        !isRankedF32Tensor(operation->getOperand(0).getType()) ||
         !isStaticF32Tensor(operation->getOperand(1).getType()) ||
-        !isStaticF32Tensor(operation->getResult(0).getType())) {
+        !isRankedF32Tensor(operation->getResult(0).getType())) {
       return operation->emitOpError(
-        "supports static f32 input, weight, and result tensors only");
+        "supports ranked f32 input and static f32 weight/result tensors only");
     }
     auto sourceInput =
       cast<RankedTensorType>(operation->getOperand(0).getType());
     auto weightType =
       cast<RankedTensorType>(operation->getOperand(1).getType());
     auto outputType = cast<RankedTensorType>(operation->getResult(0).getType());
-    if (weightType.getRank() != 2 || outputType.getRank() != 1) {
+    const bool dynamicMatrix =
+      sourceInput.getRank() == 2 && sourceInput.isDynamicDim(0) &&
+      !sourceInput.isDynamicDim(1) && outputType.getRank() == 2;
+    if (weightType.getRank() != 2 ||
+        (!dynamicMatrix && outputType.getRank() != 1)) {
       return operation->emitOpError(
         "requires [O,K] weights and a rank-1 output");
     }
     const int64_t outputs = weightType.getShape()[0];
     const int64_t inputs = weightType.getShape()[1];
-    if (sourceInput.getNumElements() != inputs ||
-        outputType.getShape()[0] != outputs) {
+    if ((!dynamicMatrix && sourceInput.getNumElements() != inputs) ||
+        (dynamicMatrix && sourceInput.getShape()[1] != inputs) ||
+        outputType.getShape().back() != outputs) {
       return operation->emitOpError("input/weight/output sizes do not match");
     }
     Value input = restoreNCNNLayout(
       rewriter, operation->getLoc(), operands[0], sourceInput);
+    const int64_t rows = dynamicMatrix ? ShapedType::kDynamic : 1;
     auto matrixInputType =
-      RankedTensorType::get({1, 1, inputs}, sourceInput.getElementType());
-    input = reshapeValue(rewriter, operation->getLoc(), input, matrixInputType);
+      RankedTensorType::get({1, rows, inputs}, sourceInput.getElementType());
+    if (dynamicMatrix) {
+      SmallVector<ReassociationIndices> reassociation = {{0, 1}, {2}};
+      Value dynamicRows =
+        rewriter.create<tensor::DimOp>(operation->getLoc(), input, 0);
+      input = rewriter.create<tensor::ExpandShapeOp>(
+        operation->getLoc(),
+        matrixInputType,
+        input,
+        reassociation,
+        SmallVector<OpFoldResult>{rewriter.getIndexAttr(1),
+                                  dynamicRows,
+                                  rewriter.getIndexAttr(inputs)});
+    } else {
+      input =
+        reshapeValue(rewriter, operation->getLoc(), input, matrixInputType);
+    }
     auto transposedWeightType =
       RankedTensorType::get({inputs, outputs}, weightType.getElementType());
     Value transposedWeight =
@@ -1944,7 +2202,7 @@ class ConvertInnerProduct final : public ConversionPattern {
     Value matrixWeight = reshapeValue(
       rewriter, operation->getLoc(), transposedWeight, matrixWeightType);
     auto matrixOutputType =
-      RankedTensorType::get({1, 1, outputs}, outputType.getElementType());
+      RankedTensorType::get({1, rows, outputs}, outputType.getElementType());
     Value result = rewriter.create<tosa::MatMulOp>(
       operation->getLoc(), matrixOutputType, input, matrixWeight);
     const bool hasBias = getIntegerAttrOr(operation, "has_bias", 0) != 0;
@@ -1959,9 +2217,14 @@ class ConvertInnerProduct final : public ConversionPattern {
       result = rewriter.create<tosa::AddOp>(
         operation->getLoc(), matrixOutputType, result, bias);
     }
-    rewriter.replaceOp(
-      operation,
-      reshapeValue(rewriter, operation->getLoc(), result, outputType));
+    if (dynamicMatrix) {
+      SmallVector<ReassociationIndices> reassociation = {{0, 1}, {2}};
+      result = rewriter.create<tensor::CollapseShapeOp>(
+        operation->getLoc(), outputType, result, reassociation);
+    } else {
+      result = reshapeValue(rewriter, operation->getLoc(), result, outputType);
+    }
+    rewriter.replaceOp(operation, result);
     return success();
   }
 };
@@ -2040,20 +2303,24 @@ class ConvertSlice final : public OpConversionPattern<SliceOp> {
     ConversionPatternRewriter& rewriter) const final {
     auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
     auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
-    int64_t sourceAxis = operation.getAxis();
+    auto sourceAxis = static_cast<int64_t>(operation.getAxis());
     if (sourceAxis < 0) {
       sourceAxis += sourceType.getRank();
     }
     const uint32_t axis = convertAxis(sourceAxis, sourceType.getRank());
-    int64_t offset = 0;
+    int64_t staticOffset = 0;
+    Value dynamicOffset = createIndexConstant(rewriter, operation.getLoc(), 0);
+    Value axisExtent = rewriter.create<tensor::DimOp>(
+      operation.getLoc(), adaptor.getInput(), axis);
+    ArrayRef<int64_t> requestedSlices = operation.getSlices();
     SmallVector<Value> results;
-    for (Value result : operation.getResults()) {
+    for (auto [resultIndex, result] : llvm::enumerate(operation.getResults())) {
       auto sourceResultType = cast<RankedTensorType>(result.getType());
       auto resultType = sourceResultType.getRank() == 3
                           ? getNHWCType(sourceResultType)
                           : sourceResultType;
       SmallVector<int64_t> start(inputType.getRank(), 0);
-      start[axis] = offset;
+      start[axis] = staticOffset;
       if (inputType.hasStaticShape()) {
         results.push_back(rewriter.create<tosa::SliceOp>(
           operation.getLoc(),
@@ -2061,17 +2328,39 @@ class ConvertSlice final : public OpConversionPattern<SliceOp> {
           adaptor.getInput(),
           createShape(rewriter, operation.getLoc(), start),
           createShape(rewriter, operation.getLoc(), resultType.getShape())));
+        staticOffset += resultType.getDimSize(axis);
       } else {
         SmallVector<OpFoldResult> offsets(inputType.getRank(),
                                           rewriter.getIndexAttr(0));
         SmallVector<OpFoldResult> sizes;
         SmallVector<OpFoldResult> strides(inputType.getRank(),
                                           rewriter.getIndexAttr(1));
-        offsets[axis] = rewriter.getIndexAttr(offset);
+        offsets[axis] = dynamicOffset;
+        Value axisSize;
+        OpFoldResult axisSizeFolded;
+        if (requestedSlices[resultIndex] == -233) {
+          Value remaining = rewriter.create<arith::SubIOp>(
+            operation.getLoc(), axisExtent, dynamicOffset);
+          axisSize = rewriter.create<arith::DivUIOp>(
+            operation.getLoc(),
+            remaining,
+            createIndexConstant(rewriter,
+                                operation.getLoc(),
+                                requestedSlices.size() - resultIndex));
+          axisSizeFolded = resultType.isDynamicDim(axis)
+                             ? OpFoldResult(axisSize)
+                             : OpFoldResult(rewriter.getIndexAttr(
+                                 resultType.getDimSize(axis)));
+        } else {
+          axisSize = createIndexConstant(
+            rewriter, operation.getLoc(), requestedSlices[resultIndex]);
+          axisSizeFolded = rewriter.getIndexAttr(requestedSlices[resultIndex]);
+        }
         for (auto [dimension, extent] :
              llvm::enumerate(resultType.getShape())) {
           sizes.push_back(
-            ShapedType::isDynamic(extent)
+            dimension == axis ? axisSizeFolded
+            : ShapedType::isDynamic(extent)
               ? OpFoldResult(rewriter.create<tensor::DimOp>(
                   operation.getLoc(), adaptor.getInput(), dimension))
               : OpFoldResult(rewriter.getIndexAttr(extent)));
@@ -2083,8 +2372,9 @@ class ConvertSlice final : public OpConversionPattern<SliceOp> {
                                                   offsets,
                                                   sizes,
                                                   strides));
+        dynamicOffset = rewriter.create<arith::AddIOp>(
+          operation.getLoc(), dynamicOffset, axisSize);
       }
-      offset += resultType.getShape()[axis];
     }
     rewriter.replaceOp(operation, results);
     return success();
@@ -2298,9 +2588,8 @@ class ConvertNCNNToTosaPass final
       return operation.getInt8ScaleTerm() != 0;
     });
     target.addDynamicallyLegalOp<PoolingOp>([](PoolingOp operation) {
-      return operation.getMode() == static_cast<int64_t>(PoolMode::Adaptive) ||
-             (operation.getKind() == static_cast<int64_t>(PoolKind::Average) &&
-              operation.getIncludePad());
+      return operation.getKind() == static_cast<int64_t>(PoolKind::Average) &&
+             operation.getIncludePad();
     });
     target.addIllegalOp<ReluOp,
                         DetectionOutputOp,

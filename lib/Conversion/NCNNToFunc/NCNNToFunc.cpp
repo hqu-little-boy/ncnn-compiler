@@ -1,6 +1,7 @@
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 
 #include <memory>
+#include <optional>
 #include <set>
 
 #include "llvm/ADT/DenseMap.h"
@@ -21,8 +22,13 @@ namespace mlir::ncnn {
 
 namespace {
 
+struct ShapeDimension {
+  ShapeExpr expression;
+  std::optional<DimensionExpr> v1;
+};
+
 struct ShapeTransform {
-  SmallVector<DimensionExpr> dimensions;
+  SmallVector<ShapeDimension> dimensions;
 };
 
 SmallVector<ShapeConstraint> getShapeConstraints(ModelOp model) {
@@ -46,15 +52,38 @@ void appendInstruction(ShapeTransform& transform,
                        unsigned dimension,
                        ShapeOpcode opcode,
                        int64_t operand) {
-  transform.dimensions[dimension].append(opcode, operand);
+  if (transform.dimensions[dimension].v1) {
+    transform.dimensions[dimension].v1->append(opcode, operand);
+  }
+  ShapeExprOpcode expressionOpcode;
+  switch (opcode) {
+    case ShapeOpcode::Add:
+      expressionOpcode = ShapeExprOpcode::Add;
+      break;
+    case ShapeOpcode::Multiply:
+      expressionOpcode = ShapeExprOpcode::Multiply;
+      break;
+    case ShapeOpcode::Divide:
+      expressionOpcode = ShapeExprOpcode::FloorDivide;
+      break;
+    default:
+      llvm_unreachable("unsupported shape instruction");
+  }
+  transform.dimensions[dimension].expression =
+    ShapeExpr::binary(expressionOpcode,
+                      std::move(transform.dimensions[dimension].expression),
+                      ShapeExpr::constant(operand));
 }
 
 LogicalResult requireSameDimensionExpr(Operation* operation,
                                        unsigned dimension,
                                        ArrayRef<ShapeConstraint> constraints,
-                                       const DimensionExpr& lhs,
-                                       const DimensionExpr& rhs) {
-  if (lhs.equivalentUnder(constraints, rhs)) {
+                                       const ShapeDimension& lhs,
+                                       const ShapeDimension& rhs) {
+  auto lhsProgram = lhs.expression.serializeChecked();
+  auto rhsProgram = rhs.expression.serializeChecked();
+  if ((lhs.v1 && rhs.v1 && lhs.v1->equivalentUnder(constraints, *rhs.v1)) ||
+      (lhsProgram && rhsProgram && *lhsProgram == *rhsProgram)) {
     return success();
   }
   return operation->emitOpError()
@@ -129,11 +158,12 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
     SmallVector<ShapeConstraint> shapeConstraints = getShapeConstraints(model);
     for (auto [inputIndex, input] : llvm::enumerate(inputs)) {
       auto type = cast<RankedTensorType>(input.getOutput().getType());
-      SmallVector<DimensionExpr> dimensions;
+      SmallVector<ShapeDimension> dimensions;
       dimensions.reserve(type.getRank());
       for (int64_t dimension = 0; dimension < type.getRank(); ++dimension) {
-        dimensions.emplace_back(static_cast<unsigned>(inputIndex),
-                                static_cast<unsigned>(dimension));
+        DimensionExpr v1(static_cast<unsigned>(inputIndex),
+                         static_cast<unsigned>(dimension));
+        dimensions.push_back({.expression = v1.toV2(), .v1 = std::move(v1)});
       }
       shapeTransforms[input.getOutput()] = {.dimensions =
                                               std::move(dimensions)};
@@ -170,25 +200,97 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
         if (auto reshape = dyn_cast<ReshapeOp>(operation);
             reshape && reshape.getShapeSources()) {
           ArrayRef<int64_t> sources = *reshape.getShapeSources();
-          int64_t sourceOperand = sources.front();
-          bool identity = sources.size() ==
-                          static_cast<std::size_t>(resultType.getRank()) * 2;
-          for (int64_t dimension = 0;
-               identity && dimension < resultType.getRank();
-               ++dimension) {
-            identity = sources[dimension * 2] == sourceOperand &&
-                       sources[(dimension * 2) + 1] == dimension;
-          }
-          if (identity && sourceOperand >= 0 &&
-              static_cast<unsigned>(sourceOperand) <
-                operation.getNumOperands()) {
+          SmallVector<ShapeDimension> dimensions;
+          dimensions.reserve(resultType.getRank());
+          for (std::size_t index = 0; index < sources.size(); index += 2) {
+            const int64_t sourceOperand = sources[index];
+            const int64_t sourceDimension = sources[index + 1];
+            if (sourceOperand < 0 || sourceDimension < 0 ||
+                static_cast<unsigned>(sourceOperand) >=
+                  operation.getNumOperands()) {
+              dimensions.clear();
+              break;
+            }
             auto reshapeSource =
               shapeTransforms.find(operation.getOperand(sourceOperand));
-            if (reshapeSource != shapeTransforms.end()) {
-              ShapeTransform reshapeTransform = reshapeSource->second;
-              shapeTransforms[result] = std::move(reshapeTransform);
+            if (reshapeSource == shapeTransforms.end() ||
+                static_cast<unsigned>(sourceDimension) >=
+                  reshapeSource->second.dimensions.size()) {
+              dimensions.clear();
+              break;
+            }
+            dimensions.push_back(
+              reshapeSource->second.dimensions[sourceDimension]);
+          }
+          if (dimensions.size() ==
+              static_cast<std::size_t>(resultType.getRank())) {
+            shapeTransforms[result] = {.dimensions = std::move(dimensions)};
+          }
+          continue;
+        }
+        if (auto reshape = dyn_cast<ReshapeOp>(operation)) {
+          auto shapeSpec =
+            reshape->getAttrOfType<DenseI64ArrayAttr>("shape_spec");
+          auto zeroSourceAttr =
+            reshape->getAttrOfType<DenseI64ArrayAttr>("shape_zero_sources");
+          ArrayRef<int64_t> shape =
+            shapeSpec ? shapeSpec.asArrayRef() : reshape.getShape();
+          ArrayRef<int64_t> zeroSources =
+            zeroSourceAttr ? zeroSourceAttr.asArrayRef() : ArrayRef<int64_t>();
+          if (shape.size() != static_cast<std::size_t>(resultType.getRank())) {
+            continue;
+          }
+          auto reshapeSource = shapeTransforms.find(reshape.getInput());
+          if (reshapeSource == shapeTransforms.end()) {
+            continue;
+          }
+          SmallVector<ShapeDimension> dimensions;
+          dimensions.reserve(resultType.getRank());
+          std::optional<unsigned> inferredDimension;
+          for (auto [dimension, extent] : llvm::enumerate(shape)) {
+            if (extent == 0 && dimension < zeroSources.size() &&
+                zeroSources[dimension] >= 0 &&
+                static_cast<std::size_t>(zeroSources[dimension]) <
+                  reshapeSource->second.dimensions.size()) {
+              dimensions.push_back(
+                reshapeSource->second.dimensions[zeroSources[dimension]]);
+            } else if (extent == -1) {
+              inferredDimension = dimension;
+              dimensions.push_back(
+                {.expression = ShapeExpr::constant(1), .v1 = std::nullopt});
+            } else if (extent > 0) {
+              dimensions.push_back({.expression = ShapeExpr::constant(extent),
+                                    .v1 = std::nullopt});
+            } else {
+              dimensions.clear();
+              break;
             }
           }
+          if (dimensions.empty()) {
+            continue;
+          }
+          if (inferredDimension) {
+            ShapeExpr elements = ShapeExpr::constant(1);
+            for (const ShapeDimension& dimension :
+                 reshapeSource->second.dimensions) {
+              elements = ShapeExpr::binary(ShapeExprOpcode::Multiply,
+                                           std::move(elements),
+                                           dimension.expression);
+            }
+            ShapeExpr knownElements = ShapeExpr::constant(1);
+            for (auto [dimension, expression] : llvm::enumerate(dimensions)) {
+              if (dimension != *inferredDimension) {
+                knownElements = ShapeExpr::binary(ShapeExprOpcode::Multiply,
+                                                  std::move(knownElements),
+                                                  expression.expression);
+              }
+            }
+            dimensions[*inferredDimension].expression =
+              ShapeExpr::binary(ShapeExprOpcode::FloorDivide,
+                                std::move(elements),
+                                std::move(knownElements));
+          }
+          shapeTransforms[result] = {.dimensions = std::move(dimensions)};
           continue;
         }
         source = shapeTransforms.find(operation.getOperand(0));
@@ -200,7 +302,7 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           continue;
         }
         if (auto permute = dyn_cast<PermuteOp>(operation)) {
-          SmallVector<DimensionExpr> dimensions;
+          SmallVector<ShapeDimension> dimensions;
           dimensions.reserve(resultType.getRank());
           for (int64_t axis : permute.getPermutation()) {
             dimensions.push_back(transform.dimensions[axis]);
@@ -213,13 +315,15 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           for (int64_t axis : expand.getAxes()) {
             axes.insert(axis < 0 ? axis + resultType.getRank() : axis);
           }
-          SmallVector<DimensionExpr> dimensions;
+          SmallVector<ShapeDimension> dimensions;
           dimensions.reserve(resultType.getRank());
           unsigned inputDimension = 0;
           for (int64_t axis = 0; axis < resultType.getRank(); ++axis) {
-            dimensions.push_back(axes.contains(axis)
-                                   ? transform.dimensions.front()
-                                   : transform.dimensions[inputDimension++]);
+            dimensions.push_back(
+              axes.contains(axis)
+                ? ShapeDimension{.expression = ShapeExpr::constant(1),
+                                 .v1 = transform.dimensions.front().v1}
+                : transform.dimensions[inputDimension++]);
           }
           shapeTransforms[result] = {.dimensions = std::move(dimensions)};
           continue;
@@ -229,7 +333,7 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           for (int64_t axis : squeeze.getAxes()) {
             axes.insert(axis < 0 ? axis + inputType.getRank() : axis);
           }
-          SmallVector<DimensionExpr> dimensions;
+          SmallVector<ShapeDimension> dimensions;
           for (int64_t axis = 0; axis < inputType.getRank(); ++axis) {
             if (!axes.contains(axis)) {
               dimensions.push_back(transform.dimensions[axis]);
@@ -252,12 +356,13 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
               axes.insert(axis < 0 ? axis + inputType.getRank() : axis);
             }
           }
-          SmallVector<DimensionExpr> dimensions;
+          SmallVector<ShapeDimension> dimensions;
           for (int64_t axis = 0; axis < inputType.getRank(); ++axis) {
             if (!axes.contains(axis)) {
               dimensions.push_back(transform.dimensions[axis]);
             } else if (reduction.getKeepdims()) {
-              dimensions.push_back(transform.dimensions.front());
+              dimensions.push_back({.expression = ShapeExpr::constant(1),
+                                    .v1 = transform.dimensions.front().v1});
             }
           }
           if (dimensions.empty()) {
@@ -268,7 +373,19 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
         }
         if (isa<GemmOp>(operation)) {
           shapeTransforms[result] = {
-            .dimensions = {transform.dimensions[0], transform.dimensions[0]}};
+            .dimensions = {
+              transform.dimensions[0],
+              {.expression = ShapeExpr::constant(resultType.getShape()[1]),
+               .v1 = transform.dimensions[0].v1}}};
+          continue;
+        }
+        if (isa<InnerProductOp>(operation) && inputType.getRank() == 2 &&
+            resultType.getRank() == 2) {
+          shapeTransforms[result] = {
+            .dimensions = {
+              transform.dimensions[0],
+              {.expression = ShapeExpr::constant(resultType.getShape()[1]),
+               .v1 = transform.dimensions[0].v1}}};
           continue;
         }
         if (auto slice = dyn_cast<SliceOp>(operation)) {
@@ -276,12 +393,62 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           if (axis < 0) {
             axis += inputType.getRank();
           }
-          SmallVector<DimensionExpr> dimensions = transform.dimensions;
-          dimensions[axis] = transform.dimensions.front();
-          shapeTransforms[result] = {.dimensions = std::move(dimensions)};
+          ShapeExpr consumed = ShapeExpr::constant(0);
+          for (auto [resultIndex, sliceResult] :
+               llvm::enumerate(slice.getResults())) {
+            ShapeExpr size;
+            const int64_t requested = slice.getSlices()[resultIndex];
+            if (requested == -233) {
+              size = ShapeExpr::binary(
+                ShapeExprOpcode::FloorDivide,
+                ShapeExpr::binary(ShapeExprOpcode::Add,
+                                  transform.dimensions[axis].expression,
+                                  ShapeExpr::binary(ShapeExprOpcode::Multiply,
+                                                    consumed,
+                                                    ShapeExpr::constant(-1))),
+                ShapeExpr::constant(operation.getNumResults() - resultIndex));
+            } else {
+              size = ShapeExpr::constant(requested);
+            }
+            SmallVector<ShapeDimension> dimensions = transform.dimensions;
+            dimensions[axis] = {.expression = size,
+                                .v1 = requested == -233
+                                        ? std::nullopt
+                                        : transform.dimensions.front().v1};
+            shapeTransforms[sliceResult] = {.dimensions =
+                                              std::move(dimensions)};
+            consumed = ShapeExpr::binary(
+              ShapeExprOpcode::Add, std::move(consumed), std::move(size));
+          }
           continue;
         }
-        if (inputType.getRank() != 3 || resultType.getRank() != 3) {
+        if (auto pooling = dyn_cast<PoolingOp>(operation)) {
+          if (pooling.getMode() == static_cast<int64_t>(PoolMode::Global)) {
+            shapeTransforms[result] = {
+              .dimensions = {transform.dimensions.front()}};
+            continue;
+          }
+          if (pooling.getMode() == static_cast<int64_t>(PoolMode::Adaptive)) {
+            if (resultType.getRank() != 3) {
+              continue;
+            }
+            const int64_t adaptiveExtents[] = {
+              static_cast<int64_t>(pooling.getKernelH()),
+              static_cast<int64_t>(pooling.getKernelW())};
+            for (auto [dimension, extent] :
+                 llvm::zip_equal(ArrayRef<unsigned>{1, 2}, adaptiveExtents)) {
+              if (extent != -233) {
+                transform.dimensions[dimension] = {
+                  .expression = ShapeExpr::constant(extent),
+                  .v1 = std::nullopt};
+              }
+            }
+            shapeTransforms[result] = std::move(transform);
+            continue;
+          }
+        }
+        if ((inputType.getRank() != 3 || resultType.getRank() != 3) &&
+            !isa<ConcatOp, BinaryOp>(operation)) {
           continue;
         }
         if (auto padding = dyn_cast<PaddingOp>(operation)) {
@@ -415,12 +582,9 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
                               deconvolution.getPadRight());
           shapeTransforms[result] = std::move(transform);
         } else if (auto concat = dyn_cast<ConcatOp>(operation)) {
-          if (concat.getAxis() != 0) {
-            if (!resultType.hasStaticShape()) {
-              return concat.emitOpError(
-                "dynamic symbolic shape proof only supports channel concat");
-            }
-            continue;
+          int64_t axis = concat.getAxis();
+          if (axis < 0) {
+            axis += resultType.getRank();
           }
           for (Value input : concat.getInputs().drop_front()) {
             auto candidate = shapeTransforms.find(input);
@@ -428,7 +592,19 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
               return concat.emitOpError(
                 "cannot prove dynamic concat input shapes equal");
             }
-            for (unsigned dimension : {1U, 2U}) {
+            for (int64_t dimension = 0; dimension < resultType.getRank();
+                 ++dimension) {
+              if (dimension == axis) {
+                if (ShapedType::isDynamic(resultType.getShape()[dimension])) {
+                  transform.dimensions[dimension].expression =
+                    ShapeExpr::binary(
+                      ShapeExprOpcode::Add,
+                      std::move(transform.dimensions[dimension].expression),
+                      candidate->second.dimensions[dimension].expression);
+                  transform.dimensions[dimension].v1 = std::nullopt;
+                }
+                continue;
+              }
               if (!ShapedType::isDynamic(resultType.getShape()[dimension])) {
                 continue;
               }
@@ -460,20 +636,20 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
             cast<RankedTensorType>(binary.getInputs()[0].getType());
           auto secondType =
             cast<RankedTensorType>(binary.getInputs()[1].getType());
-          for (unsigned dimension = 0; dimension < 3; ++dimension) {
+          for (unsigned dimension = 0; dimension < resultType.getRank();
+               ++dimension) {
             if (firstType.getShape()[dimension] == 1) {
               transform.dimensions[dimension] =
                 candidate->second.dimensions[dimension];
-            } else if (secondType.getShape()[dimension] != 1 &&
-                       ShapedType::isDynamic(
-                         resultType.getShape()[dimension]) &&
-                       failed(requireSameDimensionExpr(
-                         binary,
-                         dimension,
-                         shapeConstraints,
-                         transform.dimensions[dimension],
-                         candidate->second.dimensions[dimension]))) {
-              return failure();
+            } else if (secondType.getShape()[dimension] != 1) {
+              if (failed(requireSameDimensionExpr(
+                    binary,
+                    dimension,
+                    shapeConstraints,
+                    transform.dimensions[dimension],
+                    candidate->second.dimensions[dimension]))) {
+                return failure();
+              }
             }
           }
           shapeTransforms[result] = std::move(transform);
@@ -490,29 +666,49 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
       }
       auto transform = shapeTransforms.find(output.getInput());
       if (transform != shapeTransforms.end()) {
-        function.setResultAttr(
-          functionResultIndex,
-          "ncnn.shape_source_input",
-          rewriter.getI32IntegerAttr(static_cast<int32_t>(
-            transform->second.dimensions.front().getInputIndex())));
+        const auto sourceInput =
+          transform->second.dimensions.front().v1
+            ? std::optional<unsigned>(
+                transform->second.dimensions.front().v1->getInputIndex())
+            : std::nullopt;
+        const bool v2 =
+          !sourceInput ||
+          llvm::any_of(transform->second.dimensions,
+                       [&](const ShapeDimension& dimension) {
+                         return !dimension.v1 ||
+                                dimension.v1->getInputIndex() != *sourceInput;
+                       });
         SmallVector<Attribute> programs;
         for (auto [dimensionIndex, dimension] :
              llvm::enumerate(transform->second.dimensions)) {
-          if (dimension.getInputIndex() !=
-              transform->second.dimensions.front().getInputIndex()) {
-            return model.emitOpError(
-              "output shape dimensions require multiple source inputs");
+          if (v2) {
+            auto program = dimension.expression.serializeChecked();
+            if (!program) {
+              return output.emitOpError() << program.error();
+            }
+            programs.push_back(rewriter.getDenseI64ArrayAttr(*program));
+            continue;
           }
-          DimensionExpr identity(dimension.getInputIndex(),
-                                 dimension.getInputDimension());
+          const DimensionExpr& v1 = *dimension.v1;
+          DimensionExpr identity(v1.getInputIndex(), v1.getInputDimension());
           programs.push_back(rewriter.getDenseI64ArrayAttr(
-            dimension.equivalentUnder(shapeConstraints, identity)
+            v1.equivalentUnder(shapeConstraints, identity)
               ? identity.serialize(dimensionIndex)
-              : dimension.serialize(dimensionIndex)));
+              : v1.serialize(dimensionIndex)));
         }
         function.setResultAttr(functionResultIndex,
                                "ncnn.shape_program",
                                rewriter.getArrayAttr(programs));
+        if (v2) {
+          function.setResultAttr(functionResultIndex,
+                                 "ncnn.shape_program_version",
+                                 rewriter.getI32IntegerAttr(2));
+        } else {
+          function.setResultAttr(
+            functionResultIndex,
+            "ncnn.shape_source_input",
+            rewriter.getI32IntegerAttr(static_cast<int32_t>(*sourceInput)));
+        }
       }
       functionResultIndex +=
         output.getInput().getDefiningOp<DetectionOutputOp>() ? 2 : 1;

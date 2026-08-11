@@ -12,6 +12,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "ncnn-mlir/Support/ShapeMode.hpp"
+#include "ncnn-mlir/Support/ShapeProgram.hpp"
 
 namespace mlir::ncnn {
 
@@ -74,6 +75,48 @@ LogicalResult verifyShapeProgram(func::FuncOp function,
                                  ArrayRef<unsigned> inputIndices) {
   auto source = function.getArgAttrOfType<IntegerAttr>(
     outputIndex, "ncnn.shape_source_input");
+  auto version = function.getArgAttrOfType<IntegerAttr>(
+    outputIndex, "ncnn.shape_program_version");
+  if (version && version.getInt() != 2) {
+    return function.emitOpError()
+           << "dynamic output " << outputIndex
+           << " has an unsupported shape program version";
+  }
+  if (version && version.getInt() == 2) {
+    if (source) {
+      return function.emitOpError()
+             << "dynamic output " << outputIndex
+             << " V2 program must not have a shape source";
+    }
+    auto program =
+      function.getArgAttrOfType<ArrayAttr>(outputIndex, "ncnn.shape_program");
+    if (!program ||
+        program.size() != static_cast<std::size_t>(outputType.getRank())) {
+      return function.emitOpError() << "dynamic output " << outputIndex
+                                    << " has no complete V2 shape program";
+    }
+    SmallVector<unsigned> inputRanks;
+    for (unsigned inputIndex : inputIndices) {
+      auto type = dyn_cast<MemRefType>(function.getArgumentTypes()[inputIndex]);
+      if (!type) {
+        return function.emitOpError("shape input must be a ranked memref");
+      }
+      inputRanks.push_back(type.getRank());
+    }
+    for (Attribute dimension : program) {
+      auto instructions = dyn_cast<DenseI64ArrayAttr>(dimension);
+      if (!instructions) {
+        return function.emitOpError() << "dynamic output " << outputIndex
+                                      << " has an invalid V2 shape program";
+      }
+      auto expression = ShapeExpr::deserialize(instructions.asArrayRef());
+      if (!expression || !expression->validateInputRanks(inputRanks)) {
+        return function.emitOpError() << "dynamic output " << outputIndex
+                                      << " has an invalid V2 shape program";
+      }
+    }
+    return success();
+  }
   if (!source || source.getInt() < 0 ||
       static_cast<std::size_t>(source.getInt()) >= inputIndices.size()) {
     return function.emitOpError() << "dynamic output " << outputIndex
@@ -138,7 +181,8 @@ LogicalResult verifyDataDependentOutput(func::FuncOp function,
   const uint64_t validMask = (UINT64_C(1) << outputType.getRank()) - 1;
   if (!outputType.hasStaticShape() || (mask & ~validMask) != 0 ||
       function.getArgAttr(outputIndex, "ncnn.shape_source_input") ||
-      function.getArgAttr(outputIndex, "ncnn.shape_program")) {
+      function.getArgAttr(outputIndex, "ncnn.shape_program") ||
+      function.getArgAttr(outputIndex, "ncnn.shape_program_version")) {
     return function.emitOpError()
            << "output " << outputIndex
            << " has an invalid data-dependent shape contract";

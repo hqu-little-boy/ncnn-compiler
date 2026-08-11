@@ -1,0 +1,9 @@
+7767517
+7 9
+Input input 0 1 data 0=0 1=0 2=0
+Squeeze squeeze 1 1 data matrix -23303=1,0
+Slice slice_ordered_dynamic 1 3 matrix first middle last -23300=3,-233,2,-233 1=0
+Dropout scale_first 1 1 first first_scaled 0=0.5
+Dropout scale_middle 1 1 middle middle_scaled 0=-1.25
+Dropout scale_last 1 1 last last_scaled 0=2.0
+Concat join 3 1 first_scaled middle_scaled last_scaled output 0=0

@@ -66,3 +66,12 @@ func.func @ppocr_rec_ops(%arg0: tensor<2x1x3xf32>) -> tensor<3x4xf32> {
   %output = ncnn.gemm %transposed, %weight, %gemm_bias {alpha = 1.000000e+00 : f32, beta = 1.000000e+00 : f32} : (tensor<3x2xf32>, tensor<4x2xf32>, tensor<4xf32>) -> tensor<3x4xf32>
   return %output : tensor<3x4xf32>
 }
+
+// CHECK-LABEL: func.func @static_inner_product_flattens
+func.func @static_inner_product_flattens(%arg0: tensor<2x4xf32>) -> tensor<3xf32> {
+  %weight = arith.constant dense<0.000000e+00> : tensor<3x8xf32>
+  // CHECK: ncnn.inner_product
+  // CHECK-SAME: (tensor<2x4xf32>, tensor<3x8xf32>) -> tensor<3xf32>
+  %output = ncnn.inner_product %arg0, %weight {has_bias = false} : (tensor<2x4xf32>, tensor<3x8xf32>) -> tensor<3xf32>
+  return %output : tensor<3xf32>
+}

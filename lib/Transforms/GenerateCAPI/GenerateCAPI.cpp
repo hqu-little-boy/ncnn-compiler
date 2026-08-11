@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstdint>
 #include <format>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -78,6 +79,8 @@ constexpr StringLiteral kOutputShapeSourcesAttr =
   "ncnn.c_api.output_shape_sources";
 constexpr StringLiteral kOutputShapeProgramsAttr =
   "ncnn.c_api.output_shape_programs";
+constexpr StringLiteral kOutputShapeVersionsAttr =
+  "ncnn.c_api.output_shape_program_versions";
 constexpr StringLiteral kShapeCarrierIndicesAttr =
   "ncnn.c_api.shape_carrier_indices";
 constexpr StringLiteral kInputShapeConstraintsAttr =
@@ -301,6 +304,7 @@ class GenerateCAPIPass final
       return function.emitOpError("requires at least one input and one output");
     }
     SmallVector<int32_t> outputShapeSources;
+    SmallVector<int32_t> outputShapeVersions;
     SmallVector<Attribute> outputShapePrograms;
     auto shapeConstraints =
       function->getAttrOfType<ArrayAttr>("ncnn.shape_constraints");
@@ -325,7 +329,27 @@ class GenerateCAPIPass final
     }
     for (const ArgumentInfo& output : outputs) {
       if (output.shapeCarrier) {
+        if (output.functionIndex == 0 || !output.type.hasStaticShape() ||
+            output.type.getRank() != 1 ||
+            !output.type.getElementType().isInteger(64)) {
+          return function.emitOpError() << "argument " << output.functionIndex
+                                        << " has an invalid shape carrier type";
+        }
+        const unsigned dataIndex = output.functionIndex - 1;
+        auto dataType =
+          dyn_cast<MemRefType>(function.getArgumentTypes()[dataIndex]);
+        auto dataMask = function.getArgAttrOfType<IntegerAttr>(
+          dataIndex, "ncnn.data_dependent_dim_mask");
+        if (!function.getArgAttr(dataIndex, "bufferize.result") ||
+            function.getArgAttr(dataIndex, "ncnn.shape_carrier") || !dataType ||
+            !dataMask || dataMask.getInt() == 0 ||
+            output.type.getShape()[0] != dataType.getRank()) {
+          return function.emitOpError()
+                 << "argument " << output.functionIndex
+                 << " is not paired with a data-dependent output";
+        }
         outputShapeSources.push_back(-1);
+        outputShapeVersions.push_back(0);
         Builder builder(function.getContext());
         outputShapePrograms.push_back(builder.getArrayAttr({}));
         continue;
@@ -361,22 +385,48 @@ class GenerateCAPIPass final
             output.functionIndex, "ncnn.shape_source_input")) {
         source = static_cast<int32_t>(attribute.getInt());
       }
-      if (!output.type.hasStaticShape() &&
+      outputShapeSources.push_back(source);
+      auto version = function.getArgAttrOfType<IntegerAttr>(
+        output.functionIndex, "ncnn.shape_program_version");
+      if (version && version.getInt() != 2) {
+        return function.emitOpError("has an unsupported shape program version");
+      }
+      const bool v2 = version && version.getInt() == 2;
+      if (!output.type.hasStaticShape() && !v2 &&
           (source < 0 || static_cast<std::size_t>(source) >= inputs.size() ||
            inputs[source].type.hasStaticShape())) {
         return function.emitOpError()
                << "output " << output.functionIndex
                << " has dynamic extents without a valid input shape source";
       }
-      outputShapeSources.push_back(source);
+      if (!output.type.hasStaticShape() && v2 && source >= 0) {
+        return function.emitOpError()
+               << "output " << output.functionIndex
+               << " V2 program must not have a shape source";
+      }
+      outputShapeVersions.push_back(
+        version ? static_cast<int32_t>(version.getInt()) : 1);
       auto program = function.getArgAttrOfType<ArrayAttr>(output.functionIndex,
                                                           "ncnn.shape_program");
+      SmallVector<unsigned> inputRanks;
+      for (const ArgumentInfo& input : inputs) {
+        inputRanks.push_back(input.type.getRank());
+      }
       if (!output.type.hasStaticShape() &&
           (!program ||
            program.size() != static_cast<std::size_t>(output.type.getRank()) ||
            llvm::any_of(program, [&](Attribute dimension) {
              auto instructions = dyn_cast<DenseI64ArrayAttr>(dimension);
-             if (!instructions || instructions.size() % 2 != 0) {
+             if (!instructions) {
+               return true;
+             }
+             if (v2) {
+               auto expression =
+                 ShapeExpr::deserialize(instructions.asArrayRef());
+               return !expression ||
+                      !expression->validateInputRanks(inputRanks);
+             }
+             if (instructions.size() % 2 != 0) {
                return true;
              }
              ArrayRef<int64_t> values = instructions.asArrayRef();
@@ -475,6 +525,9 @@ class GenerateCAPIPass final
         if (outputShapeSources[outputInfoIndex] >= 0) {
           argument["shape_source_input"] = outputShapeSources[outputInfoIndex];
         }
+        if (outputShapeVersions[outputInfoIndex] == 2) {
+          argument["shape_program_version"] = 2;
+        }
         if (!info.type.hasStaticShape() && !dataDependent) {
           auto programs =
             dyn_cast<ArrayAttr>(outputShapePrograms[outputInfoIndex]);
@@ -534,6 +587,8 @@ class GenerateCAPIPass final
                             builder.getDenseI32ArrayAttr(outputIndices));
     getOperation()->setAttr(kOutputShapeSourcesAttr,
                             builder.getDenseI32ArrayAttr(outputShapeSources));
+    getOperation()->setAttr(kOutputShapeVersionsAttr,
+                            builder.getDenseI32ArrayAttr(outputShapeVersions));
     getOperation()->setAttr(kOutputShapeProgramsAttr,
                             builder.getArrayAttr(outputShapePrograms));
     getOperation()->setAttr(kShapeCarrierIndicesAttr,
@@ -621,16 +676,20 @@ class FinalizeCAPIPass final
       getOperation()->getAttrOfType<DenseI32ArrayAttr>(kOutputIndicesAttr);
     auto outputShapeSources =
       getOperation()->getAttrOfType<DenseI32ArrayAttr>(kOutputShapeSourcesAttr);
+    auto outputShapeVersions = getOperation()->getAttrOfType<DenseI32ArrayAttr>(
+      kOutputShapeVersionsAttr);
     auto outputShapePrograms =
       getOperation()->getAttrOfType<ArrayAttr>(kOutputShapeProgramsAttr);
     auto shapeCarrierIndices = getOperation()->getAttrOfType<DenseI32ArrayAttr>(
       kShapeCarrierIndicesAttr);
     auto inputShapeConstraints =
       getOperation()->getAttrOfType<ArrayAttr>(kInputShapeConstraintsAttr);
-    auto internal = getOperation().lookupSymbol<LLVM::LLVMFuncOp>(internalName);
-    if (!internal || !argumentTypeAttrs || !outputIndices ||
-        !outputShapeSources || !outputShapePrograms || !shapeCarrierIndices ||
-        !inputShapeConstraints) {
+    auto internal =
+      internalName ? getOperation().lookupSymbol<LLVM::LLVMFuncOp>(internalName)
+                   : LLVM::LLVMFuncOp();
+    if (!internalName || !internal || !argumentTypeAttrs || !outputIndices ||
+        !outputShapeSources || !outputShapeVersions || !outputShapePrograms ||
+        !shapeCarrierIndices || !inputShapeConstraints) {
       getOperation().emitError("has incomplete prepared ncnn C ABI metadata");
       signalPassFailure();
       return;
@@ -638,34 +697,150 @@ class FinalizeCAPIPass final
 
     SmallVector<MemRefType> argumentTypes;
     for (Attribute attribute : argumentTypeAttrs) {
-      argumentTypes.push_back(
-        cast<MemRefType>(cast<TypeAttr>(attribute).getValue()));
+      auto typeAttr = dyn_cast<TypeAttr>(attribute);
+      auto type =
+        typeAttr ? dyn_cast<MemRefType>(typeAttr.getValue()) : MemRefType();
+      if (!type) {
+        getOperation().emitError("has invalid prepared argument type metadata");
+        signalPassFailure();
+        return;
+      }
+      argumentTypes.push_back(type);
     }
     llvm::SmallDenseSet<unsigned> outputs;
     for (int32_t index : outputIndices.asArrayRef()) {
-      outputs.insert(static_cast<unsigned>(index));
+      if (index < 0 || std::cmp_greater_equal(index, argumentTypes.size()) ||
+          !outputs.insert(static_cast<unsigned>(index)).second) {
+        getOperation().emitError("has invalid prepared output index metadata");
+        signalPassFailure();
+        return;
+      }
     }
     llvm::SmallDenseSet<unsigned> shapeCarriers;
     for (int32_t index : shapeCarrierIndices.asArrayRef()) {
-      shapeCarriers.insert(static_cast<unsigned>(index));
+      if (index < 0 || std::cmp_greater_equal(index, argumentTypes.size()) ||
+          !outputs.contains(static_cast<unsigned>(index)) ||
+          !shapeCarriers.insert(static_cast<unsigned>(index)).second) {
+        getOperation().emitError(
+          "has invalid prepared shape carrier index metadata");
+        signalPassFailure();
+        return;
+      }
     }
     SmallVector<int32_t> shapeSources(outputShapeSources.asArrayRef());
+    SmallVector<int32_t> shapeVersions(outputShapeVersions.asArrayRef());
     SmallVector<unsigned> inputIndices;
     SmallVector<unsigned> outputArgumentIndices;
     for (unsigned index = 0; index < argumentTypes.size(); ++index) {
       (outputs.contains(index) ? outputArgumentIndices : inputIndices)
         .push_back(index);
     }
-    SmallVector<SmallVector<DimensionExpr>> shapePrograms;
+    if (shapeSources.size() != outputArgumentIndices.size() ||
+        shapeVersions.size() != outputArgumentIndices.size() ||
+        outputShapePrograms.size() != outputArgumentIndices.size()) {
+      getOperation().emitError("has inconsistent prepared output metadata");
+      signalPassFailure();
+      return;
+    }
+    SmallVector<unsigned> inputRanks;
+    llvm::transform(
+      inputIndices, std::back_inserter(inputRanks), [&](unsigned index) {
+        return argumentTypes[index].getRank();
+      });
+    SmallVector<SmallVector<ShapeExpr>> shapePrograms;
     for (auto [outputIndex, output] : llvm::enumerate(outputShapePrograms)) {
-      SmallVector<DimensionExpr> dimensions;
+      auto dimensions = dyn_cast<ArrayAttr>(output);
+      const MemRefType outputType =
+        argumentTypes[outputArgumentIndices[outputIndex]];
+      const bool shapeCarrier =
+        shapeCarriers.contains(outputArgumentIndices[outputIndex]);
+      if (!dimensions ||
+          (!shapeCarrier && shapeVersions[outputIndex] != 1 &&
+           shapeVersions[outputIndex] != 2) ||
+          (shapeCarrier && shapeVersions[outputIndex] != 0) ||
+          (outputType.hasStaticShape() && !dimensions.empty()) ||
+          (!outputType.hasStaticShape() &&
+           dimensions.size() !=
+             static_cast<std::size_t>(outputType.getRank()))) {
+        getOperation().emitError("has invalid prepared output shape metadata");
+        signalPassFailure();
+        return;
+      }
+      SmallVector<ShapeExpr> expressions;
+      if (shapeCarrier) {
+        const unsigned carrierIndex = outputArgumentIndices[outputIndex];
+        const bool paired =
+          outputIndex > 0 && carrierIndex > 0 &&
+          outputArgumentIndices[outputIndex - 1] == carrierIndex - 1 &&
+          !shapeCarriers.contains(carrierIndex - 1);
+        const MemRefType dataType =
+          paired ? argumentTypes[carrierIndex - 1] : MemRefType();
+        if (shapeSources[outputIndex] != -1 || !dimensions.empty() ||
+            !outputType.hasStaticShape() || outputType.getRank() != 1 ||
+            !outputType.getElementType().isInteger(64) || !dataType ||
+            !dataType.hasStaticShape() || shapeSources[outputIndex - 1] != -1 ||
+            shapeVersions[outputIndex - 1] != 1 ||
+            outputType.getShape()[0] != dataType.getRank()) {
+          getOperation().emitError("has invalid shape carrier metadata");
+          signalPassFailure();
+          return;
+        }
+        shapePrograms.push_back(std::move(expressions));
+        continue;
+      }
+      if (outputType.hasStaticShape()) {
+        if (shapeSources[outputIndex] != -1 ||
+            shapeVersions[outputIndex] != 1) {
+          getOperation().emitError("has invalid static output shape metadata");
+          signalPassFailure();
+          return;
+        }
+        shapePrograms.push_back(std::move(expressions));
+        continue;
+      }
+      if (shapeVersions[outputIndex] == 2) {
+        if (shapeSources[outputIndex] != -1) {
+          getOperation().emitError("has invalid V2 shape source metadata");
+          signalPassFailure();
+          return;
+        }
+        for (Attribute dimension : dimensions) {
+          auto values = dyn_cast<DenseI64ArrayAttr>(dimension);
+          if (!values) {
+            getOperation().emitError("has invalid serialized V2 shape program");
+            signalPassFailure();
+            return;
+          }
+          auto expression = ShapeExpr::deserialize(values.asArrayRef());
+          if (!expression || !expression->validateInputRanks(inputRanks)) {
+            getOperation().emitError("has invalid serialized V2 shape program");
+            signalPassFailure();
+            return;
+          }
+          expressions.push_back(std::move(*expression));
+        }
+        shapePrograms.push_back(std::move(expressions));
+        continue;
+      }
+      if (shapeSources[outputIndex] < 0 ||
+          std::cmp_greater_equal(shapeSources[outputIndex],
+                                 inputIndices.size())) {
+        getOperation().emitError("has out-of-range shape source input");
+        signalPassFailure();
+        return;
+      }
       auto sourceInput = static_cast<unsigned>(shapeSources[outputIndex]);
-      for (auto [dimensionIndex, dimension] :
-           llvm::enumerate(cast<ArrayAttr>(output))) {
-        auto expression = DimensionExpr::deserialize(
-          sourceInput,
-          static_cast<unsigned>(dimensionIndex),
-          cast<DenseI64ArrayAttr>(dimension).asArrayRef());
+      for (auto [dimensionIndex, dimension] : llvm::enumerate(dimensions)) {
+        auto values = dyn_cast<DenseI64ArrayAttr>(dimension);
+        if (!values) {
+          getOperation().emitError("has invalid serialized shape program");
+          signalPassFailure();
+          return;
+        }
+        auto expression =
+          DimensionExpr::deserialize(sourceInput,
+                                     static_cast<unsigned>(dimensionIndex),
+                                     values.asArrayRef());
         if (!expression) {
           getOperation().emitError("has invalid serialized shape program");
           signalPassFailure();
@@ -678,14 +853,23 @@ class FinalizeCAPIPass final
           signalPassFailure();
           return;
         }
-        dimensions.push_back(std::move(*expression));
+        expressions.push_back(expression->toV2());
       }
-      shapePrograms.push_back(std::move(dimensions));
+      shapePrograms.push_back(std::move(expressions));
     }
     SmallVector<SmallVector<DimConstraintAttr>> constraintsByInput(
       inputIndices.size());
     for (Attribute attribute : inputShapeConstraints) {
-      auto constraint = cast<DimConstraintAttr>(attribute);
+      auto constraint = dyn_cast<DimConstraintAttr>(attribute);
+      if (!constraint || constraint.getInput() >= inputIndices.size() ||
+          constraint.getDim() >=
+            static_cast<uint32_t>(
+              argumentTypes[inputIndices[constraint.getInput()]].getRank())) {
+        getOperation().emitError(
+          "has invalid prepared input constraint metadata");
+        signalPassFailure();
+        return;
+      }
       constraintsByInput[constraint.getInput()].push_back(constraint);
     }
     SmallVector<unsigned> wrapperOrder;
@@ -826,42 +1010,121 @@ class FinalizeCAPIPass final
         internal.getLoc(), result, ArrayRef<int64_t>{1});
       return std::pair<Value, Value>{value, overflow};
     };
-    auto applyShapeTransform =
-      [&](Value extent, unsigned outputIndex, unsigned dimension) {
-        Value overflow;
-        const DimensionExpr& expression = shapePrograms[outputIndex][dimension];
-        for (ShapeInstruction instruction : expression.getInstructions()) {
-          const int64_t operand = instruction.operand;
-          Value value = builder.create<LLVM::ConstantOp>(
-            internal.getLoc(), builder.getI64IntegerAttr(operand));
-          if (instruction.opcode == ShapeOpcode::Add) {
-            Value result = builder.create<LLVM::SAddWithOverflowOp>(
-              internal.getLoc(), overflowResultType, extent, value);
-            extent = builder.create<LLVM::ExtractValueOp>(
-              internal.getLoc(), result, ArrayRef<int64_t>{0});
-            overflow =
-              mergeFlag(overflow,
-                        builder.create<LLVM::ExtractValueOp>(
-                          internal.getLoc(), result, ArrayRef<int64_t>{1}));
-          } else if (instruction.opcode == ShapeOpcode::Multiply) {
-            Value result = builder.create<LLVM::SMulWithOverflowOp>(
-              internal.getLoc(), overflowResultType, extent, value);
-            extent = builder.create<LLVM::ExtractValueOp>(
-              internal.getLoc(), result, ArrayRef<int64_t>{0});
-            overflow =
-              mergeFlag(overflow,
-                        builder.create<LLVM::ExtractValueOp>(
-                          internal.getLoc(), result, ArrayRef<int64_t>{1}));
-          } else {
-            extent =
-              builder.create<LLVM::SDivOp>(internal.getLoc(), extent, value);
+    using LoadInputDimension = std::function<Value(unsigned, unsigned)>;
+    auto evaluateShapeExpression =
+      [&](const ShapeExpr& expression,
+          const LoadInputDimension& loadInputDimension,
+          bool floorDivision) {
+        std::function<std::pair<Value, Value>(const ShapeExpr&)> evaluate =
+          [&](const ShapeExpr& node) -> std::pair<Value, Value> {
+          const auto opcode = node.getOpcode();
+          if (opcode == ShapeExprOpcode::Constant) {
+            Value value = builder.create<LLVM::ConstantOp>(
+              internal.getLoc(), builder.getI64IntegerAttr(node.getValue()));
+            Value valid = builder.create<LLVM::ConstantOp>(
+              internal.getLoc(), builder.getBoolAttr(false));
+            return {value, valid};
           }
-        }
-        if (!overflow) {
-          overflow = builder.create<LLVM::ConstantOp>(
-            internal.getLoc(), builder.getBoolAttr(false));
-        }
-        return std::pair<Value, Value>{extent, overflow};
+          if (opcode == ShapeExprOpcode::InputDimension) {
+            Value value = loadInputDimension(node.getInput(), node.getValue());
+            Value valid = builder.create<LLVM::ConstantOp>(
+              internal.getLoc(), builder.getBoolAttr(false));
+            return {value, valid};
+          }
+          auto lhs = evaluate(node.getLhs());
+          auto rhs = evaluate(node.getRhs());
+          Value invalid = mergeFlag(lhs.second, rhs.second);
+          if (opcode == ShapeExprOpcode::Add ||
+              opcode == ShapeExprOpcode::Multiply) {
+            Value result;
+            if (opcode == ShapeExprOpcode::Add) {
+              result = builder.create<LLVM::SAddWithOverflowOp>(
+                internal.getLoc(), overflowResultType, lhs.first, rhs.first);
+            } else {
+              result = builder.create<LLVM::SMulWithOverflowOp>(
+                internal.getLoc(), overflowResultType, lhs.first, rhs.first);
+            }
+            Value value = builder.create<LLVM::ExtractValueOp>(
+              internal.getLoc(), result, ArrayRef<int64_t>{0});
+            invalid =
+              mergeFlag(invalid,
+                        builder.create<LLVM::ExtractValueOp>(
+                          internal.getLoc(), result, ArrayRef<int64_t>{1}));
+            return {value, invalid};
+          }
+          if (opcode == ShapeExprOpcode::Max) {
+            Value lhsGreater =
+              builder.create<LLVM::ICmpOp>(internal.getLoc(),
+                                           LLVM::ICmpPredicate::sgt,
+                                           lhs.first,
+                                           rhs.first);
+            Value value = builder.create<LLVM::SelectOp>(
+              internal.getLoc(), lhsGreater, lhs.first, rhs.first);
+            return {value, invalid};
+          }
+          Value zero = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(), builder.getI64IntegerAttr(0));
+          Value one = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(), builder.getI64IntegerAttr(1));
+          Value minusOne = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(), builder.getI64IntegerAttr(-1));
+          Value minimum = builder.create<LLVM::ConstantOp>(
+            internal.getLoc(),
+            builder.getI64IntegerAttr(std::numeric_limits<int64_t>::min()));
+          Value divisorZero = builder.create<LLVM::ICmpOp>(
+            internal.getLoc(), LLVM::ICmpPredicate::eq, rhs.first, zero);
+          Value minimumDividend = builder.create<LLVM::ICmpOp>(
+            internal.getLoc(), LLVM::ICmpPredicate::eq, lhs.first, minimum);
+          Value negativeOneDivisor = builder.create<LLVM::ICmpOp>(
+            internal.getLoc(), LLVM::ICmpPredicate::eq, rhs.first, minusOne);
+          Value divisionOverflow = builder.create<LLVM::AndOp>(
+            internal.getLoc(), minimumDividend, negativeOneDivisor);
+          Value divisionInvalid = builder.create<LLVM::OrOp>(
+            internal.getLoc(), divisorZero, divisionOverflow);
+          invalid = mergeFlag(invalid, divisionInvalid);
+          Value safeDivisor = builder.create<LLVM::SelectOp>(
+            internal.getLoc(), divisionInvalid, one, rhs.first);
+          Value quotient = builder.create<LLVM::SDivOp>(
+            internal.getLoc(), lhs.first, safeDivisor);
+          Value remainder = builder.create<LLVM::SRemOp>(
+            internal.getLoc(), lhs.first, safeDivisor);
+          Value hasRemainder = builder.create<LLVM::ICmpOp>(
+            internal.getLoc(), LLVM::ICmpPredicate::ne, remainder, zero);
+          Value lhsNegative = builder.create<LLVM::ICmpOp>(
+            internal.getLoc(), LLVM::ICmpPredicate::slt, lhs.first, zero);
+          Value rhsNegative = builder.create<LLVM::ICmpOp>(
+            internal.getLoc(), LLVM::ICmpPredicate::slt, safeDivisor, zero);
+          Value signsDiffer = builder.create<LLVM::XOrOp>(
+            internal.getLoc(), lhsNegative, rhsNegative);
+          Value adjust;
+          if (opcode == ShapeExprOpcode::FloorDivide && floorDivision) {
+            adjust = builder.create<LLVM::AndOp>(
+              internal.getLoc(), hasRemainder, signsDiffer);
+          } else if (opcode == ShapeExprOpcode::CeilDivide) {
+            Value sameSigns = builder.create<LLVM::XOrOp>(
+              internal.getLoc(),
+              signsDiffer,
+              builder.create<LLVM::ConstantOp>(internal.getLoc(),
+                                               builder.getBoolAttr(true)));
+            adjust = builder.create<LLVM::AndOp>(
+              internal.getLoc(), hasRemainder, sameSigns);
+          } else {
+            adjust = builder.create<LLVM::ConstantOp>(
+              internal.getLoc(), builder.getBoolAttr(false));
+          }
+          Value adjustment = builder.create<LLVM::SelectOp>(
+            internal.getLoc(), adjust, one, zero);
+          Value result;
+          if (opcode == ShapeExprOpcode::FloorDivide) {
+            result = builder.create<LLVM::SubOp>(
+              internal.getLoc(), quotient, adjustment);
+          } else {
+            result = builder.create<LLVM::AddOp>(
+              internal.getLoc(), quotient, adjustment);
+          }
+          return {result, invalid};
+        };
+        return evaluate(expression);
       };
     for (unsigned functionIndex : wrapperOrder) {
       MemRefType type = argumentTypes[functionIndex];
@@ -947,28 +1210,37 @@ class FinalizeCAPIPass final
       if (type.hasStaticShape() || shapeCarriers.contains(functionIndex)) {
         continue;
       }
-      Value sourceShape = entry->getArgument(
-        wrapperShapeIndices[inputIndices[shapeSources[outputIndex]]]);
       Value required = builder.create<LLVM::ConstantOp>(
         internal.getLoc(), builder.getI64IntegerAttr(1));
       for (auto [dimensionIndex, dimension] :
            llvm::enumerate(type.getShape())) {
         Value extent;
         if (ShapedType::isDynamic(dimension)) {
-          const unsigned sourceDimension =
-            shapePrograms[outputIndex][dimensionIndex].getInputDimension();
-          Value address = builder.create<LLVM::GEPOp>(
-            internal.getLoc(),
-            pointerType,
-            i64Type,
-            sourceShape,
-            ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(sourceDimension)});
-          extent =
-            builder.create<LLVM::LoadOp>(internal.getLoc(), i64Type, address);
-          auto transformed =
-            applyShapeTransform(extent, outputIndex, dimensionIndex);
-          extent = transformed.first;
-          arithmeticInvalid = mergeFlag(arithmeticInvalid, transformed.second);
+          auto evaluated = evaluateShapeExpression(
+            shapePrograms[outputIndex][dimensionIndex],
+            [&](unsigned inputIndex, unsigned inputDimension) -> Value {
+              unsigned inputFunctionIndex = inputIndices[inputIndex];
+              MemRefType inputType = argumentTypes[inputFunctionIndex];
+              if (!inputType.isDynamicDim(inputDimension)) {
+                return builder.create<LLVM::ConstantOp>(
+                  internal.getLoc(),
+                  builder.getI64IntegerAttr(
+                    inputType.getShape()[inputDimension]));
+              }
+              Value shape =
+                entry->getArgument(wrapperShapeIndices[inputFunctionIndex]);
+              Value address = builder.create<LLVM::GEPOp>(
+                internal.getLoc(),
+                pointerType,
+                i64Type,
+                shape,
+                ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(inputDimension)});
+              return builder.create<LLVM::LoadOp>(
+                internal.getLoc(), i64Type, address);
+            },
+            shapeVersions[outputIndex] == 2);
+          extent = evaluated.first;
+          arithmeticInvalid = mergeFlag(arithmeticInvalid, evaluated.second);
         } else {
           extent = builder.create<LLVM::ConstantOp>(
             internal.getLoc(), builder.getI64IntegerAttr(dimension));
@@ -1082,16 +1354,14 @@ class FinalizeCAPIPass final
             builder, internal.getLoc(), typeConverter, type, data);
         }
 
-        Value shape;
         std::optional<unsigned> outputIndex;
         if (outputs.contains(functionIndex)) {
           auto* outputPosition =
             llvm::find(outputArgumentIndices, functionIndex);
           outputIndex = static_cast<unsigned>(outputPosition -
                                               outputArgumentIndices.begin());
-          shape = inputShapes[shapeSources[*outputIndex]];
         } else {
-          shape = entry->getArgument(wrapperShapeIndices[functionIndex]);
+          Value shape = entry->getArgument(wrapperShapeIndices[functionIndex]);
           auto* inputPosition = llvm::find(inputIndices, functionIndex);
           inputShapes[inputPosition - inputIndices.begin()] = shape;
         }
@@ -1107,28 +1377,41 @@ class FinalizeCAPIPass final
           if (!ShapedType::isDynamic(dimension)) {
             sizes.push_back(builder.create<LLVM::ConstantOp>(
               internal.getLoc(), builder.getI64IntegerAttr(dimension)));
-          } else {
-            const unsigned sourceDimension =
-              outputIndex ? shapePrograms[*outputIndex][dimensionIndex]
-                              .getInputDimension()
-                          : dimensionIndex;
+          } else if (!outputIndex) {
+            Value shape =
+              entry->getArgument(wrapperShapeIndices[functionIndex]);
             Value address = builder.create<LLVM::GEPOp>(
               internal.getLoc(),
               pointerType,
               i64Type,
               shape,
-              ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(sourceDimension)});
-            Value size =
-              builder.create<LLVM::LoadOp>(internal.getLoc(), i64Type, address);
-            if (outputs.contains(functionIndex)) {
-              auto* outputPosition =
-                llvm::find(outputArgumentIndices, functionIndex);
-              auto outputIndex = static_cast<unsigned>(
-                outputPosition - outputArgumentIndices.begin());
-              size =
-                applyShapeTransform(size, outputIndex, dimensionIndex).first;
-            }
-            sizes.push_back(size);
+              ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimensionIndex)});
+            sizes.push_back(builder.create<LLVM::LoadOp>(
+              internal.getLoc(), i64Type, address));
+          } else {
+            auto evaluated = evaluateShapeExpression(
+              shapePrograms[*outputIndex][dimensionIndex],
+              [&](unsigned inputIndex, unsigned inputDimension) -> Value {
+                unsigned inputFunctionIndex = inputIndices[inputIndex];
+                MemRefType inputType = argumentTypes[inputFunctionIndex];
+                if (!inputType.isDynamicDim(inputDimension)) {
+                  return builder.create<LLVM::ConstantOp>(
+                    internal.getLoc(),
+                    builder.getI64IntegerAttr(
+                      inputType.getShape()[inputDimension]));
+                }
+                Value shape = inputShapes[inputIndex];
+                Value address = builder.create<LLVM::GEPOp>(
+                  internal.getLoc(),
+                  pointerType,
+                  i64Type,
+                  shape,
+                  ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(inputDimension)});
+                return builder.create<LLVM::LoadOp>(
+                  internal.getLoc(), i64Type, address);
+              },
+              shapeVersions[*outputIndex] == 2);
+            sizes.push_back(evaluated.first);
           }
           result.setSize(
             builder, internal.getLoc(), dimensionIndex, sizes.back());
@@ -1330,18 +1613,9 @@ class FinalizeCAPIPass final
           continue;
         }
         Value destination = shapeEntry->getArgument(shapeArgumentIndex++);
-        Value source = shapeInputs[shapeSources[outputIndex]];
         Value outputElements = builder.create<LLVM::ConstantOp>(
           internal.getLoc(), builder.getI64IntegerAttr(1));
         for (unsigned dimension = 0; dimension < type.getRank(); ++dimension) {
-          const unsigned sourceDimension =
-            shapePrograms[outputIndex][dimension].getInputDimension();
-          Value sourceAddress = builder.create<LLVM::GEPOp>(
-            internal.getLoc(),
-            pointerType,
-            i64Type,
-            source,
-            ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(sourceDimension)});
           Value destinationAddress = builder.create<LLVM::GEPOp>(
             internal.getLoc(),
             pointerType,
@@ -1350,13 +1624,31 @@ class FinalizeCAPIPass final
             ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimension)});
           Value extent;
           if (ShapedType::isDynamic(type.getShape()[dimension])) {
-            extent = builder.create<LLVM::LoadOp>(
-              internal.getLoc(), i64Type, sourceAddress);
-            auto transformed =
-              applyShapeTransform(extent, outputIndex, dimension);
-            extent = transformed.first;
+            auto evaluated = evaluateShapeExpression(
+              shapePrograms[outputIndex][dimension],
+              [&](unsigned inputIndex, unsigned inputDimension) -> Value {
+                unsigned inputFunctionIndex = inputIndices[inputIndex];
+                MemRefType inputType = argumentTypes[inputFunctionIndex];
+                if (!inputType.isDynamicDim(inputDimension)) {
+                  return builder.create<LLVM::ConstantOp>(
+                    internal.getLoc(),
+                    builder.getI64IntegerAttr(
+                      inputType.getShape()[inputDimension]));
+                }
+                Value source = shapeInputs[inputIndex];
+                Value sourceAddress = builder.create<LLVM::GEPOp>(
+                  internal.getLoc(),
+                  pointerType,
+                  i64Type,
+                  source,
+                  ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(inputDimension)});
+                return builder.create<LLVM::LoadOp>(
+                  internal.getLoc(), i64Type, sourceAddress);
+              },
+              shapeVersions[outputIndex] == 2);
+            extent = evaluated.first;
             shapeArithmeticInvalid =
-              mergeFlag(shapeArithmeticInvalid, transformed.second);
+              mergeFlag(shapeArithmeticInvalid, evaluated.second);
           } else {
             extent = builder.create<LLVM::ConstantOp>(
               internal.getLoc(),
@@ -1445,6 +1737,7 @@ class FinalizeCAPIPass final
     getOperation()->removeAttr(kOutputIndicesAttr);
     getOperation()->removeAttr(kOutputShapeSourcesAttr);
     getOperation()->removeAttr(kOutputShapeProgramsAttr);
+    getOperation()->removeAttr(kOutputShapeVersionsAttr);
     getOperation()->removeAttr(kShapeCarrierIndicesAttr);
     getOperation()->removeAttr(kInputShapeConstraintsAttr);
   }

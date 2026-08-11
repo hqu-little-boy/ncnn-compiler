@@ -248,6 +248,8 @@ def NCNN_ReshapeOp : NCNN_LayerOp<"reshape", [InferTensorTypeAdaptor]> {
   let arguments = (ins NCNN_RankedTensor:$input,
     Variadic<NCNN_RankedTensor>:$shape_references,
     DenseI64ArrayAttr:$shape,
+    OptionalAttr<DenseI64ArrayAttr>:$shape_spec,
+    OptionalAttr<DenseI64ArrayAttr>:$shape_zero_sources,
     OptionalAttr<DenseI64ArrayAttr>:$shape_sources,
     OptionalAttr<StrAttr>:$shape_expression);
   let results = (outs NCNN_RankedTensor:$output);
@@ -311,6 +313,7 @@ def NCNN_SliceOp
   let arguments =
     (ins NCNN_RankedTensor:$input, DenseI64ArrayAttr:$slices, I64Attr:$axis);
   let results = (outs Variadic<NCNN_RankedTensor>:$results);
+  let hasVerifier = 1;
 }
 
 def NCNN_ReductionOp : NCNN_LayerOp<"reduction", [InferTensorTypeAdaptor]> {

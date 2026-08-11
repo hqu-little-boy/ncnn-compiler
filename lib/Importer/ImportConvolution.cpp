@@ -86,6 +86,8 @@ ImportResult import_convolution(ImportContext& importer,
       mlir::ValueRange{},
       builder.getDenseI64ArrayAttr(restored_type.getShape()),
       nullptr,
+      nullptr,
+      nullptr,
       nullptr);
     importer.tag_source(restored.getOperation(), context);
     input_value = restored.getResult();

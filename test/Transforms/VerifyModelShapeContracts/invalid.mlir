@@ -13,6 +13,37 @@ module {
 // -----
 
 module {
+  // expected-error@+1 {{dynamic output 2 V2 program must not have a shape source}}
+  func.func @v2_with_source(
+      %first: memref<?xf32>,
+      %second: memref<?xf32>,
+      %output: memref<?xf32> {bufferize.result,
+        ncnn.shape_program = [array<i64: 1, 0, 0>],
+        ncnn.shape_program_version = 2 : i32,
+        ncnn.shape_source_input = 0 : i32})
+      attributes {ncnn.entry_point} {
+    return
+  }
+}
+
+// -----
+
+module {
+  // expected-error@+1 {{dynamic output 2 has an invalid V2 shape program}}
+  func.func @v2_out_of_range_input(
+      %first: memref<?xf32>,
+      %second: memref<?xf32>,
+      %output: memref<?xf32> {bufferize.result,
+        ncnn.shape_program = [array<i64: 1, 2, 0>],
+        ncnn.shape_program_version = 2 : i32})
+      attributes {ncnn.entry_point} {
+    return
+  }
+}
+
+// -----
+
+module {
   // expected-error@+1 {{dynamic output 1 has no valid input shape source}}
   func.func @missing_source(
       %input: memref<?xf32>,

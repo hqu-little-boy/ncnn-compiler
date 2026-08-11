@@ -55,11 +55,11 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | `Sigmoid` | `ncnn.sigmoid` | 无 | 静态 FP32 |
 | `HardSigmoid` | `ncnn.hard_sigmoid` | alpha, beta | 静态 FP32 |
 | `HardSwish` | `ncnn.hard_swish` | alpha, beta | 静态 FP32 |
-| `Reshape` | `ncnn.reshape` | shape、shape_sources、shape_expression | 支持静态 shape、单个 `-1`、`0` 复制维度，以及引用单一 shape 输入并保持维序的表达式（如 `1w,1h,1c`） |
-| `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 加法/乘法；支持标量和同 rank 双向广播 |
-| `InnerProduct` | `ncnn.inner_product` | has_bias | 仅静态 FP32，输入按元素展平 |
+| `Reshape` | `ncnn.reshape` | shape、shape_spec、shape_zero_sources、shape_sources、shape_expression | 支持静态 shape、单个 `-1`、`0` 复制维度，并保留原始 shape 语义；也支持引用单一 shape 输入并保持维序的表达式（如 `1w,1h,1c`） |
+| `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 加法/乘法/最大值；支持标量和同 rank 双向广播，动态 extent 保守推断 |
+| `InnerProduct` | `ncnn.inner_product` | has_bias | 静态 FP32 权重；既有静态输入按元素展平，另支持 rank-2 动态 M、静态 K 的 `[M,K] -> [M,O]` |
 | `ShuffleChannel` | `ncnn.shuffle_channel` | group, reverse | 静态 FP32；group 必须整除通道数 |
-| `Slice` | `ncnn.slice` | slices, axis | 静态 FP32；支持显式 sizes 和 `-233` 等分 |
+| `Slice` | `ncnn.slice` | slices, axis | FP32；支持显式 sizes 和 `-233` 按序切分；动态切分轴上的显式 size 保持精确，`-233` 结果为动态 |
 | `Reduction` | `ncnn.reduction` | kind, reduce_all, coeff, axes, keepdims | 静态 FP32 mean 子集 |
 | `GELU` | `ncnn.gelu` | fast | 当前支持标准 erfc 形式（`fast=0`） |
 | `Squeeze` | `ncnn.squeeze` | axes | 显式静态 axes |
@@ -86,15 +86,27 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 - **Interp**：仅支持 `resize_type=1` 的 nearest 模式、`align_corner=0` 和正整数倍 scale；显式输出
   shape 必须与 scale 推导结果一致。静态实例可走 TOSA resize；动态 H/W 直接 lower 为
   `tensor.dim + tensor.empty + linalg.generic`。
-- **Pooling**：`mode=Adaptive` 和 regular `Average + include_pad=1` **不会被 lowering**（残留 → 拒绝）。
+- **Pooling**：NCNN IR 类型推断允许安全的动态通道，并在 regular/adaptive 结果中保留通道、global
+  结果为 `[C]`。动态 H/W 的 global 和固定 target adaptive 直接 lower 为运行时 Linalg/SCF 归约；
+  adaptive 窗口按 `floor(input * output_index / output)` 与
+  `ceil(input * (output_index + 1) / output)` 计算。regular `Average + include_pad=1` 仍明确拒绝。
   `pad_mode=0`（full + tail padding）通过尾部填充计算正常支持；global 模式按 ncnn 语义忽略
   regular-only 的 padding 和 `include_pad` 参数。
 - **Softmax**：旧版 `fixbug0=0` 仅允许 `axis=0`。
-- **Reshape**：shape expression 当前支持直接引用单一输入 blob 的 `w/h/d/c` 维度，并要求输出
+- **Reshape**：非 expression 形式通过 `shape_spec` 保留原始 `0/-1`，并以
+  `shape_zero_sources` 明确每个 `0` 映射的输入维；只允许单个 `-1`，缺失维的 `0` 明确拒绝。
+  shape expression 当前支持直接引用单一输入 blob 的 `w/h/d/c` 维度，并要求输出
   保持该输入的维序；算术、维度置换、跨输入混合、min/max 等通用表达式仍会明确拒绝。动态 expression 直接下降为
   `tensor.dim + tensor.from_elements + tensor.reshape`。M09 的固定 `3x640x640` 产品实例已闭环；
   整张模型的一般动态 H/W 仍受 Pooling 等更早算子的动态 shape 覆盖限制。
-- **Slice**：当前支持 `slices` 参数，不支持 `indices` 参数形式。
+- **Slice**：当前支持 `slices` 参数，不支持 `indices` 参数形式。切分轴动态时要求最后一片为
+  `-233`，显式片大小仍静态精确，按序遇到的 `-233` 片保守推断为动态；静态切分轴仍严格校验
+  所有片完整消费该轴。
+- **BinaryOp**：Importer/NCNN IR 支持 `op_type=0/2/4`（add/multiply/max）的标量或同 rank
+  广播；动态维仅在一侧静态为 `1` 或两侧符号 shape 可证明等价时放行，不可由当前 ABI 验证的
+  运行时析取广播条件继续拒绝。不支持的 op_type 和 rank 组合继续拒绝。
+- **InnerProduct**：权重及 K/O 必须静态；rank-2 输入允许动态 M，并推断 `[M,O]`。动态 K、
+  动态权重和其他非静态输入形态继续拒绝。
 - **Reduction**：当前只支持 `operation=3`（mean）；显式 axes 要求新版 `fixbug0=1`。
 - **Gemm**：仅支持 `constantA=0, constantB=1, constantC=1, transA=0, transB=1`、
   `broadcast_type_C=4` 的 FP32 子集；不支持量化、packing 和输出转置。
@@ -227,8 +239,9 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
   结构化 minimum/multiple 约束；执行和 shape inference 入口都会校验，manifest/header 同步公开。
 - 阶段二已支持 regular Pooling、纯 Depthwise Convolution、Deconvolution、Sigmoid 的动态
   H/W shape inference 和 NCNN-to-TOSA lowering；动态 `SAME` 仅支持对应 stride 为 1。
-- Concat/Binary 动态空间维必须由输入约束下的符号 shape program 证明相等或可广播，否则编译
-  失败。当前完整动态 M09 仍受上游 `TosaToLinalg` 对动态 `tosa.transpose_conv2d` 的限制。
+- Concat 非拼接动态维与 Binary 非静态-1 广播维必须由输入约束下的符号 shape program 证明
+  等价，否则编译失败；Concat 拼接轴使用 V2 加法表达式，Binary 输出广播维可使用 V2 Max。
+  当前完整动态 M09 仍受上游 `TosaToLinalg` 对动态 `tosa.transpose_conv2d` 的限制。
 - shape-only 动态输出由 `<model>_infer_output_shapes` 返回，调用方据此分配 output buffer。
 - 数据依赖输出由执行入口返回 actual shape/rank，并接收 shape metadata capacity；调用方按
   `MAX_DIMn`/`MAX_ELEMENTS` 分配最大 data buffer。shape capacity 是元数据数组容量，不是 data
@@ -318,13 +331,14 @@ DetectionOutput 当前未注册 naive override，使用 ncnn 内建层路径。
   lowering/数值测试、SqueezeNet、PP-LCNet、PP-OCR，以及固定 target 的导出符号、
   manifest、header 和共享库产物大小。静态产物不得导出 `_infer_output_shapes`。
 - 动态数值测试编译为独立的 `numerical_dynamic_tests`，通过 `ctest -L dynamic`
-  执行；静态与动态测试不共享测试源或 expected。
+  执行；另有动态算子测试覆盖 global/adaptive pooling、Reshape `0/-1`、Slice `-233` 和
+  InnerProduct 动态 M，并在多个运行时 shape 上与 ncnn 对齐。静态与动态测试不共享 expected。
 
 ### 7.5 未覆盖（明确排除）
 
 - 通用 `ConvolutionDepthWise` / 分组卷积；当前仅支持纯 depthwise 子集
 - Average pooling `include_pad=1`（严格流水线拒绝）
-- Adaptive pooling（严格流水线拒绝）
+- DetectionOutput 动态 prior 数量、动态权重，以及需要跨输入运行时 shape 等式的动态通道实例
 
 ---
 
@@ -334,7 +348,7 @@ DetectionOutput 当前未注册 naive override，使用 ncnn 内建层路径。
 |---|---|
 | 算子覆盖 | 27 个计算 op 的受限实例；DetectionOutput 仅 Caffe SSD；无 PriorBox/Proposal/Yolo、通用 group conv、RNN |
 | 量化 | int8 参数可解析但不被 lowering；f16 权重可解析但端到端路径仅 f32 |
-| 形状 | 静态 shape 广泛覆盖；固定 rank 动态 extent 覆盖 identity/ReLU/Padding/Interp 和保持单一输入维序的 Reshape expression；动态 rank 仅一入一出 identity/ReLU rank 1..4；动态 SAME、通用表达式和一般动态图仍不支持 |
+| 形状 | 静态 shape 广泛覆盖；固定 rank 动态 extent 覆盖空间 Concat、可证明的 Binary 同 rank 广播、Reshape `0/-1`、Slice 动态轴 `-233`、global/adaptive Pooling、Pooling 动态通道和 InnerProduct 动态 M。V2 shape program 支持多输入 Add/Multiply/FloorDiv/CeilDiv/Max。动态 rank 仅一入一出 identity/ReLU rank 1..4；DetectionOutput 动态 prior、动态权重及一般动态图仍不支持 |
 | 数据类型 | GenerateCAPI 支持 typed f16/bf16/f32/f64 与整数 ABI；当前 ncnn 模型数据主路径为 f32 |
 | 入口 | 一个执行入口；shape-only 动态输出另有 inference 入口；执行 ABI 按输入组、输出 data、数据依赖元数据排列 |
 | 平台 | 仅 Linux 64-bit ELF |

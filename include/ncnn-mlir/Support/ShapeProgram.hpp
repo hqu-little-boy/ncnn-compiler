@@ -1,9 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <expected>
 #include <limits>
+#include <memory>
 #include <string>
+#include <utility>
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
@@ -31,6 +34,8 @@ struct ShapeConstraint {
   int64_t minimum;
   int64_t multipleOf;
 };
+
+class ShapeExpr;
 
 class DimensionExpr {
  public:
@@ -168,6 +173,8 @@ class DimensionExpr {
     return result;
   }
 
+  ShapeExpr toV2() const;
+
  private:
   struct CanonicalForm {
     int64_t coefficient;
@@ -226,5 +233,327 @@ class DimensionExpr {
   unsigned inputDimension_;
   llvm::SmallVector<ShapeInstruction> instructions_;
 };
+
+// V2 expressions are serialized as a prefix tree. Each node starts with an
+// opcode; InputDim and Constant have two and one operands respectively, while
+// binary operators recursively consume two nodes.
+enum class ShapeExprOpcode : int64_t {
+  Constant = 0,
+  InputDimension = 1,
+  Add = 2,
+  Multiply = 3,
+  FloorDivide = 4,
+  CeilDivide = 5,
+  Max = 6
+};
+
+class ShapeExpr {
+ public:
+  ShapeExpr() = default;
+
+  static ShapeExpr constant(int64_t value) {
+    return ShapeExpr(
+      std::make_shared<Node>(Node{.opcode = ShapeExprOpcode::Constant,
+                                  .value = value,
+                                  .input = 0,
+                                  .lhs = nullptr,
+                                  .rhs = nullptr}));
+  }
+
+  static ShapeExpr inputDimension(unsigned input, unsigned dimension) {
+    return ShapeExpr(
+      std::make_shared<Node>(Node{.opcode = ShapeExprOpcode::InputDimension,
+                                  .value = static_cast<int64_t>(dimension),
+                                  .input = input,
+                                  .lhs = nullptr,
+                                  .rhs = nullptr}));
+  }
+
+  static ShapeExpr binary(ShapeExprOpcode opcode,
+                          ShapeExpr lhs,
+                          ShapeExpr rhs) {
+    return ShapeExpr(std::make_shared<Node>(Node{.opcode = opcode,
+                                                 .value = 0,
+                                                 .input = 0,
+                                                 .lhs = std::move(lhs.node_),
+                                                 .rhs = std::move(rhs.node_)}));
+  }
+
+  ShapeExprOpcode getOpcode() const noexcept { return node_->opcode; }
+  int64_t getValue() const noexcept { return node_->value; }
+  unsigned getInput() const noexcept { return node_->input; }
+  ShapeExpr getLhs() const noexcept {
+    return ShapeExpr(node_ ? node_->lhs : nullptr);
+  }
+  ShapeExpr getRhs() const noexcept {
+    return ShapeExpr(node_ ? node_->rhs : nullptr);
+  }
+  bool isValid() const noexcept { return static_cast<bool>(node_); }
+
+  std::expected<int64_t, std::string> evaluateChecked(
+    llvm::ArrayRef<llvm::ArrayRef<int64_t>> inputShapes) const {
+    if (!node_) {
+      return std::unexpected("shape expression is empty");
+    }
+    return evaluate(*node_, inputShapes);
+  }
+
+  std::expected<void, std::string> validateInputRanks(
+    llvm::ArrayRef<unsigned> inputRanks) const {
+    if (!node_) {
+      return std::unexpected("shape expression is empty");
+    }
+    return validateInputRanks(*node_, inputRanks);
+  }
+
+  llvm::SmallVector<int64_t> serialize() const {
+    llvm::SmallVector<int64_t> result;
+    if (node_) {
+      serializeNode(*node_, result);
+    }
+    return result;
+  }
+
+  std::expected<llvm::SmallVector<int64_t>, std::string> serializeChecked()
+    const {
+    if (!node_) {
+      return std::unexpected("shape expression is empty");
+    }
+    llvm::SmallVector<int64_t> result;
+    std::size_t nodes = 0;
+    if (auto status = serializeNodeChecked(*node_, result, nodes, 0); !status) {
+      return std::unexpected(status.error());
+    }
+    return result;
+  }
+
+  static std::expected<ShapeExpr, std::string> deserialize(
+    llvm::ArrayRef<int64_t> program) {
+    constexpr std::size_t kMaximumNodes = 4096;
+    if (program.size() > kMaximumNodes * 3) {
+      return std::unexpected("shape V2 expression is too large");
+    }
+    std::size_t index = 0;
+    std::size_t nodes = 0;
+    auto node = deserializeNode(program, index, nodes, 0);
+    if (!node) {
+      return std::unexpected(node.error());
+    }
+    if (index != program.size()) {
+      return std::unexpected("shape V2 expression has trailing operands");
+    }
+    return ShapeExpr(std::move(*node));
+  }
+
+ private:
+  struct Node {
+    ShapeExprOpcode opcode;
+    int64_t value;
+    unsigned input;
+    std::shared_ptr<Node> lhs;
+    std::shared_ptr<Node> rhs;
+  };
+
+  explicit ShapeExpr(std::shared_ptr<Node> node) : node_(std::move(node)) {}
+
+  static std::expected<std::shared_ptr<Node>, std::string> deserializeNode(
+    llvm::ArrayRef<int64_t> program,
+    std::size_t& index,
+    std::size_t& nodes,
+    std::size_t depth) {
+    constexpr std::size_t kMaximumNodes = 4096;
+    constexpr std::size_t kMaximumDepth = 256;
+    if (++nodes > kMaximumNodes || depth > kMaximumDepth) {
+      return std::unexpected("shape V2 expression is too complex");
+    }
+    if (index >= program.size()) {
+      return std::unexpected("shape V2 expression is truncated");
+    }
+    const int64_t opcodeValue = program[index++];
+    if (opcodeValue < 0 || opcodeValue > 6) {
+      return std::unexpected("shape V2 expression opcode is invalid");
+    }
+    const auto opcode = static_cast<ShapeExprOpcode>(opcodeValue);
+    if (opcode == ShapeExprOpcode::Constant) {
+      if (index >= program.size()) {
+        return std::unexpected("shape constant is truncated");
+      }
+      return std::make_shared<Node>(Node{.opcode = opcode,
+                                         .value = program[index++],
+                                         .input = 0,
+                                         .lhs = nullptr,
+                                         .rhs = nullptr});
+    }
+    if (opcode == ShapeExprOpcode::InputDimension) {
+      if (index + 1 >= program.size() || program[index] < 0 ||
+          program[index + 1] < 0 ||
+          std::cmp_greater(program[index],
+                           std::numeric_limits<unsigned>::max()) ||
+          std::cmp_greater(program[index + 1],
+                           std::numeric_limits<unsigned>::max())) {
+        return std::unexpected("shape input dimension is invalid");
+      }
+      auto input = static_cast<unsigned>(program[index++]);
+      auto dimension = static_cast<unsigned>(program[index++]);
+      return std::make_shared<Node>(
+        Node{.opcode = opcode,
+             .value = static_cast<int64_t>(dimension),
+             .input = input,
+             .lhs = nullptr,
+             .rhs = nullptr});
+    }
+    auto lhs = deserializeNode(program, index, nodes, depth + 1);
+    if (!lhs) {
+      return std::unexpected(lhs.error());
+    }
+    auto rhs = deserializeNode(program, index, nodes, depth + 1);
+    if (!rhs) {
+      return std::unexpected(rhs.error());
+    }
+    return std::make_shared<Node>(Node{.opcode = opcode,
+                                       .value = 0,
+                                       .input = 0,
+                                       .lhs = std::move(*lhs),
+                                       .rhs = std::move(*rhs)});
+  }
+
+  static std::expected<int64_t, std::string> evaluate(
+    const Node& node, llvm::ArrayRef<llvm::ArrayRef<int64_t>> inputShapes) {
+    if (node.opcode == ShapeExprOpcode::Constant) {
+      return node.value;
+    }
+    if (node.opcode == ShapeExprOpcode::InputDimension) {
+      if (node.input >= inputShapes.size() || node.value < 0 ||
+          static_cast<std::size_t>(node.value) >=
+            inputShapes[node.input].size()) {
+        return std::unexpected("shape input dimension is out of range");
+      }
+      return inputShapes[node.input][node.value];
+    }
+    auto lhs = evaluate(*node.lhs, inputShapes);
+    auto rhs = evaluate(*node.rhs, inputShapes);
+    if (!lhs || !rhs) {
+      return std::unexpected(!lhs ? lhs.error() : rhs.error());
+    }
+    int64_t result = 0;
+    switch (node.opcode) {
+      case ShapeExprOpcode::Add:
+        if (llvm::AddOverflow(*lhs, *rhs, result)) {
+          return std::unexpected("shape addition overflows");
+        }
+        return result;
+      case ShapeExprOpcode::Multiply:
+        if (llvm::MulOverflow(*lhs, *rhs, result)) {
+          return std::unexpected("shape multiplication overflows");
+        }
+        return result;
+      case ShapeExprOpcode::FloorDivide:
+      case ShapeExprOpcode::CeilDivide: {
+        if (*rhs == 0 ||
+            (*lhs == std::numeric_limits<int64_t>::min() && *rhs == -1)) {
+          return std::unexpected("shape division is invalid");
+        }
+        int64_t quotient = *lhs / *rhs;
+        int64_t remainder = *lhs % *rhs;
+        if (node.opcode == ShapeExprOpcode::FloorDivide && remainder != 0 &&
+            ((*lhs < 0) != (*rhs < 0))) {
+          --quotient;
+        }
+        if (node.opcode == ShapeExprOpcode::CeilDivide && remainder != 0 &&
+            ((*lhs < 0) == (*rhs < 0))) {
+          ++quotient;
+        }
+        return quotient;
+      }
+      case ShapeExprOpcode::Max:
+        return std::max(*lhs, *rhs);
+      default:
+        return std::unexpected("shape expression opcode is invalid");
+    }
+  }
+
+  static std::expected<void, std::string> validateInputRanks(
+    const Node& node, llvm::ArrayRef<unsigned> inputRanks) {
+    if (node.opcode == ShapeExprOpcode::Constant) {
+      return {};
+    }
+    if (node.opcode == ShapeExprOpcode::InputDimension) {
+      if (node.input >= inputRanks.size() || node.value < 0 ||
+          std::cmp_greater_equal(node.value, inputRanks[node.input])) {
+        return std::unexpected("shape input dimension is out of range");
+      }
+      return {};
+    }
+    if (auto lhs = validateInputRanks(*node.lhs, inputRanks); !lhs) {
+      return lhs;
+    }
+    return validateInputRanks(*node.rhs, inputRanks);
+  }
+
+  static void serializeNode(const Node& node, llvm::SmallVector<int64_t>& out) {
+    out.push_back(static_cast<int64_t>(node.opcode));
+    if (node.opcode == ShapeExprOpcode::Constant) {
+      out.push_back(node.value);
+    } else if (node.opcode == ShapeExprOpcode::InputDimension) {
+      out.push_back(node.input);
+      out.push_back(node.value);
+    } else {
+      serializeNode(*node.lhs, out);
+      serializeNode(*node.rhs, out);
+    }
+  }
+
+  static std::expected<void, std::string> serializeNodeChecked(
+    const Node& node,
+    llvm::SmallVector<int64_t>& out,
+    std::size_t& nodes,
+    std::size_t depth) {
+    constexpr std::size_t kMaximumNodes = 4096;
+    constexpr std::size_t kMaximumDepth = 256;
+    if (++nodes > kMaximumNodes || depth > kMaximumDepth) {
+      return std::unexpected("shape V2 expression is too complex");
+    }
+    out.push_back(static_cast<int64_t>(node.opcode));
+    if (node.opcode == ShapeExprOpcode::Constant) {
+      out.push_back(node.value);
+      return {};
+    }
+    if (node.opcode == ShapeExprOpcode::InputDimension) {
+      out.push_back(node.input);
+      out.push_back(node.value);
+      return {};
+    }
+    if (auto lhs = serializeNodeChecked(*node.lhs, out, nodes, depth + 1);
+        !lhs) {
+      return lhs;
+    }
+    return serializeNodeChecked(*node.rhs, out, nodes, depth + 1);
+  }
+
+  std::shared_ptr<Node> node_;
+};
+
+inline ShapeExpr DimensionExpr::toV2() const {
+  ShapeExpr result = ShapeExpr::inputDimension(inputIndex_, inputDimension_);
+  for (ShapeInstruction instruction : instructions_) {
+    ShapeExprOpcode opcode;
+    switch (instruction.opcode) {
+      case ShapeOpcode::Add:
+        opcode = ShapeExprOpcode::Add;
+        break;
+      case ShapeOpcode::Multiply:
+        opcode = ShapeExprOpcode::Multiply;
+        break;
+      case ShapeOpcode::Divide:
+        opcode = ShapeExprOpcode::FloorDivide;
+        break;
+      default:
+        llvm_unreachable("source dimension is not a linear instruction");
+    }
+    result = ShapeExpr::binary(
+      opcode, std::move(result), ShapeExpr::constant(instruction.operand));
+  }
+  return result;
+}
 
 }  // namespace mlir::ncnn

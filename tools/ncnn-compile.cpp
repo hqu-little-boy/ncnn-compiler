@@ -26,6 +26,7 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
+#include "ncnn-mlir/Support/ShapeProgram.hpp"
 
 namespace {
 
@@ -179,6 +180,7 @@ struct Argument {
   std::uint32_t dynamic_dim_mask;
   bool shape_depends_on_data;
   std::int32_t shape_source_input;
+  std::int32_t shape_program_version;
   bool dynamic_rank;
   std::uint32_t rank_min;
   std::uint32_t rank_max;
@@ -479,6 +481,8 @@ int run(const std::vector<std::string>& command,
           argument_object->getBoolean("shape_depends_on_data").value_or(false),
         .shape_source_input = static_cast<std::int32_t>(
           argument_object->getInteger("shape_source_input").value_or(-1)),
+        .shape_program_version = static_cast<std::int32_t>(
+          argument_object->getInteger("shape_program_version").value_or(1)),
         .dynamic_rank =
           argument_object->getBoolean("dynamic_rank").value_or(false),
         .rank_min = static_cast<std::uint32_t>(
@@ -568,6 +572,10 @@ int run(const std::vector<std::string>& command,
       if (argument.shape_source_input < -1) {
         return false;
       }
+      if (argument.shape_program_version != 1 &&
+          argument.shape_program_version != 2) {
+        return false;
+      }
       if (argument.dynamic_rank &&
           (!argument.shape.empty() || argument.dynamic_dim_mask != 0 ||
            argument.rank_min != 1 || argument.rank_max != 4)) {
@@ -596,14 +604,32 @@ int run(const std::vector<std::string>& command,
         "ABI manifest data-dependent output has no finite maximum shape");
     }
     if ((output.dynamic_rank || output.dynamic_dim_mask != 0) &&
-        output.shape_source_input < 0 && !output.shape_depends_on_data) {
+        output.shape_program_version == 1 && output.shape_source_input < 0 &&
+        !output.shape_depends_on_data) {
       return std::unexpected(
         "ABI manifest dynamic output has no input shape source");
+    }
+    if (output.shape_program_version == 2 && output.shape_source_input >= 0) {
+      return std::unexpected(
+        "ABI manifest V2 output must not have an input shape source");
     }
     if (!output.shape_depends_on_data && output.dynamic_dim_mask != 0 &&
         output.shape_program.size() != output.shape.size()) {
       return std::unexpected(
         "ABI manifest dynamic output has an invalid shape program");
+    }
+    if (output.shape_program_version == 2) {
+      llvm::SmallVector<unsigned> input_ranks;
+      for (const Argument& input : manifest.inputs) {
+        input_ranks.push_back(input.shape.size());
+      }
+      for (const auto& program : output.shape_program) {
+        auto expression = mlir::ncnn::ShapeExpr::deserialize(program);
+        if (!expression || !expression->validateInputRanks(input_ranks)) {
+          return std::unexpected(
+            "ABI manifest dynamic output has an invalid V2 shape program");
+        }
+      }
     }
   }
   manifest.function = c_identifier(manifest.function);
@@ -704,6 +730,9 @@ int run(const std::vector<std::string>& command,
       }
       if (argument.shape_source_input >= 0) {
         object["shape_source_input"] = argument.shape_source_input;
+      }
+      if (argument.shape_program_version == 2) {
+        object["shape_program_version"] = 2;
       }
       if (!argument.shape_program.empty()) {
         llvm::json::Array programs;
@@ -1687,15 +1716,38 @@ int main(int argc, char** argv) {
   if (!exports_result) {
     return fail(exports_result.error());
   }
+  bool uses_address_sanitizer = false;
+  bool uses_undefined_sanitizer = false;
+  for (const std::string& argument : g_linker_args) {
+    constexpr std::string_view prefix = "-fsanitize=";
+    if (!argument.starts_with(prefix)) {
+      continue;
+    }
+    std::string_view values(argument);
+    values.remove_prefix(prefix.size());
+    while (!values.empty()) {
+      const std::size_t separator = values.find(',');
+      const std::string_view value = values.substr(0, separator);
+      uses_address_sanitizer |= value == "address";
+      uses_undefined_sanitizer |= value == "undefined";
+      if (separator == std::string_view::npos) {
+        break;
+      }
+      values.remove_prefix(separator + 1);
+    }
+  }
+  const bool uses_sanitizer =
+    uses_address_sanitizer || uses_undefined_sanitizer;
   std::vector<std::string> link = {
     clang_path, "-shared", "-nostdlib", optimization};
   link.insert(link.end(), target_args.begin(), target_args.end());
   link.push_back(object.string());
   link.insert(link.end(), g_linker_args.begin(), g_linker_args.end());
+  if (!uses_sanitizer) {
+    link.insert(link.end(), {"-Wl,-z,defs", "-Wl,--no-undefined"});
+  }
   link.insert(link.end(),
-              {"-Wl,-z,defs",
-               "-Wl,--no-undefined",
-               "-Wl,--build-id=none",
+              {"-Wl,--build-id=none",
                "-Wl,--version-script=" + exports.string(),
                "-lc",
                "-lm",
@@ -1717,10 +1769,16 @@ int main(int argc, char** argv) {
   const std::set<std::string> undefined = symbols(*text);
   const std::set<std::string> allowed = {
     "erfcf", "erff", "expf", "free", "malloc", "memcpy", "memset", "powf"};
-  if (!std::ranges::includes(allowed, undefined)) {
+  const auto is_allowed_undefined = [&](const std::string& symbol) {
+    return allowed.contains(symbol) ||
+           (uses_address_sanitizer && symbol.starts_with("__asan_")) ||
+           (uses_undefined_sanitizer && symbol.starts_with("__ubsan_")) ||
+           (uses_sanitizer && symbol.starts_with("__sanitizer_"));
+  };
+  if (!std::ranges::all_of(undefined, is_allowed_undefined)) {
     std::string unexpected;
     for (const std::string& symbol : undefined) {
-      if (!allowed.contains(symbol)) {
+      if (!is_allowed_undefined(symbol)) {
         unexpected += (unexpected.empty() ? "" : ", ") + symbol;
       }
     }
@@ -1770,15 +1828,38 @@ int main(int argc, char** argv) {
   static const std::regex needed_pattern(
     R"(^\s*(lib[^\s]+\.so(?:\.\d+)*)\s*$)",
     std::regex_constants::ECMAScript | std::regex_constants::multiline);
+  bool has_address_runtime = false;
+  bool has_undefined_runtime = false;
   for (auto match =
          std::sregex_iterator(text->begin(), text->end(), needed_pattern);
        match != std::sregex_iterator();
        ++match) {
     const std::string name = (*match)[1];
-    if (!name.starts_with("libc.so") && !name.starts_with("libm.so")) {
+    has_address_runtime |=
+      name.starts_with("libasan.so") || name.starts_with("libclang_rt.asan-");
+    has_undefined_runtime |= name.starts_with("libubsan.so") ||
+                             name.starts_with("libclang_rt.ubsan_standalone-");
+    const bool sanitizer_runtime =
+      (uses_address_sanitizer && (name.starts_with("libasan.so") ||
+                                  name.starts_with("libclang_rt.asan-"))) ||
+      (uses_undefined_sanitizer &&
+       (name.starts_with("libubsan.so") ||
+        name.starts_with("libclang_rt.ubsan_standalone-")));
+    if (!name.starts_with("libc.so") && !name.starts_with("libm.so") &&
+        !sanitizer_runtime) {
       return fail(
         std::format("shared library has an unexpected dependency: {}", name));
     }
+  }
+  const bool has_address_symbols = std::ranges::any_of(
+    undefined,
+    [](const std::string& symbol) { return symbol.starts_with("__asan_"); });
+  const bool has_undefined_symbols = std::ranges::any_of(
+    undefined,
+    [](const std::string& symbol) { return symbol.starts_with("__ubsan_"); });
+  if ((has_address_symbols && !has_address_runtime) ||
+      (has_undefined_symbols && !has_undefined_runtime)) {
+    return fail("shared library lacks a required sanitizer runtime dependency");
   }
   capture_path = staging.path() / "symbols.txt";
   if (int status = run({nm_path, "-D", library.string()}, capture_path)) {

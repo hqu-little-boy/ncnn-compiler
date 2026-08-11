@@ -5,11 +5,13 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <utility>
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
@@ -509,8 +511,8 @@ FailureOr<RankedTensorType> computePoolResult(std::optional<Location> location,
     return fail("pooling kind is invalid");
   }
   ArrayRef<int64_t> inShape = input.getShape();
-  if (ShapedType::isDynamic(inShape[0]) || inShape[0] <= 0) {
-    return fail("pooling input channels must be static and positive");
+  if (!ShapedType::isDynamic(inShape[0]) && inShape[0] <= 0) {
+    return fail("pooling input channels must be positive or dynamic");
   }
   for (int64_t dim : inShape.drop_front()) {
     if (!ShapedType::isDynamic(dim) && dim <= 0) {
@@ -679,6 +681,139 @@ FailureOr<RankedTensorType> computeReshapeResult(
   return RankedTensorType::get(shape, input.getElementType());
 }
 
+FailureOr<RankedTensorType> computeReshapeSpecResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  ArrayRef<int64_t> spec,
+  ArrayRef<int64_t> zeroSources) {
+  if (!input || !input.getElementType().isF32() || spec.empty() ||
+      spec.size() != zeroSources.size()) {
+    return emitOptionalError(location, "Reshape shape_spec is invalid");
+  }
+  int64_t inputCount = 1;
+  bool dynamicInputCount = false;
+  SmallVector<bool> consumedInputDimensions(input.getRank(), false);
+  for (int64_t dimension : input.getShape()) {
+    if (ShapedType::isDynamic(dimension)) {
+      dynamicInputCount = true;
+    } else if (llvm::MulOverflow(inputCount, dimension, inputCount)) {
+      return emitOptionalError(location,
+                               "Reshape input element count overflows");
+    }
+  }
+  SmallVector<int64_t> outputShape;
+  int64_t outputCount = 1;
+  int64_t unknown = -1;
+  bool dynamicOutputCount = false;
+  for (size_t index = 0; index < spec.size(); ++index) {
+    int64_t dimension = spec[index];
+    if (dimension == -1) {
+      if (unknown != -1) {
+        return emitOptionalError(location,
+                                 "Reshape has multiple -1 dimensions");
+      }
+      if (zeroSources[index] != -1) {
+        return emitOptionalError(location,
+                                 "Reshape -1 cannot have a zero source");
+      }
+      unknown = outputShape.size();
+      outputShape.push_back(ShapedType::kDynamic);
+      continue;
+    }
+    if (dimension == 0) {
+      const int64_t source = zeroSources[index];
+      if (source < 0 || source >= input.getRank()) {
+        return emitOptionalError(
+          location, "Reshape 0 dimension is outside the input rank");
+      }
+      dimension = input.getShape()[source];
+      if (consumedInputDimensions[source]) {
+        return emitOptionalError(location,
+                                 "Reshape cannot prove exact element count");
+      }
+      consumedInputDimensions[source] = true;
+    } else if (dimension < 0 || zeroSources[index] != -1) {
+      return emitOptionalError(location,
+                               "Reshape shape_spec dimension is invalid");
+    }
+    outputShape.push_back(dimension);
+    if (ShapedType::isDynamic(dimension)) {
+      dynamicOutputCount = true;
+    } else if (llvm::MulOverflow(outputCount, dimension, outputCount)) {
+      return emitOptionalError(location,
+                               "Reshape output element count overflows");
+    }
+  }
+  if (unknown != -1) {
+    if (!dynamicInputCount && !dynamicOutputCount) {
+      if (inputCount % outputCount != 0) {
+        return emitOptionalError(location,
+                                 "Reshape element count does not match input");
+      }
+      outputShape[unknown] = inputCount / outputCount;
+    } else {
+      int64_t uncancelledInputCount = 1;
+      for (auto [index, dimension] : llvm::enumerate(input.getShape())) {
+        if (!consumedInputDimensions[index] &&
+            !ShapedType::isDynamic(dimension) &&
+            llvm::MulOverflow(
+              uncancelledInputCount, dimension, uncancelledInputCount)) {
+          return emitOptionalError(location,
+                                   "Reshape input element count overflows");
+        }
+      }
+      int64_t uncancelledOutputCount = 1;
+      for (size_t index = 0; index < spec.size(); ++index) {
+        if (std::cmp_equal(index, unknown) || spec[index] == 0) {
+          continue;
+        }
+        if (llvm::MulOverflow(
+              uncancelledOutputCount, spec[index], uncancelledOutputCount)) {
+          return emitOptionalError(location,
+                                   "Reshape output element count overflows");
+        }
+      }
+      if (uncancelledInputCount % uncancelledOutputCount != 0) {
+        return emitOptionalError(
+          location, "Reshape cannot prove exact inferred dimension");
+      }
+    }
+  } else if (dynamicInputCount || dynamicOutputCount) {
+    int64_t uncancelledInputCount = 1;
+    for (auto [index, dimension] : llvm::enumerate(input.getShape())) {
+      if (consumedInputDimensions[index]) {
+        continue;
+      }
+      if (ShapedType::isDynamic(dimension)) {
+        return emitOptionalError(location,
+                                 "Reshape cannot prove exact element count");
+      }
+      if (llvm::MulOverflow(
+            uncancelledInputCount, dimension, uncancelledInputCount)) {
+        return emitOptionalError(location,
+                                 "Reshape input element count overflows");
+      }
+    }
+    int64_t uncancelledOutputCount = 1;
+    for (int64_t dimension : spec) {
+      if (dimension > 0 &&
+          llvm::MulOverflow(
+            uncancelledOutputCount, dimension, uncancelledOutputCount)) {
+        return emitOptionalError(location,
+                                 "Reshape output element count overflows");
+      }
+    }
+    if (uncancelledInputCount != uncancelledOutputCount) {
+      return emitOptionalError(location,
+                               "Reshape cannot prove exact element count");
+    }
+  } else if (inputCount != outputCount) {
+    return emitOptionalError(location,
+                             "Reshape element count does not match input");
+  }
+  return RankedTensorType::get(outputShape, input.getElementType());
+}
+
 FailureOr<RankedTensorType> computeSqueezeResult(
   std::optional<Location> location,
   RankedTensorType input,
@@ -765,9 +900,9 @@ FailureOr<RankedTensorType> computeBinaryResult(
   llvm::APFloat scalar,
   int64_t opType) {
   (void)scalar;
-  if (opType != 0 && opType != 2) {
+  if (opType != 0 && opType != 2 && opType != 4) {
     return emitOptionalError(location,
-                             "BinaryOp only supports add and multiply");
+                             "BinaryOp only supports add, multiply, and max");
   }
   if ((withScalar && inputs.size() != 1) ||
       (!withScalar && inputs.size() != 2)) {
@@ -796,7 +931,11 @@ FailureOr<RankedTensorType> computeBinaryResult(
       shape.push_back(right);
     } else if (right == 1) {
       shape.push_back(left);
-    } else if (ShapedType::isDynamic(left) || ShapedType::isDynamic(right)) {
+    } else if (ShapedType::isDynamic(left) != ShapedType::isDynamic(right)) {
+      return emitOptionalError(
+        location,
+        "BinaryOp dynamic extent cannot be broadcast to a static extent");
+    } else if (ShapedType::isDynamic(left)) {
       shape.push_back(ShapedType::kDynamic);
     } else if (left == right) {
       shape.push_back(left);
@@ -819,8 +958,14 @@ FailureOr<RankedTensorType> computeInnerProductResult(
     return emitOptionalError(location,
                              "InnerProduct input and weight must be f32");
   }
-  if (!input.hasStaticShape() || input.getRank() < 1 || weight.getRank() != 2 ||
-      weight.getShape()[1] != input.getNumElements()) {
+  const bool dynamicMatrix =
+    input.getRank() == 2 && input.isDynamicDim(0) && !input.isDynamicDim(1);
+  const int64_t inputElements =
+    dynamicMatrix ? input.getShape()[1]
+                  : (input.hasStaticShape() ? input.getNumElements() : -1);
+  if (input.getRank() < 1 || weight.getRank() != 2 ||
+      (!input.hasStaticShape() && !dynamicMatrix) || !weight.hasStaticShape() ||
+      weight.getShape()[1] != inputElements) {
     return emitOptionalError(
       location, "InnerProduct input elements must match weight [O,I]");
   }
@@ -837,6 +982,10 @@ FailureOr<RankedTensorType> computeInnerProductResult(
     }
   } else if (!bias.empty()) {
     return emitOptionalError(location, "InnerProduct has unexpected bias");
+  }
+  if (dynamicMatrix) {
+    return RankedTensorType::get({input.getShape()[0], weight.getShape()[0]},
+                                 input.getElementType());
   }
   return RankedTensorType::get({weight.getShape()[0]}, input.getElementType());
 }
@@ -905,18 +1054,26 @@ LogicalResult inferSliceResults(
     return emitOptionalError(location, "Slice axis is outside input rank");
   }
   const int64_t extent = input.getShape()[axis];
-  if (ShapedType::isDynamic(extent)) {
-    return emitOptionalError(location, "Slice axis must have static extent");
+  const bool dynamicExtent = ShapedType::isDynamic(extent);
+  if (dynamicExtent && requestedSlices.back() != -233) {
+    return emitOptionalError(
+      location, "Slice dynamic axis requires a trailing -233 remainder slice");
   }
   int64_t consumed = 0;
   for (std::size_t index = 0; index < requestedSlices.size(); ++index) {
     int64_t size = requestedSlices[index];
     if (size == -233) {
+      if (dynamicExtent) {
+        SmallVector<int64_t> shape(input.getShape());
+        shape[axis] = ShapedType::kDynamic;
+        inferredReturnShapes.emplace_back(shape, input.getElementType());
+        continue;
+      }
       const auto remainingResults =
         static_cast<int64_t>(requestedSlices.size() - index);
       size = (extent - consumed) / remainingResults;
     }
-    if (size <= 0 || size > extent - consumed) {
+    if (size <= 0 || (!dynamicExtent && size > extent - consumed)) {
       return emitOptionalError(location,
                                "Slice sizes must be positive and fit input");
     }
@@ -925,7 +1082,7 @@ LogicalResult inferSliceResults(
     inferredReturnShapes.emplace_back(shape, input.getElementType());
     consumed += size;
   }
-  if (consumed != extent) {
+  if (!dynamicExtent && consumed != extent) {
     return emitOptionalError(location,
                              "Slice sizes must consume the entire axis");
   }
@@ -1249,6 +1406,10 @@ LogicalResult ReshapeOp::inferReturnTypeComponents(
   SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
   auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
   if (adaptor.getShapeExpression()) {
+    if (adaptor.getShapeSpec() || adaptor.getShapeZeroSources()) {
+      return emitOptionalError(
+        location, "Reshape shape expression cannot have a shape_spec");
+    }
     auto sources = adaptor.getShapeSources();
     if (!sources || sources->empty() || sources->size() % 2 != 0 ||
         sources->size() / 2 != adaptor.getShape().size()) {
@@ -1288,7 +1449,42 @@ LogicalResult ReshapeOp::inferReturnTypeComponents(
     return emitOptionalError(
       location, "Reshape shape references require a shape expression");
   }
-  auto result = computeReshapeResult(location, input, adaptor.getShape());
+  ArrayRef<int64_t> shape = adaptor.getShape();
+  FailureOr<RankedTensorType> result;
+  if (adaptor.getShapeSpec()) {
+    ArrayRef<int64_t> spec = *adaptor.getShapeSpec();
+    std::optional<ArrayRef<int64_t>> zeroSources =
+      adaptor.getShapeZeroSources();
+    if (spec.empty() || spec.size() != shape.size() || !zeroSources ||
+        zeroSources->size() != spec.size()) {
+      return emitOptionalError(
+        location, "Reshape shape_spec must match the resolved shape");
+    }
+    SmallVector<int64_t> resolvedSpec(spec.begin(), spec.end());
+    for (size_t index = 0; index < resolvedSpec.size(); ++index) {
+      if (resolvedSpec[index] == 0) {
+        const int64_t source = (*zeroSources)[index];
+        if (source < 0 || source >= input.getRank()) {
+          return emitOptionalError(
+            location, "Reshape 0 dimension is outside the input rank");
+        }
+        resolvedSpec[index] = input.getShape()[source];
+      } else if ((*zeroSources)[index] != -1) {
+        return emitOptionalError(location,
+                                 "Reshape zero source is inconsistent");
+      }
+    }
+    if (resolvedSpec != shape) {
+      return emitOptionalError(
+        location, "Reshape shape does not match shape_spec semantics");
+    }
+    result = computeReshapeSpecResult(location, input, spec, *zeroSources);
+  } else if (adaptor.getShapeZeroSources()) {
+    return emitOptionalError(location,
+                             "Reshape shape_zero_sources requires shape_spec");
+  } else {
+    result = computeReshapeResult(location, input, shape);
+  }
   if (failed(result)) {
     return failure();
   }
@@ -1438,6 +1634,125 @@ LogicalResult SliceOp::inferReturnTypeComponents(
                            adaptor.getSlices(),
                            adaptor.getAxis(),
                            inferredReturnShapes);
+}
+
+LogicalResult SliceOp::verify() {
+  auto inputType = dyn_cast<RankedTensorType>(getInput().getType());
+  if (!inputType) {
+    return success();
+  }
+  int64_t axis = getAxis();
+  if (axis < 0) {
+    axis += inputType.getRank();
+  }
+  if (axis < 0 || axis >= inputType.getRank() ||
+      !inputType.isDynamicDim(axis)) {
+    return success();
+  }
+
+  if (getSlices().empty() || getSlices().back() != -233 ||
+      llvm::any_of(getSlices(),
+                   [](int64_t size) { return size <= 0 && size != -233; })) {
+    return success();
+  }
+
+  int64_t requiredMinimum = 0;
+  for (int64_t size : getSlices()) {
+    const int64_t contribution = size == -233 ? 1 : size;
+    if (contribution <= 0 ||
+        llvm::AddOverflow(requiredMinimum, contribution, requiredMinimum)) {
+      return emitOpError("has invalid dynamic slice minimum extent");
+    }
+  }
+
+  std::optional<unsigned> inputIndex;
+  Operation* constraintOwner = nullptr;
+  Value source = getInput();
+  int64_t sourceAxis = axis;
+  while (true) {
+    if (auto binary = source.getDefiningOp<BinaryOp>()) {
+      if (binary.getWithScalar()) {
+        source = binary.getInputs().front();
+        continue;
+      }
+      auto firstType = cast<RankedTensorType>(binary.getInputs()[0].getType());
+      auto secondType = cast<RankedTensorType>(binary.getInputs()[1].getType());
+      if (firstType.getDimSize(sourceAxis) == 1) {
+        source = binary.getInputs()[1];
+      } else if (secondType.getDimSize(sourceAxis) == 1 ||
+                 firstType.getDimSize(sourceAxis) ==
+                   secondType.getDimSize(sourceAxis)) {
+        source = binary.getInputs()[0];
+      } else {
+        break;
+      }
+      continue;
+    }
+    if (auto squeeze = source.getDefiningOp<SqueezeOp>()) {
+      auto sourceType = cast<RankedTensorType>(squeeze.getInput().getType());
+      std::set<int64_t> removedAxes;
+      for (int64_t removedAxis : squeeze.getAxes()) {
+        if (removedAxis < 0) {
+          removedAxis += sourceType.getRank();
+        }
+        removedAxes.insert(removedAxis);
+      }
+      int64_t outputAxis = 0;
+      bool mapped = false;
+      for (int64_t inputAxis = 0; inputAxis < sourceType.getRank();
+           ++inputAxis) {
+        if (removedAxes.contains(inputAxis)) {
+          continue;
+        }
+        if (outputAxis++ == sourceAxis) {
+          sourceAxis = inputAxis;
+          mapped = true;
+          break;
+        }
+      }
+      if (!mapped) {
+        break;
+      }
+      source = squeeze.getInput();
+      continue;
+    }
+    break;
+  }
+  if (auto input = source.getDefiningOp<InputOp>()) {
+    if (auto model = getOperation()->getParentOfType<ModelOp>()) {
+      unsigned index = 0;
+      for (InputOp candidate : model.getOps<InputOp>()) {
+        if (candidate == input) {
+          inputIndex = index;
+          break;
+        }
+        ++index;
+      }
+      constraintOwner = model;
+    }
+  } else if (auto argument = dyn_cast<BlockArgument>(source)) {
+    if (auto function = getOperation()->getParentOfType<func::FuncOp>()) {
+      inputIndex = argument.getArgNumber();
+      constraintOwner = function;
+    }
+  }
+  auto constraints =
+    constraintOwner
+      ? constraintOwner->getAttrOfType<ArrayAttr>("ncnn.shape_constraints")
+      : nullptr;
+  if (inputIndex && constraints) {
+    for (Attribute attribute : constraints) {
+      auto constraint = dyn_cast<DimConstraintAttr>(attribute);
+      if (constraint && constraint.getInput() == *inputIndex &&
+          constraint.getDim() == static_cast<uint32_t>(sourceAxis) &&
+          constraint.getMin() >= requiredMinimum) {
+        return success();
+      }
+    }
+  }
+  return emitOpError()
+         << "dynamic axis requires an input minimum extent of at least "
+         << requiredMinimum;
 }
 
 LogicalResult ReductionOp::inferReturnTypeComponents(

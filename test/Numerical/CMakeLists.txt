@@ -68,7 +68,9 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
         list(APPEND sanitizer_args
              --clang-arg=-fsanitize=address,undefined
              --clang-arg=-fno-omit-frame-pointer
-             --linker-arg=-fsanitize=address,undefined)
+             --linker-arg=-fsanitize=address,undefined
+             --linker-arg=-lasan
+             --linker-arg=-lubsan)
     endif()
     add_custom_command(
         OUTPUT ${library} ${output_dir}/${name}.h ${output_dir}/${name}.json
@@ -126,6 +128,7 @@ set(convolution_depthwise_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/co
 set(convolution_depthwise_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_same_upper.bin)
 set(convolution_depthwise_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_same_lower.bin)
 set(inner_product_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product.bin)
+set(inner_product_dynamic_m_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product_dynamic_m.bin)
 set(inner_product_fused_relu_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/inner_product_fused_relu.bin)
 set(batch_norm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/batch_norm.bin)
 set(gemm_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/gemm.bin)
@@ -155,6 +158,7 @@ foreach(weighted_case IN ITEMS
         convolution_depthwise_same_upper
         convolution_depthwise_same_lower
         inner_product
+        inner_product_dynamic_m
         inner_product_fused_relu
         batch_norm
         gemm
@@ -578,6 +582,52 @@ ncnn_add_compiled_fixture(
     0:1:min=1,multiple=1
     0:2:min=1,multiple=1)
 ncnn_add_compiled_fixture(
+    pooling_global_max_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_global_max_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    pooling_global_average_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_global_average_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    pooling_adaptive_max_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_adaptive_max_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    pooling_adaptive_average_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_adaptive_average_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    reshape_spec_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reshape_spec_dynamic.param
+    ${empty_bin}
+    1x?x6
+    0:1:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    slice_ordered_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slice_ordered_dynamic.param
+    ${empty_bin}
+    1x?x4
+    0:1:min=5,multiple=1)
+ncnn_add_compiled_fixture(
+    inner_product_dynamic_m
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/inner_product_dynamic_m.param
+    ${inner_product_dynamic_m_bin}
+    1x?x4
+    0:1:min=1,multiple=1)
+ncnn_add_compiled_fixture(
     detection_output
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/detection_output.param
     ${empty_bin})
@@ -724,6 +774,13 @@ set(numerical_fixture_targets
     compile_reduction_dynamic
     compile_gemm_dynamic
     compile_slice_dynamic
+    compile_pooling_global_max_dynamic
+    compile_pooling_global_average_dynamic
+    compile_pooling_adaptive_max_dynamic
+    compile_pooling_adaptive_average_dynamic
+    compile_reshape_spec_dynamic
+    compile_slice_ordered_dynamic
+    compile_inner_product_dynamic_m
     compile_detection_output)
 list(LENGTH numerical_fixture_targets numerical_fixture_target_count)
 math(EXPR numerical_fixture_last_index "${numerical_fixture_target_count} - 1")
@@ -932,6 +989,14 @@ target_compile_definitions(numerical_dynamic_operator_tests PRIVATE
     REDUCTION_DYNAMIC_LIBRARY_PATH="${reduction_dynamic_LIBRARY}"
     GEMM_DYNAMIC_LIBRARY_PATH="${gemm_dynamic_LIBRARY}"
     SLICE_DYNAMIC_LIBRARY_PATH="${slice_dynamic_LIBRARY}"
+    POOLING_GLOBAL_MAX_DYNAMIC_LIBRARY_PATH="${pooling_global_max_dynamic_LIBRARY}"
+    POOLING_GLOBAL_AVERAGE_DYNAMIC_LIBRARY_PATH="${pooling_global_average_dynamic_LIBRARY}"
+    POOLING_ADAPTIVE_MAX_DYNAMIC_LIBRARY_PATH="${pooling_adaptive_max_dynamic_LIBRARY}"
+    POOLING_ADAPTIVE_AVERAGE_DYNAMIC_LIBRARY_PATH="${pooling_adaptive_average_dynamic_LIBRARY}"
+    RESHAPE_SPEC_DYNAMIC_LIBRARY_PATH="${reshape_spec_dynamic_LIBRARY}"
+    SLICE_ORDERED_DYNAMIC_LIBRARY_PATH="${slice_ordered_dynamic_LIBRARY}"
+    INNER_PRODUCT_DYNAMIC_M_LIBRARY_PATH="${inner_product_dynamic_m_LIBRARY}"
+    INNER_PRODUCT_DYNAMIC_M_BIN_PATH="${inner_product_dynamic_m_bin}"
     GEMM_BIN_PATH="${gemm_bin}"
     BATCH_NORM_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/fixtures/batch_norm.bin")
 add_dependencies(numerical_dynamic_operator_tests
@@ -951,7 +1016,14 @@ add_dependencies(numerical_dynamic_operator_tests
     compile_expand_dims_dynamic
     compile_reduction_dynamic
     compile_gemm_dynamic
-    compile_slice_dynamic)
+    compile_slice_dynamic
+    compile_pooling_global_max_dynamic
+    compile_pooling_global_average_dynamic
+    compile_pooling_adaptive_max_dynamic
+    compile_pooling_adaptive_average_dynamic
+    compile_reshape_spec_dynamic
+    compile_slice_ordered_dynamic
+    compile_inner_product_dynamic_m)
 
 add_executable(numerical_dynamic_tests
     models/dynamic_pp_ocr_test.cpp)
@@ -966,15 +1038,22 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
     PP_OCRV5_SERVER_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_server_det_dynamic_LIBRARY}")
 add_dependencies(numerical_dynamic_tests compile_pp_ocrv5_server_det_dynamic)
 
+set(numerical_test_timeout 900)
+set(numerical_dynamic_test_timeout 3600)
+if(CMAKE_CXX_FLAGS MATCHES "fsanitize")
+    set(numerical_test_timeout 7200)
+    set(numerical_dynamic_test_timeout 14400)
+endif()
+
 gtest_discover_tests(numerical_tests
     PROPERTIES
         LABELS numerical-static-baseline
-        TIMEOUT 900
+        TIMEOUT ${numerical_test_timeout}
         RUN_SERIAL TRUE)
 gtest_discover_tests(numerical_dynamic_tests
     PROPERTIES
         LABELS numerical-dynamic
-        TIMEOUT 3600
+        TIMEOUT ${numerical_dynamic_test_timeout}
         RUN_SERIAL TRUE)
 gtest_discover_tests(numerical_dynamic_operator_tests
     PROPERTIES

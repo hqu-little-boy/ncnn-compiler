@@ -516,6 +516,121 @@ TEST_F(NcnnImporterTest, ImportsReshapeShapeExpressionReferences) {
   EXPECT_FALSE(import(graph, options));
 }
 
+TEST_F(NcnnImporterTest, PreservesReshapeZeroAndInferSemantics) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "input", {}, {"data"}));
+  auto reshape = make_layer("Reshape", "reshape", {"data"}, {"output"});
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(-1));
+  params.set_value(1, ncnn_graph::ParamValue::make_int(0));
+  reshape.set_params(std::move(params));
+  graph.add_layer(std::move(reshape));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"output"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions options;
+  options.input_shape = ncnn_importer::InputShape{3, 4, 5};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  imported->get().walk([&](mlir::ncnn::ReshapeOp op) {
+    ASSERT_TRUE(op.getShapeSpec());
+    EXPECT_EQ(*op.getShapeSpec(), (llvm::ArrayRef<int64_t>{0, -1}));
+    ASSERT_TRUE(op.getShapeZeroSources());
+    EXPECT_EQ(*op.getShapeZeroSources(), (llvm::ArrayRef<int64_t>{1, -1}));
+    EXPECT_TRUE(shape_is(op.getOutput().getType(), {4, 15}));
+  });
+
+  auto layers = std::vector<ncnn_graph::Layer>(graph.get_layers().begin(),
+                                               graph.get_layers().end());
+  ncnn_graph::ParamDict multipleUnknown;
+  multipleUnknown.set_value(0, ncnn_graph::ParamValue::make_int(-1));
+  multipleUnknown.set_value(1, ncnn_graph::ParamValue::make_int(-1));
+  layers[1].set_params(std::move(multipleUnknown));
+  graph.set_layers(std::move(layers));
+  EXPECT_FALSE(import(graph, options));
+}
+
+TEST_F(NcnnImporterTest, ImportsDynamicBinarySlicePoolingAndInnerProduct) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "left", {}, {"left"}));
+  graph.add_layer(make_layer("Input", "right", {}, {"right"}));
+  auto binary = make_layer("BinaryOp", "max3d", {"left", "right"}, {"max3d"});
+  ncnn_graph::ParamDict binaryParams;
+  binaryParams.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  binary.set_params(std::move(binaryParams));
+  graph.add_layer(std::move(binary));
+  auto squeeze = make_layer("Squeeze", "max", {"max3d"}, {"max"});
+  ncnn_graph::ParamDict squeezeParams;
+  squeezeParams.set_value(3, ncnn_graph::ParamValue::make_int_array({1}));
+  squeeze.set_params(std::move(squeezeParams));
+  graph.add_layer(std::move(squeeze));
+  auto slice = make_layer("Slice", "slice", {"max"}, {"first", "rest"});
+  ncnn_graph::ParamDict sliceParams;
+  sliceParams.set_value(0, ncnn_graph::ParamValue::make_int_array({2, -233}));
+  sliceParams.set_value(1, ncnn_graph::ParamValue::make_int(0));
+  slice.set_params(std::move(sliceParams));
+  graph.add_layer(std::move(slice));
+  auto product = make_layer("InnerProduct", "product", {"max"}, {"product"});
+  ncnn_graph::ParamDict productParams;
+  productParams.set_value(0, ncnn_graph::ParamValue::make_int(3));
+  productParams.set_value(2, ncnn_graph::ParamValue::make_int(12));
+  product.set_params(std::move(productParams));
+  product.add_weight(make_tensor({3, 4}, ncnn_graph::DataType::Float32));
+  graph.add_layer(std::move(product));
+  graph.set_input_blob_names({"left", "right"});
+  graph.set_output_blob_names({"first", "rest", "product"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions options;
+  options.input_shapes = {{-1, 1, 4}, {1, 1, 4}};
+  options.input_dim_constraints = {
+    {.input = 0, .dimension = 0, .minimum = 3, .multiple_of = 1}};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_TRUE(shape_is(result_type_by_name(imported->get(), "max"),
+                       {mlir::ShapedType::kDynamic, 4}));
+  EXPECT_TRUE(shape_is(result_type_by_name(imported->get(), "product"),
+                       {mlir::ShapedType::kDynamic, 3}));
+  imported->get().walk([&](mlir::ncnn::SliceOp op) {
+    EXPECT_TRUE(shape_is(
+      mlir::cast<mlir::RankedTensorType>(op->getResult(0).getType()), {2, 4}));
+    EXPECT_TRUE(
+      shape_is(mlir::cast<mlir::RankedTensorType>(op->getResult(1).getType()),
+               {mlir::ShapedType::kDynamic, 4}));
+  });
+
+  ncnn_graph::Graph pooling;
+  pooling.add_layer(make_layer("Input", "input", {}, {"data"}));
+  auto global = make_layer("Pooling", "global", {"data"}, {"output"});
+  ncnn_graph::ParamDict globalParams;
+  globalParams.set_value(4, ncnn_graph::ParamValue::make_int(1));
+  global.set_params(std::move(globalParams));
+  pooling.add_layer(std::move(global));
+  pooling.set_input_blob_names({"data"});
+  pooling.set_output_blob_names({"output"});
+  pooling.set_weights_loaded(true);
+  options.input_shapes = {{-1, -1, -1}};
+  auto pooled = import(pooling, options);
+  ASSERT_TRUE(pooled) << pooled.error().to_string();
+  EXPECT_TRUE(
+    shape_is(output_type(pooled->get()), {mlir::ShapedType::kDynamic}));
+}
+
+TEST_F(NcnnImporterTest, RejectsUnsafeDynamicDetectionAndWeights) {
+  auto detection = make_detection_output_graph();
+  auto layers = std::vector<ncnn_graph::Layer>(detection.get_layers().begin(),
+                                               detection.get_layers().end());
+  layers[2].set_params({});
+  detection.set_layers(std::move(layers));
+  ncnn_importer::ImportOptions options;
+  options.input_shapes = {{1, 1, 12}, {1, 1, 9}, {1, 2, -1}};
+  auto dynamicPrior = import(detection, options);
+  ASSERT_FALSE(dynamicPrior);
+  EXPECT_NE(dynamicPrior.error().get_message().find("static FP32 inputs"),
+            std::string_view::npos);
+}
+
 TEST_F(NcnnImporterTest, RejectsInputShapeContractErrors) {
   ncnn_graph::Graph graph;
   graph.add_layer(make_layer("Input", "input", {}, {"data"}));
