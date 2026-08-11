@@ -11,6 +11,27 @@
 使用 FP32 CPU 计算。固定种子输入采用 `[-0.01, 0.01]` 范围，避免随机大幅值在深层网络中
 放大不同累加顺序的舍入差异。
 
+## 运行前必须重建 generated fixture
+
+> **不要直接运行 CTest。CTest 只执行已有测试，不会构建测试 target，也不会重新生成模型
+> fixture。每一次测试前都必须先构建包含目标用例的正确 target。**
+
+```bash
+cmake --build compiler/build --target numerical_tests --parallel
+cmake --build compiler/build \
+  --target numerical_dynamic_operator_tests numerical_dynamic_tests --parallel
+```
+
+静态标签只需构建 `numerical_tests`；`numerical-dynamic` 标签同时包含动态算子和动态模型，
+运行整个标签前必须同时构建上面的两个动态 target。对应 target 会通过 CMake 依赖重建其
+`generated/` 下的模型 `.so`、头文件和 manifest，然后才能运行相应的 `ctest -R ...` 或
+`ctest -L ...`。尤其在修改
+`ncnn-compile`、driver、opt、pipeline、模型 `.param/.bin` 或 fixture 参数后，直接运行
+CTest 会静默复用陈旧产物，可能得到完全错误的数值、动态依赖和性能结果。完整说明及单个
+fixture 的命令见
+[`docs/ncnn-suspected-issues.md`](../../docs/ncnn-suspected-issues.md) 的“CTest 不会重建
+fixture”一节。
+
 现有分层：
 
 - `operators/`：小型单算子 `.param/.bin` fixture 的精确比较。

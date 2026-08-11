@@ -14,6 +14,47 @@ fixture 通过唯一产品入口 `ncnn-compile` 生成并加载模型 `.so`；sa
 插桩模型时，`ncnn-compile` 会按 `-fsanitize=` 选择审计对应的 sanitizer 符号族和
 `libasan`/`libubsan` `DT_NEEDED`，不能把仅测试进程带 sanitizer 与模型代码已插桩混为一谈。
 
+## 测试基础设施坑点：CTest 不会重建 fixture
+
+> **强制要求：每一次运行 CTest 前，必须先重建包含目标测试用例的测试 target，确保其
+> generated fixture 使用当前 `ncnn-compile`、MLIR pipeline、模型输入和编译参数重新生成。
+> 禁止修改编译器或 lowering 后直接运行 `ctest`。**
+
+CTest 只执行已经存在的测试程序，不会执行 CMake build，也不会检查或触发
+`add_custom_command(DEPENDS ...)`。因此，即使 fixture 正确依赖 `ncnn-compile`、
+`ncnn-mlir-driver` 和 `ncnn-mlir-opt`，直接运行 `ctest` 仍可能加载构建目录中陈旧的模型
+`.so`。这会造成错误的数值、依赖和性能结论。例如，旧动态模型产物可能没有当前 pipeline
+生成的 OpenMP 调用，却仍被 CTest 正常加载和执行。
+
+从仓库根目录按测试类型执行：
+
+```bash
+# 静态 numerical 用例及其 generated fixture
+cmake --build compiler/build --target numerical_tests --parallel
+ctest --test-dir compiler/build -L numerical-static-baseline --output-on-failure
+
+# numerical-dynamic 标签包含动态算子和动态模型，必须同时重建两类 fixture
+cmake --build compiler/build \
+  --target numerical_dynamic_operator_tests numerical_dynamic_tests --parallel
+ctest --test-dir compiler/build -L numerical-dynamic --output-on-failure
+```
+
+只验证单个 fixture 时，至少先构建其 `compile_<fixture-name>` target；如果测试程序源码、
+链接依赖或编译定义也可能变化，应直接构建对应测试 executable target。构建单个类别后只
+能运行匹配该类别的精确 `-R`，不能直接运行同时覆盖其他类别的整个 label。例如：
+
+```bash
+cmake --build compiler/build \
+  --target compile_pp_ocrv5_server_det_dynamic --parallel
+cmake --build compiler/build --target numerical_dynamic_tests --parallel
+ctest --test-dir compiler/build \
+  -R 'NumericalDynamicModel.PPOCRv5ServerDet' --output-on-failure
+```
+
+性能或链接依赖调查还必须核对 generated `.so` 的时间戳以及 `DT_NEEDED`/未定义符号，不能
+仅凭 CTest 输出推断当前编译器生成了该产物。清理整个构建目录不是日常要求；正确做法是先
+构建准确的测试 target，让 CMake 根据依赖关系重建对应 fixture。
+
 ## 1. 外部 Mat 与优化 kernel 的尾部预读
 
 **分类：高可信疑似 API 契约缺口，尚未确认是实现 bug。**

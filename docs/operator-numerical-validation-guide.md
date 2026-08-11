@@ -281,7 +281,26 @@ project(ncnn_compiler LANGUAGES C CXX)
 - 项目 `format`/`tidy` 文件 glob 必须排除 `test/third_party/`，不能格式化或审查第三方源码。
 - ncnn 的全局 cache options 必须在 `add_subdirectory` 之前统一设置。
 
-## 14. 并行构建下生成 fixture 要避免相互踩产物
+## 14. 运行 CTest 前必须重建对应 fixture
+
+CTest 是测试执行器，不是构建工具。它不会触发 fixture 的 CMake custom command。每次运行
+numerical CTest 前，必须先构建包含目标用例的测试 executable target：
+
+```bash
+cmake --build compiler/build --target numerical_tests --parallel
+cmake --build compiler/build \
+  --target numerical_dynamic_operator_tests numerical_dynamic_tests --parallel
+```
+
+静态标签只需构建 `numerical_tests`。`numerical-dynamic` 标签同时包含动态算子和动态模型，
+运行整个标签前必须同时构建两个动态 target。只运行单个 fixture 时可以先构建对应的
+`compile_<fixture-name>` target，但测试程序本身也有变化时必须构建测试 executable target，
+并使用精确 `ctest -R`，不能运行包含未重建类别的整个 label。
+修改 compiler、driver、opt、lowering pipeline、模型或 fixture 参数后直接执行 `ctest`，会
+复用旧的 generated `.so`，从而使数值、符号依赖和性能结果失真。详细坑点和命令见
+[`ncnn-suspected-issues.md`](ncnn-suspected-issues.md) 的“CTest 不会重建 fixture”一节。
+
+## 15. 并行构建下生成 fixture 要避免相互踩产物
 
 多个模型 fixture 会同时运行 driver、opt、translate、clang、nm 和 readelf。本环境曾在并行构建
 时出现以下瞬时问题：
@@ -294,7 +313,7 @@ project(ncnn_compiler LANGUAGES C CXX)
 新增 fixture 时应把它接入该链，或改造生成脚本使用临时文件加原子 rename。不要通过全局关闭
 并行构建掩盖产物声明和原子性问题，也不要让测试与会重链接同一 executable 的 target 并发运行。
 
-## 15. 推荐的新增算子流程
+## 16. 推荐的新增算子流程
 
 1. 明确支持矩阵和拒绝路径，不从层名推断完整支持。
 2. 添加 parser/importer/verifier 测试，检查参数类型、默认值、shape 和错误上下文。
@@ -306,7 +325,7 @@ project(ncnn_compiler LANGUAGES C CXX)
 8. 审核新增 undefined symbols、动态依赖和导出符号。
 9. 在 Release 下验证真实优化产物。
 10. 在 sanitizer 下验证 harness、reference 和桥接，并明确生成 `.so` 是否已插桩。
-11. 最后运行完整构建、全部 CTest、format、tidy 和 `git diff --check`。
+11. 最后先重建全部测试 target，再运行全部 CTest、format、tidy 和 `git diff --check`。
 
 若模型级结果不一致，优先从第一处中间结果偏差开始定位，而不是直接调整最终阈值。对
 SqueezeNet，建议依次检查第一层 Conv、Pooling 尾部 padding、Fire Concat channel 顺序、

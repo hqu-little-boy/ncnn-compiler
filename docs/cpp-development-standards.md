@@ -478,7 +478,8 @@ cmake --build compiler/build-sanitize --parallel
 ctest --test-dir compiler/build-sanitize --output-on-failure
 ```
 
-sanitizer 构建的 numerical fixture 仍由 CMake 测试实际调用 `ncnn-compile`。fixture 检测到
+sanitizer 构建的 numerical fixture 由 CMake build 阶段调用 `ncnn-compile` 生成，不是由
+CTest 生成。运行 CTest 前必须先构建对应 numerical 测试 target。fixture 检测到
 `CMAKE_CXX_FLAGS` 中的 sanitizer 后，会自动通过 `--clang-arg` 和 `--linker-arg` 为生成模型
 传递匹配的 `-fsanitize=`，因此 harness、reference、动态库边界和模型 `.so` 均受覆盖。直接
 手工调用 `ncnn-compile` 时仍须显式传递这些参数；driver 只放行对应 sanitizer 符号族和 runtime
@@ -490,6 +491,9 @@ Sanitizer 报告、崩溃、未定义行为或测试失败均为阻断问题，�
 ## 13. 提交前验收
 
 从项目根目录执行：
+
+**不得跳过 build 直接运行 CTest。CTest 不会重建 generated fixture；下列 build 必须在每次
+测试前完成，以保证测试加载的是当前编译器生成的产物。**
 
 ```bash
 cmake -S compiler -B compiler/build -DCMAKE_BUILD_TYPE=Release
