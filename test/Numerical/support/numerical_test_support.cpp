@@ -17,82 +17,6 @@
 namespace ncnn_compiler::test {
 namespace {
 
-#define DEFINE_NAIVE_CREATOR(name)          \
-  ncnn::Layer* create_naive_##name(void*) { \
-    return ncnn::create_layer_naive(#name); \
-  }
-
-DEFINE_NAIVE_CREATOR(Input)
-DEFINE_NAIVE_CREATOR(Convolution)
-DEFINE_NAIVE_CREATOR(ConvolutionDepthWise)
-DEFINE_NAIVE_CREATOR(HardSigmoid)
-DEFINE_NAIVE_CREATOR(HardSwish)
-DEFINE_NAIVE_CREATOR(Reshape)
-DEFINE_NAIVE_CREATOR(BinaryOp)
-DEFINE_NAIVE_CREATOR(InnerProduct)
-DEFINE_NAIVE_CREATOR(ShuffleChannel)
-DEFINE_NAIVE_CREATOR(Slice)
-DEFINE_NAIVE_CREATOR(Reduction)
-DEFINE_NAIVE_CREATOR(ReLU)
-DEFINE_NAIVE_CREATOR(Pooling)
-DEFINE_NAIVE_CREATOR(Split)
-DEFINE_NAIVE_CREATOR(Concat)
-DEFINE_NAIVE_CREATOR(Dropout)
-DEFINE_NAIVE_CREATOR(Softmax)
-DEFINE_NAIVE_CREATOR(GELU)
-DEFINE_NAIVE_CREATOR(Squeeze)
-DEFINE_NAIVE_CREATOR(BatchNorm)
-DEFINE_NAIVE_CREATOR(ExpandDims)
-DEFINE_NAIVE_CREATOR(Permute)
-DEFINE_NAIVE_CREATOR(Gemm)
-DEFINE_NAIVE_CREATOR(Padding)
-DEFINE_NAIVE_CREATOR(Interp)
-DEFINE_NAIVE_CREATOR(Deconvolution)
-DEFINE_NAIVE_CREATOR(Sigmoid)
-
-#undef DEFINE_NAIVE_CREATOR
-
-bool register_naive_layers(ncnn::Net& network) {
-  return network.register_custom_layer("Input", create_naive_Input) == 0 &&
-         network.register_custom_layer("Convolution",
-                                       create_naive_Convolution) == 0 &&
-         network.register_custom_layer(
-           "ConvolutionDepthWise", create_naive_ConvolutionDepthWise) == 0 &&
-         network.register_custom_layer("HardSigmoid",
-                                       create_naive_HardSigmoid) == 0 &&
-         network.register_custom_layer("HardSwish", create_naive_HardSwish) ==
-           0 &&
-         network.register_custom_layer("Reshape", create_naive_Reshape) == 0 &&
-         network.register_custom_layer("BinaryOp", create_naive_BinaryOp) ==
-           0 &&
-         network.register_custom_layer("InnerProduct",
-                                       create_naive_InnerProduct) == 0 &&
-         network.register_custom_layer("ShuffleChannel",
-                                       create_naive_ShuffleChannel) == 0 &&
-         network.register_custom_layer("Slice", create_naive_Slice) == 0 &&
-         network.register_custom_layer("Reduction", create_naive_Reduction) ==
-           0 &&
-         network.register_custom_layer("ReLU", create_naive_ReLU) == 0 &&
-         network.register_custom_layer("Pooling", create_naive_Pooling) == 0 &&
-         network.register_custom_layer("Split", create_naive_Split) == 0 &&
-         network.register_custom_layer("Concat", create_naive_Concat) == 0 &&
-         network.register_custom_layer("Dropout", create_naive_Dropout) == 0 &&
-         network.register_custom_layer("Softmax", create_naive_Softmax) == 0 &&
-         network.register_custom_layer("GELU", create_naive_GELU) == 0 &&
-         network.register_custom_layer("Squeeze", create_naive_Squeeze) == 0 &&
-         network.register_custom_layer("BatchNorm", create_naive_BatchNorm) ==
-           0 &&
-         network.register_custom_layer("ExpandDims", create_naive_ExpandDims) ==
-           0 &&
-         network.register_custom_layer("Permute", create_naive_Permute) == 0 &&
-         network.register_custom_layer("Gemm", create_naive_Gemm) == 0 &&
-         network.register_custom_layer("Padding", create_naive_Padding) == 0 &&
-         network.register_custom_layer("Interp", create_naive_Interp) == 0 &&
-         network.register_custom_layer("Deconvolution",
-                                       create_naive_Deconvolution) == 0 &&
-         network.register_custom_layer("Sigmoid", create_naive_Sigmoid) == 0;
-}
-
 std::vector<std::size_t> top_indices(std::span<const float> values,
                                      std::size_t count) {
   std::vector<std::size_t> indices(values.size());
@@ -412,15 +336,8 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
     return std::unexpected("reference model requires inputs and outputs");
   }
   ncnn::Net network;
-  network.opt.num_threads = 1;
   network.opt.lightmode = false;
   network.opt.use_vulkan_compute = false;
-  network.opt.use_packing_layout = false;
-  network.opt.use_winograd_convolution = false;
-  network.opt.use_winograd23_convolution = false;
-  network.opt.use_winograd43_convolution = false;
-  network.opt.use_winograd63_convolution = false;
-  network.opt.use_sgemm_convolution = false;
   network.opt.use_int8_inference = false;
   network.opt.use_fp16_packed = false;
   network.opt.use_fp16_storage = false;
@@ -428,9 +345,6 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
   network.opt.use_bf16_packed = false;
   network.opt.use_bf16_storage = false;
   network.opt.flush_denormals = 0;
-  if (!register_naive_layers(network)) {
-    return std::unexpected("ncnn failed to register naive layers");
-  }
 
   if (network.load_param(std::string(param_path).c_str()) != 0) {
     return std::unexpected("ncnn failed to load param file");

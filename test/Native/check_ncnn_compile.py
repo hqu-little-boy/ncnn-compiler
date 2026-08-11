@@ -90,8 +90,25 @@ def main():
     shutil.copy2(args.param, work_dir / "model.param")
     shutil.copy2(args.bin, work_dir / "model.bin")
     default_output = work_dir / "model"
-    run([args.compiler, "model.param", "-O0"], cwd=work_dir)
-    assert_files(default_output, {"libmodel.so", "model.h"})
+    default_compile = run(
+        [args.compiler, "model.param", "-O0", "--emit=llvm", "-v"],
+        cwd=work_dir,
+        capture_output=True,
+        text=True,
+    )
+    assert_files(default_output, {"libmodel.so", "model.h", "model.llvm.mlir"})
+    default_ir = (default_output / "model.llvm.mlir").read_text()
+    if "omp.parallel" not in default_ir or "omp.wsloop" not in default_ir:
+        raise RuntimeError("default compilation does not use OpenMP lowering")
+    if "-mprefer-vector-width=256" not in default_compile.stderr:
+        raise RuntimeError("default compilation does not request 256-bit SIMD")
+    default_needed = run(
+        [args.readelf, "--needed-libs", default_output / "libmodel.so"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    if "libomp.so" not in default_needed:
+        raise RuntimeError("default artifact does not depend on libomp")
 
     unrelated_output = work_dir / "unrelated"
     unrelated_output.mkdir()
@@ -130,6 +147,8 @@ def main():
             "--emit",
             "all",
             "--emit-manifest",
+            "--threads=1",
+            "--vector-width=0",
             "-O2",
         ]
     )
@@ -703,6 +722,73 @@ def main():
             "model.llvm.mlir",
         },
     )
+
+    vector_output = work_dir / "relu-vector"
+    run(
+        [
+            args.compiler,
+            args.param,
+            "--bin",
+            args.bin,
+            "--model-name",
+            "relu_vector",
+            "--output-dir",
+            vector_output,
+            "--threads=1",
+            "--vector-width=256",
+            "--emit=llvm",
+            "--verify-execution",
+        ]
+    )
+    vector_ir = (vector_output / "model.llvm.mlir").read_text()
+    if "vector<8xf32>" not in vector_ir or "llvm.intr.masked" not in vector_ir:
+        raise RuntimeError("explicit SIMD lowering is missing from LLVM dialect IR")
+
+    parallel_output = work_dir / "relu-parallel"
+    run(
+        [
+            args.compiler,
+            args.param,
+            "--bin",
+            args.bin,
+            "--model-name",
+            "relu_parallel",
+            "--output-dir",
+            parallel_output,
+            "--threads=4",
+            "--emit=llvm",
+            "--verify-execution",
+        ]
+    )
+    parallel_ir = (parallel_output / "model.llvm.mlir").read_text()
+    if "omp.parallel" not in parallel_ir or "omp.wsloop" not in parallel_ir:
+        raise RuntimeError("OpenMP lowering is missing from LLVM dialect IR")
+    needed = run(
+        [args.readelf, "--needed-libs", parallel_output / "librelu_parallel.so"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    if "libomp.so" not in needed:
+        raise RuntimeError("parallel artifact does not depend on libomp")
+
+    invalid_vector_width = subprocess.run(
+        [
+            args.compiler,
+            args.param,
+            "--bin",
+            args.bin,
+            "--output-dir",
+            work_dir / "invalid-vector-width",
+            "--vector-width=96",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if (
+        invalid_vector_width.returncode == 0
+        or "multiple of 64" not in invalid_vector_width.stderr
+    ):
+        raise RuntimeError("invalid SIMD vector width was not rejected")
 
     run(
         [

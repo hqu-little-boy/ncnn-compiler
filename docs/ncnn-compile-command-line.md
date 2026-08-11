@@ -236,7 +236,32 @@ ncnn-compile model.param -O3
 默认值是 `-O3`。该选项主要控制最终 LLVM IR 到目标代码的优化；流水线仍会执行 MLIR lowering
 所必需的 canonicalization、CSE、bufferization 和 dialect conversion。
 
-### 3.2 `-g` 和 `--debug-info`
+### 3.2 `--threads=<count>`
+
+启用 Linalg 并行循环 lowering 和 OpenMP 运行时。默认值 `0` 生成 OpenMP worksharing loop，
+线程团队大小由 OpenMP 运行时按当前可用 CPU 决定；`1` 明确关闭并行；大于 `1` 时把固定线程数
+写入生成代码：
+
+```bash
+ncnn-compile model.param --threads=8
+```
+
+多线程产物依赖 `libomp`。交叉编译时，目标 sysroot 必须提供匹配的 OpenMP 运行时。
+
+### 3.3 `--vector-width=<bits>`
+
+设置 SIMD 宽度，默认值为 `256` 位。`0` 不设置宽度偏好；非零值必须是 64 的倍数。当前张量
+计算以 32 位 lane 计算，例如串行模式下 `256` 生成 8-lane vector IR。
+该选项通常与目标 CPU 选项配合使用：
+
+```bash
+ncnn-compile model.param --march=native --vector-width=256
+```
+
+显式向量化适用于 `--threads=1` 的串行 lowering。OpenMP 模式下，编译器把该值作为每个 worker
+内 LLVM 自动向量化的宽度偏好。使用 `--threads=1 --vector-width=0` 可同时关闭并行和显式 SIMD。
+
+### 3.4 `-g` 和 `--debug-info`
 
 让 Clang 在目标文件和动态库中生成调试信息：
 

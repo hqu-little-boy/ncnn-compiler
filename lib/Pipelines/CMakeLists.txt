@@ -20,6 +20,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     MLIRBufferizationPipelines
     MLIRBufferizationTransforms
     MLIRAffineToStandard
+    MLIRAffineTransforms
     MLIRArithToLLVM
     MLIRControlFlowToLLVM
     MLIRFuncToLLVM
@@ -27,11 +28,16 @@ target_link_libraries(NCNNPipelines PUBLIC
     MLIRMathToLibm
     MLIRMemRefToLLVM
     MLIRMemRefTransforms
+    MLIROpenMPToLLVM
     MLIRPass
     MLIRReconcileUnrealizedCasts
     MLIRSCFToControlFlow
+    MLIRSCFToOpenMP
+    MLIRSCFTransforms
     MLIRTosaToArith
     MLIRTosaToLinalg
     MLIRTosaToTensor
     MLIRTosaTransforms
+    MLIRUBToLLVM
+    MLIRVectorToLLVM
     MLIRTransforms)

@@ -267,8 +267,10 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 
 | 层级 | 内容 |
 |---|---|
-| MLIR 级（始终执行） | canonicalize、CSE、One-Shot Bufferize、buffer-results-to-out-params、deallocation、linalg-to-loops、math-to-libm |
+| MLIR 级（始终执行） | canonicalize、CSE、LICM、One-Shot Bufferize、buffer-results-to-out-params、deallocation、linalg-to-loops、math-to-libm |
 | 代码生成级 | Clang `-O0`/`-O1`/`-O2`/`-O3`（默认 `-O3`） |
+| SIMD | 默认使用 256-bit LLVM 向量宽度偏好；`--threads=1` 时使用 Affine Super Vectorizer 和 Vector-to-LLVM |
+| 多线程 | 默认将 Linalg 并行维 lowering 为 OpenMP，并由运行时使用可用 CPU；`--threads=1` 可关闭 |
 | 目标调优 | `--target-triple`、`--march`（含 `native`）、`--mcpu`、`--mtune`、`--target-feature`、`--sysroot` |
 | 图级优化 | 无（无算子融合、无常量折叠、无量化优化） |
 

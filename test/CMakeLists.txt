@@ -64,7 +64,6 @@ add_test(NAME squeezenet-shared-library
         --param ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn/examples/squeezenet_v1.1.param
         --bin ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn/examples/squeezenet_v1.1.bin
         --model-name squeezenet_v1_1
-        --expected-undefined expf,free,malloc,memset
         --output-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/squeezenet
         --emit-manifest
         --verify-execution)

@@ -90,6 +90,17 @@ llvm::cl::opt<std::string> g_optimization(
   llvm::cl::Prefix,
   llvm::cl::init("3"),
   llvm::cl::cat(g_category));
+llvm::cl::opt<unsigned> g_threads(
+  "threads",
+  llvm::cl::desc(
+    "OpenMP worker threads (0 uses all runtime-available CPUs; 1 disables)"),
+  llvm::cl::init(0),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<unsigned> g_vector_width(
+  "vector-width",
+  llvm::cl::desc("Preferred SIMD vector width in bits (0 disables preference)"),
+  llvm::cl::init(256),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_target_triple(
   "target-triple",
   llvm::cl::desc("Target triple (64-bit Linux ELF only)"),
@@ -1503,6 +1514,9 @@ int main(int argc, char** argv) {
       g_optimization != "3") {
     return fail("-O must be one of -O0, -O1, -O2, or -O3");
   }
+  if (g_vector_width != 0 && g_vector_width % 64 != 0) {
+    return fail("--vector-width must be 0 or a multiple of 64 bits");
+  }
   if (!g_target_triple.empty()) {
     std::string triple = g_target_triple;
     std::ranges::transform(
@@ -1635,8 +1649,12 @@ int main(int argc, char** argv) {
         {opt_path, capi_option, memref_ir.string(), "-o", capi_ir.string()})) {
     return status;
   }
+  std::string llvm_pipeline = "--ncnn-memref-to-llvm-pipeline=";
+  const bool uses_openmp = g_threads != 1;
+  llvm_pipeline += "threads=" + std::to_string(g_threads);
+  llvm_pipeline += " vector-size=" + std::to_string(g_vector_width / 32);
   if (int status = run({opt_path,
-                        "--ncnn-memref-to-llvm-pipeline",
+                        llvm_pipeline,
                         capi_ir.string(),
                         "-o",
                         llvm_dialect_ir.string()})) {
@@ -1670,6 +1688,10 @@ int main(int argc, char** argv) {
   for (const std::string& feature : g_target_features) {
     codegen_args.insert(codegen_args.end(),
                         {"-Xclang", "-target-feature", "-Xclang", feature});
+  }
+  if (g_vector_width != 0) {
+    codegen_args.push_back("-mprefer-vector-width=" +
+                           std::to_string(g_vector_width));
   }
   if (g_debug) {
     codegen_args.emplace_back("-g");
@@ -1743,6 +1765,9 @@ int main(int argc, char** argv) {
   link.insert(link.end(), target_args.begin(), target_args.end());
   link.push_back(object.string());
   link.insert(link.end(), g_linker_args.begin(), g_linker_args.end());
+  if (uses_openmp) {
+    link.emplace_back("-lomp");
+  }
   if (!uses_sanitizer) {
     link.insert(link.end(), {"-Wl,-z,defs", "-Wl,--no-undefined"});
   }
@@ -1771,6 +1796,7 @@ int main(int argc, char** argv) {
     "erfcf", "erff", "expf", "free", "malloc", "memcpy", "memset", "powf"};
   const auto is_allowed_undefined = [&](const std::string& symbol) {
     return allowed.contains(symbol) ||
+           (uses_openmp && symbol.starts_with("__kmpc_")) ||
            (uses_address_sanitizer && symbol.starts_with("__asan_")) ||
            (uses_undefined_sanitizer && symbol.starts_with("__ubsan_")) ||
            (uses_sanitizer && symbol.starts_with("__sanitizer_"));
@@ -1845,8 +1871,9 @@ int main(int argc, char** argv) {
       (uses_undefined_sanitizer &&
        (name.starts_with("libubsan.so") ||
         name.starts_with("libclang_rt.ubsan_standalone-")));
+    const bool openmp_runtime = uses_openmp && name.starts_with("libomp.so");
     if (!name.starts_with("libc.so") && !name.starts_with("libm.so") &&
-        !sanitizer_runtime) {
+        !openmp_runtime && !sanitizer_runtime) {
       return fail(
         std::format("shared library has an unexpected dependency: {}", name));
     }

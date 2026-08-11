@@ -9,16 +9,22 @@
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
 #include "mlir/Conversion/MathToLibm/MathToLibm.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
+#include "mlir/Conversion/OpenMPToLLVM/ConvertOpenMPToLLVM.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Conversion/SCFToOpenMP/SCFToOpenMP.h"
 #include "mlir/Conversion/TosaToArith/TosaToArith.h"
 #include "mlir/Conversion/TosaToLinalg/TosaToLinalg.h"
 #include "mlir/Conversion/TosaToTensor/TosaToTensor.h"
+#include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
+#include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVMPass.h"
+#include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/Dialect/Bufferization/Pipelines/Passes.h"
 #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
+#include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
@@ -72,7 +78,32 @@ void buildNCNNLinalgToMemRefPipeline(OpPassManager& passManager) {
 }
 
 void buildNCNNMemRefToLLVMPipeline(OpPassManager& passManager) {
-  passManager.addPass(createConvertLinalgToLoopsPass());
+  buildNCNNMemRefToLLVMPipeline(passManager, NCNNMemRefToLLVMPipelineOptions());
+}
+
+void buildNCNNMemRefToLLVMPipeline(
+  OpPassManager& passManager, const NCNNMemRefToLLVMPipelineOptions& options) {
+  if (options.threads != 1) {
+    passManager.addPass(createConvertLinalgToParallelLoopsPass());
+    passManager.addPass(createParallelLoopFusionPass());
+    ConvertSCFToOpenMPPassOptions openmpOptions;
+    if (options.threads > 1) {
+      openmpOptions.numThreads = options.threads;
+    }
+    passManager.addPass(createConvertSCFToOpenMPPass(openmpOptions));
+  } else if (options.vectorSize > 0) {
+    passManager.addPass(createConvertLinalgToAffineLoopsPass());
+    affine::AffineVectorizeOptions vectorOptions;
+    vectorOptions.vectorSizes.push_back(options.vectorSize);
+    vectorOptions.vectorizeReductions = true;
+    passManager.addNestedPass<func::FuncOp>(
+      affine::createAffineVectorize(vectorOptions));
+  } else {
+    passManager.addPass(createConvertLinalgToLoopsPass());
+  }
+  passManager.addPass(createLoopInvariantCodeMotionPass());
+  passManager.addPass(createCanonicalizerPass());
+  passManager.addPass(createCSEPass());
   passManager.addPass(createLowerAffinePass());
   passManager.addPass(createSCFToControlFlowPass());
   passManager.addPass(createConvertMathToLibmPass());
@@ -83,6 +114,14 @@ void buildNCNNMemRefToLLVMPipeline(OpPassManager& passManager) {
   passManager.addPass(createConvertFuncToLLVMPass());
   passManager.addPass(createFinalizeCAPIPass());
   passManager.addPass(createConvertControlFlowToLLVMPass());
+  if (options.vectorSize > 0 && options.threads == 1) {
+    passManager.addPass(createConvertVectorToLLVMPass());
+    passManager.addPass(createArithToLLVMConversionPass());
+    passManager.addPass(createUBToLLVMConversionPass());
+  }
+  if (options.threads != 1) {
+    passManager.addPass(createConvertOpenMPToLLVMPass());
+  }
   passManager.addPass(createReconcileUnrealizedCastsPass());
 }
 
@@ -99,10 +138,14 @@ void registerNCNNPipelines() {
     "ncnn-linalg-to-memref-pipeline",
     "Bufferize ncnn Linalg models with caller-owned output parameters",
     buildNCNNLinalgToMemRefPipeline);
-  static PassPipelineRegistration<> memRefToLLVMRegistration(
-    "ncnn-memref-to-llvm-pipeline",
-    "Lower bufferized ncnn models to the LLVM dialect",
-    buildNCNNMemRefToLLVMPipeline);
+  static PassPipelineRegistration<NCNNMemRefToLLVMPipelineOptions>
+    memRefToLLVMRegistration(
+      "ncnn-memref-to-llvm-pipeline",
+      "Lower bufferized ncnn models to the LLVM dialect",
+      [](OpPassManager& passManager,
+         const NCNNMemRefToLLVMPipelineOptions& options) {
+        buildNCNNMemRefToLLVMPipeline(passManager, options);
+      });
 }
 
 }  // namespace mlir::ncnn
