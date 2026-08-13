@@ -96,7 +96,9 @@ set(convolution_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_
 set(convolution_asymmetric_stride_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_asymmetric_stride.bin)
 set(convolution_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_upper.bin)
 set(convolution_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_lower.bin)
+set(convolution_fp16_storage_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_fp16_storage.bin)
 set(convolution_depthwise_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise.bin)
+set(convolution_depthwise_fp16_storage_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_fp16_storage.bin)
 set(convolution_depthwise_7x7_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_7x7.bin)
 set(convolution_depthwise_9x9_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_9x9.bin)
 set(convolution_depthwise_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_asymmetric.bin)
@@ -118,7 +120,8 @@ foreach(convolution_case IN ITEMS
         convolution_asymmetric
         convolution_asymmetric_stride
         convolution_same_upper
-        convolution_same_lower)
+        convolution_same_lower
+        convolution_fp16_storage)
     execute_process(
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
                 ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${convolution_case}.bin
@@ -127,6 +130,7 @@ foreach(convolution_case IN ITEMS
 endforeach()
 foreach(weighted_case IN ITEMS
         convolution_depthwise
+        convolution_depthwise_fp16_storage
         convolution_depthwise_7x7
         convolution_depthwise_9x9
         convolution_depthwise_asymmetric
@@ -175,9 +179,17 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_same_lower.param
     ${convolution_same_lower_bin})
 ncnn_add_compiled_fixture(
+    convolution_fp16_storage
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_fp16_storage.param
+    ${convolution_fp16_storage_bin})
+ncnn_add_compiled_fixture(
     convolution_depthwise
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise.param
     ${convolution_depthwise_bin})
+ncnn_add_compiled_fixture(
+    convolution_depthwise_fp16_storage
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise_fp16_storage.param
+    ${convolution_depthwise_fp16_storage_bin})
 ncnn_add_compiled_fixture(
     convolution_depthwise_7x7
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise_7x7.param
@@ -667,6 +679,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin
     3x488x488)
+ncnn_add_compiled_fixture(
+    pp_formulanet_plus_s_encoder
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin
+    1x384x384)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -675,7 +692,9 @@ set(numerical_fixture_targets
     compile_convolution_asymmetric_stride
     compile_convolution_same_upper
     compile_convolution_same_lower
+    compile_convolution_fp16_storage
     compile_convolution_depthwise
+    compile_convolution_depthwise_fp16_storage
     compile_convolution_depthwise_7x7
     compile_convolution_depthwise_9x9
     compile_convolution_depthwise_asymmetric
@@ -793,7 +812,9 @@ add_dependencies(compile_pp_ocrv5_server_det_static compile_pp_ocrv5_mobile_det)
 add_dependencies(compile_pp_ocrv5_server_det_dynamic
                   compile_pp_ocrv5_server_det_static)
 add_dependencies(compile_pp_structrurev2_slanet_plus_cnn
-                 compile_pp_ocrv5_server_det_dynamic)
+                  compile_pp_ocrv5_server_det_dynamic)
+add_dependencies(compile_pp_formulanet_plus_s_encoder
+                 compile_pp_structrurev2_slanet_plus_cnn)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -820,7 +841,9 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_ASYMMETRIC_STRIDE_BIN_PATH="${convolution_asymmetric_stride_bin}"
     CONVOLUTION_SAME_UPPER_BIN_PATH="${convolution_same_upper_bin}"
     CONVOLUTION_SAME_LOWER_BIN_PATH="${convolution_same_lower_bin}"
+    CONVOLUTION_FP16_STORAGE_BIN_PATH="${convolution_fp16_storage_bin}"
     CONVOLUTION_DEPTHWISE_BIN_PATH="${convolution_depthwise_bin}"
+    CONVOLUTION_DEPTHWISE_FP16_STORAGE_BIN_PATH="${convolution_depthwise_fp16_storage_bin}"
     CONVOLUTION_DEPTHWISE_7X7_BIN_PATH="${convolution_depthwise_7x7_bin}"
     CONVOLUTION_DEPTHWISE_9X9_BIN_PATH="${convolution_depthwise_9x9_bin}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_BIN_PATH="${convolution_depthwise_asymmetric_bin}"
@@ -895,6 +918,8 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_ASYMMETRIC_STRIDE_LIBRARY_PATH="${convolution_asymmetric_stride_LIBRARY}"
     CONVOLUTION_SAME_UPPER_LIBRARY_PATH="${convolution_same_upper_LIBRARY}"
     CONVOLUTION_SAME_LOWER_LIBRARY_PATH="${convolution_same_lower_LIBRARY}"
+    CONVOLUTION_FP16_STORAGE_LIBRARY_PATH="${convolution_fp16_storage_LIBRARY}"
+    CONVOLUTION_DEPTHWISE_FP16_STORAGE_LIBRARY_PATH="${convolution_depthwise_fp16_storage_LIBRARY}"
     PADDING_LIBRARY_PATH="${padding_LIBRARY}"
     PADDING_FOUR_SIDES_LIBRARY_PATH="${padding_four_sides_LIBRARY}"
     PADDING_IDENTITY_LIBRARY_PATH="${padding_identity_LIBRARY}"
@@ -940,7 +965,10 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV5_SERVER_DET_STATIC_LIBRARY_PATH="${pp_ocrv5_server_det_static_LIBRARY}"
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param"
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin"
-    PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH="${pp_structrurev2_slanet_plus_cnn_LIBRARY}")
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH="${pp_structrurev2_slanet_plus_cnn_LIBRARY}"
+    PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param"
+    PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin"
+    PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH="${pp_formulanet_plus_s_encoder_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
@@ -953,6 +981,7 @@ add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_det_static)
 add_dependencies(numerical_tests compile_pp_structrurev2_slanet_plus_cnn)
+add_dependencies(numerical_tests compile_pp_formulanet_plus_s_encoder)
 
 add_executable(numerical_dynamic_operator_tests
     operators/dynamic_ops_test.cpp)

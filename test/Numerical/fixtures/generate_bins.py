@@ -14,7 +14,9 @@ sizes = {
     "convolution_asymmetric_stride": (12, 0),
     "convolution_same_upper": (18, 0),
     "convolution_same_lower": (18, 0),
+    "convolution_fp16_storage": (18, 2),
     "convolution_depthwise": (18, 2),
+    "convolution_depthwise_fp16_storage": (18, 2),
     "convolution_depthwise_7x7": (4704, 96),
     "convolution_depthwise_9x9": (20736, 256),
     "convolution_depthwise_asymmetric": (12, 2),
@@ -45,6 +47,18 @@ if case not in sizes:
     output.write_bytes(b"")
     raise SystemExit(0)
 kernel_count, bias_count = sizes[case]
+if case.endswith("fp16_storage"):
+    rng = random.Random(0x46313657)
+    weights = [rng.uniform(-0.25, 0.25) for _ in range(kernel_count)]
+    bias = [rng.uniform(-0.1, 0.1) for _ in range(bias_count)]
+    kernel = struct.pack(f"<{kernel_count}e", *weights)
+    kernel += bytes((-len(kernel)) % 4)
+    output.write_bytes(
+        struct.pack("<I", 0x01306B47)
+        + kernel
+        + struct.pack(f"<{bias_count}f", *bias)
+    )
+    raise SystemExit(0)
 if case.startswith("deconvolution"):
     # ncnn stores deconvolution weights as [output][input][kh][kw]. Distinct
     # values make an accidental input/output transpose visible in the golden.

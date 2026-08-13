@@ -480,15 +480,21 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
       *activation > 1 || context.layer.get_params().has(10) ||
       *padValue != 0.0F) {
     return std::unexpected(make_error(
-      context, "only static pure depthwise FP32 convolution is supported"));
+      context,
+      "only static pure depthwise convolution with FP32 computation is "
+      "supported"));
   }
+  const auto kernelType = context.layer.get_weights().empty()
+                            ? ncnn_graph::DataType::Unknown
+                            : context.layer.get_weights()[0].get_dtype();
   if (context.layer.get_weights().size() != p->expected_weight_tensors() ||
       context.layer.get_weights().empty() ||
-      context.layer.get_weights()[0].get_dtype() !=
-        ncnn_graph::DataType::Float32) {
+      (kernelType != ncnn_graph::DataType::Float32 &&
+       kernelType != ncnn_graph::DataType::Float16)) {
     return std::unexpected(make_error(
       context,
-      "depthwise weights must be static FP32 kernel and optional bias"));
+      "depthwise weights must use static FP32 or FP16-storage kernel and "
+      "optional FP32 bias"));
   }
   auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
   if (!input) {

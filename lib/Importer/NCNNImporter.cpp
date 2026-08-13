@@ -18,6 +18,8 @@
 #include <utility>
 #include <vector>
 
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/Verifier.h"
 
@@ -100,6 +102,27 @@ std::span<const ImportEntry> importers() noexcept {
 
 std::expected<mlir::DenseElementsAttr, std::string> make_dense_attr(
   mlir::MLIRContext* context, const ncnn_graph::Tensor& tensor) {
+  const std::span<const std::byte> raw = tensor.get_data();
+  if (raw.size() != tensor.byte_size()) {
+    return std::unexpected("constant payload size does not match its type");
+  }
+  llvm::SmallVector<std::int64_t> shape(tensor.get_shape().begin(),
+                                        tensor.get_shape().end());
+  if (tensor.get_dtype() == ncnn_graph::DataType::Float16) {
+    std::vector<float> values;
+    values.reserve(tensor.element_count());
+    for (std::size_t offset = 0; offset < raw.size(); offset += 2) {
+      const auto low = static_cast<std::uint16_t>(raw[offset]);
+      const auto high = static_cast<std::uint16_t>(raw[offset + 1]);
+      llvm::APFloat value(llvm::APFloat::IEEEhalf(),
+                          llvm::APInt(16, low | (high << 8)));
+      values.push_back(value.convertToFloat());
+    }
+    auto type =
+      mlir::RankedTensorType::get(shape, mlir::Float32Type::get(context));
+    return mlir::DenseElementsAttr::get(type, llvm::ArrayRef(values));
+  }
+
   mlir::Type element;
   std::size_t width = 0;
   switch (tensor.get_dtype()) {
@@ -108,9 +131,7 @@ std::expected<mlir::DenseElementsAttr, std::string> make_dense_attr(
       width = 4;
       break;
     case ncnn_graph::DataType::Float16:
-      element = mlir::Float16Type::get(context);
-      width = 2;
-      break;
+      llvm_unreachable("float16 constants are promoted above");
     case ncnn_graph::DataType::Int8:
       element = mlir::IntegerType::get(context, 8);
       width = 1;
@@ -118,13 +139,7 @@ std::expected<mlir::DenseElementsAttr, std::string> make_dense_attr(
     case ncnn_graph::DataType::Unknown:
       return std::unexpected("constant has unknown element type");
   }
-  llvm::SmallVector<std::int64_t> shape(tensor.get_shape().begin(),
-                                        tensor.get_shape().end());
   auto type = mlir::RankedTensorType::get(shape, element);
-  const std::span<const std::byte> raw = tensor.get_data();
-  if (raw.size() != tensor.byte_size()) {
-    return std::unexpected("constant payload size does not match its type");
-  }
   std::vector<char> native(raw.size());
   std::memcpy(native.data(), raw.data(), raw.size());
   if constexpr (std::endian::native == std::endian::big) {

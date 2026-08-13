@@ -672,7 +672,11 @@ TEST_F(NcnnImporterTest, ImportsSupportedGraph) {
   EXPECT_EQ(count_ops<mlir::ncnn::InputOp>(module), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::OutputOp>(module), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::ConstOp>(module), 2)
-    << "f16 weight and f32 bias become ncnn model constants";
+    << "f16-storage weight and f32 bias become ncnn model constants";
+  module->walk([](mlir::ncnn::ConstOp constant) {
+    EXPECT_TRUE(constant.getOutput().getType().getElementType().isF32())
+      << "f16 model storage is promoted to f32 computation";
+  });
   EXPECT_EQ(count_ops<mlir::func::FuncOp>(module), 0)
     << "import does not establish the function ABI";
   EXPECT_EQ(count_ops<mlir::ncnn::ConvolutionOp>(module), 1);

@@ -307,5 +307,35 @@ TEST(NumericalModel, PPStructureV2SLANetPlusCNNMatchesNcnn) {
   EXPECT_EQ(repeated, actual);
 }
 
+TEST(NumericalModel, PPFormulaNetPlusSEncoderMatchesNcnn) {
+  const TensorShape inputShape(384, 384, 1);
+  constexpr std::size_t kOutputElements = 144 * 2048;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x464F524DU, -0.01F, 0.01F);
+  const ReferenceModel reference(PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH,
+                                 PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 inputShape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), kOutputElements);
+
+  CompiledModel compiled(PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH,
+                         "pp_formulanet_plus_s_encoder");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kOutputElements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F));
+  EXPECT_TRUE(std::ranges::all_of(
+    actual, [](float value) { return std::isfinite(value); }));
+
+  std::vector<float> repeated(kOutputElements);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+}
+
 }  // namespace
 }  // namespace ncnn_compiler::test

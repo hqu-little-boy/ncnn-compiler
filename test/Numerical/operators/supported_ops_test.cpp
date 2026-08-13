@@ -476,6 +476,16 @@ TEST(NumericalOperator, ConvolutionSameLowerMatchesNcnn) {
                                0x43534C4FU);
 }
 
+TEST(NumericalOperator, ConvolutionFp16StorageMatchesNcnn) {
+  expect_single_input_operator("convolution_fp16_storage",
+                               CONVOLUTION_FP16_STORAGE_LIBRARY_PATH,
+                               CONVOLUTION_FP16_STORAGE_BIN_PATH,
+                               TensorShape(4, 4, 1),
+                               32,
+                               1.0e-5F,
+                               0x46313643U);
+}
+
 TEST(NumericalOperator, DepthwiseConvolutionMatchesNcnn) {
   expect_single_input_operator("convolution_depthwise",
                                CONVOLUTION_DEPTHWISE_LIBRARY_PATH,
@@ -484,6 +494,16 @@ TEST(NumericalOperator, DepthwiseConvolutionMatchesNcnn) {
                                50,
                                1.0e-5F,
                                0x44574356U);
+}
+
+TEST(NumericalOperator, DepthwiseConvolutionFp16StorageMatchesNcnn) {
+  expect_single_input_operator("convolution_depthwise_fp16_storage",
+                               CONVOLUTION_DEPTHWISE_FP16_STORAGE_LIBRARY_PATH,
+                               CONVOLUTION_DEPTHWISE_FP16_STORAGE_BIN_PATH,
+                               TensorShape(5, 5, 2),
+                               50,
+                               1.0e-5F,
+                               0x46313644U);
 }
 
 TEST(NumericalOperator, DepthwiseConvolution7x7MatchesNcnn) {
