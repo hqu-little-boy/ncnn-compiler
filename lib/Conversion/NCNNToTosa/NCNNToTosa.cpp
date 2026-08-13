@@ -28,6 +28,11 @@ namespace mlir::ncnn {
 
 namespace {
 
+SmallVector<Value> getDynamicSizeValues(OpBuilder& builder,
+                                        Location location,
+                                        Value source,
+                                        RankedTensorType type);
+
 RankedTensorType getNHWCType(RankedTensorType chwType) {
   ArrayRef<int64_t> shape = chwType.getShape();
   return RankedTensorType::get({1, shape[1], shape[2], shape[0]},
@@ -69,6 +74,51 @@ Value createI8Zero(OpBuilder& builder, Location location) {
   auto value = DenseElementsAttr::get(type, builder.getI8IntegerAttr(0));
   Value result = builder.create<tosa::ConstOp>(location, type, value);
   return result;
+}
+
+Value convertFloatingTensor(OpBuilder& builder,
+                            Location location,
+                            Value input,
+                            Type targetElement) {
+  auto inputType = cast<RankedTensorType>(input.getType());
+  if (inputType.getElementType() == targetElement) {
+    return input;
+  }
+  auto outputType = inputType.clone(targetElement);
+  Value init = builder.create<tensor::EmptyOp>(
+    location,
+    outputType.getShape(),
+    targetElement,
+    getDynamicSizeValues(builder, location, input, outputType));
+  auto converted = builder.create<linalg::MapOp>(
+    location,
+    ValueRange{input},
+    init,
+    [targetElement](
+      OpBuilder& nested, Location nestedLocation, ValueRange values) {
+      auto source = cast<FloatType>(values.front().getType());
+      auto target = cast<FloatType>(targetElement);
+      Value value = source.getWidth() < target.getWidth()
+                      ? static_cast<Value>(nested.create<arith::ExtFOp>(
+                          nestedLocation, target, values.front()))
+                      : static_cast<Value>(nested.create<arith::TruncFOp>(
+                          nestedLocation, target, values.front()));
+      nested.create<linalg::YieldOp>(nestedLocation, value);
+    });
+  return converted->getResult(0);
+}
+
+Value roundStoragePrecision(OpBuilder& builder,
+                            Location location,
+                            Value input,
+                            Type storageElement) {
+  Value stored =
+    convertFloatingTensor(builder, location, input, storageElement);
+  return convertFloatingTensor(
+    builder,
+    location,
+    stored,
+    cast<ShapedType>(input.getType()).getElementType());
 }
 
 Value createIndexConstant(OpBuilder& builder,
@@ -416,11 +466,24 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
     }
     Value input = adaptor.getInput();
     auto weightType = cast<RankedTensorType>(operation.getWeight().getType());
+    Type storageElement = weightType.getElementType();
+    const bool lowPrecisionWeight =
+      storageElement.isF16() || storageElement.isBF16();
+    if (lowPrecisionWeight) {
+      input = roundStoragePrecision(
+        rewriter, operation.getLoc(), input, storageElement);
+    }
+    Value sourceWeight = adaptor.getWeight();
+    if (lowPrecisionWeight) {
+      sourceWeight = convertFloatingTensor(
+        rewriter, operation.getLoc(), sourceWeight, rewriter.getF32Type());
+      weightType = cast<RankedTensorType>(sourceWeight.getType());
+    }
     auto ohwiType = getOHWIType(weightType);
     Value weight =
       rewriter.create<tosa::TransposeOp>(operation.getLoc(),
                                          ohwiType,
-                                         adaptor.getWeight(),
+                                         sourceWeight,
                                          ArrayRef<int32_t>{0, 2, 3, 1});
     Value bias;
     if (operation.getHasBias()) {
@@ -517,6 +580,10 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
         createShape(rewriter, operation.getLoc(), outputType.getShape());
       result = rewriter.create<tosa::SliceOp>(
         operation.getLoc(), outputType, result, start, size);
+    }
+    if (lowPrecisionWeight) {
+      result = roundStoragePrecision(
+        rewriter, operation.getLoc(), result, storageElement);
     }
     rewriter.replaceOp(operation, result);
     return success();
@@ -1507,14 +1574,30 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
     Operation* operation,
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
+    auto sourceWeightType =
+      operands.size() >= 2 ? dyn_cast<RankedTensorType>(operands[1].getType())
+                           : RankedTensorType{};
+    const bool lowPrecisionWeight =
+      sourceWeightType && sourceWeightType.hasStaticShape() &&
+      (sourceWeightType.getElementType().isF16() ||
+       sourceWeightType.getElementType().isBF16());
     if (operands.size() < 2 || operation->getNumResults() != 1 ||
         !isRankedF32Tensor(operation->getOperand(0).getType()) ||
-        !isStaticF32Tensor(operands[1].getType())) {
+        (!isStaticF32Tensor(operands[1].getType()) && !lowPrecisionWeight)) {
       return operation->emitOpError(
-        "supports ranked f32 input and static f32 weight tensors only");
+        "supports ranked f32 input and static floating weight tensors only");
     }
-    auto inputType = cast<RankedTensorType>(operands[0].getType());
-    auto weightType = cast<RankedTensorType>(operands[1].getType());
+    Type storageElement = sourceWeightType.getElementType();
+    Value input = operands[0];
+    Value sourceWeight = operands[1];
+    if (lowPrecisionWeight) {
+      input = roundStoragePrecision(
+        rewriter, operation->getLoc(), input, storageElement);
+      sourceWeight = convertFloatingTensor(
+        rewriter, operation->getLoc(), sourceWeight, rewriter.getF32Type());
+    }
+    auto inputType = cast<RankedTensorType>(input.getType());
+    auto weightType = cast<RankedTensorType>(sourceWeight.getType());
     auto sourceOutput =
       cast<RankedTensorType>(operation->getResult(0).getType());
     if (inputType.getRank() != 4 || weightType.getRank() != 4 ||
@@ -1536,7 +1619,7 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
                                                     weightType.getShape()[3]},
                                                    weightType.getElementType());
     Value groupedWeight = reshapeValue(
-      rewriter, operation->getLoc(), operands[1], groupedWeightType);
+      rewriter, operation->getLoc(), sourceWeight, groupedWeightType);
     auto hwcmType = RankedTensorType::get({weightType.getShape()[2],
                                            weightType.getShape()[3],
                                            channels,
@@ -1648,7 +1731,7 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
     Value result =
       rewriter.create<tosa::DepthwiseConv2DOp>(operation->getLoc(),
                                                paddedOutputType,
-                                               operands[0],
+                                               input,
                                                weight,
                                                bias,
                                                inputZero,
@@ -1663,6 +1746,10 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
         createShape(rewriter, operation->getLoc(), outputType.getShape());
       result = rewriter.create<tosa::SliceOp>(
         operation->getLoc(), outputType, result, start, size);
+    }
+    if (lowPrecisionWeight) {
+      result = roundStoragePrecision(
+        rewriter, operation->getLoc(), result, storageElement);
     }
     rewriter.replaceOp(operation, result);
     return success();

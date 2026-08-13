@@ -93,7 +93,8 @@ FailureOr<RankedTensorType> computeConvResult(MLIRContext* context,
   if (quantized && wElem.isF16()) {
     return fail("quantized convolution weight must be f32 or i8");
   }
-  if (!wElem.isF32() && !wElem.isF16() && !wElem.isInteger(8)) {
+  if (!wElem.isF32() && !wElem.isF16() && !wElem.isBF16() &&
+      !wElem.isInteger(8)) {
     return fail("convolution weight has unsupported element type");
   }
   ArrayRef<int64_t> inShape = input.getShape();
@@ -1259,14 +1260,17 @@ LogicalResult ConvolutionDepthWiseOp::inferReturnTypeComponents(
   SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
   auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
   auto weight = llvm::dyn_cast<RankedTensorType>(adaptor.getWeight().getType());
+  const bool floatingWeight = weight && (weight.getElementType().isF32() ||
+                                         weight.getElementType().isF16() ||
+                                         weight.getElementType().isBF16());
   if (!input || !weight || input.getRank() != 3 || weight.getRank() != 4 ||
-      !input.getElementType().isF32() || !weight.getElementType().isF32() ||
+      !input.getElementType().isF32() || !floatingWeight ||
       !weight.hasStaticShape() || ShapedType::isDynamic(input.getShape()[0]) ||
       weight.getShape()[1] != 1 ||
       weight.getShape()[0] != input.getShape()[0]) {
-    return emitOptionalError(
-      location,
-      "ConvolutionDepthWise requires FP32 pure depthwise weights [C,1,H,W]");
+    return emitOptionalError(location,
+                             "ConvolutionDepthWise requires floating pure "
+                             "depthwise weights [C,1,H,W]");
   }
   auto convolutionWeight = RankedTensorType::get({weight.getShape()[0],
                                                   input.getShape()[0],

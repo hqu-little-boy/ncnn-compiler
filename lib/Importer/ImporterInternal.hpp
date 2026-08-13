@@ -70,7 +70,8 @@ class ImportContext {
   std::expected<mlir::Value, ImportError> make_constant(
     const LayerContext& context,
     const ncnn_graph::Tensor& tensor,
-    std::size_t weight_index);
+    std::size_t weight_index,
+    bool precision_storage = false);
   void tag_source(mlir::Operation* operation, const LayerContext& context);
 
   template <typename Op>

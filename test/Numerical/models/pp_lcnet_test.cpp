@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <numeric>
+#include <string>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -17,6 +20,12 @@ const ReferenceModel kReference(PP_LCNET_DOC_ORI_PARAM_PATH,
                                 "in0",
                                 "out0",
                                 kInputShape);
+
+std::string read_text(const std::filesystem::path& path) {
+  std::ifstream stream(path);
+  return {std::istreambuf_iterator<char>(stream),
+          std::istreambuf_iterator<char>()};
+}
 
 TEST(NumericalModel, PPLCNetDocOriMatchesNcnn) {
   const auto input_elements = kInputShape.element_count();
@@ -150,6 +159,32 @@ TEST(NumericalModel, PPOCRv6TinyDetMatchesNcnn) {
     return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
   }));
 
+  std::vector<float> repeated(kOutputElements);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+}
+
+TEST(NumericalModel, PPOCRv6TinyDetFp16StorageMatchesNcnn) {
+  const TensorShape inputShape(640, 640, 3);
+  constexpr std::size_t kOutputElements = 640 * 640;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x46503644U, -0.01F, 0.01F);
+  const ReferenceModel reference(PP_OCRV6_TINY_DET_PARAM_PATH,
+                                 PP_OCRV6_TINY_DET_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 inputShape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel compiled(PP_OCRV6_TINY_DET_FP16_LIBRARY_PATH,
+                         "pp_ocrv6_tiny_det_fp16");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kOutputElements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 2.0e-2F));
   std::vector<float> repeated(kOutputElements);
   ASSERT_EQ(compiled.run(input, repeated), 0);
   EXPECT_EQ(repeated, actual);
@@ -307,6 +342,32 @@ TEST(NumericalModel, PPStructureV2SLANetPlusCNNMatchesNcnn) {
   EXPECT_EQ(repeated, actual);
 }
 
+TEST(NumericalModel, PPStructureV2SLANetPlusCNNFp16StorageMatchesNcnn) {
+  const TensorShape inputShape(488, 488, 3);
+  constexpr std::size_t kOutputElements = 256 * 96;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x534C4631U, -0.1F, 0.1F);
+  const ReferenceModel reference(PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH,
+                                 PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 inputShape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel compiled(PP_STRUCTRUREV2_SLANET_PLUS_CNN_FP16_LIBRARY_PATH,
+                         "pp_structrurev2_slanet_plus_cnn_fp16");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kOutputElements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 4.0e-2F));
+  std::vector<float> repeated(kOutputElements);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+}
+
 TEST(NumericalModel, PPFormulaNetPlusSEncoderMatchesNcnn) {
   const TensorShape inputShape(384, 384, 1);
   constexpr std::size_t kOutputElements = 144 * 2048;
@@ -335,6 +396,56 @@ TEST(NumericalModel, PPFormulaNetPlusSEncoderMatchesNcnn) {
   std::vector<float> repeated(kOutputElements);
   ASSERT_EQ(compiled.run(input, repeated), 0);
   EXPECT_EQ(repeated, actual);
+}
+
+TEST(NumericalModel, PPFormulaNetPlusSEncoderFp16StorageMatchesNcnn) {
+  const TensorShape inputShape(384, 384, 1);
+  constexpr std::size_t kOutputElements = 144 * 2048;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x464D4631U, -0.01F, 0.01F);
+  const ReferenceModel reference(PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH,
+                                 PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 inputShape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel compiled(PP_FORMULANET_PLUS_S_ENCODER_FP16_LIBRARY_PATH,
+                         "pp_formulanet_plus_s_encoder_fp16");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kOutputElements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 2.0e-2F));
+  EXPECT_TRUE(std::ranges::all_of(
+    actual, [](float value) { return std::isfinite(value); }));
+  std::vector<float> repeated(kOutputElements);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+}
+
+TEST(NumericalModel, FormulaNetFp16ArtifactsPreserveStorageAndFp32Abi) {
+  const auto baselineSize =
+    std::filesystem::file_size(PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH);
+  const auto fp16Size =
+    std::filesystem::file_size(PP_FORMULANET_PLUS_S_ENCODER_FP16_LIBRARY_PATH);
+  EXPECT_LT(fp16Size, baselineSize * 4 / 5);
+
+  const std::string manifest =
+    read_text(PP_FORMULANET_PLUS_S_ENCODER_FP16_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("\"element_type\": \"f32\""), std::string::npos);
+  EXPECT_EQ(manifest.find("\"element_type\": \"f16\""), std::string::npos);
+
+  const std::string ncnnIr =
+    read_text(PP_FORMULANET_PLUS_S_ENCODER_FP16_NCNN_IR_PATH);
+  EXPECT_NE(ncnnIr.find("xf16>"), std::string::npos);
+  EXPECT_NE(ncnnIr.find("ncnn.precision = \"fp16\""), std::string::npos);
+  const std::string linalgIr =
+    read_text(PP_FORMULANET_PLUS_S_ENCODER_FP16_LINALG_IR_PATH);
+  EXPECT_NE(linalgIr.find("arith.extf"), std::string::npos);
+  EXPECT_NE(linalgIr.find("arith.truncf"), std::string::npos);
 }
 
 }  // namespace

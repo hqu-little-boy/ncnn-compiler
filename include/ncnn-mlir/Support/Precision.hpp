@@ -15,6 +15,10 @@ struct PrecisionPolicy {
   bool preserve_float16_storage() const noexcept {
     return mode == PrecisionMode::Float16;
   }
+
+  bool uses_low_precision_storage() const noexcept {
+    return mode == PrecisionMode::Float16 || mode == PrecisionMode::BFloat16;
+  }
 };
 
 [[nodiscard]] std::expected<PrecisionMode, std::string> parse_precision_mode(

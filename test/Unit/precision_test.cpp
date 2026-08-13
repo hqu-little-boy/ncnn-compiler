@@ -28,4 +28,7 @@ TEST(PrecisionTest, ChecksTargetCapabilities) {
 
   target.features.emplace_back("-avx512fp16");
   EXPECT_FALSE(ncnn_mlir::infer_target_capabilities(target).fp16);
+
+  target.features = {"+f16c"};
+  EXPECT_TRUE(ncnn_mlir::infer_target_capabilities(target).fp16);
 }

@@ -103,26 +103,49 @@ std::span<const ImportEntry> importers() noexcept {
 std::expected<mlir::DenseElementsAttr, std::string> make_dense_attr(
   mlir::MLIRContext* context,
   const ncnn_graph::Tensor& tensor,
-  bool preserve_float16_storage) {
+  ncnn_mlir::PrecisionMode precision,
+  bool precision_storage) {
   const std::span<const std::byte> raw = tensor.get_data();
   if (raw.size() != tensor.byte_size()) {
     return std::unexpected("constant payload size does not match its type");
   }
   llvm::SmallVector<std::int64_t> shape(tensor.get_shape().begin(),
                                         tensor.get_shape().end());
-  if (tensor.get_dtype() == ncnn_graph::DataType::Float16 &&
-      !preserve_float16_storage) {
-    std::vector<float> values;
+  const bool targetFloat16 =
+    precision_storage && precision == ncnn_mlir::PrecisionMode::Float16;
+  const bool targetBFloat16 =
+    precision_storage && precision == ncnn_mlir::PrecisionMode::BFloat16;
+  if ((tensor.get_dtype() == ncnn_graph::DataType::Float16 && !targetFloat16) ||
+      (tensor.get_dtype() == ncnn_graph::DataType::Float32 &&
+       (targetFloat16 || targetBFloat16))) {
+    const llvm::fltSemantics& targetSemantics =
+      targetFloat16    ? llvm::APFloat::IEEEhalf()
+      : targetBFloat16 ? llvm::APFloat::BFloat()
+                       : llvm::APFloat::IEEEsingle();
+    mlir::Type targetElement =
+      targetFloat16 ? static_cast<mlir::Type>(mlir::Float16Type::get(context))
+      : targetBFloat16
+        ? static_cast<mlir::Type>(mlir::BFloat16Type::get(context))
+        : static_cast<mlir::Type>(mlir::Float32Type::get(context));
+    std::vector<llvm::APFloat> values;
     values.reserve(tensor.element_count());
-    for (std::size_t offset = 0; offset < raw.size(); offset += 2) {
-      const auto low = static_cast<std::uint16_t>(raw[offset]);
-      const auto high = static_cast<std::uint16_t>(raw[offset + 1]);
-      llvm::APFloat value(llvm::APFloat::IEEEhalf(),
-                          llvm::APInt(16, low | (high << 8)));
-      values.push_back(value.convertToFloat());
+    const std::size_t width =
+      tensor.get_dtype() == ncnn_graph::DataType::Float16 ? 2 : 4;
+    for (std::size_t offset = 0; offset < raw.size(); offset += width) {
+      std::uint64_t bits = 0;
+      for (std::size_t byte = 0; byte < width; ++byte) {
+        bits |= static_cast<std::uint64_t>(raw[offset + byte]) << (byte * 8);
+      }
+      llvm::APFloat value(tensor.get_dtype() == ncnn_graph::DataType::Float16
+                            ? llvm::APFloat::IEEEhalf()
+                            : llvm::APFloat::IEEEsingle(),
+                          llvm::APInt(static_cast<unsigned>(width * 8), bits));
+      bool losesInfo = false;
+      value.convert(
+        targetSemantics, llvm::RoundingMode::NearestTiesToEven, &losesInfo);
+      values.push_back(value);
     }
-    auto type =
-      mlir::RankedTensorType::get(shape, mlir::Float32Type::get(context));
+    auto type = mlir::RankedTensorType::get(shape, targetElement);
     return mlir::DenseElementsAttr::get(type, llvm::ArrayRef(values));
   }
 
@@ -385,9 +408,10 @@ ImportResult ImportContext::bind_blob(const LayerContext& context,
 std::expected<mlir::Value, ImportError> ImportContext::make_constant(
   const LayerContext& context,
   const ncnn_graph::Tensor& tensor,
-  std::size_t weight_index) {
+  std::size_t weight_index,
+  bool precision_storage) {
   auto attr = make_dense_attr(
-    context_, tensor, options_.precision.preserve_float16_storage());
+    context_, tensor, options_.precision.mode, precision_storage);
   if (!attr) {
     return std::unexpected(make_error(context, attr.error()));
   }

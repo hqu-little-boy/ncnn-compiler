@@ -490,7 +490,8 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
   if (context.layer.get_weights().size() != p->expected_weight_tensors() ||
       context.layer.get_weights().empty() ||
       (kernelType != ncnn_graph::DataType::Float32 &&
-       kernelType != ncnn_graph::DataType::Float16)) {
+       kernelType != ncnn_graph::DataType::Float16 &&
+       kernelType != ncnn_graph::DataType::BFloat16)) {
     return std::unexpected(make_error(
       context,
       "depthwise weights must use static FP32 or FP16-storage kernel and "

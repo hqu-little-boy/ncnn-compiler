@@ -1778,10 +1778,32 @@ int main(int argc, char** argv) {
   }
   const bool uses_sanitizer =
     uses_address_sanitizer || uses_undefined_sanitizer;
+  const fs::path builtins_capture = staging.path() / "compiler-rt.txt";
+  std::vector<std::string> builtins_command{
+    clang_path, "--rtlib=compiler-rt", "--print-libgcc-file-name"};
+  builtins_command.insert(
+    builtins_command.end(), target_args.begin(), target_args.end());
+  if (int status = run(builtins_command, builtins_capture)) {
+    return status;
+  }
+  auto builtins_text = read_text(builtins_capture);
+  if (!builtins_text) {
+    return fail(builtins_text.error());
+  }
+  std::string builtins_path = *builtins_text;
+  while (!builtins_path.empty() &&
+         std::isspace(static_cast<unsigned char>(builtins_path.back()))) {
+    builtins_path.pop_back();
+  }
+  if (!fs::is_regular_file(builtins_path)) {
+    return fail(llvm::Twine("clang compiler builtins archive not found: ") +
+                builtins_path);
+  }
   std::vector<std::string> link = {
     clang_path, "-shared", "-nostdlib", optimization};
   link.insert(link.end(), target_args.begin(), target_args.end());
   link.push_back(object.string());
+  link.push_back(builtins_path);
   link.insert(link.end(), g_linker_args.begin(), g_linker_args.end());
   if (uses_openmp) {
     link.emplace_back("-lomp");

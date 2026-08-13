@@ -72,7 +72,7 @@ func.func @invalid_pooling(%arg0: tensor<32x?x?xf32>) {
 // -----
 
 func.func @dynamic_depthwise_channel(%arg0: tensor<?x?x?xf32>, %weight: tensor<32x1x3x3xf32>) {
-  // expected-error@+2 {{ConvolutionDepthWise requires FP32 pure depthwise weights}}
+  // expected-error@+2 {{ConvolutionDepthWise requires floating pure depthwise weights}}
   // expected-error@+1 {{'ncnn.convolution_depthwise' op failed to infer returned types}}
   %result = ncnn.convolution_depthwise %arg0, %weight {dilation_h = 1 : i64, dilation_w = 1 : i64, has_bias = false, kernel_h = 3 : i64, kernel_w = 3 : i64, pad_bottom = 1 : i64, pad_left = 1 : i64, pad_right = 1 : i64, pad_top = 1 : i64, stride_h = 1 : i64, stride_w = 1 : i64} : (tensor<?x?x?xf32>, tensor<32x1x3x3xf32>) -> tensor<32x?x?xf32>
   return

@@ -96,9 +96,9 @@ TargetCapabilities infer_target_capabilities(const TargetSpec& target) {
   TargetCapabilities capabilities;
   capabilities.fp16 = feature_enabled(
     target,
-    {"fullfp16", "fp16", "avx512fp16"},
+    {"fullfp16", "fp16", "f16c", "avx512fp16"},
     (arm && contains_any(attributes, {"fullfp16", "fp16", "armv8.2"})) ||
-      (x86 && attributes.contains("avx512fp16")));
+      (x86 && contains_any(attributes, {"f16c", "avx512fp16"})));
   capabilities.bf16 =
     feature_enabled(target,
                     {"bf16", "avx512bf16"},

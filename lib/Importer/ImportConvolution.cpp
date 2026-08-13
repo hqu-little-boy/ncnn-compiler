@@ -47,7 +47,8 @@ ImportResult import_convolution(ImportContext& importer,
   const auto weight_dtype = context.layer.get_weights()[0].get_dtype();
   const bool quantized = convolution.int8_scale_term != 0;
   if ((!quantized && weight_dtype == ncnn_graph::DataType::Int8) ||
-      (quantized && weight_dtype == ncnn_graph::DataType::Float16)) {
+      (quantized && (weight_dtype == ncnn_graph::DataType::Float16 ||
+                     weight_dtype == ncnn_graph::DataType::BFloat16))) {
     return std::unexpected(make_error(
       context, "convolution kernel element type does not match scale term"));
   }
@@ -96,8 +97,10 @@ ImportResult import_convolution(ImportContext& importer,
   llvm::SmallVector<mlir::Value> tail;
   mlir::Value weight_value;
   for (std::size_t index = 0; index < expected_weights; ++index) {
-    auto constant = importer.make_constant(
-      context, context.layer.get_weights()[index], index);
+    auto constant = importer.make_constant(context,
+                                           context.layer.get_weights()[index],
+                                           index,
+                                           index == 0 && !quantized);
     if (!constant) {
       return std::unexpected(constant.error());
     }

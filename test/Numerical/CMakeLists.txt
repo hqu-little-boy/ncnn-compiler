@@ -28,6 +28,23 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     if(NOT "${input_shape}" STREQUAL "")
         list(REMOVE_AT input_constraints 0)
     endif()
+    set(precision_args)
+    set(clang_args)
+    set(filtered_constraints)
+    foreach(argument IN LISTS input_constraints)
+        if(argument MATCHES "^PRECISION=(.+)$")
+            list(APPEND precision_args --precision ${CMAKE_MATCH_1})
+        elseif(argument MATCHES "^TARGET_FEATURE=(.+)$")
+            list(APPEND precision_args --target-feature ${CMAKE_MATCH_1})
+        elseif(argument MATCHES "^CLANG_ARG=(.+)$")
+            list(APPEND clang_args --clang-arg ${CMAKE_MATCH_1})
+        elseif(argument STREQUAL "EMIT_IR")
+            list(APPEND precision_args --emit ncnn --emit tosa --emit linalg)
+        else()
+            list(APPEND filtered_constraints ${argument})
+        endif()
+    endforeach()
+    set(input_constraints ${filtered_constraints})
     set(output_dir ${CMAKE_CURRENT_BINARY_DIR}/generated/${name})
     set(library ${output_dir}/lib${name}.so)
     set(input_shape_args)
@@ -62,6 +79,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             --model-name ${name}
             ${input_shape_args}
             ${input_constraint_args}
+            ${precision_args}
+            ${clang_args}
             ${sanitizer_args}
             --output-dir ${output_dir}
             --emit-manifest
@@ -684,6 +703,56 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin
     1x384x384)
+ncnn_add_compiled_fixture(
+    convolution_mixed_fp16
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
+    ${convolution_bin}
+    1x4x4
+    PRECISION=fp16 TARGET_FEATURE=+f16c EMIT_IR)
+ncnn_add_compiled_fixture(
+    convolution_mixed_bf16
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
+    ${convolution_bin}
+    1x4x4
+    PRECISION=bf16 TARGET_FEATURE=+avx512bf16
+    CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+    CLANG_ARG=-Xclang CLANG_ARG=-avx512bf16
+    CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+    CLANG_ARG=-Xclang CLANG_ARG=-avx512f EMIT_IR)
+ncnn_add_compiled_fixture(
+    convolution_depthwise_mixed_fp16
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise.param
+    ${convolution_depthwise_bin}
+    2x5x5
+    PRECISION=fp16 TARGET_FEATURE=+f16c)
+ncnn_add_compiled_fixture(
+    convolution_depthwise_mixed_bf16
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise.param
+    ${convolution_depthwise_bin}
+    2x5x5
+    PRECISION=bf16 TARGET_FEATURE=+avx512bf16
+    CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+    CLANG_ARG=-Xclang CLANG_ARG=-avx512bf16
+    CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+    CLANG_ARG=-Xclang CLANG_ARG=-avx512f)
+ncnn_add_compiled_fixture(
+    pp_ocrv6_tiny_det_fp16
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin
+    3x640x640
+    PRECISION=fp16 TARGET_FEATURE=+f16c)
+ncnn_add_compiled_fixture(
+    pp_structrurev2_slanet_plus_cnn_fp16
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin
+    3x488x488
+    PRECISION=fp16 TARGET_FEATURE=+f16c)
+ncnn_add_compiled_fixture(
+    pp_formulanet_plus_s_encoder_fp16
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin
+    1x384x384
+    PRECISION=fp16 TARGET_FEATURE=+f16c EMIT_IR)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -814,7 +883,21 @@ add_dependencies(compile_pp_ocrv5_server_det_dynamic
 add_dependencies(compile_pp_structrurev2_slanet_plus_cnn
                   compile_pp_ocrv5_server_det_dynamic)
 add_dependencies(compile_pp_formulanet_plus_s_encoder
-                 compile_pp_structrurev2_slanet_plus_cnn)
+                  compile_pp_structrurev2_slanet_plus_cnn)
+add_dependencies(compile_convolution_mixed_fp16
+                 compile_pp_formulanet_plus_s_encoder)
+add_dependencies(compile_convolution_mixed_bf16
+                 compile_convolution_mixed_fp16)
+add_dependencies(compile_convolution_depthwise_mixed_fp16
+                 compile_convolution_mixed_bf16)
+add_dependencies(compile_convolution_depthwise_mixed_bf16
+                 compile_convolution_depthwise_mixed_fp16)
+add_dependencies(compile_pp_ocrv6_tiny_det_fp16
+                 compile_convolution_depthwise_mixed_bf16)
+add_dependencies(compile_pp_structrurev2_slanet_plus_cnn_fp16
+                 compile_pp_ocrv6_tiny_det_fp16)
+add_dependencies(compile_pp_formulanet_plus_s_encoder_fp16
+                 compile_pp_structrurev2_slanet_plus_cnn_fp16)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -842,8 +925,12 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_SAME_UPPER_BIN_PATH="${convolution_same_upper_bin}"
     CONVOLUTION_SAME_LOWER_BIN_PATH="${convolution_same_lower_bin}"
     CONVOLUTION_FP16_STORAGE_BIN_PATH="${convolution_fp16_storage_bin}"
+    CONVOLUTION_MIXED_FP16_LIBRARY_PATH="${convolution_mixed_fp16_LIBRARY}"
+    CONVOLUTION_MIXED_BF16_LIBRARY_PATH="${convolution_mixed_bf16_LIBRARY}"
     CONVOLUTION_DEPTHWISE_BIN_PATH="${convolution_depthwise_bin}"
     CONVOLUTION_DEPTHWISE_FP16_STORAGE_BIN_PATH="${convolution_depthwise_fp16_storage_bin}"
+    CONVOLUTION_DEPTHWISE_MIXED_FP16_LIBRARY_PATH="${convolution_depthwise_mixed_fp16_LIBRARY}"
+    CONVOLUTION_DEPTHWISE_MIXED_BF16_LIBRARY_PATH="${convolution_depthwise_mixed_bf16_LIBRARY}"
     CONVOLUTION_DEPTHWISE_7X7_BIN_PATH="${convolution_depthwise_7x7_bin}"
     CONVOLUTION_DEPTHWISE_9X9_BIN_PATH="${convolution_depthwise_9x9_bin}"
     CONVOLUTION_DEPTHWISE_ASYMMETRIC_BIN_PATH="${convolution_depthwise_asymmetric_bin}"
@@ -951,6 +1038,7 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_TINY_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param"
     PP_OCRV6_TINY_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin"
     PP_OCRV6_TINY_DET_LIBRARY_PATH="${pp_ocrv6_tiny_det_LIBRARY}"
+    PP_OCRV6_TINY_DET_FP16_LIBRARY_PATH="${pp_ocrv6_tiny_det_fp16_LIBRARY}"
     PP_OCRV6_SMALL_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.param"
     PP_OCRV6_SMALL_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.bin"
     PP_OCRV6_SMALL_DET_LIBRARY_PATH="${pp_ocrv6_small_det_LIBRARY}"
@@ -966,9 +1054,14 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param"
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin"
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH="${pp_structrurev2_slanet_plus_cnn_LIBRARY}"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_FP16_LIBRARY_PATH="${pp_structrurev2_slanet_plus_cnn_fp16_LIBRARY}"
     PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param"
     PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin"
-    PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH="${pp_formulanet_plus_s_encoder_LIBRARY}")
+    PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH="${pp_formulanet_plus_s_encoder_LIBRARY}"
+    PP_FORMULANET_PLUS_S_ENCODER_FP16_LIBRARY_PATH="${pp_formulanet_plus_s_encoder_fp16_LIBRARY}"
+    PP_FORMULANET_PLUS_S_ENCODER_FP16_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_encoder_fp16/pp_formulanet_plus_s_encoder_fp16.json"
+    PP_FORMULANET_PLUS_S_ENCODER_FP16_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_encoder_fp16/model.ncnn.mlir"
+    PP_FORMULANET_PLUS_S_ENCODER_FP16_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_encoder_fp16/model.linalg.mlir")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
@@ -982,6 +1075,14 @@ add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_det_static)
 add_dependencies(numerical_tests compile_pp_structrurev2_slanet_plus_cnn)
 add_dependencies(numerical_tests compile_pp_formulanet_plus_s_encoder)
+add_dependencies(numerical_tests
+    compile_convolution_mixed_fp16
+    compile_convolution_mixed_bf16
+    compile_convolution_depthwise_mixed_fp16
+    compile_convolution_depthwise_mixed_bf16
+    compile_pp_ocrv6_tiny_det_fp16
+    compile_pp_structrurev2_slanet_plus_cnn_fp16
+    compile_pp_formulanet_plus_s_encoder_fp16)
 
 add_executable(numerical_dynamic_operator_tests
     operators/dynamic_ops_test.cpp)

@@ -79,8 +79,18 @@ void expect_single_input_operator(std::string_view name,
   ASSERT_TRUE(input_shape.byte_count(sizeof(float)).has_value());
   const std::vector<float> input =
     make_random_input(*input_elements, seed, -2.0F, 2.0F);
-  const ReferenceModel reference(
-    fixture_path(name), std::string(bin_path), "data", "output", input_shape);
+  std::string_view reference_name = name;
+  if (name == "convolution_mixed_fp16" || name == "convolution_mixed_bf16") {
+    reference_name = "convolution";
+  } else if (name == "convolution_depthwise_mixed_fp16" ||
+             name == "convolution_depthwise_mixed_bf16") {
+    reference_name = "convolution_depthwise";
+  }
+  const ReferenceModel reference(fixture_path(reference_name),
+                                 std::string(bin_path),
+                                 "data",
+                                 "output",
+                                 input_shape);
   const auto expected = run_ncnn_reference(reference, input);
   ASSERT_TRUE(expected.has_value()) << expected.error();
   ASSERT_EQ(expected->size(), output_elements);
@@ -486,6 +496,26 @@ TEST(NumericalOperator, ConvolutionFp16StorageMatchesNcnn) {
                                0x46313643U);
 }
 
+TEST(NumericalOperator, ConvolutionMixedFp16MatchesNcnn) {
+  expect_single_input_operator("convolution_mixed_fp16",
+                               CONVOLUTION_MIXED_FP16_LIBRARY_PATH,
+                               CONVOLUTION_BIN_PATH,
+                               TensorShape(4, 4, 1),
+                               32,
+                               2.0e-3F,
+                               0x4D463136U);
+}
+
+TEST(NumericalOperator, ConvolutionMixedBf16MatchesNcnn) {
+  expect_single_input_operator("convolution_mixed_bf16",
+                               CONVOLUTION_MIXED_BF16_LIBRARY_PATH,
+                               CONVOLUTION_BIN_PATH,
+                               TensorShape(4, 4, 1),
+                               32,
+                               2.0e-2F,
+                               0x4D424631U);
+}
+
 TEST(NumericalOperator, DepthwiseConvolutionMatchesNcnn) {
   expect_single_input_operator("convolution_depthwise",
                                CONVOLUTION_DEPTHWISE_LIBRARY_PATH,
@@ -504,6 +534,26 @@ TEST(NumericalOperator, DepthwiseConvolutionFp16StorageMatchesNcnn) {
                                50,
                                1.0e-5F,
                                0x46313644U);
+}
+
+TEST(NumericalOperator, DepthwiseConvolutionMixedFp16MatchesNcnn) {
+  expect_single_input_operator("convolution_depthwise_mixed_fp16",
+                               CONVOLUTION_DEPTHWISE_MIXED_FP16_LIBRARY_PATH,
+                               CONVOLUTION_DEPTHWISE_BIN_PATH,
+                               TensorShape(5, 5, 2),
+                               50,
+                               2.0e-3F,
+                               0x444D4631U);
+}
+
+TEST(NumericalOperator, DepthwiseConvolutionMixedBf16MatchesNcnn) {
+  expect_single_input_operator("convolution_depthwise_mixed_bf16",
+                               CONVOLUTION_DEPTHWISE_MIXED_BF16_LIBRARY_PATH,
+                               CONVOLUTION_DEPTHWISE_BIN_PATH,
+                               TensorShape(5, 5, 2),
+                               50,
+                               2.0e-2F,
+                               0x444D4246U);
 }
 
 TEST(NumericalOperator, DepthwiseConvolution7x7MatchesNcnn) {
