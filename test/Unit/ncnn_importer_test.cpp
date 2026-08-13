@@ -83,6 +83,7 @@ ncnn_graph::Tensor make_tensor(std::vector<std::int64_t> shape,
       element_width = sizeof(float);
       break;
     case ncnn_graph::DataType::Float16:
+    case ncnn_graph::DataType::BFloat16:
       element_width = 2;
       break;
     case ncnn_graph::DataType::Int8:
@@ -691,6 +692,27 @@ TEST_F(NcnnImporterTest, ImportsSupportedGraph) {
     << "pad_mode 0 uses ceil/full-padding output shape";
   EXPECT_TRUE(shape_is(output_type(module), {4}))
     << "global pool and softmax produce rank-one output";
+}
+
+TEST_F(NcnnImporterTest, PreservesFloat16StorageForFloat16Policy) {
+  ncnn_importer::ImportOptions options;
+  options.precision.mode = ncnn_mlir::PrecisionMode::Float16;
+  auto imported = import(make_supported_graph(), options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+
+  mlir::ModuleOp module = imported->get();
+  auto model = *module.getOps<mlir::ncnn::ModelOp>().begin();
+  EXPECT_EQ(model->getAttrOfType<mlir::StringAttr>("ncnn.precision").getValue(),
+            "fp16");
+  int float16_constants = 0;
+  int float32_constants = 0;
+  module->walk([&](mlir::ncnn::ConstOp constant) {
+    mlir::Type element = constant.getOutput().getType().getElementType();
+    float16_constants += element.isF16();
+    float32_constants += element.isF32();
+  });
+  EXPECT_EQ(float16_constants, 1);
+  EXPECT_EQ(float32_constants, 1);
 }
 
 TEST_F(NcnnImporterTest, ImportsBoundedDetectionOutputContract) {

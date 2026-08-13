@@ -28,6 +28,7 @@
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNDialect.hpp"
 #include "ncnn-mlir/Graph/graph.hpp"
 #include "ncnn-mlir/Importer/NCNNImporter.hpp"
+#include "ncnn-mlir/Support/Precision.hpp"
 
 namespace {
 
@@ -68,6 +69,27 @@ llvm::cl::list<std::string> g_input_dim_constraints(
   llvm::cl::desc("Dynamic input dimension constraint as "
                  "INPUT:DIM:min=N,multiple=N"),
   llvm::cl::value_desc("constraint"),
+  llvm::cl::ZeroOrMore,
+  llvm::cl::cat(g_driver_category));
+
+llvm::cl::opt<std::string> g_precision(
+  "precision",
+  llvm::cl::desc("Precision policy: auto, f32, fp16, bf16, or int8"),
+  llvm::cl::init("auto"),
+  llvm::cl::cat(g_driver_category));
+
+llvm::cl::opt<std::string> g_target_triple("target-triple",
+                                           llvm::cl::init(""),
+                                           llvm::cl::cat(g_driver_category));
+llvm::cl::opt<std::string> g_march("march",
+                                   llvm::cl::init(""),
+                                   llvm::cl::cat(g_driver_category));
+llvm::cl::opt<std::string> g_mcpu("mcpu",
+                                  llvm::cl::init(""),
+                                  llvm::cl::cat(g_driver_category));
+llvm::cl::list<std::string> g_target_features(
+  "target-feature",
+  llvm::cl::desc("Target feature used for precision capability checks"),
   llvm::cl::ZeroOrMore,
   llvm::cl::cat(g_driver_category));
 
@@ -221,6 +243,22 @@ int main(int argc, char** argv) {
     argv,
     "ncnn-mlir-driver -- compile ncnn .param/.bin toward MLIR/native code\n");
 
+  auto precision = ncnn_mlir::parse_precision_mode(g_precision);
+  if (!precision) {
+    llvm::errs() << "error: " << precision.error() << "\n";
+    return 1;
+  }
+  ncnn_mlir::TargetSpec target{
+    .triple = g_target_triple,
+    .march = g_march,
+    .mcpu = g_mcpu,
+    .features = {g_target_features.begin(), g_target_features.end()}};
+  if (auto supported = ncnn_mlir::validate_precision_target(*precision, target);
+      !supported) {
+    llvm::errs() << "error: " << supported.error() << "\n";
+    return 1;
+  }
+
   const std::string bin_path =
     g_bin_path.empty() ? derive_bin_path(g_input_path) : g_bin_path.getValue();
 
@@ -245,6 +283,7 @@ int main(int argc, char** argv) {
   context.loadAllAvailableDialects();
 
   ncnn_importer::ImportOptions import_options;
+  import_options.precision.mode = *precision;
   for (const std::string& input_shape : g_input_shapes) {
     if (input_shape == "*") {
       if (g_input_shapes.size() != 1) {

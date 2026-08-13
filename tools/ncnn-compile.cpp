@@ -70,6 +70,11 @@ llvm::cl::list<std::string> g_input_dim_constraints(
   llvm::cl::value_desc("constraint"),
   llvm::cl::ZeroOrMore,
   llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_precision(
+  "precision",
+  llvm::cl::desc("Precision policy: auto, f32, fp16, bf16, or int8"),
+  llvm::cl::init("auto"),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_output_dir("output-dir",
                                         llvm::cl::desc("Output directory"),
                                         llvm::cl::value_desc("path"),
@@ -1612,6 +1617,19 @@ int main(int argc, char** argv) {
 
   std::vector<std::string> driver_command{
     driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()};
+  driver_command.push_back("--precision=" + g_precision);
+  if (!g_target_triple.empty()) {
+    driver_command.push_back("--target-triple=" + g_target_triple);
+  }
+  if (!g_march.empty()) {
+    driver_command.push_back("--march=" + g_march);
+  }
+  if (!g_mcpu.empty()) {
+    driver_command.push_back("--mcpu=" + g_mcpu);
+  }
+  for (const std::string& feature : g_target_features) {
+    driver_command.push_back("--target-feature=" + feature);
+  }
   for (const std::string& input_shape : g_input_shapes) {
     driver_command.push_back("--input-shape=" + input_shape);
   }

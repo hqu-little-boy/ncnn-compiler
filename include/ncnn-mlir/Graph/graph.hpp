@@ -194,7 +194,7 @@ decode_batch_norm_params(const ParamDict& params);
 bool has_weight_loader(std::string_view layer_type) noexcept;
 std::size_t get_weight_loader_count() noexcept;
 
-enum class DataType { Unknown, Float32, Float16, Int8 };
+enum class DataType { Unknown, Float32, Float16, BFloat16, Int8 };
 
 class Tensor {
  public:

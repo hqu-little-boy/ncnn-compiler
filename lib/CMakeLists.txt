@@ -1,6 +1,7 @@
 add_subdirectory(Dialect)
 add_subdirectory(Conversion)
 add_subdirectory(Graph)
+add_subdirectory(Support)
 add_subdirectory(Importer)
 add_subdirectory(Transforms)
 add_subdirectory(Pipelines)

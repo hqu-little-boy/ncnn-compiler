@@ -12,6 +12,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "ncnn-mlir/Graph/graph.hpp"
+#include "ncnn-mlir/Support/Precision.hpp"
 
 namespace ncnn_importer {
 
@@ -52,6 +53,8 @@ bool has_layer_importer(std::string_view layer_type) noexcept;
 std::size_t get_layer_importer_count() noexcept;
 
 struct ImportOptions {
+  ncnn_mlir::PrecisionPolicy precision;
+
   // Used only when the model has one Input layer whose w/h/c are all omitted.
   std::optional<InputShape> input_shape;
 

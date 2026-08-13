@@ -101,14 +101,17 @@ std::span<const ImportEntry> importers() noexcept {
 }
 
 std::expected<mlir::DenseElementsAttr, std::string> make_dense_attr(
-  mlir::MLIRContext* context, const ncnn_graph::Tensor& tensor) {
+  mlir::MLIRContext* context,
+  const ncnn_graph::Tensor& tensor,
+  bool preserve_float16_storage) {
   const std::span<const std::byte> raw = tensor.get_data();
   if (raw.size() != tensor.byte_size()) {
     return std::unexpected("constant payload size does not match its type");
   }
   llvm::SmallVector<std::int64_t> shape(tensor.get_shape().begin(),
                                         tensor.get_shape().end());
-  if (tensor.get_dtype() == ncnn_graph::DataType::Float16) {
+  if (tensor.get_dtype() == ncnn_graph::DataType::Float16 &&
+      !preserve_float16_storage) {
     std::vector<float> values;
     values.reserve(tensor.element_count());
     for (std::size_t offset = 0; offset < raw.size(); offset += 2) {
@@ -131,7 +134,13 @@ std::expected<mlir::DenseElementsAttr, std::string> make_dense_attr(
       width = 4;
       break;
     case ncnn_graph::DataType::Float16:
-      llvm_unreachable("float16 constants are promoted above");
+      element = mlir::Float16Type::get(context);
+      width = 2;
+      break;
+    case ncnn_graph::DataType::BFloat16:
+      element = mlir::BFloat16Type::get(context);
+      width = 2;
+      break;
     case ncnn_graph::DataType::Int8:
       element = mlir::IntegerType::get(context, 8);
       width = 1;
@@ -377,7 +386,8 @@ std::expected<mlir::Value, ImportError> ImportContext::make_constant(
   const LayerContext& context,
   const ncnn_graph::Tensor& tensor,
   std::size_t weight_index) {
-  auto attr = make_dense_attr(context_, tensor);
+  auto attr = make_dense_attr(
+    context_, tensor, options_.precision.preserve_float16_storage());
   if (!attr) {
     return std::unexpected(make_error(context, attr.error()));
   }
@@ -407,6 +417,9 @@ const std::string& ImportContext::captured_diagnostic() const noexcept {
 ImportResult ImportContext::prepare_model() {
   model_ = builder_.create<mlir::ncnn::ModelOp>(
     builder_.getUnknownLoc(), builder_.getStringAttr("model"));
+  model_->setAttr(
+    "ncnn.precision",
+    builder_.getStringAttr(precision_mode_name(options_.precision.mode)));
   if (!options_.input_dim_constraints.empty()) {
     llvm::SmallVector<mlir::Attribute> constraints;
     constraints.reserve(options_.input_dim_constraints.size());
@@ -533,6 +546,7 @@ std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> import_graph(
     auto module = mlir::ModuleOp::create(builder.getUnknownLoc());
     for (std::uint32_t rank = 1; rank <= 4; ++rank) {
       ImportOptions specialized;
+      specialized.precision = options.precision;
       specialized.input_shapes = {InputShape(rank, kDynamicExtent)};
       specialized.rank_specialization = rank;
       detail::ImportContext importer(context, specialized);

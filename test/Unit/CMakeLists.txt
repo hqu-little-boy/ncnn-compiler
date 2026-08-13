@@ -5,6 +5,7 @@ include(GoogleTest)
 add_executable(unit_tests
     load_squeezenet.cpp
     parser_test.cpp
+    precision_test.cpp
     shape_program_test.cpp
     malformed_graph_test.cpp
     layer_registry_test.cpp
@@ -15,6 +16,7 @@ target_link_libraries(unit_tests PRIVATE
     NCNNImporter
     NCNNDialect
     NCNNGraph
+    NCNNPrecisionSupport
     MLIRFuncDialect
     MLIRArithDialect
     GTest::gtest_main)

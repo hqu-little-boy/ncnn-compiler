@@ -12,6 +12,7 @@ add_library(NCNNImporter STATIC
 target_compile_options(NCNNImporter PRIVATE -fno-rtti)
 target_link_libraries(NCNNImporter PUBLIC
     NCNNGraph
+    NCNNPrecisionSupport
     NCNNDialect
     MLIRFuncDialect
     MLIRArithDialect

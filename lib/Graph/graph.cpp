@@ -620,6 +620,7 @@ std::expected<void, std::string> Tensor::set_shape(
       element_width = sizeof(float);
       break;
     case DataType::Float16:
+    case DataType::BFloat16:
       element_width = 2;
       break;
     case DataType::Int8:
@@ -682,6 +683,7 @@ std::size_t Tensor::byte_size() const noexcept {
     case DataType::Float32:
       return element_count() * sizeof(float);
     case DataType::Float16:
+    case DataType::BFloat16:
       return element_count() * 2;
     case DataType::Int8:
       return element_count();
@@ -1524,6 +1526,8 @@ std::string_view get_dtype_name(DataType dtype) {
       return "f32";
     case DataType::Float16:
       return "f16";
+    case DataType::BFloat16:
+      return "bf16";
     case DataType::Int8:
       return "i8";
   }
