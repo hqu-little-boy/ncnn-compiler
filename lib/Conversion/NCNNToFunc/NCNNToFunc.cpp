@@ -133,6 +133,13 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
       FunctionType::get(model.getContext(), inputTypes, outputTypes));
     function->setAttr("ncnn.entry_point", rewriter.getUnitAttr());
     function->setAttr("llvm.emit_c_interface", rewriter.getUnitAttr());
+    for (StringRef name : {"ncnn.precision",
+                           "ncnn.fp16_accumulator",
+                           "ncnn.precision_fallback"}) {
+      if (Attribute value = model->getAttr(name)) {
+        function->setAttr(name, value);
+      }
+    }
     if (Attribute constraints = model->getAttr("ncnn.shape_constraints")) {
       function->setAttr("ncnn.shape_constraints", constraints);
     }

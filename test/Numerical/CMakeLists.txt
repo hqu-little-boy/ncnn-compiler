@@ -34,12 +34,19 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     foreach(argument IN LISTS input_constraints)
         if(argument MATCHES "^PRECISION=(.+)$")
             list(APPEND precision_args --precision ${CMAKE_MATCH_1})
+        elseif(argument MATCHES "^FP16_ACCUMULATOR=(.+)$")
+            list(APPEND precision_args --fp16-accumulator ${CMAKE_MATCH_1})
+        elseif(argument STREQUAL "ALLOW_FALLBACK")
+            list(APPEND precision_args --allow-fallback)
         elseif(argument MATCHES "^TARGET_FEATURE=(.+)$")
             list(APPEND precision_args --target-feature ${CMAKE_MATCH_1})
         elseif(argument MATCHES "^CLANG_ARG=(.+)$")
             list(APPEND clang_args --clang-arg ${CMAKE_MATCH_1})
         elseif(argument STREQUAL "EMIT_IR")
             list(APPEND precision_args --emit ncnn --emit tosa --emit linalg)
+        elseif(argument STREQUAL "EMIT_BACKEND")
+            list(APPEND precision_args --emit linalg --emit llvm-ir
+                                            --emit object --emit assembly)
         else()
             list(APPEND filtered_constraints ${argument})
         endif()
@@ -708,7 +715,24 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
     ${convolution_bin}
     1x4x4
-    PRECISION=fp16 TARGET_FEATURE=+f16c EMIT_IR)
+    PRECISION=fp16 FP16_ACCUMULATOR=f32 TARGET_FEATURE=+f16c EMIT_IR)
+ncnn_add_compiled_fixture(
+    convolution_arithmetic_fp16
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
+    ${convolution_bin}
+    1x4x4
+    PRECISION=fp16 FP16_ACCUMULATOR=f16 TARGET_FEATURE=+avx512fp16
+    CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+    CLANG_ARG=-Xclang CLANG_ARG=-avx512fp16
+    CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+    CLANG_ARG=-Xclang CLANG_ARG=-avx512f EMIT_BACKEND)
+ncnn_add_compiled_fixture(
+    convolution_codegen_fp16
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
+    ${convolution_bin}
+    1x4x4
+    PRECISION=fp16 FP16_ACCUMULATOR=f16 TARGET_FEATURE=+avx512fp16
+    EMIT_BACKEND)
 ncnn_add_compiled_fixture(
     convolution_mixed_bf16
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
@@ -724,7 +748,17 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise.param
     ${convolution_depthwise_bin}
     2x5x5
-    PRECISION=fp16 TARGET_FEATURE=+f16c)
+    PRECISION=fp16 FP16_ACCUMULATOR=f32 TARGET_FEATURE=+f16c)
+ncnn_add_compiled_fixture(
+    convolution_depthwise_arithmetic_fp16
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise.param
+    ${convolution_depthwise_bin}
+    2x5x5
+    PRECISION=fp16 FP16_ACCUMULATOR=f16 TARGET_FEATURE=+avx512fp16
+    CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+    CLANG_ARG=-Xclang CLANG_ARG=-avx512fp16
+    CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+    CLANG_ARG=-Xclang CLANG_ARG=-avx512f)
 ncnn_add_compiled_fixture(
     convolution_depthwise_mixed_bf16
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_depthwise.param
@@ -740,19 +774,19 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin
     3x640x640
-    PRECISION=fp16 TARGET_FEATURE=+f16c)
+    PRECISION=fp16 FP16_ACCUMULATOR=f32 TARGET_FEATURE=+f16c)
 ncnn_add_compiled_fixture(
     pp_structrurev2_slanet_plus_cnn_fp16
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin
     3x488x488
-    PRECISION=fp16 TARGET_FEATURE=+f16c)
+    PRECISION=fp16 FP16_ACCUMULATOR=f32 TARGET_FEATURE=+f16c)
 ncnn_add_compiled_fixture(
     pp_formulanet_plus_s_encoder_fp16
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin
     1x384x384
-    PRECISION=fp16 TARGET_FEATURE=+f16c EMIT_IR)
+    PRECISION=fp16 FP16_ACCUMULATOR=f32 TARGET_FEATURE=+f16c EMIT_IR)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -887,10 +921,16 @@ add_dependencies(compile_pp_formulanet_plus_s_encoder
 add_dependencies(compile_convolution_mixed_fp16
                  compile_pp_formulanet_plus_s_encoder)
 add_dependencies(compile_convolution_mixed_bf16
+                 compile_convolution_codegen_fp16)
+add_dependencies(compile_convolution_codegen_fp16
+                 compile_convolution_arithmetic_fp16)
+add_dependencies(compile_convolution_arithmetic_fp16
                  compile_convolution_mixed_fp16)
 add_dependencies(compile_convolution_depthwise_mixed_fp16
                  compile_convolution_mixed_bf16)
 add_dependencies(compile_convolution_depthwise_mixed_bf16
+                 compile_convolution_depthwise_arithmetic_fp16)
+add_dependencies(compile_convolution_depthwise_arithmetic_fp16
                  compile_convolution_depthwise_mixed_fp16)
 add_dependencies(compile_pp_ocrv6_tiny_det_fp16
                  compile_convolution_depthwise_mixed_bf16)
@@ -926,10 +966,14 @@ target_compile_definitions(numerical_tests PRIVATE
     CONVOLUTION_SAME_LOWER_BIN_PATH="${convolution_same_lower_bin}"
     CONVOLUTION_FP16_STORAGE_BIN_PATH="${convolution_fp16_storage_bin}"
     CONVOLUTION_MIXED_FP16_LIBRARY_PATH="${convolution_mixed_fp16_LIBRARY}"
+    CONVOLUTION_ARITHMETIC_FP16_LIBRARY_PATH="${convolution_arithmetic_fp16_LIBRARY}"
+    CONVOLUTION_ARITHMETIC_FP16_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/convolution_arithmetic_fp16/model.linalg.mlir"
+    CONVOLUTION_ARITHMETIC_FP16_LLVM_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/convolution_arithmetic_fp16/model.ll"
     CONVOLUTION_MIXED_BF16_LIBRARY_PATH="${convolution_mixed_bf16_LIBRARY}"
     CONVOLUTION_DEPTHWISE_BIN_PATH="${convolution_depthwise_bin}"
     CONVOLUTION_DEPTHWISE_FP16_STORAGE_BIN_PATH="${convolution_depthwise_fp16_storage_bin}"
     CONVOLUTION_DEPTHWISE_MIXED_FP16_LIBRARY_PATH="${convolution_depthwise_mixed_fp16_LIBRARY}"
+    CONVOLUTION_DEPTHWISE_ARITHMETIC_FP16_LIBRARY_PATH="${convolution_depthwise_arithmetic_fp16_LIBRARY}"
     CONVOLUTION_DEPTHWISE_MIXED_BF16_LIBRARY_PATH="${convolution_depthwise_mixed_bf16_LIBRARY}"
     CONVOLUTION_DEPTHWISE_7X7_BIN_PATH="${convolution_depthwise_7x7_bin}"
     CONVOLUTION_DEPTHWISE_9X9_BIN_PATH="${convolution_depthwise_9x9_bin}"
@@ -1077,8 +1121,10 @@ add_dependencies(numerical_tests compile_pp_structrurev2_slanet_plus_cnn)
 add_dependencies(numerical_tests compile_pp_formulanet_plus_s_encoder)
 add_dependencies(numerical_tests
     compile_convolution_mixed_fp16
+    compile_convolution_arithmetic_fp16
     compile_convolution_mixed_bf16
     compile_convolution_depthwise_mixed_fp16
+    compile_convolution_depthwise_arithmetic_fp16
     compile_convolution_depthwise_mixed_bf16
     compile_pp_ocrv6_tiny_det_fp16
     compile_pp_structrurev2_slanet_plus_cnn_fp16

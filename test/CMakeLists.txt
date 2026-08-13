@@ -9,6 +9,9 @@ find_program(MLIR_TRANSLATE NAMES mlir-translate-21 REQUIRED)
 find_program(CLANG NAMES clang-21 REQUIRED)
 find_program(LLVM_NM NAMES llvm-nm-21 REQUIRED)
 find_program(LLVM_READELF NAMES llvm-readelf-21 REQUIRED)
+find_program(LLVM_OBJDUMP NAMES llvm-objdump-21 REQUIRED)
+find_program(LLVM_SIZE NAMES llvm-size-21 REQUIRED)
+find_program(LLVM_MCA NAMES llvm-mca-21 REQUIRED)
 # find_library(MLIR_RUNNER_UTILS NAMES mlir_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
 # find_library(MLIR_C_RUNNER_UTILS NAMES mlir_c_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
 add_subdirectory(Numerical)
@@ -89,5 +92,26 @@ add_test(NAME ncnn-compile-cli
         --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/ncnn-compile-cli)
 set_tests_properties(ncnn-compile-cli PROPERTIES
     LABELS "native;integration;cli;static-baseline"
+    RUN_SERIAL TRUE
+    TIMEOUT 180)
+
+add_test(NAME fp16-arithmetic-codegen
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_fp16_arithmetic.py
+        --compiler $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --objdump ${LLVM_OBJDUMP}
+        --size ${LLVM_SIZE}
+        --mca ${LLVM_MCA}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/convolution.param
+        --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/convolution.bin
+        --codegen-dir ${CMAKE_CURRENT_BINARY_DIR}/Numerical/generated/convolution_codegen_fp16
+        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/fp16-arithmetic)
+set_tests_properties(fp16-arithmetic-codegen PROPERTIES
+    LABELS "native;integration;precision;performance"
     RUN_SERIAL TRUE
     TIMEOUT 180)

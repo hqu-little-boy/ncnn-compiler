@@ -20,6 +20,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
+#include "ncnn-mlir/Support/Precision.hpp"
 
 namespace mlir::ncnn {
 
@@ -32,6 +33,10 @@ SmallVector<Value> getDynamicSizeValues(OpBuilder& builder,
                                         Location location,
                                         Value source,
                                         RankedTensorType type);
+Value roundStoragePrecision(OpBuilder& builder,
+                            Location location,
+                            Value input,
+                            Type storageElement);
 
 RankedTensorType getNHWCType(RankedTensorType chwType) {
   ArrayRef<int64_t> shape = chwType.getShape();
@@ -43,6 +48,39 @@ RankedTensorType getOHWIType(RankedTensorType oihwType) {
   ArrayRef<int64_t> shape = oihwType.getShape();
   return RankedTensorType::get({shape[0], shape[2], shape[3], shape[1]},
                                oihwType.getElementType());
+}
+
+RankedTensorType getHWCFType(RankedTensorType oihwType) {
+  ArrayRef<int64_t> shape = oihwType.getShape();
+  return RankedTensorType::get({shape[2], shape[3], shape[1], shape[0]},
+                               oihwType.getElementType());
+}
+
+bool usesFP16Arithmetic(Operation* operation) {
+  auto function = operation->getParentOfType<func::FuncOp>();
+  auto precision = function->getAttrOfType<StringAttr>("ncnn.precision");
+  auto accumulator =
+    function->getAttrOfType<StringAttr>("ncnn.fp16_accumulator");
+  return precision && precision.getValue() == "fp16" && accumulator &&
+         accumulator.getValue() == "f16";
+}
+
+bool usesFP16Boundary(Operation* operation) {
+  StringRef name = operation->getName().getStringRef();
+  return usesFP16Arithmetic(operation) &&
+         ncnn_mlir::operator_precision_capability(
+           std::string_view(name.data(), name.size())) ==
+           ncnn_mlir::OperatorPrecisionCapability::FP16Boundary;
+}
+
+Value applyFP16Boundary(OpBuilder& builder,
+                        Location location,
+                        Operation* operation,
+                        Value value) {
+  return usesFP16Boundary(operation)
+           ? roundStoragePrecision(
+               builder, location, value, builder.getF16Type())
+           : value;
 }
 
 Value createShape(OpBuilder& builder,
@@ -119,6 +157,37 @@ Value roundStoragePrecision(OpBuilder& builder,
     location,
     stored,
     cast<ShapedType>(input.getType()).getElementType());
+}
+
+Value initializeConvolutionOutput(OpBuilder& builder,
+                                  Location location,
+                                  RankedTensorType outputType,
+                                  Value bias) {
+  Value empty = builder.create<tensor::EmptyOp>(
+    location, outputType.getShape(), outputType.getElementType());
+  AffineExpr channel = builder.getAffineDimExpr(3);
+  AffineMap biasMap =
+    AffineMap::get(4, 0, {channel}, builder.getContext());
+  AffineMap outputMap = builder.getMultiDimIdentityMap(4);
+  SmallVector<utils::IteratorType> iterators(4,
+                                             utils::IteratorType::parallel);
+  auto initialized = builder.create<linalg::GenericOp>(
+    location,
+    outputType,
+    ValueRange{bias},
+    ValueRange{empty},
+    ArrayRef<AffineMap>{biasMap, outputMap},
+    iterators,
+    [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+      nested.create<linalg::YieldOp>(nestedLocation, arguments.front());
+    });
+  return initialized.getResult(0);
+}
+
+DenseIntElementsAttr createI64PairAttr(OpBuilder& builder,
+                                       ArrayRef<int64_t> values) {
+  return DenseIntElementsAttr::get(
+    RankedTensorType::get({2}, builder.getI64Type()), values);
 }
 
 Value createIndexConstant(OpBuilder& builder,
@@ -465,15 +534,115 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
         "requires explicit non-negative padding; run normalize-ncnn first");
     }
     Value input = adaptor.getInput();
+    input = applyFP16Boundary(
+      rewriter, operation.getLoc(), operation, input);
     auto weightType = cast<RankedTensorType>(operation.getWeight().getType());
     Type storageElement = weightType.getElementType();
     const bool lowPrecisionWeight =
       storageElement.isF16() || storageElement.isBF16();
+    const bool fp16Arithmetic =
+      storageElement.isF16() && usesFP16Arithmetic(operation);
+    Value sourceWeight = adaptor.getWeight();
+    auto sourceOutput = cast<RankedTensorType>(operation.getOutput().getType());
+    auto outputType = getNHWCType(sourceOutput);
+    Value bias;
+    if (operation.getHasBias()) {
+      bias = adaptor.getBiasAndScales().front();
+    } else {
+      auto biasType =
+        RankedTensorType::get({sourceOutput.getShape()[0]},
+                              sourceOutput.getElementType());
+      bias = createSplat(rewriter, operation.getLoc(), biasType, 0.0);
+    }
+    if (fp16Arithmetic) {
+      Location location = operation.getLoc();
+      input = convertFloatingTensor(rewriter, location, input, storageElement);
+      bias = convertFloatingTensor(rewriter, location, bias, storageElement);
+      auto hwcfType = getHWCFType(weightType);
+      Value weight = rewriter.create<tosa::TransposeOp>(
+        location, hwcfType, sourceWeight, ArrayRef<int32_t>{2, 3, 1, 0});
+      SmallVector<int64_t> padding{
+        padTop, padBottom, padLeft, padRight};
+      auto inputShape = cast<RankedTensorType>(input.getType()).getShape();
+      auto adjustTrailingPadding = [&](int64_t inputSize,
+                                        int64_t kernel,
+                                        int64_t stride,
+                                        int64_t dilation,
+                                        int64_t leading,
+                                        int64_t& trailing) {
+        int64_t effective = ((kernel - 1) * dilation) + 1;
+        int64_t numerator = inputSize - 1 + leading + trailing - effective + 1;
+        int64_t remainder = numerator % stride;
+        if (remainder < 0) {
+          remainder += stride;
+        }
+        if (remainder != 0) {
+          trailing += stride - remainder;
+        }
+      };
+      const bool dynamicSpatial = ShapedType::isDynamic(inputShape[1]) ||
+                                  ShapedType::isDynamic(inputShape[2]);
+      if (dynamicSpatial) {
+        return operation.emitOpError(
+          "FP16 arithmetic convolution requires static spatial dimensions");
+      }
+      adjustTrailingPadding(inputShape[1],
+                            operation.getKernelH(),
+                            operation.getStrideH(),
+                            operation.getDilationH(),
+                            padTop,
+                            padding[1]);
+      adjustTrailingPadding(inputShape[2],
+                            operation.getKernelW(),
+                            operation.getStrideW(),
+                            operation.getDilationW(),
+                            padLeft,
+                            padding[3]);
+      auto paddedInputType = RankedTensorType::get(
+        {inputShape[0],
+         inputShape[1] + padding[0] + padding[1],
+         inputShape[2] + padding[2] + padding[3],
+         inputShape[3]},
+        storageElement);
+      Value paddingShape = createShape(rewriter,
+                                       location,
+                                       {0,
+                                        0,
+                                        padding[0],
+                                        padding[1],
+                                        padding[2],
+                                        padding[3],
+                                        0,
+                                        0});
+      Value zero = createSplat(rewriter,
+                               location,
+                               RankedTensorType::get({1}, storageElement),
+                               0.0);
+      Value paddedInput = rewriter.create<tosa::PadOp>(
+        location, paddedInputType, input, paddingShape, zero);
+      auto fp16OutputType = outputType.clone(storageElement);
+      Value initialized = initializeConvolutionOutput(
+        rewriter, location, fp16OutputType, bias);
+      auto convolution = rewriter.create<linalg::Conv2DNhwcHwcfOp>(
+        location,
+        TypeRange{fp16OutputType},
+        ValueRange{paddedInput, weight},
+        ValueRange{initialized},
+        createI64PairAttr(rewriter,
+                          {static_cast<int64_t>(operation.getStrideH()),
+                           static_cast<int64_t>(operation.getStrideW())}),
+        createI64PairAttr(rewriter,
+                          {static_cast<int64_t>(operation.getDilationH()),
+                           static_cast<int64_t>(operation.getDilationW())}));
+      Value result = convertFloatingTensor(
+        rewriter, location, convolution.getResult(0), rewriter.getF32Type());
+      rewriter.replaceOp(operation, result);
+      return success();
+    }
     if (lowPrecisionWeight) {
       input = roundStoragePrecision(
         rewriter, operation.getLoc(), input, storageElement);
     }
-    Value sourceWeight = adaptor.getWeight();
     if (lowPrecisionWeight) {
       sourceWeight = convertFloatingTensor(
         rewriter, operation.getLoc(), sourceWeight, rewriter.getF32Type());
@@ -485,17 +654,6 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
                                          ohwiType,
                                          sourceWeight,
                                          ArrayRef<int32_t>{0, 2, 3, 1});
-    Value bias;
-    if (operation.getHasBias()) {
-      bias = adaptor.getBiasAndScales().front();
-    } else {
-      auto output = cast<RankedTensorType>(operation.getOutput().getType());
-      auto biasType =
-        RankedTensorType::get({output.getShape()[0]}, output.getElementType());
-      bias = createSplat(rewriter, operation.getLoc(), biasType, 0.0);
-    }
-    auto sourceOutput = cast<RankedTensorType>(operation.getOutput().getType());
-    auto outputType = getNHWCType(sourceOutput);
     Value inputZero =
       createSplat(rewriter,
                   operation.getLoc(),
@@ -1000,6 +1158,8 @@ class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
     OpAdaptor adaptor,
     ConversionPatternRewriter& rewriter) const final {
     Value input = adaptor.getInput();
+    input = applyFP16Boundary(
+      rewriter, operation.getLoc(), operation, input);
     auto type = cast<RankedTensorType>(input.getType());
     auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
     auto sourceAxis = static_cast<int64_t>(operation.getAxis());
@@ -1024,6 +1184,8 @@ class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
     Value shift = createI8Zero(rewriter, operation.getLoc());
     Value result = rewriter.create<tosa::MulOp>(
       operation.getLoc(), type, exponent, reciprocal, shift);
+    result = applyFP16Boundary(
+      rewriter, operation.getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -1501,16 +1663,20 @@ class ConvertSigmoid final : public ConversionPattern {
         !isRankedF32Tensor(operation->getResult(0).getType())) {
       return operation->emitOpError("supports one ranked f32 tensor only");
     }
-    auto type = cast<RankedTensorType>(operands.front().getType());
+    Value input = applyFP16Boundary(
+      rewriter, operation->getLoc(), operation, operands.front());
+    auto type = cast<RankedTensorType>(input.getType());
     Value clamped = rewriter.create<tosa::ClampOp>(
       operation->getLoc(),
       type,
-      operands.front(),
+      input,
       rewriter.getF32FloatAttr(-88.3762626647949F),
       rewriter.getF32FloatAttr(88.3762626647949F));
-    rewriter.replaceOp(
-      operation,
-      rewriter.create<tosa::SigmoidOp>(operation->getLoc(), type, clamped));
+    Value result =
+      rewriter.create<tosa::SigmoidOp>(operation->getLoc(), type, clamped);
+    result = applyFP16Boundary(
+      rewriter, operation->getLoc(), operation, result);
+    rewriter.replaceOp(operation, result);
     return success();
   }
 };
@@ -1581,6 +1747,9 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
       sourceWeightType && sourceWeightType.hasStaticShape() &&
       (sourceWeightType.getElementType().isF16() ||
        sourceWeightType.getElementType().isBF16());
+    const bool fp16Arithmetic = sourceWeightType &&
+                                sourceWeightType.getElementType().isF16() &&
+                                usesFP16Arithmetic(operation);
     if (operands.size() < 2 || operation->getNumResults() != 1 ||
         !isRankedF32Tensor(operation->getOperand(0).getType()) ||
         (!isStaticF32Tensor(operands[1].getType()) && !lowPrecisionWeight)) {
@@ -1590,7 +1759,10 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
     Type storageElement = sourceWeightType.getElementType();
     Value input = operands[0];
     Value sourceWeight = operands[1];
-    if (lowPrecisionWeight) {
+    if (fp16Arithmetic) {
+      input = convertFloatingTensor(
+        rewriter, operation->getLoc(), input, storageElement);
+    } else if (lowPrecisionWeight) {
       input = roundStoragePrecision(
         rewriter, operation->getLoc(), input, storageElement);
       sourceWeight = convertFloatingTensor(
@@ -1643,6 +1815,10 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
         operation->getLoc(),
         RankedTensorType::get({outputs}, inputType.getElementType()),
         0.0);
+    }
+    if (fp16Arithmetic) {
+      bias = convertFloatingTensor(
+        rewriter, operation->getLoc(), bias, storageElement);
     }
     SmallVector<int64_t> pad;
     for (StringRef name : {"pad_top", "pad_bottom", "pad_left", "pad_right"}) {
@@ -1700,6 +1876,57 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
                             pad[2],
                             pad[3]);
     }
+    auto outputType = getNHWCType(sourceOutput);
+    if (fp16Arithmetic) {
+      if (dynamicSpatial) {
+        return operation->emitOpError(
+          "FP16 arithmetic depthwise convolution requires static spatial "
+          "dimensions");
+      }
+      auto paddedInputType = RankedTensorType::get(
+        {inputType.getShape()[0],
+         inputType.getShape()[1] + pad[0] + pad[1],
+         inputType.getShape()[2] + pad[2] + pad[3],
+         inputType.getShape()[3]},
+        storageElement);
+      Value paddingShape = createShape(rewriter,
+                                       operation->getLoc(),
+                                       {0,
+                                        0,
+                                        pad[0],
+                                        pad[1],
+                                        pad[2],
+                                        pad[3],
+                                        0,
+                                        0});
+      Value zero = createSplat(
+        rewriter,
+        operation->getLoc(),
+        RankedTensorType::get({1}, storageElement),
+        0.0);
+      Value paddedInput = rewriter.create<tosa::PadOp>(operation->getLoc(),
+                                                       paddedInputType,
+                                                       input,
+                                                       paddingShape,
+                                                       zero);
+      auto fp16OutputType = outputType.clone(storageElement);
+      Value initialized = initializeConvolutionOutput(
+        rewriter, operation->getLoc(), fp16OutputType, bias);
+      auto convolution =
+        rewriter.create<linalg::DepthwiseConv2DNhwcHwcmOp>(
+          operation->getLoc(),
+          TypeRange{fp16OutputType},
+          ValueRange{paddedInput, weight},
+          ValueRange{initialized},
+          createI64PairAttr(rewriter, *stride),
+          createI64PairAttr(rewriter, *dilation));
+      Value result = convertFloatingTensor(rewriter,
+                                           operation->getLoc(),
+                                           convolution.getResult(0),
+                                           rewriter.getF32Type());
+      rewriter.replaceOp(operation, result);
+      return success();
+    }
     Value inputZero =
       createSplat(rewriter,
                   operation->getLoc(),
@@ -1710,7 +1937,6 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
                   operation->getLoc(),
                   RankedTensorType::get({1}, weightType.getElementType()),
                   0.0);
-    auto outputType = getNHWCType(sourceOutput);
     auto paddedOutputType = outputType;
     if (!dynamicSpatial) {
       int64_t effectiveH =
@@ -1958,7 +2184,9 @@ class ConvertGELU final : public OpConversionPattern<GELUOp> {
     GELUOp operation,
     OpAdaptor adaptor,
     ConversionPatternRewriter& rewriter) const final {
-    auto type = cast<RankedTensorType>(adaptor.getInput().getType());
+    Value input = applyFP16Boundary(
+      rewriter, operation.getLoc(), operation, adaptor.getInput());
+    auto type = cast<RankedTensorType>(input.getType());
     Value half = createSplat(
       rewriter, operation.getLoc(), getBroadcastScalarType(type), 0.5);
     Value shift = createI8Zero(rewriter, operation.getLoc());
@@ -1969,7 +2197,7 @@ class ConvertGELU final : public OpConversionPattern<GELUOp> {
                                          getBroadcastScalarType(type),
                                          -0.7071067811865476);
       Value scaled = rewriter.create<tosa::MulOp>(
-        operation.getLoc(), type, adaptor.getInput(), inverseSqrtTwo, shift);
+        operation.getLoc(), type, input, inverseSqrtTwo, shift);
       Value init = rewriter.create<tensor::EmptyOp>(
         operation.getLoc(),
         type.getShape(),
@@ -1989,17 +2217,17 @@ class ConvertGELU final : public OpConversionPattern<GELUOp> {
         rewriter, operation.getLoc(), getBroadcastScalarType(type), 1.0);
       Value cubic = rewriter.create<tosa::MulOp>(operation.getLoc(),
                                                  type,
-                                                 adaptor.getInput(),
-                                                 adaptor.getInput(),
+                                                  input,
+                                                  input,
                                                  shift);
       cubic = rewriter.create<tosa::MulOp>(
-        operation.getLoc(), type, cubic, adaptor.getInput(), shift);
+        operation.getLoc(), type, cubic, input, shift);
       Value cubicScale = createSplat(
         rewriter, operation.getLoc(), getBroadcastScalarType(type), 0.044715);
       cubic = rewriter.create<tosa::MulOp>(
         operation.getLoc(), type, cubic, cubicScale, shift);
       Value sum = rewriter.create<tosa::AddOp>(
-        operation.getLoc(), type, adaptor.getInput(), cubic);
+        operation.getLoc(), type, input, cubic);
       Value tanhScale = createSplat(rewriter,
                                     operation.getLoc(),
                                     getBroadcastScalarType(type),
@@ -2011,9 +2239,11 @@ class ConvertGELU final : public OpConversionPattern<GELUOp> {
         rewriter.create<tosa::AddOp>(operation.getLoc(), type, one, tanh);
     }
     Value result = rewriter.create<tosa::MulOp>(
-      operation.getLoc(), type, adaptor.getInput(), activation, shift);
+      operation.getLoc(), type, input, activation, shift);
     result = rewriter.create<tosa::MulOp>(
       operation.getLoc(), type, result, half, shift);
+    result = applyFP16Boundary(
+      rewriter, operation.getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -2028,7 +2258,9 @@ class ConvertBatchNorm final : public OpConversionPattern<BatchNormOp> {
     OpAdaptor adaptor,
     ConversionPatternRewriter& rewriter) const final {
     auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
-    auto outputType = cast<RankedTensorType>(adaptor.getInput().getType());
+    Value input = applyFP16Boundary(
+      rewriter, operation.getLoc(), operation, adaptor.getInput());
+    auto outputType = cast<RankedTensorType>(input.getType());
     SmallVector<int64_t> parameterShape(outputType.getRank(), 1);
     const int64_t channelAxis =
       sourceType.getRank() == 3 ? outputType.getRank() - 1 : 0;
@@ -2069,9 +2301,11 @@ class ConvertBatchNorm final : public OpConversionPattern<BatchNormOp> {
     Value offset = rewriter.create<tosa::SubOp>(
       operation.getLoc(), parameterType, bias, scaledMean);
     Value result = rewriter.create<tosa::MulOp>(
-      operation.getLoc(), outputType, adaptor.getInput(), scale, shift);
+      operation.getLoc(), outputType, input, scale, shift);
     result = rewriter.create<tosa::AddOp>(
       operation.getLoc(), outputType, result, offset);
+    result = applyFP16Boundary(
+      rewriter, operation.getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }

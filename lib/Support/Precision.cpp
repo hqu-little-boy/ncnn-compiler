@@ -82,6 +82,36 @@ std::string_view precision_mode_name(PrecisionMode mode) noexcept {
   return "auto";
 }
 
+std::expected<FP16AccumulatorMode, std::string>
+parse_fp16_accumulator_mode(std::string_view value) {
+  if (value == "f16" || value == "fp16") {
+    return FP16AccumulatorMode::Float16;
+  }
+  if (value == "f32" || value == "fp32") {
+    return FP16AccumulatorMode::Float32;
+  }
+  return std::unexpected(std::format(
+    "invalid FP16 accumulator '{}'; expected f16 or f32", value));
+}
+
+std::string_view fp16_accumulator_mode_name(
+  FP16AccumulatorMode mode) noexcept {
+  return mode == FP16AccumulatorMode::Float16 ? "f16" : "f32";
+}
+
+OperatorPrecisionCapability operator_precision_capability(
+  std::string_view operation) noexcept {
+  if (operation == "ncnn.convolution" ||
+      operation == "ncnn.convolution_depthwise") {
+    return OperatorPrecisionCapability::FP16Arithmetic;
+  }
+  if (operation == "ncnn.sigmoid" || operation == "ncnn.gelu" ||
+      operation == "ncnn.softmax" || operation == "ncnn.batch_norm") {
+    return OperatorPrecisionCapability::FP16Boundary;
+  }
+  return OperatorPrecisionCapability::Float32Only;
+}
+
 TargetCapabilities infer_target_capabilities(const TargetSpec& target) {
   const std::string triple = lowercase(target.triple);
   std::string attributes = lowercase(target.march + " " + target.mcpu);
@@ -94,11 +124,17 @@ TargetCapabilities infer_target_capabilities(const TargetSpec& target) {
                    contains_any(attributes, {"x86-64", "x86_64"});
 
   TargetCapabilities capabilities;
-  capabilities.fp16 = feature_enabled(
+  capabilities.fp16_storage = feature_enabled(
     target,
     {"fullfp16", "fp16", "f16c", "avx512fp16"},
     (arm && contains_any(attributes, {"fullfp16", "fp16", "armv8.2"})) ||
       (x86 && contains_any(attributes, {"f16c", "avx512fp16"})));
+  capabilities.fp16_arithmetic = feature_enabled(
+    target,
+    {"fullfp16", "asimdhp", "avx512fp16", "zvfh", "zfh"},
+    (arm && contains_any(attributes, {"fullfp16", "asimdhp", "armv8.2"})) ||
+      (x86 && attributes.contains("avx512fp16")) ||
+      contains_any(attributes, {"zvfh", "zfh"}));
   capabilities.bf16 =
     feature_enabled(target,
                     {"bf16", "avx512bf16"},
@@ -118,9 +154,10 @@ std::expected<void, std::string> validate_precision_target(
     return {};
   }
   const TargetCapabilities capabilities = infer_target_capabilities(target);
-  const bool supported = mode == PrecisionMode::Float16    ? capabilities.fp16
-                         : mode == PrecisionMode::BFloat16 ? capabilities.bf16
-                                                           : capabilities.int8;
+  const bool supported = mode == PrecisionMode::Float16
+                           ? capabilities.fp16_storage
+                          : mode == PrecisionMode::BFloat16 ? capabilities.bf16
+                                                            : capabilities.int8;
   if (supported) {
     return {};
   }
@@ -128,6 +165,33 @@ std::expected<void, std::string> validate_precision_target(
     "precision {} is not supported by the selected target; specify a matching "
     "--march, --mcpu, or --target-feature",
     precision_mode_name(mode)));
+}
+
+std::expected<PrecisionPolicy, std::string> resolve_precision_policy(
+  PrecisionMode mode,
+  FP16AccumulatorMode accumulator,
+  bool allow_fallback,
+  const TargetSpec& target) {
+  if (auto supported = validate_precision_target(mode, target); !supported) {
+    return std::unexpected(supported.error());
+  }
+  PrecisionPolicy policy{.mode = mode, .fp16_accumulator = accumulator};
+  if (mode != PrecisionMode::Float16 ||
+      accumulator != FP16AccumulatorMode::Float16) {
+    return policy;
+  }
+  if (infer_target_capabilities(target).fp16_arithmetic) {
+    return policy;
+  }
+  if (!allow_fallback) {
+    return std::unexpected(
+      "FP16 arithmetic is not supported by the selected target; require "
+      "AVX512-FP16, ARM ASIMDHP/fullfp16, or RISC-V Zfh/Zvfh, or specify "
+      "--allow-fallback");
+  }
+  policy.fp16_accumulator = FP16AccumulatorMode::Float32;
+  policy.used_fallback = true;
+  return policy;
 }
 
 }  // namespace ncnn_mlir

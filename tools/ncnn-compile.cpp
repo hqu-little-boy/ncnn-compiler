@@ -75,6 +75,15 @@ llvm::cl::opt<std::string> g_precision(
   llvm::cl::desc("Precision policy: auto, f32, fp16, bf16, or int8"),
   llvm::cl::init("auto"),
   llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_fp16_accumulator(
+  "fp16-accumulator",
+  llvm::cl::desc("FP16 convolution accumulator: f16 or f32"),
+  llvm::cl::init("f16"),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_allow_fallback(
+  "allow-fallback",
+  llvm::cl::desc("Allow unsupported FP16 arithmetic to use FP32 accumulation"),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_output_dir("output-dir",
                                         llvm::cl::desc("Output directory"),
                                         llvm::cl::value_desc("path"),
@@ -85,8 +94,9 @@ llvm::cl::alias g_output_alias("o",
                                llvm::cl::cat(g_category));
 llvm::cl::list<std::string> g_emit(
   "emit",
-  llvm::cl::desc("Keep MLIR stages (repeat or comma-separate): "
-                 "ncnn,tosa,linalg,memref,capi,llvm,all"),
+  llvm::cl::desc(
+    "Keep compiler stages (repeat or comma-separate): "
+    "ncnn,tosa,linalg,memref,capi,llvm,llvm-ir,object,assembly,all"),
   llvm::cl::CommaSeparated,
   llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_optimization(
@@ -1081,7 +1091,10 @@ bool is_generated_output(const fs::path& path, std::string_view model_name) {
                                        "model.linalg.mlir",
                                        "model.memref.mlir",
                                        "model.capi.mlir",
-                                       "model.llvm.mlir"};
+                                       "model.llvm.mlir",
+                                       "model.ll",
+                                       "model.o",
+                                       "model.s"};
   return fixed.contains(name) ||
          name == "lib" + std::string(model_name) + ".so" ||
          name == std::string(model_name) + ".h" ||
@@ -1554,8 +1567,16 @@ int main(int argc, char** argv) {
     return fail(output_exists.error());
   }
 
-  const std::set<std::string> valid_stages = {
-    "ncnn", "tosa", "linalg", "memref", "capi", "llvm", "all"};
+  const std::set<std::string> valid_stages = {"ncnn",
+                                              "tosa",
+                                              "linalg",
+                                              "memref",
+                                              "capi",
+                                              "llvm",
+                                              "llvm-ir",
+                                              "object",
+                                              "assembly",
+                                              "all"};
   std::set<std::string> emitted;
   for (const std::string& stage : g_emit) {
     if (!valid_stages.contains(stage)) {
@@ -1564,7 +1585,15 @@ int main(int argc, char** argv) {
     emitted.insert(stage);
   }
   if (emitted.contains("all")) {
-    emitted = {"ncnn", "tosa", "linalg", "memref", "capi", "llvm"};
+    emitted = {"ncnn",
+               "tosa",
+               "linalg",
+               "memref",
+               "capi",
+               "llvm",
+               "llvm-ir",
+               "object",
+               "assembly"};
   }
 
   const fs::path executable =
@@ -1610,6 +1639,7 @@ int main(int argc, char** argv) {
   const fs::path llvm_dialect_ir = staging.path() / "model.llvm.mlir";
   const fs::path llvm_ir = staging.path() / "model.ll";
   const fs::path object = staging.path() / "model.o";
+  const fs::path assembly = staging.path() / "model.s";
   const fs::path manifest_path = staging.path() / (model_name + ".json");
   const fs::path header = staging.path() / (model_name + ".h");
   const fs::path exports = staging.path() / "exports.map";
@@ -1618,6 +1648,10 @@ int main(int argc, char** argv) {
   std::vector<std::string> driver_command{
     driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()};
   driver_command.push_back("--precision=" + g_precision);
+  driver_command.push_back("--fp16-accumulator=" + g_fp16_accumulator);
+  if (g_allow_fallback) {
+    driver_command.emplace_back("--allow-fallback");
+  }
   if (!g_target_triple.empty()) {
     driver_command.push_back("--target-triple=" + g_target_triple);
   }
@@ -1723,6 +1757,15 @@ int main(int argc, char** argv) {
   compile.insert(compile.end(),
                  {"-c", llvm_ir.string(), "-o", object.string()});
   if (int status = run(compile)) {
+    return status;
+  }
+  std::vector<std::string> assemble = {clang_path, "-x", "ir", optimization};
+  assemble.insert(assemble.end(), target_args.begin(), target_args.end());
+  assemble.insert(assemble.end(), codegen_args.begin(), codegen_args.end());
+  assemble.insert(assemble.end(), g_clang_args.begin(), g_clang_args.end());
+  assemble.insert(assemble.end(),
+                  {"-S", llvm_ir.string(), "-o", assembly.string()});
+  if (int status = run(assemble)) {
     return status;
   }
 
@@ -2027,7 +2070,10 @@ int main(int argc, char** argv) {
     {"linalg", linalg_ir},
     {"memref", memref_ir},
     {"capi", capi_ir},
-    {"llvm", llvm_dialect_ir}};
+    {"llvm", llvm_dialect_ir},
+    {"llvm-ir", llvm_ir},
+    {"object", object},
+    {"assembly", assembly}};
   for (const auto& [stage, path] : stages) {
     if (emitted.contains(stage)) {
       if (auto result = publish(path); !result) {

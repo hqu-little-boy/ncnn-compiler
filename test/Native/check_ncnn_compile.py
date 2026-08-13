@@ -112,7 +112,7 @@ def main():
 
     unrelated_output = work_dir / "unrelated"
     unrelated_output.mkdir()
-    unrelated = unrelated_output / "model.o"
+    unrelated = unrelated_output / "user-data.txt"
     unrelated.write_text("user data")
     refused = subprocess.run(
         [
@@ -164,6 +164,9 @@ def main():
             "model.memref.mlir",
             "model.capi.mlir",
             "model.llvm.mlir",
+            "model.ll",
+            "model.o",
+            "model.s",
         },
     )
     assert_static_artifact_baseline(

@@ -80,9 +80,12 @@ void expect_single_input_operator(std::string_view name,
   const std::vector<float> input =
     make_random_input(*input_elements, seed, -2.0F, 2.0F);
   std::string_view reference_name = name;
-  if (name == "convolution_mixed_fp16" || name == "convolution_mixed_bf16") {
+  if (name == "convolution_mixed_fp16" ||
+      name == "convolution_arithmetic_fp16" ||
+      name == "convolution_mixed_bf16") {
     reference_name = "convolution";
   } else if (name == "convolution_depthwise_mixed_fp16" ||
+             name == "convolution_depthwise_arithmetic_fp16" ||
              name == "convolution_depthwise_mixed_bf16") {
     reference_name = "convolution_depthwise";
   }
@@ -506,6 +509,16 @@ TEST(NumericalOperator, ConvolutionMixedFp16MatchesNcnn) {
                                0x4D463136U);
 }
 
+TEST(NumericalOperator, ConvolutionFp16AccumulatorMatchesNcnn) {
+  expect_single_input_operator("convolution_arithmetic_fp16",
+                               CONVOLUTION_ARITHMETIC_FP16_LIBRARY_PATH,
+                               CONVOLUTION_BIN_PATH,
+                               TensorShape(4, 4, 1),
+                               32,
+                               8.0e-3F,
+                               0x41463136U);
+}
+
 TEST(NumericalOperator, ConvolutionMixedBf16MatchesNcnn) {
   expect_single_input_operator("convolution_mixed_bf16",
                                CONVOLUTION_MIXED_BF16_LIBRARY_PATH,
@@ -544,6 +557,17 @@ TEST(NumericalOperator, DepthwiseConvolutionMixedFp16MatchesNcnn) {
                                50,
                                2.0e-3F,
                                0x444D4631U);
+}
+
+TEST(NumericalOperator, DepthwiseConvolutionFp16AccumulatorMatchesNcnn) {
+  expect_single_input_operator(
+    "convolution_depthwise_arithmetic_fp16",
+    CONVOLUTION_DEPTHWISE_ARITHMETIC_FP16_LIBRARY_PATH,
+    CONVOLUTION_DEPTHWISE_BIN_PATH,
+    TensorShape(5, 5, 2),
+    50,
+    8.0e-3F,
+    0x44414631U);
 }
 
 TEST(NumericalOperator, DepthwiseConvolutionMixedBf16MatchesNcnn) {

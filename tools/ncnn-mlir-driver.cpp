@@ -77,6 +77,15 @@ llvm::cl::opt<std::string> g_precision(
   llvm::cl::desc("Precision policy: auto, f32, fp16, bf16, or int8"),
   llvm::cl::init("auto"),
   llvm::cl::cat(g_driver_category));
+llvm::cl::opt<std::string> g_fp16_accumulator(
+  "fp16-accumulator",
+  llvm::cl::desc("FP16 convolution accumulator: f16 or f32"),
+  llvm::cl::init("f16"),
+  llvm::cl::cat(g_driver_category));
+llvm::cl::opt<bool> g_allow_fallback(
+  "allow-fallback",
+  llvm::cl::desc("Allow unsupported FP16 arithmetic to use FP32 accumulation"),
+  llvm::cl::cat(g_driver_category));
 
 llvm::cl::opt<std::string> g_target_triple("target-triple",
                                            llvm::cl::init(""),
@@ -248,15 +257,26 @@ int main(int argc, char** argv) {
     llvm::errs() << "error: " << precision.error() << "\n";
     return 1;
   }
+  auto accumulator =
+    ncnn_mlir::parse_fp16_accumulator_mode(g_fp16_accumulator);
+  if (!accumulator) {
+    llvm::errs() << "error: " << accumulator.error() << "\n";
+    return 1;
+  }
   ncnn_mlir::TargetSpec target{
     .triple = g_target_triple,
     .march = g_march,
     .mcpu = g_mcpu,
     .features = {g_target_features.begin(), g_target_features.end()}};
-  if (auto supported = ncnn_mlir::validate_precision_target(*precision, target);
-      !supported) {
-    llvm::errs() << "error: " << supported.error() << "\n";
+  auto policy = ncnn_mlir::resolve_precision_policy(
+    *precision, *accumulator, g_allow_fallback, target);
+  if (!policy) {
+    llvm::errs() << "error: " << policy.error() << "\n";
     return 1;
+  }
+  if (policy->used_fallback) {
+    llvm::errs() << "warning: FP16 arithmetic unavailable; using FP32 "
+                    "accumulation because --allow-fallback was specified\n";
   }
 
   const std::string bin_path =
@@ -283,7 +303,7 @@ int main(int argc, char** argv) {
   context.loadAllAvailableDialects();
 
   ncnn_importer::ImportOptions import_options;
-  import_options.precision.mode = *precision;
+  import_options.precision = *policy;
   for (const std::string& input_shape : g_input_shapes) {
     if (input_shape == "*") {
       if (g_input_shapes.size() != 1) {

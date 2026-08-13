@@ -444,6 +444,12 @@ ImportResult ImportContext::prepare_model() {
   model_->setAttr(
     "ncnn.precision",
     builder_.getStringAttr(precision_mode_name(options_.precision.mode)));
+  model_->setAttr("ncnn.fp16_accumulator",
+                  builder_.getStringAttr(fp16_accumulator_mode_name(
+                    options_.precision.fp16_accumulator)));
+  if (options_.precision.used_fallback) {
+    model_->setAttr("ncnn.precision_fallback", builder_.getUnitAttr());
+  }
   if (!options_.input_dim_constraints.empty()) {
     llvm::SmallVector<mlir::Attribute> constraints;
     constraints.reserve(options_.input_dim_constraints.size());

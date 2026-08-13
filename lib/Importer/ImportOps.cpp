@@ -420,8 +420,8 @@ ImportResult import_inner_product(ImportContext& importer,
   if (!input) {
     return std::unexpected(input.error());
   }
-  auto weight =
-    importer.make_constant(context, context.layer.get_weights()[0], 0);
+  auto weight = importer.make_constant(
+    context, context.layer.get_weights()[0], 0, true);
   if (!weight) {
     return std::unexpected(weight.error());
   }
