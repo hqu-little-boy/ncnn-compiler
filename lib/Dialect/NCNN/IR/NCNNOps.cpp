@@ -366,11 +366,15 @@ FailureOr<RankedTensorType> computeInterpResult(
   std::optional<Location> location,
   RankedTensorType input,
   int64_t heightScale,
-  int64_t widthScale) {
+  int64_t widthScale,
+  int64_t outputH,
+  int64_t outputW) {
   if (!input || !input.getElementType().isF32() || input.getRank() != 3 ||
-      heightScale <= 0 || widthScale <= 0) {
+      heightScale <= 0 || widthScale <= 0 || outputH < 0 || outputW < 0) {
     return emitOptionalError(
-      location, "Interp requires an FP32 CHW input and positive scales");
+      location,
+      "Interp requires an FP32 CHW input, positive scales, and non-negative "
+      "output dimensions");
   }
   auto scaleDimension = [&](unsigned dimension,
                             int64_t scale) -> FailureOr<int64_t> {
@@ -378,8 +382,10 @@ FailureOr<RankedTensorType> computeInterpResult(
              ? FailureOr<int64_t>(ShapedType::kDynamic)
              : checkedMultiply(input.getShape()[dimension], scale);
   };
-  auto height = scaleDimension(1, heightScale);
-  auto width = scaleDimension(2, widthScale);
+  FailureOr<int64_t> height =
+    outputH == 0 ? scaleDimension(1, heightScale) : outputH;
+  FailureOr<int64_t> width =
+    outputW == 0 ? scaleDimension(2, widthScale) : outputW;
   if (failed(height) || failed(width)) {
     return emitOptionalError(location, "Interp output dimension overflows");
   }
@@ -1352,7 +1358,9 @@ LogicalResult InterpOp::inferReturnTypeComponents(
     location,
     dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
     adaptor.getHeightScale(),
-    adaptor.getWidthScale());
+    adaptor.getWidthScale(),
+    adaptor.getOutputH(),
+    adaptor.getOutputW());
   if (failed(result)) {
     return failure();
   }

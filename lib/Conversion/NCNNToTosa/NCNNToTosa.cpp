@@ -1053,18 +1053,28 @@ class ConvertInterp final : public ConversionPattern {
       getRequiredIntegerAttr(operation, "height_scale");
     FailureOr<int64_t> scaleW =
       getRequiredIntegerAttr(operation, "width_scale");
-    if (failed(scaleH) || failed(scaleW)) {
+    FailureOr<int64_t> explicitH =
+      getRequiredIntegerAttr(operation, "output_h");
+    FailureOr<int64_t> explicitW =
+      getRequiredIntegerAttr(operation, "output_w");
+    if (failed(scaleH) || failed(scaleW) || failed(explicitH) ||
+        failed(explicitW)) {
       return failure();
     }
-    if (*scaleH <= 0 || *scaleW <= 0) {
-      return operation->emitOpError("resize scales must be positive");
+    if (*scaleH <= 0 || *scaleW <= 0 || *explicitH < 0 || *explicitW < 0) {
+      return operation->emitOpError(
+        "resize scales must be positive and output dimensions non-negative");
     }
-    int64_t expectedH = sourceInput.isDynamicDim(1)
-                          ? ShapedType::kDynamic
-                          : sourceInput.getShape()[1] * *scaleH;
-    int64_t expectedW = sourceInput.isDynamicDim(2)
-                          ? ShapedType::kDynamic
-                          : sourceInput.getShape()[2] * *scaleW;
+    int64_t expectedH =
+      *explicitH != 0
+        ? *explicitH
+        : (sourceInput.isDynamicDim(1) ? ShapedType::kDynamic
+                                       : sourceInput.getShape()[1] * *scaleH);
+    int64_t expectedW =
+      *explicitW != 0
+        ? *explicitW
+        : (sourceInput.isDynamicDim(2) ? ShapedType::kDynamic
+                                       : sourceInput.getShape()[2] * *scaleW);
     if (sourceOutput.getShape()[1] != expectedH ||
         sourceOutput.getShape()[2] != expectedW) {
       return operation->emitOpError(
@@ -1072,22 +1082,35 @@ class ConvertInterp final : public ConversionPattern {
     }
 
     auto outputType = getNHWCType(sourceOutput);
-    if (!sourceInput.hasStaticShape()) {
+    if (!sourceInput.hasStaticShape() || *explicitH != 0 || *explicitW != 0) {
       Value input = operands.front();
       Value inputH =
         rewriter.create<tensor::DimOp>(operation->getLoc(), input, 1);
       Value inputW =
         rewriter.create<tensor::DimOp>(operation->getLoc(), input, 2);
       Value heightFactor =
-        rewriter.create<arith::ConstantIndexOp>(operation->getLoc(), *scaleH);
+        createIndexConstant(rewriter, operation->getLoc(), *scaleH);
       Value widthFactor =
-        rewriter.create<arith::ConstantIndexOp>(operation->getLoc(), *scaleW);
-      Value outputH = rewriter.create<arith::MulIOp>(
-        operation->getLoc(), inputH, heightFactor);
-      Value outputW = rewriter.create<arith::MulIOp>(
-        operation->getLoc(), inputW, widthFactor);
+        createIndexConstant(rewriter, operation->getLoc(), *scaleW);
+      Value outputH =
+        *explicitH != 0
+          ? createIndexConstant(rewriter, operation->getLoc(), *explicitH)
+          : rewriter.create<arith::MulIOp>(
+              operation->getLoc(), inputH, heightFactor);
+      Value outputW =
+        *explicitW != 0
+          ? createIndexConstant(rewriter, operation->getLoc(), *explicitW)
+          : rewriter.create<arith::MulIOp>(
+              operation->getLoc(), inputW, widthFactor);
+      SmallVector<Value> dynamicSizes;
+      if (outputType.isDynamicDim(1)) {
+        dynamicSizes.push_back(outputH);
+      }
+      if (outputType.isDynamicDim(2)) {
+        dynamicSizes.push_back(outputW);
+      }
       Value empty = rewriter.create<tensor::EmptyOp>(
-        operation->getLoc(), outputType, ValueRange{outputH, outputW});
+        operation->getLoc(), outputType, dynamicSizes);
       AffineMap identity = rewriter.getMultiDimIdentityMap(4);
       SmallVector<utils::IteratorType> iterators(4,
                                                  utils::IteratorType::parallel);
@@ -1103,10 +1126,26 @@ class ConvertInterp final : public ConversionPattern {
           Value outputHeight = nested.create<linalg::IndexOp>(location, 1);
           Value outputWidth = nested.create<linalg::IndexOp>(location, 2);
           Value channel = nested.create<linalg::IndexOp>(location, 3);
-          Value inputHeight =
-            nested.create<arith::DivUIOp>(location, outputHeight, heightFactor);
-          Value inputWidth =
-            nested.create<arith::DivUIOp>(location, outputWidth, widthFactor);
+          Value inputHeight;
+          Value inputWidth;
+          if (*explicitH != 0) {
+            Value numerator =
+              nested.create<arith::MulIOp>(location, outputHeight, inputH);
+            inputHeight =
+              nested.create<arith::DivUIOp>(location, numerator, outputH);
+          } else {
+            inputHeight = nested.create<arith::DivUIOp>(
+              location, outputHeight, heightFactor);
+          }
+          if (*explicitW != 0) {
+            Value numerator =
+              nested.create<arith::MulIOp>(location, outputWidth, inputW);
+            inputWidth =
+              nested.create<arith::DivUIOp>(location, numerator, outputW);
+          } else {
+            inputWidth =
+              nested.create<arith::DivUIOp>(location, outputWidth, widthFactor);
+          }
           Value value = nested.create<tensor::ExtractOp>(
             location,
             input,

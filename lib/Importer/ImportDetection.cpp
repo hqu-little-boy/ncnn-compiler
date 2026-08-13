@@ -114,22 +114,16 @@ ImportResult import_interp(ImportContext& importer,
   auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
   const auto heightFactor = static_cast<int64_t>(*heightScale);
   const auto widthFactor = static_cast<int64_t>(*widthScale);
-  if (!inputType || inputType.getRank() != 3 ||
-      (*outputH != 0 &&
-       (*outputH % heightFactor != 0 ||
-        (!inputType.isDynamicDim(1) &&
-         *outputH / heightFactor != inputType.getShape()[1]))) ||
-      (*outputW != 0 &&
-       (*outputW % widthFactor != 0 ||
-        (!inputType.isDynamicDim(2) &&
-         *outputW / widthFactor != inputType.getShape()[2])))) {
-    return std::unexpected(
-      make_error(context, "Interp output must match its scale"));
+  if (!inputType || inputType.getRank() != 3 || *outputH < 0 || *outputW < 0) {
+    return std::unexpected(make_error(
+      context, "Interp requires a rank-3 input and non-negative output size"));
   }
   auto& builder = importer.builder();
   mlir::ncnn::InterpOp::Properties properties;
   properties.height_scale = builder.getI64IntegerAttr(heightFactor);
   properties.width_scale = builder.getI64IntegerAttr(widthFactor);
+  properties.output_h = builder.getI64IntegerAttr(*outputH);
+  properties.output_w = builder.getI64IntegerAttr(*outputW);
   auto result = importer.infer_single_tensor_result<mlir::ncnn::InterpOp>(
     builder.getUnknownLoc(), *input, properties);
   if (mlir::failed(result)) {
@@ -139,7 +133,9 @@ ImportResult import_interp(ImportContext& importer,
                                                         *result,
                                                         *input,
                                                         properties.height_scale,
-                                                        properties.width_scale);
+                                                        properties.width_scale,
+                                                        properties.output_h,
+                                                        properties.output_w);
   importer.tag_source(operation, context);
   return importer.bind_blob(
     context, context.layer.get_outputs()[0], operation.getOutput());

@@ -235,6 +235,16 @@ TEST(NumericalOperator, InterpNearestAsymmetricOddEvenScalesMatchNcnn) {
                                0x494E5434U);
 }
 
+TEST(NumericalOperator, InterpNearestExplicitTargetMatchesNcnn) {
+  expect_single_input_operator("interp_explicit_target",
+                               INTERP_EXPLICIT_TARGET_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(16, 16, 2),
+                               31 * 31 * 2,
+                               0.0F,
+                               0x494E5431U);
+}
+
 TEST(NumericalOperator, InterpIdentityMatchesNcnnAndInput) {
   const TensorShape shape(4, 3, 2);
   const std::vector<float> input =

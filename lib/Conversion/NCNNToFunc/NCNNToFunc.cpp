@@ -462,10 +462,22 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
                             padding.getLeft() + padding.getRight());
           shapeTransforms[result] = std::move(transform);
         } else if (auto interp = dyn_cast<InterpOp>(operation)) {
-          appendInstruction(
-            transform, 1, ShapeOpcode::Multiply, interp.getHeightScale());
-          appendInstruction(
-            transform, 2, ShapeOpcode::Multiply, interp.getWidthScale());
+          if (interp.getOutputH() != 0) {
+            transform.dimensions[1] = {
+              .expression = ShapeExpr::constant(interp.getOutputH()),
+              .v1 = std::nullopt};
+          } else {
+            appendInstruction(
+              transform, 1, ShapeOpcode::Multiply, interp.getHeightScale());
+          }
+          if (interp.getOutputW() != 0) {
+            transform.dimensions[2] = {
+              .expression = ShapeExpr::constant(interp.getOutputW()),
+              .v1 = std::nullopt};
+          } else {
+            appendInstruction(
+              transform, 2, ShapeOpcode::Multiply, interp.getWidthScale());
+          }
           shapeTransforms[result] = std::move(transform);
         } else if (isa<ConvolutionOp, ConvolutionDepthWiseOp>(operation)) {
           const int64_t kernelH =

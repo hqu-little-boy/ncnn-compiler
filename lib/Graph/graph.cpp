@@ -1701,13 +1701,6 @@ std::expected<Graph, std::string> Graph::load(std::string_view param_path,
   if (line_index != lines->size()) {
     return std::unexpected("param contains trailing layer lines");
   }
-  if (blobs.size() != static_cast<std::size_t>(blob_count)) {
-    return std::unexpected(
-      std::format("blob count mismatch: declared {}, constructed {}",
-                  blob_count,
-                  blobs.size()));
-  }
-
   bool weights_loaded = false;
   if (bin_supplied) {
     for (std::size_t index = 0; index < layers.size(); ++index) {

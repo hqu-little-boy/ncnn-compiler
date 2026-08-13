@@ -279,5 +279,33 @@ TEST(NumericalModel, PPOCRv5ServerDetMatchesNcnn) {
   EXPECT_EQ(repeated, actual);
 }
 
+TEST(NumericalModel, PPStructureV2SLANetPlusCNNMatchesNcnn) {
+  const TensorShape inputShape(488, 488, 3);
+  constexpr std::size_t kOutputElements = 256 * 96;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x534C414EU, -0.1F, 0.1F);
+  const ReferenceModel reference(PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH,
+                                 PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 inputShape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), kOutputElements);
+
+  CompiledModel compiled(PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH,
+                         "pp_structrurev2_slanet_plus_cnn");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kOutputElements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F));
+
+  std::vector<float> repeated(kOutputElements);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+}
+
 }  // namespace
 }  // namespace ncnn_compiler::test

@@ -171,10 +171,12 @@ TEST_F(MalformedGraphTest, RejectsMalformedParam) {
                        "7767517\n1 0\nInput input 0 1 data\n",
                        "more blobs",
                        "constructing more blobs than declared is rejected");
-  expect_graph_failure("blob-underflow",
-                       "7767517\n0 1\n",
-                       "blob count mismatch",
-                       "constructing fewer blobs than declared is rejected");
+  auto spare_blob_capacity =
+    load_text("spare-blob-capacity", "7767517\n1 2\nInput input 0 1 data\n");
+  EXPECT_TRUE(spare_blob_capacity &&
+              spare_blob_capacity->get_blobs().size() == 1 &&
+              spare_blob_capacity->get_output_blob_names().size() == 1)
+    << "unused declared blob capacity follows upstream ncnn semantics";
   expect_graph_failure("bad-param",
                        "7767517\n1 1\nInput input 0 1 data 0=1junk\n",
                        "layer 0 (Input)",

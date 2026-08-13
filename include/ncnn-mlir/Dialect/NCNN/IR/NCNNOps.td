@@ -179,9 +179,12 @@ def NCNN_PaddingOp : NCNN_LayerOp<"padding", [InferTensorTypeAdaptor]> {
 }
 
 def NCNN_InterpOp : NCNN_LayerOp<"interp", [InferTensorTypeAdaptor]> {
-  let summary = "Nearest-neighbor integer-factor resize of a CHW tensor.";
-  let arguments =
-    (ins NCNN_RankedTensor:$input, I64Attr:$height_scale, I64Attr:$width_scale);
+  let summary = "Nearest-neighbor resize of a CHW tensor.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    I64Attr:$height_scale,
+    I64Attr:$width_scale,
+    DefaultValuedAttr<I64Attr, "0">:$output_h,
+    DefaultValuedAttr<I64Attr, "0">:$output_w);
   let results = (outs NCNN_RankedTensor:$output);
 }
 

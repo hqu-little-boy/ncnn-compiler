@@ -15,7 +15,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 **SqueezeNet v1.1** 以及静态 FP32 的 `PP-LCNet_x1_0_doc_ori`、
 `PP-LCNet_x1_0_textline_ori`、`Chineseocr_Lite_AngleNet`、
 `PP-OCRv6_tiny_rec`、`PP-OCRv6_tiny_det`、`PP-OCRv6_small_det`、
-`PP-OCRv6_medium_det`、`PP-OCRv5_mobile_det`、`PP-OCRv5_server_det` 作为端到端验证目标。
+`PP-OCRv6_medium_det`、`PP-OCRv5_mobile_det`、`PP-OCRv5_server_det`、
+`PP-StructrureV2_SLANet_plus_cnn` 作为端到端验证目标。
 
 ---
 
@@ -51,7 +52,7 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 当前支持纯 depthwise、静态 FP32 和融合 ReLU；不是通用 group conv |
 | `Deconvolution` | `ncnn.deconvolution` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, output_pad_bottom/right, has_bias | 静态 FP32 2x2 stride-2 子集；可选 bias 和融合 ReLU |
 | `Padding` | `ncnn.padding` | top, bottom, left, right, value | FP32 constant spatial padding；支持动态 H/W |
-| `Interp` | `ncnn.interp` | height_scale, width_scale | FP32 rank-3 nearest、正整数倍；支持静态或动态 H/W |
+| `Interp` | `ncnn.interp` | height_scale, width_scale, output_h/w | FP32 rank-3 nearest；支持正整数倍或显式静态目标，scale 模式支持动态 H/W |
 | `Sigmoid` | `ncnn.sigmoid` | 无 | 静态 FP32 |
 | `HardSigmoid` | `ncnn.hard_sigmoid` | alpha, beta | 静态 FP32 |
 | `HardSwish` | `ncnn.hard_swish` | alpha, beta | 静态 FP32 |
@@ -83,8 +84,9 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
   会拒绝超出 TOSA `transpose_conv2d` `out_pad` 表示范围的 crop。无激活/ReLU 携带的
   activation params 按 ncnn 语义忽略，`weight_data_size` 必须与实际权重元素数一致。
 - **Padding**：仅支持 spatial constant padding，不支持 per-channel padding data 或其他 padding mode。
-- **Interp**：仅支持 `resize_type=1` 的 nearest 模式、`align_corner=0` 和正整数倍 scale；显式输出
-  shape 必须与 scale 推导结果一致。静态实例可走 TOSA resize；动态 H/W 直接 lower 为
+- **Interp**：仅支持 `resize_type=1` 的 nearest 模式和 `align_corner=0`。支持正整数倍 scale，
+  以及显式静态 `output_h/output_w`；后者按 ncnn 的 `floor(dst * input / output)` 采样语义直接
+  lower 为 Linalg。整数 scale 的静态实例可走 TOSA resize，动态 H/W 直接 lower 为
   `tensor.dim + tensor.empty + linalg.generic`。
 - **Pooling**：NCNN IR 类型推断允许安全的动态通道，并在 regular/adaptive 结果中保留通道、global
   结果为 `[C]`。动态 H/W 的 global 和固定 target adaptive 直接 lower 为运行时 Linalg/SCF 归约；

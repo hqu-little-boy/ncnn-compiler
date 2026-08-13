@@ -415,6 +415,10 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp_asymmetric.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    interp_explicit_target
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp_explicit_target.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     interp_identity
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/interp_identity.param
     ${empty_bin})
@@ -658,6 +662,11 @@ ncnn_add_compiled_shape_pair(
     3x?x?
     0:1:min=32,multiple=32
     0:2:min=32,multiple=32)
+ncnn_add_compiled_fixture(
+    pp_structrurev2_slanet_plus_cnn
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin
+    3x488x488)
 set(numerical_fixture_targets
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -726,6 +735,7 @@ set(numerical_fixture_targets
     compile_padding_identity
     compile_interp
     compile_interp_asymmetric
+    compile_interp_explicit_target
     compile_interp_identity
     compile_interp_eightfold
     compile_deconvolution
@@ -781,7 +791,9 @@ add_dependencies(compile_pp_ocrv6_medium_det compile_pp_ocrv6_small_det)
 add_dependencies(compile_pp_ocrv5_mobile_det compile_pp_ocrv6_medium_det)
 add_dependencies(compile_pp_ocrv5_server_det_static compile_pp_ocrv5_mobile_det)
 add_dependencies(compile_pp_ocrv5_server_det_dynamic
-                 compile_pp_ocrv5_server_det_static)
+                  compile_pp_ocrv5_server_det_static)
+add_dependencies(compile_pp_structrurev2_slanet_plus_cnn
+                 compile_pp_ocrv5_server_det_dynamic)
 
 add_library(numerical_test_support STATIC
     support/numerical_test_support.cpp)
@@ -888,6 +900,7 @@ target_compile_definitions(numerical_tests PRIVATE
     PADDING_IDENTITY_LIBRARY_PATH="${padding_identity_LIBRARY}"
     INTERP_LIBRARY_PATH="${interp_LIBRARY}"
     INTERP_ASYMMETRIC_LIBRARY_PATH="${interp_asymmetric_LIBRARY}"
+    INTERP_EXPLICIT_TARGET_LIBRARY_PATH="${interp_explicit_target_LIBRARY}"
     INTERP_IDENTITY_LIBRARY_PATH="${interp_identity_LIBRARY}"
     INTERP_EIGHTFOLD_LIBRARY_PATH="${interp_eightfold_LIBRARY}"
     DECONVOLUTION_LIBRARY_PATH="${deconvolution_LIBRARY}"
@@ -924,7 +937,10 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV5_MOBILE_DET_LIBRARY_PATH="${pp_ocrv5_mobile_det_LIBRARY}"
     PP_OCRV5_SERVER_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
     PP_OCRV5_SERVER_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
-    PP_OCRV5_SERVER_DET_STATIC_LIBRARY_PATH="${pp_ocrv5_server_det_static_LIBRARY}")
+    PP_OCRV5_SERVER_DET_STATIC_LIBRARY_PATH="${pp_ocrv5_server_det_static_LIBRARY}"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH="${pp_structrurev2_slanet_plus_cnn_LIBRARY}")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
@@ -936,6 +952,7 @@ add_dependencies(numerical_tests compile_pp_ocrv6_small_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_det_static)
+add_dependencies(numerical_tests compile_pp_structrurev2_slanet_plus_cnn)
 
 add_executable(numerical_dynamic_operator_tests
     operators/dynamic_ops_test.cpp)
