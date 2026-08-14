@@ -4,9 +4,12 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -19,7 +22,251 @@ std::string fixture_path(std::string_view name) {
          ".param";
 }
 
-TEST(SupportedOps, DetectionOutputCaffeSsd) {
+std::string read_text(std::string_view path) {
+  std::ifstream stream{std::string(path)};
+  return {std::istreambuf_iterator<char>(stream),
+          std::istreambuf_iterator<char>()};
+}
+
+struct ComplexPrecisionCase {
+  std::string_view fixture;
+  std::string_view model;
+  std::string_view library;
+  std::string_view bin;
+  TensorShape shape;
+  std::size_t outputElements;
+  float tolerance;
+  std::uint32_t seed;
+};
+
+class ComplexPrecisionTest
+  : public ::testing::TestWithParam<ComplexPrecisionCase> {};
+
+TEST_P(ComplexPrecisionTest, MatchesFloat32ReferenceWithStorageBoundary) {
+  const ComplexPrecisionCase& test = GetParam();
+  const auto inputElements = test.shape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, test.seed, -8.0F, 8.0F);
+  const ReferenceModel reference(fixture_path(test.fixture),
+                                 std::string(test.bin),
+                                 "data",
+                                 "output",
+                                 test.shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), test.outputElements);
+
+  CompiledModel compiled(test.library, test.model);
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(test.outputElements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, test.tolerance));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  MixedFP16AndBF16,
+  ComplexPrecisionTest,
+  ::testing::Values(ComplexPrecisionCase{"sigmoid",
+                                         "sigmoid_mixed_fp16",
+                                         SIGMOID_MIXED_FP16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 2, 2),
+                                         20,
+                                         1.0e-3F,
+                                         0x53463136U},
+                    ComplexPrecisionCase{"sigmoid",
+                                         "sigmoid_mixed_bf16",
+                                         SIGMOID_MIXED_BF16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 2, 2),
+                                         20,
+                                         8.0e-3F,
+                                         0x53424631U},
+                    ComplexPrecisionCase{"hard_sigmoid",
+                                         "hard_sigmoid_mixed_fp16",
+                                         HARD_SIGMOID_MIXED_FP16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 4, 3),
+                                         60,
+                                         1.0e-3F,
+                                         0x48463136U},
+                    ComplexPrecisionCase{"hard_sigmoid",
+                                         "hard_sigmoid_mixed_bf16",
+                                         HARD_SIGMOID_MIXED_BF16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 4, 3),
+                                         60,
+                                         1.0e-2F,
+                                         0x48424631U},
+                    ComplexPrecisionCase{"hard_swish",
+                                         "hard_swish_mixed_fp16",
+                                         HARD_SWISH_MIXED_FP16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 4, 3),
+                                         60,
+                                         5.0e-3F,
+                                         0x57463136U},
+                    ComplexPrecisionCase{"hard_swish",
+                                         "hard_swish_mixed_bf16",
+                                         HARD_SWISH_MIXED_BF16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 4, 3),
+                                         60,
+                                         4.0e-2F,
+                                         0x57424631U},
+                    ComplexPrecisionCase{"gelu",
+                                         "gelu_mixed_fp16",
+                                         GELU_MIXED_FP16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 2, 2),
+                                         20,
+                                         5.0e-3F,
+                                         0x47463136U},
+                    ComplexPrecisionCase{"gelu",
+                                         "gelu_mixed_bf16",
+                                         GELU_MIXED_BF16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 2, 2),
+                                         20,
+                                         4.0e-2F,
+                                         0x47424631U},
+                    ComplexPrecisionCase{"softmax",
+                                         "softmax_mixed_fp16",
+                                         SOFTMAX_MIXED_FP16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 4, 3),
+                                         60,
+                                         1.0e-3F,
+                                         0x4D463136U},
+                    ComplexPrecisionCase{"softmax",
+                                         "softmax_mixed_bf16",
+                                         SOFTMAX_MIXED_BF16_LIBRARY_PATH,
+                                         NUMERICAL_EMPTY_BIN_PATH,
+                                         TensorShape(5, 4, 3),
+                                         60,
+                                         8.0e-3F,
+                                         0x4D424631U},
+                    ComplexPrecisionCase{"batch_norm",
+                                         "batch_norm_mixed_fp16",
+                                         BATCH_NORM_MIXED_FP16_LIBRARY_PATH,
+                                         BATCH_NORM_BIN_PATH,
+                                         TensorShape(4, 1, 3),
+                                         12,
+                                         5.0e-3F,
+                                         0x4E463136U},
+                    ComplexPrecisionCase{"batch_norm",
+                                         "batch_norm_mixed_bf16",
+                                         BATCH_NORM_MIXED_BF16_LIBRARY_PATH,
+                                         BATCH_NORM_BIN_PATH,
+                                         TensorShape(4, 1, 3),
+                                         12,
+                                         4.0e-2F,
+                                         0x4E424631U}));
+
+TEST(ComplexPrecision, SigmoidPreservesNaNAndClampsInfinities) {
+  constexpr std::array<float, 20> input{-std::numeric_limits<float>::infinity(),
+                                        std::numeric_limits<float>::infinity(),
+                                        std::numeric_limits<float>::quiet_NaN(),
+                                        -std::numeric_limits<float>::max(),
+                                        std::numeric_limits<float>::max(),
+                                        -100.0F,
+                                        100.0F,
+                                        -20.0F,
+                                        20.0F,
+                                        -8.0F,
+                                        8.0F,
+                                        -1.0F,
+                                        1.0F,
+                                        -0.0F,
+                                        0.0F,
+                                        -0.5F,
+                                        0.5F,
+                                        -4.0F,
+                                        4.0F,
+                                        2.0F};
+  const std::array<std::pair<std::string_view, std::string_view>, 2> models{{
+    {SIGMOID_MIXED_FP16_LIBRARY_PATH, "sigmoid_mixed_fp16"},
+    {SIGMOID_MIXED_BF16_LIBRARY_PATH, "sigmoid_mixed_bf16"},
+  }};
+  for (const auto& [library, model] : models) {
+    CompiledModel compiled(library, model);
+    ASSERT_TRUE(compiled.valid()) << compiled.error();
+    std::vector<float> actual(input.size());
+    ASSERT_EQ(compiled.run(input, actual), 0);
+    EXPECT_TRUE(std::isfinite(actual[0]));
+    EXPECT_TRUE(std::isfinite(actual[1]));
+    EXPECT_TRUE(std::isnan(actual[2]));
+    EXPECT_GE(actual[0], 0.0F);
+    EXPECT_EQ(actual[1], 1.0F);
+    EXPECT_TRUE(
+      std::ranges::all_of(std::span<const float>(actual).subspan(3),
+                          [](float value) { return std::isfinite(value); }));
+  }
+}
+
+void expect_low_precision_softmax(std::string_view library,
+                                  std::string_view model,
+                                  float maximumError,
+                                  double sumTolerance) {
+  const TensorShape shape(5, 4, 3);
+  const std::vector<float> input =
+    make_random_input(60, 0x534F4654U, -80.0F, 80.0F);
+  const ReferenceModel reference(
+    fixture_path("softmax"), NUMERICAL_EMPTY_BIN_PATH, "data", "output", shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  CompiledModel compiled(library, model);
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(input.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, maximumError));
+  constexpr std::size_t kSpatialElements = 20;
+  constexpr std::size_t kChannels = 3;
+  for (std::size_t spatial = 0; spatial < kSpatialElements; ++spatial) {
+    std::array<float, kChannels> actualClasses{};
+    std::array<float, kChannels> expectedClasses{};
+    for (std::size_t channel = 0; channel < kChannels; ++channel) {
+      const std::size_t index = (channel * kSpatialElements) + spatial;
+      actualClasses[channel] = actual[index];
+      expectedClasses[channel] = (*expected)[index];
+    }
+    EXPECT_TRUE(check_softmax(actualClasses, expectedClasses, sumTolerance))
+      << "spatial index " << spatial;
+  }
+}
+
+TEST(ComplexPrecision, SoftmaxFP16PreservesSumTopKAndErrorBudget) {
+  expect_low_precision_softmax(
+    SOFTMAX_MIXED_FP16_LIBRARY_PATH, "softmax_mixed_fp16", 1.5e-2F, 2.0e-3);
+}
+
+TEST(ComplexPrecision, SoftmaxBF16PreservesSumTopKAndErrorBudget) {
+  expect_low_precision_softmax(
+    SOFTMAX_MIXED_BF16_LIBRARY_PATH, "softmax_mixed_bf16", 5.0e-2F, 1.0e-2);
+}
+
+TEST(ComplexPrecision, ManifestAndIRDescribeMixedCoreAndActualAbi) {
+  const std::string fp16Manifest = read_text(SIGMOID_MIXED_FP16_MANIFEST_PATH);
+  const std::string bf16Manifest = read_text(SIGMOID_MIXED_BF16_MANIFEST_PATH);
+  EXPECT_NE(fp16Manifest.find("\"element_type\": \"f32\""), std::string::npos);
+  EXPECT_NE(fp16Manifest.find("\"storage\": \"fp16\""), std::string::npos);
+  EXPECT_NE(fp16Manifest.find("\"complex_math\": \"f32\""), std::string::npos);
+  EXPECT_NE(fp16Manifest.find("\"complex_accumulator\": \"f32\""),
+            std::string::npos);
+  EXPECT_NE(bf16Manifest.find("\"element_type\": \"f32\""), std::string::npos);
+  EXPECT_NE(bf16Manifest.find("\"storage\": \"bf16\""), std::string::npos);
+  const std::string fp16IR = read_text(SIGMOID_MIXED_FP16_LINALG_IR_PATH);
+  const std::string bf16IR = read_text(SIGMOID_MIXED_BF16_LINALG_IR_PATH);
+  EXPECT_NE(fp16IR.find("xf16"), std::string::npos);
+  EXPECT_NE(bf16IR.find("xbf16"), std::string::npos);
+  EXPECT_NE(fp16IR.find("xf32"), std::string::npos);
+  EXPECT_NE(bf16IR.find("xf32"), std::string::npos);
+}
+
+void expect_detection_output(std::string_view library,
+                             std::string_view model,
+                             float tolerance) {
   const std::vector<float> location{
     1.0F, -1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
   const std::vector<float> confidence{
@@ -40,7 +287,7 @@ TEST(SupportedOps, DetectionOutputCaffeSsd) {
   ASSERT_TRUE(reference.has_value()) << reference.error();
   ASSERT_EQ(reference->front().size(), 12);
 
-  CompiledModel compiled(DETECTION_OUTPUT_LIBRARY_PATH, "detection_output");
+  CompiledModel compiled(library, model);
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> output(18, 0.0F);
   std::array<std::int64_t, 2> actualShape{};
@@ -61,10 +308,29 @@ TEST(SupportedOps, DetectionOutputCaffeSsd) {
                                        -0.04F,
                                        0.44F,
                                        0.36F};
+  EXPECT_TRUE(
+    compare_values(std::span<const float>(output.data(), expected.size()),
+                   expected,
+                   tolerance));
   EXPECT_TRUE(compare_values(
-    std::span<const float>(output.data(), expected.size()), expected, 1.0e-6F));
-  EXPECT_TRUE(compare_values(
-    std::span<const float>(output.data(), 12), reference->front(), 1.0e-6F));
+    std::span<const float>(output.data(), 12), reference->front(), tolerance));
+}
+
+TEST(SupportedOps, DetectionOutputCaffeSsd) {
+  expect_detection_output(
+    DETECTION_OUTPUT_LIBRARY_PATH, "detection_output", 1.0e-6F);
+}
+
+TEST(SupportedOps, DetectionOutputMixedFP16KeepsF32DecodeAndNms) {
+  expect_detection_output(DETECTION_OUTPUT_MIXED_FP16_LIBRARY_PATH,
+                          "detection_output_mixed_fp16",
+                          2.0e-3F);
+}
+
+TEST(SupportedOps, DetectionOutputMixedBF16KeepsF32DecodeAndNms) {
+  expect_detection_output(DETECTION_OUTPUT_MIXED_BF16_LIBRARY_PATH,
+                          "detection_output_mixed_bf16",
+                          2.0e-2F);
 }
 
 void expect_single_input_operator(std::string_view name,

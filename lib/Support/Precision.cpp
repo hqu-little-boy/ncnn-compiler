@@ -104,12 +104,14 @@ OperatorPrecisionCapability operator_precision_capability(
       operation == "ncnn.convolution_depthwise") {
     return OperatorPrecisionCapability::FP16Arithmetic;
   }
-  if (operation == "ncnn.sigmoid" || operation == "ncnn.gelu" ||
+  if (operation == "ncnn.sigmoid" || operation == "ncnn.hard_sigmoid" ||
+      operation == "ncnn.hard_swish" || operation == "ncnn.gelu" ||
       operation == "ncnn.softmax" || operation == "ncnn.batch_norm" ||
+      operation == "ncnn.detection_output" ||
       operation == "ncnn.deconvolution" || operation == "ncnn.gemm" ||
       operation == "ncnn.binary" || operation == "ncnn.pooling" ||
       operation == "ncnn.concat") {
-    return OperatorPrecisionCapability::FP16Boundary;
+    return OperatorPrecisionCapability::LowPrecisionBoundary;
   }
   return OperatorPrecisionCapability::Float32Only;
 }

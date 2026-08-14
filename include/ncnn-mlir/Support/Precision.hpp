@@ -13,7 +13,7 @@ enum class FP16AccumulatorMode { Float16, Float32 };
 enum class OperatorPrecisionCapability {
   Float32Only,
   FP16Arithmetic,
-  FP16Boundary,
+  LowPrecisionBoundary,
 };
 
 struct PrecisionPolicy {

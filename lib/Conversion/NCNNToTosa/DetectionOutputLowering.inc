@@ -31,9 +31,15 @@ class ConvertDetectionOutput final
         RankedTensorType::get(
           {count}, cast<ShapedType>(value.getType()).getElementType()));
     };
-    Value locations = flatten(adaptor.getLocation(), numPrior * 4);
-    Value confidences = flatten(adaptor.getConfidence(), numPrior * numClass);
-    Value priors = flatten(adaptor.getPriorbox(), numPrior * 8);
+    Value locations = flatten(
+      applyLowPrecisionBoundary(rewriter, loc, op, adaptor.getLocation()),
+      numPrior * 4);
+    Value confidences = flatten(
+      applyLowPrecisionBoundary(rewriter, loc, op, adaptor.getConfidence()),
+      numPrior * numClass);
+    Value priors = flatten(
+      applyLowPrecisionBoundary(rewriter, loc, op, adaptor.getPriorbox()),
+      numPrior * 8);
 
     Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
     Value c1 = rewriter.create<arith::ConstantIndexOp>(loc, 1);
@@ -246,6 +252,7 @@ class ConvertDetectionOutput final
                                      priors,
                                      numPrior,
                                      half);
+    output = applyLowPrecisionBoundary(rewriter, loc, op, output);
     Value count = rewriter.create<arith::IndexCastOp>(loc, i64, globalCount);
     Value width = rewriter.create<arith::ConstantIntOp>(loc, 6, 64);
     Value actualShape =

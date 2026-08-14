@@ -59,14 +59,23 @@ TEST(PrecisionTest, RegistersOperatorCapabilities) {
   EXPECT_EQ(ncnn_mlir::operator_precision_capability("ncnn.convolution"),
             OperatorPrecisionCapability::FP16Arithmetic);
   EXPECT_EQ(ncnn_mlir::operator_precision_capability("ncnn.softmax"),
-            OperatorPrecisionCapability::FP16Boundary);
+            OperatorPrecisionCapability::LowPrecisionBoundary);
+  for (const char* operation : {"ncnn.sigmoid",
+                                "ncnn.hard_sigmoid",
+                                "ncnn.hard_swish",
+                                "ncnn.gelu",
+                                "ncnn.batch_norm",
+                                "ncnn.detection_output"}) {
+    EXPECT_EQ(ncnn_mlir::operator_precision_capability(operation),
+              OperatorPrecisionCapability::LowPrecisionBoundary);
+  }
   for (const char* operation : {"ncnn.deconvolution",
                                 "ncnn.gemm",
                                 "ncnn.binary",
                                 "ncnn.pooling",
                                 "ncnn.concat"}) {
     EXPECT_EQ(ncnn_mlir::operator_precision_capability(operation),
-              OperatorPrecisionCapability::FP16Boundary);
+              OperatorPrecisionCapability::LowPrecisionBoundary);
   }
   EXPECT_EQ(ncnn_mlir::operator_precision_capability("ncnn.relu"),
             OperatorPrecisionCapability::Float32Only);

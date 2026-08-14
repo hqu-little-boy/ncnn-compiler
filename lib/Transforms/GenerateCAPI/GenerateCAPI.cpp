@@ -225,7 +225,8 @@ class GenerateCAPIPass final
     SmallVector<llvm::json::Object> outputs;
     inputs.push_back(std::move(input));
     outputs.push_back(std::move(output));
-    if (failed(writeManifest(std::move(inputs), std::move(outputs)))) {
+    if (failed(writeManifest(
+          variants.front(), std::move(inputs), std::move(outputs)))) {
       return failure();
     }
 
@@ -563,8 +564,8 @@ class GenerateCAPIPass final
              << "cannot create duplicate internal symbol '" << internalName
              << "'";
     }
-    if (failed(
-          writeManifest(std::move(inputManifest), std::move(outputManifest)))) {
+    if (failed(writeManifest(
+          function, std::move(inputManifest), std::move(outputManifest)))) {
       return failure();
     }
 
@@ -600,7 +601,8 @@ class GenerateCAPIPass final
     return success();
   }
 
-  LogicalResult writeManifest(SmallVector<llvm::json::Object> inputs,
+  LogicalResult writeManifest(func::FuncOp function,
+                              SmallVector<llvm::json::Object> inputs,
                               SmallVector<llvm::json::Object> outputs) {
     if (manifestPath.empty()) {
       return success();
@@ -624,6 +626,20 @@ class GenerateCAPIPass final
     manifest["function"] = exportName;
     manifest["inputs"] = std::move(inputArray);
     manifest["outputs"] = std::move(outputArray);
+    auto precision = function->getAttrOfType<StringAttr>("ncnn.precision");
+    if (precision &&
+        (precision.getValue() == "fp16" || precision.getValue() == "bf16")) {
+      llvm::json::Object policy;
+      policy["storage"] = precision.getValue();
+      policy["complex_math"] = "f32";
+      policy["complex_accumulator"] = "f32";
+      if (auto accumulator =
+            function->getAttrOfType<StringAttr>("ncnn.fp16_accumulator")) {
+        policy["fp16_accumulator"] = accumulator.getValue();
+      }
+      policy["fallback"] = function->hasAttr("ncnn.precision_fallback");
+      manifest["precision_policy"] = std::move(policy);
+    }
     stream->os() << llvm::formatv("{0:2}\n",
                                   llvm::json::Value(std::move(manifest)));
     stream->os().close();

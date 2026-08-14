@@ -117,6 +117,23 @@ function(ncnn_add_compiled_shape_pair
     set(${name}_dynamic_LIBRARY ${${name}_dynamic_LIBRARY} PARENT_SCOPE)
 endfunction()
 
+function(ncnn_add_complex_precision_fixtures name param_file bin_file)
+    ncnn_add_compiled_fixture(
+        ${name}_mixed_fp16 ${param_file} ${bin_file} ""
+        PRECISION=fp16 FP16_ACCUMULATOR=f32 TARGET_FEATURE=+f16c EMIT_IR)
+    ncnn_add_compiled_fixture(
+        ${name}_mixed_bf16 ${param_file} ${bin_file} ""
+        PRECISION=bf16 TARGET_FEATURE=+avx512bf16
+        CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+        CLANG_ARG=-Xclang CLANG_ARG=-avx512bf16
+        CLANG_ARG=-Xclang CLANG_ARG=-target-feature
+        CLANG_ARG=-Xclang CLANG_ARG=-avx512f EMIT_IR)
+    set(${name}_mixed_fp16_LIBRARY
+        ${${name}_mixed_fp16_LIBRARY} PARENT_SCOPE)
+    set(${name}_mixed_bf16_LIBRARY
+        ${${name}_mixed_bf16_LIBRARY} PARENT_SCOPE)
+endfunction()
+
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fixtures)
 set(int8_math_shim ${CMAKE_CURRENT_BINARY_DIR}/fixtures/int8_math_shim.o)
 execute_process(
@@ -824,6 +841,34 @@ ncnn_add_compiled_fixture(
     CLANG_ARG=-Xclang CLANG_ARG=-avx512bf16
     CLANG_ARG=-Xclang CLANG_ARG=-target-feature
     CLANG_ARG=-Xclang CLANG_ARG=-avx512f)
+ncnn_add_complex_precision_fixtures(
+    sigmoid
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
+    ${empty_bin})
+ncnn_add_complex_precision_fixtures(
+    hard_sigmoid
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hard_sigmoid.param
+    ${empty_bin})
+ncnn_add_complex_precision_fixtures(
+    hard_swish
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hard_swish.param
+    ${empty_bin})
+ncnn_add_complex_precision_fixtures(
+    gelu
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gelu.param
+    ${empty_bin})
+ncnn_add_complex_precision_fixtures(
+    softmax
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/softmax.param
+    ${empty_bin})
+ncnn_add_complex_precision_fixtures(
+    batch_norm
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/batch_norm.param
+    ${batch_norm_bin})
+ncnn_add_complex_precision_fixtures(
+    detection_output
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/detection_output.param
+    ${empty_bin})
 ncnn_add_compiled_fixture(
     pp_ocrv6_tiny_det_fp16
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param
@@ -955,6 +1000,20 @@ set(numerical_fixture_targets
     compile_reshape_spec_dynamic
     compile_slice_ordered_dynamic
     compile_inner_product_dynamic_m
+    compile_sigmoid_mixed_fp16
+    compile_sigmoid_mixed_bf16
+    compile_hard_sigmoid_mixed_fp16
+    compile_hard_sigmoid_mixed_bf16
+    compile_hard_swish_mixed_fp16
+    compile_hard_swish_mixed_bf16
+    compile_gelu_mixed_fp16
+    compile_gelu_mixed_bf16
+    compile_softmax_mixed_fp16
+    compile_softmax_mixed_bf16
+    compile_batch_norm_mixed_fp16
+    compile_batch_norm_mixed_bf16
+    compile_detection_output_mixed_fp16
+    compile_detection_output_mixed_bf16
     compile_detection_output)
 list(LENGTH numerical_fixture_targets numerical_fixture_target_count)
 math(EXPR numerical_fixture_last_index "${numerical_fixture_target_count} - 1")
@@ -1091,6 +1150,24 @@ target_compile_definitions(numerical_tests PRIVATE
     HARD_SIGMOID_LIBRARY_PATH="${hard_sigmoid_LIBRARY}"
     HARD_SWISH_LIBRARY_PATH="${hard_swish_LIBRARY}"
     GELU_LIBRARY_PATH="${gelu_LIBRARY}"
+    SIGMOID_MIXED_FP16_LIBRARY_PATH="${sigmoid_mixed_fp16_LIBRARY}"
+    SIGMOID_MIXED_BF16_LIBRARY_PATH="${sigmoid_mixed_bf16_LIBRARY}"
+    HARD_SIGMOID_MIXED_FP16_LIBRARY_PATH="${hard_sigmoid_mixed_fp16_LIBRARY}"
+    HARD_SIGMOID_MIXED_BF16_LIBRARY_PATH="${hard_sigmoid_mixed_bf16_LIBRARY}"
+    HARD_SWISH_MIXED_FP16_LIBRARY_PATH="${hard_swish_mixed_fp16_LIBRARY}"
+    HARD_SWISH_MIXED_BF16_LIBRARY_PATH="${hard_swish_mixed_bf16_LIBRARY}"
+    GELU_MIXED_FP16_LIBRARY_PATH="${gelu_mixed_fp16_LIBRARY}"
+    GELU_MIXED_BF16_LIBRARY_PATH="${gelu_mixed_bf16_LIBRARY}"
+    SOFTMAX_MIXED_FP16_LIBRARY_PATH="${softmax_mixed_fp16_LIBRARY}"
+    SOFTMAX_MIXED_BF16_LIBRARY_PATH="${softmax_mixed_bf16_LIBRARY}"
+    BATCH_NORM_MIXED_FP16_LIBRARY_PATH="${batch_norm_mixed_fp16_LIBRARY}"
+    BATCH_NORM_MIXED_BF16_LIBRARY_PATH="${batch_norm_mixed_bf16_LIBRARY}"
+    DETECTION_OUTPUT_MIXED_FP16_LIBRARY_PATH="${detection_output_mixed_fp16_LIBRARY}"
+    DETECTION_OUTPUT_MIXED_BF16_LIBRARY_PATH="${detection_output_mixed_bf16_LIBRARY}"
+    SIGMOID_MIXED_FP16_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/sigmoid_mixed_fp16/sigmoid_mixed_fp16.json"
+    SIGMOID_MIXED_BF16_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/sigmoid_mixed_bf16/sigmoid_mixed_bf16.json"
+    SIGMOID_MIXED_FP16_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/sigmoid_mixed_fp16/model.linalg.mlir"
+    SIGMOID_MIXED_BF16_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/sigmoid_mixed_bf16/model.linalg.mlir"
     RESHAPE_LIBRARY_PATH="${reshape_LIBRARY}"
     RESHAPE_COPY_DIMENSION_LIBRARY_PATH="${reshape_copy_dimension_LIBRARY}"
     SQUEEZE_LIBRARY_PATH="${squeeze_LIBRARY}"
@@ -1237,6 +1314,21 @@ add_dependencies(numerical_tests
     compile_pp_ocrv6_tiny_det_fp16
     compile_pp_structrurev2_slanet_plus_cnn_fp16
     compile_pp_formulanet_plus_s_encoder_fp16)
+add_dependencies(numerical_tests
+    compile_sigmoid_mixed_fp16
+    compile_sigmoid_mixed_bf16
+    compile_hard_sigmoid_mixed_fp16
+    compile_hard_sigmoid_mixed_bf16
+    compile_hard_swish_mixed_fp16
+    compile_hard_swish_mixed_bf16
+    compile_gelu_mixed_fp16
+    compile_gelu_mixed_bf16
+    compile_softmax_mixed_fp16
+    compile_softmax_mixed_bf16
+    compile_batch_norm_mixed_fp16
+    compile_batch_norm_mixed_bf16
+    compile_detection_output_mixed_fp16
+    compile_detection_output_mixed_bf16)
 
 add_executable(numerical_dynamic_operator_tests
     operators/dynamic_ops_test.cpp)

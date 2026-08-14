@@ -215,9 +215,18 @@ struct Argument {
 };
 
 struct Manifest {
+  struct PrecisionPolicy {
+    std::string storage;
+    std::string complex_math;
+    std::string complex_accumulator;
+    std::optional<std::string> fp16_accumulator;
+    bool fallback;
+  };
+
   std::string function;
   std::vector<Argument> inputs;
   std::vector<Argument> outputs;
+  std::optional<PrecisionPolicy> precision_policy;
 };
 
 class ScopedDirectory {
@@ -476,8 +485,28 @@ int run(const std::vector<std::string>& command,
   if (!function) {
     return std::unexpected("ABI manifest has no function name");
   }
-  Manifest manifest{
-    .function = std::string(*function), .inputs = {}, .outputs = {}};
+  Manifest manifest{.function = std::string(*function),
+                    .inputs = {},
+                    .outputs = {},
+                    .precision_policy = std::nullopt};
+  if (auto* policy = object->getObject("precision_policy")) {
+    auto storage = policy->getString("storage");
+    auto complex_math = policy->getString("complex_math");
+    auto complex_accumulator = policy->getString("complex_accumulator");
+    auto fallback = policy->getBoolean("fallback");
+    if (!storage || !complex_math || !complex_accumulator || !fallback) {
+      return std::unexpected("ABI manifest has an invalid precision policy");
+    }
+    auto fp16_accumulator = policy->getString("fp16_accumulator");
+    manifest.precision_policy = Manifest::PrecisionPolicy{
+      .storage = std::string(*storage),
+      .complex_math = std::string(*complex_math),
+      .complex_accumulator = std::string(*complex_accumulator),
+      .fp16_accumulator = fp16_accumulator ? std::optional<std::string>(
+                                               std::string(*fp16_accumulator))
+                                           : std::nullopt,
+      .fallback = *fallback};
+  }
   auto parse_arguments = [&](llvm::StringRef key,
                              std::vector<Argument>& destination) {
     auto* array = object->getArray(key);
@@ -779,6 +808,18 @@ int run(const std::vector<std::string>& command,
   object["function"] = manifest.function;
   object["inputs"] = arguments(manifest.inputs);
   object["outputs"] = arguments(manifest.outputs);
+  if (manifest.precision_policy) {
+    llvm::json::Object policy;
+    policy["storage"] = manifest.precision_policy->storage;
+    policy["complex_math"] = manifest.precision_policy->complex_math;
+    policy["complex_accumulator"] =
+      manifest.precision_policy->complex_accumulator;
+    if (manifest.precision_policy->fp16_accumulator) {
+      policy["fp16_accumulator"] = *manifest.precision_policy->fp16_accumulator;
+    }
+    policy["fallback"] = manifest.precision_policy->fallback;
+    object["precision_policy"] = std::move(policy);
+  }
   return write_file(
     path, llvm::formatv("{0:2}\n", llvm::json::Value(std::move(object))).str());
 }

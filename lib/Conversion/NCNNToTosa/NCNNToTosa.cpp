@@ -69,21 +69,40 @@ bool usesFP16Arithmetic(Operation* operation) {
          accumulator.getValue() == "f16";
 }
 
-bool usesFP16Boundary(Operation* operation) {
-  StringRef name = operation->getName().getStringRef();
-  return usesFP16Arithmetic(operation) &&
-         ncnn_mlir::operator_precision_capability(
-           std::string_view(name.data(), name.size())) ==
-           ncnn_mlir::OperatorPrecisionCapability::FP16Boundary;
+Type getLowPrecisionStorageType(OpBuilder& builder, Operation* operation) {
+  auto function = operation->getParentOfType<func::FuncOp>();
+  auto precision = function->getAttrOfType<StringAttr>("ncnn.precision");
+  if (!precision) {
+    return {};
+  }
+  if (precision.getValue() == "fp16") {
+    return builder.getF16Type();
+  }
+  if (precision.getValue() == "bf16") {
+    return builder.getBF16Type();
+  }
+  return {};
 }
 
-Value applyFP16Boundary(OpBuilder& builder,
-                        Location location,
-                        Operation* operation,
-                        Value value) {
-  return usesFP16Boundary(operation)
-           ? roundStoragePrecision(
-               builder, location, value, builder.getF16Type())
+bool usesLowPrecisionBoundary(Operation* operation) {
+  StringRef name = operation->getName().getStringRef();
+  auto function = operation->getParentOfType<func::FuncOp>();
+  auto precision = function->getAttrOfType<StringAttr>("ncnn.precision");
+  const bool lowPrecision = precision && (precision.getValue() == "fp16" ||
+                                          precision.getValue() == "bf16");
+  return lowPrecision &&
+         ncnn_mlir::operator_precision_capability(
+           std::string_view(name.data(), name.size())) ==
+           ncnn_mlir::OperatorPrecisionCapability::LowPrecisionBoundary;
+}
+
+Value applyLowPrecisionBoundary(OpBuilder& builder,
+                                Location location,
+                                Operation* operation,
+                                Value value) {
+  Type storageType = getLowPrecisionStorageType(builder, operation);
+  return usesLowPrecisionBoundary(operation)
+           ? roundStoragePrecision(builder, location, value, storageType)
            : value;
 }
 
@@ -821,7 +840,8 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
         "requires explicit non-negative padding; run normalize-ncnn first");
     }
     Value input = adaptor.getInput();
-    input = applyFP16Boundary(rewriter, operation.getLoc(), operation, input);
+    input =
+      applyLowPrecisionBoundary(rewriter, operation.getLoc(), operation, input);
     auto weightType = cast<RankedTensorType>(operation.getWeight().getType());
     Type storageElement = weightType.getElementType();
     const bool lowPrecisionWeight =
@@ -1212,7 +1232,8 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
     auto inputType = cast<RankedTensorType>(input.getType());
     const bool signedI8 = inputType.getElementType().isSignlessInteger(8);
     if (!signedI8) {
-      input = applyFP16Boundary(rewriter, operation.getLoc(), operation, input);
+      input = applyLowPrecisionBoundary(
+        rewriter, operation.getLoc(), operation, input);
     }
     if ((global && !inputType.hasStaticShape()) || adaptive) {
       if (signedI8) {
@@ -1386,7 +1407,7 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
           nested.create<linalg::YieldOp>(bodyLocation, pooled);
         });
       Value dynamicResult = result.getResult(0);
-      dynamicResult = applyFP16Boundary(
+      dynamicResult = applyLowPrecisionBoundary(
         rewriter, operation.getLoc(), operation, dynamicResult);
       rewriter.replaceOp(operation, dynamicResult);
       return success();
@@ -1501,8 +1522,8 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
         operation.getLoc(), sourceOutput, result, shape);
     }
     if (!signedI8) {
-      result =
-        applyFP16Boundary(rewriter, operation.getLoc(), operation, result);
+      result = applyLowPrecisionBoundary(
+        rewriter, operation.getLoc(), operation, result);
     }
     rewriter.replaceOp(operation, result);
     return success();
@@ -1544,15 +1565,15 @@ class ConvertConcat final : public OpConversionPattern<ConcatOp> {
                               adaptor.getInputs().end());
     if (sourceType.getElementType().isF32()) {
       for (Value& input : inputs) {
-        input =
-          applyFP16Boundary(rewriter, operation.getLoc(), operation, input);
+        input = applyLowPrecisionBoundary(
+          rewriter, operation.getLoc(), operation, input);
       }
     }
     Value result = rewriter.create<tosa::ConcatOp>(
       operation.getLoc(), outputType, inputs, axis);
     if (sourceType.getElementType().isF32()) {
-      result =
-        applyFP16Boundary(rewriter, operation.getLoc(), operation, result);
+      result = applyLowPrecisionBoundary(
+        rewriter, operation.getLoc(), operation, result);
     }
     rewriter.replaceOp(operation, result);
     return success();
@@ -1593,7 +1614,8 @@ class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
     OpAdaptor adaptor,
     ConversionPatternRewriter& rewriter) const final {
     Value input = adaptor.getInput();
-    input = applyFP16Boundary(rewriter, operation.getLoc(), operation, input);
+    input =
+      applyLowPrecisionBoundary(rewriter, operation.getLoc(), operation, input);
     auto type = cast<RankedTensorType>(input.getType());
     auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
     auto sourceAxis = static_cast<int64_t>(operation.getAxis());
@@ -1618,7 +1640,8 @@ class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
     Value shift = createI8Zero(rewriter, operation.getLoc());
     Value result = rewriter.create<tosa::MulOp>(
       operation.getLoc(), type, exponent, reciprocal, shift);
-    result = applyFP16Boundary(rewriter, operation.getLoc(), operation, result);
+    result = applyLowPrecisionBoundary(
+      rewriter, operation.getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -1966,7 +1989,7 @@ class ConvertDeconvolution final : public ConversionPattern {
           "padding/output padding");
       }
 
-      Value input = applyFP16Boundary(
+      Value input = applyLowPrecisionBoundary(
         rewriter, operation->getLoc(), operation, operands[0]);
       Location location = operation->getLoc();
       Value inputH = rewriter.create<tensor::DimOp>(location, input, 1);
@@ -2041,7 +2064,7 @@ class ConvertDeconvolution final : public ConversionPattern {
         return operation->emitOpError(
           "only no activation and ReLU activation_type=1 are supported");
       }
-      dynamicResult = applyFP16Boundary(
+      dynamicResult = applyLowPrecisionBoundary(
         rewriter, operation->getLoc(), operation, dynamicResult);
       rewriter.replaceOp(operation, dynamicResult);
       return success();
@@ -2065,7 +2088,8 @@ class ConvertDeconvolution final : public ConversionPattern {
     Value result = rewriter.create<tosa::TransposeConv2DOp>(
       operation->getLoc(),
       outputType,
-      applyFP16Boundary(rewriter, operation->getLoc(), operation, operands[0]),
+      applyLowPrecisionBoundary(
+        rewriter, operation->getLoc(), operation, operands[0]),
       weight,
       bias,
       inputZero,
@@ -2086,8 +2110,8 @@ class ConvertDeconvolution final : public ConversionPattern {
       return operation->emitOpError(
         "only no activation and ReLU activation_type=1 are supported");
     }
-    result =
-      applyFP16Boundary(rewriter, operation->getLoc(), operation, result);
+    result = applyLowPrecisionBoundary(
+      rewriter, operation->getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -2107,7 +2131,7 @@ class ConvertSigmoid final : public ConversionPattern {
         !isRankedF32Tensor(operation->getResult(0).getType())) {
       return operation->emitOpError("supports one ranked f32 tensor only");
     }
-    Value input = applyFP16Boundary(
+    Value input = applyLowPrecisionBoundary(
       rewriter, operation->getLoc(), operation, operands.front());
     auto type = cast<RankedTensorType>(input.getType());
     Value clamped = rewriter.create<tosa::ClampOp>(
@@ -2118,8 +2142,8 @@ class ConvertSigmoid final : public ConversionPattern {
       rewriter.getF32FloatAttr(88.3762626647949F));
     Value result =
       rewriter.create<tosa::SigmoidOp>(operation->getLoc(), type, clamped);
-    result =
-      applyFP16Boundary(rewriter, operation->getLoc(), operation, result);
+    result = applyLowPrecisionBoundary(
+      rewriter, operation->getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -2143,7 +2167,8 @@ class ConvertHardActivation final : public ConversionPattern {
         !isRankedF32Tensor(operation->getResult(0).getType())) {
       return operation->emitOpError("supports one ranked f32 tensor only");
     }
-    Value input = operands.front();
+    Value input = applyLowPrecisionBoundary(
+      rewriter, operation->getLoc(), operation, operands.front());
     auto type = cast<RankedTensorType>(input.getType());
     const double alpha = getFloatAttrOr(operation, "alpha", 0.2);
     const double beta = getFloatAttrOr(operation, "beta", 0.5);
@@ -2165,6 +2190,8 @@ class ConvertHardActivation final : public ConversionPattern {
       gate = rewriter.create<tosa::MulOp>(
         operation->getLoc(), type, input, gate, shift);
     }
+    gate =
+      applyLowPrecisionBoundary(rewriter, operation->getLoc(), operation, gate);
     rewriter.replaceOp(operation, gate);
     return success();
   }
@@ -2718,7 +2745,7 @@ class ConvertGELU final : public OpConversionPattern<GELUOp> {
     GELUOp operation,
     OpAdaptor adaptor,
     ConversionPatternRewriter& rewriter) const final {
-    Value input = applyFP16Boundary(
+    Value input = applyLowPrecisionBoundary(
       rewriter, operation.getLoc(), operation, adaptor.getInput());
     auto type = cast<RankedTensorType>(input.getType());
     Value half = createSplat(
@@ -2773,7 +2800,8 @@ class ConvertGELU final : public OpConversionPattern<GELUOp> {
       operation.getLoc(), type, input, activation, shift);
     result = rewriter.create<tosa::MulOp>(
       operation.getLoc(), type, result, half, shift);
-    result = applyFP16Boundary(rewriter, operation.getLoc(), operation, result);
+    result = applyLowPrecisionBoundary(
+      rewriter, operation.getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -2788,7 +2816,7 @@ class ConvertBatchNorm final : public OpConversionPattern<BatchNormOp> {
     OpAdaptor adaptor,
     ConversionPatternRewriter& rewriter) const final {
     auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
-    Value input = applyFP16Boundary(
+    Value input = applyLowPrecisionBoundary(
       rewriter, operation.getLoc(), operation, adaptor.getInput());
     auto outputType = cast<RankedTensorType>(input.getType());
     SmallVector<int64_t> parameterShape(outputType.getRank(), 1);
@@ -2834,7 +2862,8 @@ class ConvertBatchNorm final : public OpConversionPattern<BatchNormOp> {
       operation.getLoc(), outputType, input, scale, shift);
     result = rewriter.create<tosa::AddOp>(
       operation.getLoc(), outputType, result, offset);
-    result = applyFP16Boundary(rewriter, operation.getLoc(), operation, result);
+    result = applyLowPrecisionBoundary(
+      rewriter, operation.getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -3037,7 +3066,7 @@ class ConvertGemm final : public OpConversionPattern<GemmOp> {
     OpAdaptor adaptor,
     ConversionPatternRewriter& rewriter) const final {
     const bool quantized = operation.getInt8ScaleTerm() != 0;
-    Value sourceInput = applyFP16Boundary(
+    Value sourceInput = applyLowPrecisionBoundary(
       rewriter, operation.getLoc(), operation, adaptor.getInput());
     Value sourceWeight = adaptor.getWeight();
     auto weightType = cast<RankedTensorType>(sourceWeight.getType());
@@ -3141,7 +3170,8 @@ class ConvertGemm final : public OpConversionPattern<GemmOp> {
       result = rewriter.create<tensor::CollapseShapeOp>(
         operation.getLoc(), outputType, result, reassociation);
     }
-    result = applyFP16Boundary(rewriter, operation.getLoc(), operation, result);
+    result = applyLowPrecisionBoundary(
+      rewriter, operation.getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -3182,8 +3212,8 @@ class ConvertBinary final : public ConversionPattern {
     SmallVector<Value> values(operands.begin(), operands.end());
     if (!signedI8) {
       for (Value& value : values) {
-        value =
-          applyFP16Boundary(rewriter, operation->getLoc(), operation, value);
+        value = applyLowPrecisionBoundary(
+          rewriter, operation->getLoc(), operation, value);
       }
     }
     if (values.size() == 1) {
@@ -3253,8 +3283,8 @@ class ConvertBinary final : public ConversionPattern {
           "supports ADD/SUB/MUL/DIV/MAX/MIN/POW and reverse variants only");
     }
     if (!signedI8) {
-      result =
-        applyFP16Boundary(rewriter, operation->getLoc(), operation, result);
+      result = applyLowPrecisionBoundary(
+        rewriter, operation->getLoc(), operation, result);
     }
     rewriter.replaceOp(operation, result);
     return success();
