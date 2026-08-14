@@ -71,32 +71,22 @@ bias float32 payload
 - 无权重模型仍传入真实的空 `.bin` 文件，使两侧都走“已提供并验证模型文件”的路径。
 - 不要把构建生成的二进制 fixture 提交到源码树；提交生成脚本和可读 `.param`。
 
-## 4. ncnn 的 CMake 开关关闭后，仍可能选择架构专用 Layer
+## 4. 当前 reference 使用 ncnn 优化 CPU 路径
 
-仅设置以下选项为 `OFF` 不足以保证 `ncnn::Net` 使用通用实现：
+`run_ncnn_reference()` 没有调用 `register_custom_layer()` 或 `create_layer_naive()`，也没有关闭
+packing、线程、Winograd 或 SGEMM。ncnn 会按构建平台和当前 CPU 选择正常的 CPU Layer、runtime
+dispatch 和优化 kernel；这与实际部署路径更接近，但不同架构的累加顺序可能产生合法浮点差异。
 
-```text
-NCNN_SSE2 / NCNN_AVX* / NCNN_FMA / NCNN_XOP / NCNN_F16C
-NCNN_RUNTIME_CPU / NCNN_GNU_INLINE_ASM
-NCNN_OPENMP / NCNN_THREADS / NCNN_VULKAN
-```
+test support 当前显式设置：
 
-ncnn 仍会根据 `NCNN_TARGET_ARCH=x86` 注册 x86 Layer 类，其中可能包含 packed kernel。运行时
-`use_packing_layout=false` 也不等同于“使用 naive Layer”。本项目因此在加载 param 前，通过
-`Net::register_custom_layer()` 覆盖多数测试涉及的内建层，并由 `create_layer_naive()` 创建
-reference Layer。DetectionOutput 当前是明确例外：fixture 使用 ncnn 内建层路径，尚未注册
-naive override。
+- `lightmode=false`、`use_vulkan_compute=false`；
+- FP16/BF16 packed、storage 和 arithmetic 均关闭；
+- `use_int8_inference` 仅在 INT8 reference case 开启；
+- `flush_denormals=0`。
 
-新增算子 numerical test 时，应优先把该层加入 naive creator 注册表；无法提供 override 时必须
-像 DetectionOutput 一样明确例外。否则测试结果可能依赖宿主 CPU、ncnn 架构实现或 sanitizer
-build，违背 reference 可重复性的目标。
-
-编译期和运行期仍需同时关闭：
-
-- packing、fp16、bf16、int8；
-- Winograd 和 SGEMM；
-- Vulkan、线程和 runtime CPU dispatch；
-- DAZ/FTZ，当前 reference 将 `flush_denormals` 设为 0。
+新增 numerical test 时无需维护 naive creator 注册表。应使用固定输入、与算子语义匹配的容差和
+模型不变量，并在失败信息中记录最大误差及索引。若未来需要纯标量 reference，应先在 test support
+实现独立模式并增加验证，不能仅通过文档声称已经关闭优化。
 
 ## 5. `ncnn::Mat` 的逻辑连续不代表 channel 之间无 padding
 
@@ -176,10 +166,11 @@ full-tail、SAME_UPPER、SAME_LOWER 和 average exclude-pad。当前 average `in
 当前 Numerical 参数矩阵已覆盖：Convolution 的无 bias、dilation、非对称显式 padding、
 SAME_UPPER/LOWER；ReLU 的普通、零/负输入和 leaky slope；Pooling 的 max/average、global、
 SAME_UPPER/LOWER 与 tail；Concat 的 rank-3 正负 axis；Softmax 的 rank-3 正负 axis；以及
-三路 Split 输出经过多级 consumer 的拓扑。`ConvolutionDepthWise` 当前支持独立的纯 depthwise
-静态 FP32 子集；这不等于支持通用 group convolution、动态权重、量化或融合激活。
+三路 Split 输出经过多级 consumer 的拓扑。`ConvolutionDepthWise` 当前支持纯 depthwise 的
+FP32、FP16/BF16 边界、INT8 scale-term 和融合 ReLU；这不等于支持通用 group convolution、
+动态权重或其他融合激活。
 
-完整 27 个计算 op 的集合，以及包含 `Input` 在内的 28 个 importer source layer type，能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
+完整 31 个 source 计算层，以及包含 `Input` 在内的 32 个 importer source layer type，能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
 为准；本节只列 numerical fixture 已覆盖的参数组合。
 
 ## 9. 多输入、多输出 ABI 必须实际调用，不能只检查 manifest
@@ -224,9 +215,10 @@ Split lowering 最终可能被优化成 `memcpy`。因此它虽然没有数学�
 
 更新 allowlist 时应满足：
 
-- 只加入 libc/libm 中预期且稳定的符号；
-- 动态库仍通过 `-z defs` 和 `--no-undefined`；
-- `DT_NEEDED` 仍仅包含允许的系统库；
+- 只加入 libc/libm 或已启用 OpenMP 路径中预期且稳定的符号；
+- 普通动态库通过 `-z defs` 和 `--no-undefined`；sanitizer 产物跳过这两个链接选项，但继续执行
+  undefined-symbol 和 `DT_NEEDED` 审计；
+- `DT_NEEDED` 仍仅包含允许的系统库；默认并行产物可包含匹配的 `libomp`；
 - 不允许 `memrefCopy`、MLIR runner utils 或项目私有 runtime 偷渡进来。
 
 ## 11. 随机输入范围本身是测试契约
@@ -257,8 +249,9 @@ Split lowering 最终可能被优化成 `memcpy`。因此它虽然没有数学�
 
 直接调用 `ncnn-compile` 时，生成模型不会仅因 driver 自身位于 sanitizer build 中就自动插桩，
 调用方仍须通过可重复的 `--clang-arg` 和 `--linker-arg` 传递 sanitizer 参数。当前 numerical
-CMake fixture 检测到 `CMAKE_CXX_FLAGS` 中的 sanitizer 后会自动补齐这些参数，因此按本文示例
-配置的 sanitizer numerical test 会同时覆盖生成模型。
+CMake fixture 只要在 `CMAKE_CXX_FLAGS` 中看到 `fsanitize`，就固定传递
+`-fsanitize=address,undefined`、`-lasan` 和 `-lubsan`。它不是从实际 flag 推导 sanitizer 集合；
+因此支持的测试配置是 ASan+UBSan 组合，其他组合需要先修正 CMake 逻辑。
 
 若要求 sanitizer 覆盖生成模型，编译与链接都必须传递匹配的 `-fsanitize=` 选项，并验证最终
 `.so` 确实包含 instrumentation。`ncnn-compile` 只允许与所选 address/undefined sanitizer
@@ -319,13 +312,12 @@ cmake --build compiler/build \
 2. 添加 parser/importer/verifier 测试，检查参数类型、默认值、shape 和错误上下文。
 3. 添加 normalize/lowering lit，检查 axis、layout、padding 和无残留算子。
 4. 添加最小 `.param/.bin` numerical fixture，使用固定 seed 和显式输入范围。
-5. 将新层加入 ncnn naive creator 注册表。
-6. 根据输入/输出数量使用精确的 C 函数指针签名。
-7. 比较全部输出，报告最大误差及索引，并检查 finite。
-8. 审核新增 undefined symbols、动态依赖和导出符号。
-9. 在 Release 下验证真实优化产物。
-10. 在 sanitizer 下验证 harness、reference 和桥接，并明确生成 `.so` 是否已插桩。
-11. 最后先重建全部测试 target，再运行全部 CTest、format、tidy 和 `git diff --check`。
+5. 根据输入/输出数量使用精确的 C 函数指针签名。
+6. 比较全部输出，报告最大误差及索引，并检查 finite。
+7. 审核新增 undefined symbols、动态依赖和导出符号。
+8. 在 Release 下验证真实优化产物。
+9. 在 ASan+UBSan 下验证 harness、reference 和桥接，并确认生成 `.so` 已插桩。
+10. 最后先重建全部测试 target，再运行全部 CTest、format、tidy 和 `git diff --check`。
 
 若模型级结果不一致，优先从第一处中间结果偏差开始定位，而不是直接调整最终阈值。对
 SqueezeNet，建议依次检查第一层 Conv、Pooling 尾部 padding、Fire Concat channel 顺序、

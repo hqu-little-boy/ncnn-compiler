@@ -169,6 +169,10 @@ dist/resnet/
 `C x H x W`。extent 可以是正整数，也可以是 `?`；`?` 表示该维在执行时由 C ABI shape
 参数提供。
 
+未提供任何 `--input-shape` 时，尺寸完全省略（`w/h/c/d` 均缺省或为 0）的 Input 会自动建立为
+`[C,?,?]`。若该 Input 直接连接到具有有效四维权重 `[O,I,H,W]` 的 Convolution，则从 `I`
+推导 `C`；否则 `C` 也保持动态。
+
 ```bash
 ncnn-compile model.param --input-shape=3x224x224
 ```
@@ -179,9 +183,9 @@ ncnn-compile model.param --input-shape=3x224x224
 ncnn-compile model.param --input-shape=3x?x?
 ```
 
-该选项可重复。通常只需为 `.param` 中没有声明尺寸的 `Input` 提供，并按这些 Input 的
-source-layer 顺序匹配。为兼容既有调用，也接受为全部 `Input` 各提供一个 override；已有静态
-尺寸的 Input 不会被改写：
+该选项可重复。任意显式 fixed-rank override 会关闭上述自动推导。override 数量必须等于尺寸完全
+省略的 Input 数量，并按这些 Input 的 source-layer 顺序匹配；为兼容既有调用，也接受为全部
+Input 各提供一个 override，已有静态尺寸的 Input 不会被改写。不能只覆盖无尺寸 Input 的任意子集：
 
 ```bash
 ncnn-compile multi_input.param \
@@ -213,6 +217,11 @@ ncnn-compile model.param \
 `INPUT` 是按 source-layer 顺序排列的 Input 索引，`DIM` 使用 CHW 维序。约束只能指向 `?`
 动态维；索引越界、重复约束、非正 minimum/multiple 或静态维约束都会在编译阶段拒绝。生成的
 执行入口和 `<model>_infer_output_shapes` 都会在调用模型前检查 minimum 和整除条件。
+
+Importer 还会为可追溯到模型输入的动态 `Slice` 轴自动推导 minimum。当前要求最后一片为
+`-233`，其他片为正数或 `-233`；minimum 是显式 size 之和，每个 `-233` 至少按 1 计，
+`multiple_of` 默认为 1。追溯可穿过受支持的 BinaryOp 广播和 Squeeze 轴映射；同一维同时有
+显式约束时取更严格的 minimum，并保留显式 `multiple_of`。
 
 ## 3. 优化和调试信息
 
@@ -298,7 +307,7 @@ ncnn-compile model.param --emit=ncnn,tosa,llvm
 # 重复指定
 ncnn-compile model.param --emit=ncnn,tosa --emit=memref --emit=llvm
 
-# 保留全部公共 MLIR 阶段
+# 保留全部公共阶段
 ncnn-compile model.param --emit=all
 ```
 
@@ -312,10 +321,13 @@ ncnn-compile model.param --emit=all
 | `memref` | `model.memref.mlir` | bufferization 和输出参数转换后的 IR |
 | `capi` | `model.capi.mlir` | 准备 C ABI wrapper 后的 IR |
 | `llvm` | `model.llvm.mlir` | lowering 到 LLVM dialect 后的 MLIR |
-| `all` | 上述全部文件 | 保留所有公共 MLIR 阶段 |
+| `llvm-ir` | `model.ll` | 翻译后的 LLVM IR |
+| `object` | `model.o` | 目标文件 |
+| `assembly` | `model.s` | 目标汇编 |
+| `all` | 上述全部文件 | 保留所有公共阶段 |
 
-`--emit=llvm` 表示 LLVM dialect MLIR，不是临时 LLVM IR `.ll`。内部使用的 `model.ll` 和
-`model.o` 不属于公共产物，不会发布到输出目录。
+`--emit=llvm` 表示 LLVM dialect MLIR；LLVM IR、目标文件和汇编分别由 `llvm-ir`、`object`、
+`assembly` 请求。未请求的代码生成中间文件仍只存在于临时构建目录，不会发布。
 
 `--emit` 只控制成功后保留哪些中间文件，不会让流水线提前停止。即使只指定 `--emit=ncnn`，
 driver 仍会继续完成动态库编译、链接和产物审计。
@@ -363,6 +375,11 @@ manifest 描述导出函数以及输入、输出的名称、shape、元素类型
     "features": [],
     "execution_profile": "x86-64-auto"
   },
+  "precision_policy": {
+    "storage": "f32",
+    "complex_math": "f32",
+    "complex_accumulator": "f32"
+  },
   "inputs": [
     {
       "name": "input1",
@@ -396,6 +413,9 @@ manifest 描述导出函数以及输入、输出的名称、shape、元素类型
 `x86-64-fp16-storage-fp32`。后者明确表示 FP16 storage 但 FP32 accumulation，不表示原生 FP16
 arithmetic。
 
+`precision_policy` 记录实际存储和复杂计算边界；FP16 策略还会记录 `fp16_accumulator`，发生显式
+回退时记录 `fallback`，避免把 storage 类型误解为全部算术的执行类型。
+
 manifest 默认只是生成头文件所需的内部临时产物，不会发布。以下情况适合显式开启：
 
 - ABI 自动化测试。
@@ -416,7 +436,7 @@ manifest 默认只是生成头文件所需的内部临时产物，不会发布�
 | `f32` | FP32 storage 和 FP32 arithmetic |
 | `fp16` | FP16 storage；卷积 accumulator 由 `--fp16-accumulator` 选择 |
 | `bf16` | BF16 storage boundary，复杂算子按已实现的 FP32 boundary 规则处理 |
-| `int8` | INT8 量化路径；支持的卷积/InnerProduct 使用 INT32 累加和重定标 |
+| `int8` | 受限 Convolution、ConvolutionDepthWise、InnerProduct、Gemm 使用 INT8/I32 累加和 FP32 边界；支持受限 Quantize、Dequantize、Requantize、Cast 链路 |
 
 ```bash
 # 需要目标具备原生 FP16 arithmetic；不满足时编译失败
@@ -588,7 +608,9 @@ ncnn-compile model.param \
   --linker-arg=-Wl,--hash-style=gnu
 ```
 
-需要向实际 linker 传参时，通常使用 `-Wl,` 前缀。driver 自身已经加入严格链接选项，确保：
+需要向实际 linker 传参时，通常使用 `-Wl,` 前缀。普通产物使用 `-z defs` 和
+`--no-undefined`；显式启用 address/undefined sanitizer 时跳过这两个链接选项，以允许 sanitizer
+runtime 在最终进程中解析其符号，但仍执行未定义符号、导出和 `DT_NEEDED` 审计。driver 确保：
 
 - 没有未解析的非预期符号。
 - 只导出模型执行入口，以及存在 shape-only 动态输出时的 `<model>_infer_output_shapes`。
@@ -764,7 +786,7 @@ ncnn-compile model.param \
 ## 10. Python 调试流水线
 
 `tools/compile_ncnn_model.py` 保留用于开发调试、快速验证完整流水线和观察中间阶段。它不是稳定
-生产入口：
+生产入口，也不是 C++ CLI 的等价实现：
 
 ```bash
 python3 tools/compile_ncnn_model.py \
@@ -781,3 +803,7 @@ python3 tools/compile_ncnn_model.py \
 ```bash
 ./build/tools/ncnn-compile model.param
 ```
+
+当前 Python 脚本缺少 `--precision`、`--fp16-accumulator`、`--allow-fallback`、`--threads` 和
+`--vector-width`；其 `--emit=all` 只发布 ncnn/tosa/linalg/memref/capi/llvm 六个 MLIR 阶段，
+不发布 `.ll`、`.o` 或 `.s`。这些能力的权威接口是 C++ `ncnn-compile --help`。

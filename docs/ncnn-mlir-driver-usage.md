@@ -30,8 +30,10 @@ cmake --build build --parallel
   下降调试（lit 测试用它），**不消费 ncnn 模型**。
 
 依赖：LLVM/MLIR 21（Debian 包 `llvm-21-dev` + `libmlir-21-dev`）、CMake 3.20+、C++23
-编译器、Python 3（lit 和 fixture 生成）、GTest 开发包以及 `clang-21`、`mlir-translate-21`、
-`llvm-nm-21`、`llvm-readelf-21`、`FileCheck-21`。CMake 通过
+编译器、Python 3（lit 和 fixture 生成）、GTest 开发包以及 `clang-21`、`clang-format-21`、
+`clang-tidy-21`、`mlir-translate-21`、`llvm-nm-21`、`llvm-readelf-21`、`llvm-objdump-21`、
+`llvm-size-21`、`llvm-mca-21`、`FileCheck-21`。这些工具在当前默认配置中由 CMake 以
+`REQUIRED` 查找。CMake 通过
 `find_package(MLIR CONFIG)` 定位（config 目录 `/usr/lib/llvm-21/lib/cmake/mlir`），
 链接 `MLIRIR / MLIRSupport / MLIRFuncDialect / MLIRArithDialect / MLIRParser` 等。
 
@@ -56,7 +58,7 @@ ncnn-mlir-driver [options] <input .param file>
 |------|------|------|
 | `<input>`（位置参数，必填） | ncnn 网络结构文件 `.param` | — |
 | `--bin=<path>` | 权重文件 `.bin` | 由 `<input>` 把末尾 `.param` 换成 `.bin` 推导 |
-| `--input-shape=<CxHxW>` | 可重复；extent 为正整数或 `?`，按 Input source order 匹配 | 无 |
+| `--input-shape=<CxHxW>` | 可重复；extent 为正整数或 `?`，按无尺寸 Input 或全部 Input 的 source order 匹配 | 自动推导无尺寸 Input |
 | `--input-shape=*` | 受限动态 rank 1..4；必须是唯一 occurrence | 无 |
 | `--input-dim-constraint=<INPUT:DIM:min=N,multiple=N>` | 可重复；约束 fixed-rank 动态输入维 | 无 |
 | `--precision=<mode>` | `auto`、`f32`、`fp16`、`bf16` 或 `int8` | `auto` |
@@ -84,34 +86,10 @@ ncnn-mlir-driver [options] <input .param file>
 `ncnn-compile` 传递，而不是单独调用 driver。
 
 查看帮助（`--help` 已用 `OptionCategory` 收窄，不会被链接 libLLVM 引入的海量
-codegen option 淹没）：
+codegen option 淹没）。上表是接口摘要，实际选项及 LLVM 通用选项以当前二进制输出为准：
 
 ```bash
 ./build/tools/ncnn-mlir-driver --help
-```
-
-```
-OVERVIEW: ncnn-mlir-driver -- compile ncnn .param/.bin toward MLIR/native code
-
-USAGE: ncnn-mlir-driver [options] <input .param file>
-
-OPTIONS:
-
-Generic Options:
-
-  --help                  - Display available options (--help-hidden for more)
-  --help-list             - Display list of available options (--help-list-hidden for more)
-  --version               - Display the version of this program
-
-ncnn-mlir-driver options:
-
-  --bin=<path>            - Weight file (.bin). Defaults to <input> with .param replaced by .bin
-  --emit=<value>          - Select the stage to emit:
-    =parsed-graph         -   Raw parsed ncnn graph (param + bound weights)
-    =mlir                 -   MLIR module in the ncnn dialect (default)
-  --input-shape=<shape|*> - Input shape override as CxHxW; '?' is a dynamic extent, and '*' requests dynamic rank 1..4
-  -o <path>               - Output file. '-' writes to stdout (default)
-  --verify                - Re-verify the imported MLIR module (default: on)
 ```
 
 ---
@@ -181,13 +159,16 @@ MLIR 模块格式详见 [ncnn-ir-format.md](ncnn-ir-format.md)。
   --input-dim-constraint=0:2:min=32,multiple=32
 ```
 
-多输入时重复指定，数量必须等于全部 Input 数量，并按 source-layer 顺序绑定。已有静态尺寸的
-Input 不会被改写，但仍占一个条目。`--input-shape=*` 必须独占，只支持一个未声明尺寸的 Input、
+未提供 `--input-shape` 时，尺寸完全省略的 Input 自动建立为 `[C,?,?]`；直接连接到有效
+Convolution 时从 `[O,I,H,W]` 权重推导 `C=I`，否则 `C` 也为动态。显式 fixed-rank override
+会关闭自动推导，其数量必须等于全部无尺寸 Input 数量，或为兼容旧调用而等于全部 Input 数量；
+已有静态尺寸的 Input 不会被改写。`--input-shape=*` 必须独占，只支持一个未声明尺寸的 Input、
 一个输出以及 identity/ReLU shape-preserving 图，并生成 rank 1..4 specialization。
 
 维度约束以 `#ncnn.dim_constraint` 结构化属性保存在 `ncnn.shape_constraints` 中，只允许指向
-动态维。`convert-ncnn-model-to-func` 会将该属性传播到入口函数，后续 C ABI wrapper 和
-shape inference wrapper 使用同一约束。
+动态维。可追溯到模型输入的动态 Slice 最小 extent 会自动推导，并与显式约束合并；
+`convert-ncnn-model-to-func` 会将属性传播到入口函数，后续 C ABI wrapper 和 shape inference
+wrapper 使用同一约束。
 
 ### 3.4 查看原始解析图
 
@@ -330,9 +311,10 @@ func.func @model(%input: memref<3x227x227xf32>,
 
 `--ncnn-memref-to-llvm-pipeline` 消除 Linalg/Affine/SCF/Math/Arith/MemRef/Func/CF，并将
 `math.exp` 映射到系统 `expf`。C++ `ncnn-compile` driver 直接调用
-`mlir-translate-21`、`clang-21 -fPIC` 和严格共享库链接；最终 `.so` 只依赖 libc/libm，
-未定义符号只允许 `malloc`、`free`、`erfcf`、`erff`、`expf`、`powf`、`memcpy`、`memset`，且禁止 `memrefCopy` 和
-runner/project runtime。
+`mlir-translate-21`、`clang-21 -fPIC` 和严格共享库链接。串行产物使用 libc/libm；默认
+OpenMP 产物还依赖 `libomp`。允许的数学/内存符号包括 `ceilf`、`floorf`、`erfcf`、`erff`、
+`expf`、`powf`、`malloc`、`free`、`memcpy`、`memset`，OpenMP 模式另允许审计过的
+`__kmpc_*`，且始终禁止 `memrefCopy` 和 runner/project runtime。
 
 `ncnn-compile model.param` 默认从文件名推导模型名和同名输出目录，并自动使用同目录的
 `model.bin`。默认目录只包含用户需要的两个文件：
@@ -358,12 +340,12 @@ shape-only 动态输出的执行入口追加以 data 元素数计的 `uint64_t c
 # 只保留 ncnn、TOSA 和 LLVM dialect MLIR
 ncnn-compile model.param --emit ncnn,tosa --emit llvm
 
-# 保留全部中间 MLIR
+# 保留全部阶段产物
 ncnn-compile model.param --emit all
 ```
 
-支持的阶段为 `ncnn`、`tosa`、`linalg`、`memref`、`capi` 和 `llvm`。`llvm` 指 LLVM dialect
-MLIR，不是临时 LLVM IR `.ll`；内部 `.ll` 和 object 不属于公共产物。
+支持的阶段为 `ncnn`、`tosa`、`linalg`、`memref`、`capi`、`llvm`、`llvm-ir`、`object` 和
+`assembly`。`llvm` 指 LLVM dialect MLIR；后三项分别发布 `.ll`、`.o` 和 `.s`，默认不发布。
 
 ABI manifest 默认是内部临时产物。需要检查 ABI 或供内部测试使用时，显式增加
 `--emit-manifest`，输出目录中会额外生成 `<model>.json`。

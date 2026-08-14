@@ -100,14 +100,15 @@ for (const auto& layer : layers) validate(layer);
 
 ## 3. 头文件与实现文件
 
-- 头文件只放类型、函数和方法声明；方法实现必须放入 `.cpp` 文件。
-- 禁止在 class 声明中编写 getter、setter、构造函数或其他方法的方法体。
+- 头文件通常只放类型、函数和方法声明；非平凡方法实现放入 `.cpp` 文件。
+- 模板、header-only utility，以及明显平凡且有利于可读性的 getter/构造函数可以在 class 声明中
+  定义；公共 ABI 或会显著增加编译依赖的实现仍应移到 `.cpp`。
 - 非公开实现细节应放在 `.cpp` 的匿名 namespace 中。
 - 头文件必须自包含，直接 include 自身所使用类型对应的标准库或项目头文件。
 - 使用 `#pragma once` 作为项目头文件的 include guard。
 - 禁止仅为传递依赖而依赖其他头文件的偶然 include。
-- 模板或生成代码若因语言/工具要求必须在头文件中定义，应在引入前经过明确的
-  设计评审；该例外不能用于普通非模板类。
+- 模板、生成代码和项目已有的 header-only shape utility 可在头文件中定义；新增大段普通实现需
+  经过设计评审。
 
 合规：
 
@@ -147,10 +148,11 @@ class Tensor {
 
 ## 4. 类设计与状态管理
 
-### 4.1 成员必须私有
+### 4.1 状态封装与 DTO 例外
 
-- 所有类属性必须为 `private`。
-- 禁止通过 public data member 暴露对象状态。
+- 有行为、不变量或所有权语义的类属性必须为 `private`。
+- 纯参数/配置 DTO（如 `ImportOptions`、`PrecisionPolicy`、`TargetSpec`）允许 public data member
+  和声明处默认值；它们不得承载需要 setter 维护的不变量。
 - 读取通过 `get_*`，替换通过 `set_*`，受控追加通过 `add_*`。
 - getter 应尽可能为 `const noexcept`，且不得修改对象。
 - 集合 getter 优先返回 `std::span<const T>`，字符串 getter 优先返回
@@ -461,7 +463,7 @@ cmake --build build --target tidy
   bin 消费验证。
 - importer 或 lowering 扩展到新算子时，必须同时增加正常模型和畸形属性测试。
 
-测试代码同样遵循本文档，包括构造函数初始化、私有状态和控制流大括号规则。
+测试代码同样遵循本文档，包括控制流大括号和适用的状态封装规则。
 测试 fixture 必须创建在构建目录，不能污染源码目录或依赖开发者绝对路径。
 
 ### 12.2 Sanitizer
@@ -480,8 +482,9 @@ ctest --test-dir compiler/build-sanitize --output-on-failure
 
 sanitizer 构建的 numerical fixture 由 CMake build 阶段调用 `ncnn-compile` 生成，不是由
 CTest 生成。运行 CTest 前必须先构建对应 numerical 测试 target。fixture 检测到
-`CMAKE_CXX_FLAGS` 中的 sanitizer 后，会自动通过 `--clang-arg` 和 `--linker-arg` 为生成模型
-传递匹配的 `-fsanitize=`，因此 harness、reference、动态库边界和模型 `.so` 均受覆盖。直接
+`CMAKE_CXX_FLAGS` 中的任意 `fsanitize` 后，会固定通过 `--clang-arg` 和 `--linker-arg` 为生成模型
+传递 `-fsanitize=address,undefined` 及对应 runtime。因此当前支持的配置是 ASan+UBSan 组合，
+harness、reference、动态库边界和模型 `.so` 均受覆盖。直接
 手工调用 `ncnn-compile` 时仍须显式传递这些参数；driver 只放行对应 sanitizer 符号族和 runtime
 `DT_NEEDED`，并拒绝缺少所需 runtime 依赖的 `.so`。
 
@@ -514,8 +517,8 @@ git -C compiler diff --check
 - 必需的 ASan/UBSan 测试通过。
 - 没有新增 `stoi`、`stol`、`strtod`、手工 `new`/`delete`、未检查窄化、
   native-endian 解码或项目自有裸指针所有权/observer API。
-- 没有省略控制流大括号、声明处成员默认值、public data member 或头文件中的普通
-  方法实现。
+- 没有省略控制流大括号；public data member、声明处默认值和头文件实现只用于本文明确允许的
+  DTO、模板或 header-only utility。
 - 错误路径包含足够上下文，失败不留下部分提交的状态。
 
 自动化工具只能执行其中一部分规则。生命周期、值语义、算术安全、事务性、格式兼容

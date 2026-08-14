@@ -11,8 +11,10 @@ fixture 通过唯一产品入口 `ncnn-compile` 生成并加载模型 `.so`；sa
 传递模型编译和链接的 sanitizer 参数，因此覆盖 harness、reference、ABI 桥接和生成模型。
 直接手工调用 `ncnn-compile` 时不会自动继承这些参数。当前数值测试的规避方法见
 [`operator-numerical-validation-guide.md`](operator-numerical-validation-guide.md)。
-插桩模型时，`ncnn-compile` 会按 `-fsanitize=` 选择审计对应的 sanitizer 符号族和
-`libasan`/`libubsan` `DT_NEEDED`，不能把仅测试进程带 sanitizer 与模型代码已插桩混为一谈。
+当前 numerical CMake fixture 检测到任意 `fsanitize` 后固定向模型传递 ASan+UBSan 参数；这不是
+按输入 flag 自动匹配 sanitizer 集合。`ncnn-compile` 会按收到的 linker 参数选择审计对应的
+sanitizer 符号族和 `libasan`/`libubsan` `DT_NEEDED`，不能把仅测试进程带 sanitizer 与模型代码
+已插桩混为一谈。
 
 ## 测试基础设施坑点：CTest 不会重建 fixture
 
@@ -112,15 +114,15 @@ CHW 数据；输出也逐 channel 展平。实现位于
 5. 记录 ncnn 编译选项、CPU 型号、ASan 版本和完整报告；
 6. 明确越界发生在读取哪个 tensor、哪个 kernel 和哪个元素之后。
 
-## 2. 关闭优化选项后仍默认选择 CPU Layer
+## 2. 当前 numerical reference 使用优化 CPU Layer
 
 **分类：可复现的配置语义疑点，可能是文档/API 能力缺口。**
 
 ### 现象
 
-关闭 SIMD、runtime CPU dispatch、packing 等 CMake 和运行时选项，不能仅凭这些选项
-断言 `ncnn::Net` 使用 naive Layer。当前数值测试仍需显式调用
-`register_custom_layer()`，将被测内建层覆盖为 `create_layer_naive()` 创建的 Layer。
+关闭 SIMD、runtime CPU dispatch、packing 等 CMake 和运行时选项，不能仅凭这些选项断言
+`ncnn::Net` 使用 naive Layer。当前 numerical test 并没有关闭这些 CPU 优化，也没有调用
+`register_custom_layer()` 或 `create_layer_naive()`；它有意使用 ncnn 正常的优化 CPU reference。
 
 ### 源码证据
 
@@ -130,9 +132,8 @@ custom layer：`test/third_party/ncnn/src/net.cpp:1399-1413`。而 `create_layer
 `test/third_party/ncnn/src/layer.cpp:442-522`。`create_layer_naive()` 则直接使用普通
 registry creator：`test/third_party/ncnn/src/layer.cpp:428-439`。
 
-因此，“关闭硬件优化”与“强制使用 naive reference”是两个不同的契约。当前 workaround
-利用 `Net::register_custom_layer()` 对内建类型建立 overwrite registry；该行为由
-`test/third_party/ncnn/src/net.cpp:1213-1255` 和 `:2625-2672` 支持。
+因此，“关闭硬件优化”与“强制使用 naive reference”是两个不同的契约。ncnn 提供 custom
+overwrite registry 能力，但当前项目未用它改变 reference layer 选择。
 
 ### 为什么还不能定性为 ncnn bug
 
@@ -141,11 +142,11 @@ registry creator：`test/third_party/ncnn/src/layer.cpp:428-439`。
 “没有 SIMD”理解成“没有架构专用 Layer”，而 ncnn 没有一个显式的 `use_naive_layers`
 式选项供 reference 测试使用。
 
-### 当前规避
+### 当前配置
 
-在 `load_param()` 前为每个测试覆盖层注册 naive creator，并保持 packing、fp16、bf16、
-int8、线程、Vulkan、Winograd 和 SGEMM 等路径关闭。新增 numerical fixture 时必须将
-该层加入 `register_naive_layers()`。
+test support 关闭 Vulkan 和 FP16/BF16 降精度，按 case 选择 INT8，并设置
+`flush_denormals=0`；packing、线程、Winograd、SGEMM 和 runtime CPU dispatch 保持 ncnn 默认。
+测试通过固定输入、容差和模型不变量吸收不同合法 CPU kernel 的浮点累加差异。
 
 ### 上游报告前的检查项
 
@@ -181,9 +182,9 @@ top-k 和 softmax sum，再决定是否存在语义错误。
 
 - 当前只有 external Mat 的 `cstep`/尾部空间契约值得作为高优先级 API 文档问题向
   upstream 进一步确认；是否存在独立的 kernel 越界缺陷仍需最小复现隔离。
-- naive Layer 选择问题应作为 reference 测试可复现性和配置文档问题跟踪。
+- 若未来要求 naive Layer，应先实现并验证独立 reference 模式；当前基线是优化 CPU reference。
 - `cstep`、Pooling full padding 和浮点累加差异目前按 ncnn 正常设计或证据不足处理。
 - 在获得独立 reproducer 或 upstream 明确回复前，禁止在其他文档中写成“ncnn 已确认的
   bug”。
-- 若升级 ncnn submodule，应重新运行 external Mat sanitizer 对照、naive Layer 选择检查
+- 若升级 ncnn submodule，应重新运行 external Mat sanitizer 对照、CPU Layer 选择检查
   和所有 numerical golden tests，并更新本文提交号及源码行号。

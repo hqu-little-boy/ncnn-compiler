@@ -83,7 +83,8 @@ memref descriptor，并可执行 rank
   `ncnn.convolution {kernel_h=3, kernel_w=3, stride_h=2, …}` 这样的具名强类型属性
   （`I64Attr` / `BoolAttr` / `F32Attr`）。
 - **shape inference**：每个值都带推断出的 ranked shape 与元素类型。传统模型通常为静态 extent；
-  `--input-shape` 的 `?` 可保留动态 extent，`*` 为受限模型生成 rank 1..4 ranked specialization。
+  无 override 时，尺寸完全省略的 Input 自动成为 `[C,?,?]`，直接连接到 Convolution 时可从
+  `[O,I,H,W]` 权重推导 `C=I`。`--input-shape` 的 `?` 可保留动态 extent，`*` 为受限模型生成 rank 1..4 ranked specialization。
   动态值能否继续下降取决于具体算子支持。
   conv/pool/concat 实现 `InferTensorTypeAdaptor`，importer 通过标准 `inferReturnTypes` 获取结果，
   `InferTypeOpInterface` 用相同实现精确复核声明类型。
@@ -130,7 +131,8 @@ module {
 
 - **`ncnn.input`**对应 ncnn `Input` 层，形状 `[C,H,W]`。
 - fixed-rank 动态输入可以在 `ncnn.model` 上携带 `ncnn.shape_constraints`，元素为结构化
-  `#ncnn.dim_constraint<input, dim, min, multiple_of>` 属性；约束只允许指向动态维。
+  `#ncnn.dim_constraint<input, dim, min, multiple_of>` 属性；约束只允许指向动态维，可由 CLI
+  提供，也可由可追溯到模型输入的动态 Slice 自动推导 minimum。
 - 函数化后，动态输出维的 provenance 存为 `ncnn.shape_program`。简单单来源表达式使用 V1
   opcode/operand 对；复合或多输入表达式使用 V2 前缀树，支持 Constant、InputDim、Add、
   Multiply、FloorDiv、CeilDiv 和 Max。V2 节点已携带输入索引，不设置 `shape_source_input`。
@@ -142,7 +144,7 @@ module {
 ## 4. 算子与属性
 
 模型边界由 `ncnn.model`、`ncnn.input`、`ncnn.const`、`ncnn.output` 表示。当前计算 op 共
-27 个；权威集合是 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td) 的
+32 个：31 个对应 source 计算层，`ncnn.zero_point_cast` 是 lowering 使用的内部 op。权威集合是 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td) 的
 TableGen 定义，完整能力矩阵见 [ncnn-compile-support-status.md](ncnn-compile-support-status.md)。
 下表 7 项只是 SqueezeNet 示例实际使用的计算 op：
 
@@ -190,7 +192,9 @@ tensor encoding；带 encoding 的 tensor 会在方言校验阶段被明确拒�
 | conv 权重 | `[O, I, H, W]` | `tensor<64x3x3x3xf32>` |
 | conv bias / 1-D 常量 | `[N]` | `tensor<64xf32>` |
 
-元素类型：`f32`（主路径）、`f16`、`i8`（量化权重/结果）。
+NCNN dialect 当前会出现 `f32`（主路径）、`f16`、`bf16`、`i8`，量化累加和边界 op 还会使用
+`i32`。后续 GenerateCAPI 的可接受 ABI 类型范围更宽：`f16/bf16/f32/f64` 以及
+8/16/32/64 位有符号或无符号整数；这不表示 importer 能生成所有这些类型。
 
 > **布局是隐式约定，不是显式 layout 字段**。verifier 与形状推断按此约定校验
 > （conv 要求 input rank3、weight rank4）。ncnn→tosa 下降通过 `TypeConverter` 和双向
@@ -216,6 +220,10 @@ SAME（`-233`/`-234`）：`out = 1 + (in-1)/stride`。
 scale；DetectionOutput 根据输入和 top-k 参数推导最大 storage，实际行数由执行时 shape carrier
 返回。动态 SAME 在对应 stride 为 1 时可直接化为零显式 padding；stride 大于 1 时仍无法在
 静态 `pad` 属性中表达运行时分配，编译器会拒绝。
+
+动态 Slice 轴在最后一片为 `-233`、其他片为正数或 `-233` 时，可自动生成输入 minimum：显式
+size 求和，每个 `-233` 至少按 1 计。追溯当前可穿过受支持的 BinaryOp 广播和 Squeeze 轴映射；
+无法追溯到模型输入时仍由 verifier 拒绝。
 
 ---
 
