@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -41,6 +42,17 @@ void append_u32_le(std::vector<std::byte>& bytes, std::uint32_t value) {
   bytes.push_back(static_cast<std::byte>((value >> 8) & 0xff));
   bytes.push_back(static_cast<std::byte>((value >> 16) & 0xff));
   bytes.push_back(static_cast<std::byte>((value >> 24) & 0xff));
+}
+
+void append_fp32(std::vector<std::byte>& bytes, std::size_t count) {
+  for (std::size_t index = 0; index < count; ++index) {
+    append_u32_le(bytes, 0x3f800000);
+  }
+}
+
+void append_tagged_fp32(std::vector<std::byte>& bytes, std::size_t count) {
+  append_u32_le(bytes, 0);
+  append_fp32(bytes, count);
 }
 
 class MalformedGraphTest : public ::testing::Test {
@@ -448,6 +460,105 @@ TEST_F(MalformedGraphTest, SequentialDepthwiseAndInnerProductFp32Weights) {
     graph->get_layers()[2].get_weights()[0].get_shape();
   EXPECT_TRUE(inner_product_shape.size() == 2 && inner_product_shape[0] == 3 &&
               inner_product_shape[1] == 2);
+}
+
+TEST_F(MalformedGraphTest, LayerNormAndAttentionConsumeWeightsInNcnnOrder) {
+  constexpr std::string_view graph_text =
+    "7767517\n"
+    "3 3\n"
+    "Input input 0 1 in\n"
+    "LayerNorm norm 1 1 in normalized 0=3 1=1.000000e-5 2=1\n"
+    "MultiHeadAttention attention 1 1 normalized out 0=2 1=1 2=6 3=4 "
+    "4=5\n";
+
+  std::vector<std::byte> weights;
+  append_fp32(weights, 3);
+  append_fp32(weights, 3);
+  append_tagged_fp32(weights, 6);
+  append_fp32(weights, 2);
+  append_tagged_fp32(weights, 8);
+  append_fp32(weights, 2);
+  append_tagged_fp32(weights, 10);
+  append_fp32(weights, 2);
+  append_tagged_fp32(weights, 6);
+  append_fp32(weights, 3);
+  auto bin_path = fixture_dir / "layernorm-attention.bin";
+  ASSERT_TRUE(write_bytes(bin_path, weights));
+
+  auto graph = load_text("layernorm-attention", graph_text, bin_path.string());
+  ASSERT_TRUE(graph) << graph.error();
+  const auto layer_norm_weights = graph->get_layers()[1].get_weights();
+  ASSERT_EQ(layer_norm_weights.size(), 2U);
+  EXPECT_EQ(layer_norm_weights[0].get_shape()[0], 3);
+  EXPECT_EQ(layer_norm_weights[1].get_shape()[0], 3);
+
+  const auto attention_weights = graph->get_layers()[2].get_weights();
+  ASSERT_EQ(attention_weights.size(), 8U);
+  const std::array<std::array<std::int64_t, 2>, 4> matrix_shapes{
+    std::array<std::int64_t, 2>{2, 3},
+    std::array<std::int64_t, 2>{2, 4},
+    std::array<std::int64_t, 2>{2, 5},
+    std::array<std::int64_t, 2>{3, 2},
+  };
+  const std::array<std::int64_t, 4> bias_sizes{2, 2, 2, 3};
+  for (std::size_t projection = 0; projection < matrix_shapes.size();
+       ++projection) {
+    const auto matrix_shape = attention_weights[projection * 2].get_shape();
+    EXPECT_TRUE(matrix_shape.size() == 2 &&
+                matrix_shape[0] == matrix_shapes[projection][0] &&
+                matrix_shape[1] == matrix_shapes[projection][1]);
+    const auto bias_shape = attention_weights[(projection * 2) + 1].get_shape();
+    EXPECT_TRUE(bias_shape.size() == 1 &&
+                bias_shape[0] == bias_sizes[projection]);
+  }
+}
+
+TEST_F(MalformedGraphTest, LayerNormWithoutAffineConsumesNoWeights) {
+  constexpr std::string_view graph_text =
+    "7767517\n"
+    "2 2\n"
+    "Input input 0 1 in\n"
+    "LayerNorm norm 1 1 in out 0=0 2=0\n";
+  auto empty_bin_path = fixture_dir / "layernorm-no-affine.bin";
+  ASSERT_TRUE(write_bytes(empty_bin_path, {}));
+  auto graph =
+    load_text("layernorm-no-affine", graph_text, empty_bin_path.string());
+  ASSERT_TRUE(graph) << graph.error();
+  EXPECT_TRUE(graph->get_layers()[1].get_weights().empty());
+}
+
+TEST_F(MalformedGraphTest, AttentionReportsTruncationAndDimensionOverflow) {
+  constexpr std::string_view graph_text =
+    "7767517\n"
+    "2 2\n"
+    "Input input 0 1 in\n"
+    "MultiHeadAttention attention 1 1 in out 0=1 1=1 2=1\n";
+  std::vector<std::byte> weights;
+  for (int projection = 0; projection < 4; ++projection) {
+    append_tagged_fp32(weights, 1);
+    if (projection != 3) {
+      append_fp32(weights, 1);
+    }
+  }
+  auto truncated_path = fixture_dir / "attention-truncated.bin";
+  ASSERT_TRUE(write_bytes(truncated_path, weights));
+  auto truncated =
+    load_text("attention-truncated", graph_text, truncated_path.string());
+  EXPECT_TRUE(
+    !truncated && contains(truncated.error(), "MultiHeadAttention out bias") &&
+    contains(truncated.error(), "layer 1 (MultiHeadAttention, attention)"));
+
+  constexpr std::string_view overflow_graph =
+    "7767517\n"
+    "2 2\n"
+    "Input input 0 1 in\n"
+    "MultiHeadAttention attention 1 1 in out 0=9223372036854775807 1=1 "
+    "2=9223372036854775807 3=9223372036854775807 4=1\n";
+  auto empty_path = fixture_dir / "attention-overflow.bin";
+  ASSERT_TRUE(write_bytes(empty_path, {}));
+  auto overflow =
+    load_text("attention-overflow", overflow_graph, empty_path.string());
+  EXPECT_TRUE(!overflow && contains(overflow.error(), "overflows size_t"));
 }
 
 TEST_F(MalformedGraphTest, QuantizationLayersConsumeRawFp32WeightsInOrder) {

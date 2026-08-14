@@ -170,7 +170,7 @@ SAME_UPPER/LOWER 与 tail；Concat 的 rank-3 正负 axis；Softmax 的 rank-3 �
 FP32、FP16/BF16 边界、INT8 scale-term 和融合 ReLU；这不等于支持通用 group convolution、
 动态权重或其他融合激活。
 
-完整 31 个 source 计算层，以及包含 `Input` 在内的 32 个 importer source layer type，能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
+完整 34 个 source 计算层，以及包含 `Input` 在内的 35 个 importer source layer type，能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
 为准；本节只列 numerical fixture 已覆盖的参数组合。
 
 ## 9. 多输入、多输出 ABI 必须实际调用，不能只检查 manifest

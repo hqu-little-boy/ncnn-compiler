@@ -144,7 +144,7 @@ module {
 ## 4. 算子与属性
 
 模型边界由 `ncnn.model`、`ncnn.input`、`ncnn.const`、`ncnn.output` 表示。当前计算 op 共
-32 个：31 个对应 source 计算层，`ncnn.zero_point_cast` 是 lowering 使用的内部 op。权威集合是 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td) 的
+35 个：34 个对应 source 计算层，`ncnn.zero_point_cast` 是 lowering 使用的内部 op。权威集合是 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td) 的
 TableGen 定义，完整能力矩阵见 [ncnn-compile-support-status.md](ncnn-compile-support-status.md)。
 下表 7 项只是 SqueezeNet 示例实际使用的计算 op：
 

@@ -144,6 +144,41 @@ TEST(ParserTest, DecodesSequentialWeightLayerParameters) {
   EXPECT_FALSE(ncnn_graph::decode_inner_product_params(inner_product));
 }
 
+TEST(ParserTest, DecodesLayerNormAndMultiHeadAttentionParameters) {
+  ncnn_graph::ParamDict layer_norm;
+  layer_norm.set_value(0, ncnn_graph::ParamValue::make_int(120));
+  layer_norm.set_value(1, ncnn_graph::ParamValue::make_float(1.0e-5F));
+  auto decoded_layer_norm = ncnn_graph::decode_layer_norm_params(layer_norm);
+  ASSERT_TRUE(decoded_layer_norm) << decoded_layer_norm.error();
+  EXPECT_EQ(decoded_layer_norm->affine_size, 120);
+  EXPECT_TRUE(decoded_layer_norm->affine);
+  EXPECT_FLOAT_EQ(decoded_layer_norm->epsilon, 1.0e-5F);
+
+  ncnn_graph::ParamDict attention;
+  attention.set_value(0, ncnn_graph::ParamValue::make_int(120));
+  attention.set_value(1, ncnn_graph::ParamValue::make_int(8));
+  attention.set_value(2, ncnn_graph::ParamValue::make_int(14400));
+  attention.set_value(3, ncnn_graph::ParamValue::make_int(120));
+  attention.set_value(4, ncnn_graph::ParamValue::make_int(120));
+  auto decoded_attention =
+    ncnn_graph::decode_multi_head_attention_params(attention);
+  ASSERT_TRUE(decoded_attention) << decoded_attention.error();
+  EXPECT_EQ(decoded_attention->embed_dim, 120);
+  EXPECT_EQ(decoded_attention->num_heads, 8);
+  EXPECT_EQ(decoded_attention->query_dim, 120);
+  EXPECT_EQ(decoded_attention->key_dim, 120);
+  EXPECT_EQ(decoded_attention->value_dim, 120);
+  EXPECT_FLOAT_EQ(decoded_attention->scale, 1.0F / std::sqrt(15.0F));
+  EXPECT_FALSE(decoded_attention->has_attention_mask);
+  EXPECT_FALSE(decoded_attention->kv_cache);
+  EXPECT_EQ(decoded_attention->int8_scale_term, 0);
+
+  attention.set_value(1, ncnn_graph::ParamValue::make_int(7));
+  EXPECT_FALSE(ncnn_graph::decode_multi_head_attention_params(attention));
+  layer_norm.set_value(2, ncnn_graph::ParamValue::make_int(2));
+  EXPECT_FALSE(ncnn_graph::decode_layer_norm_params(layer_norm));
+}
+
 TEST(ParserTest, DecodesAsymmetricDepthwiseSpatialParameters) {
   ncnn_graph::ParamDict params;
   params.set_value(0, ncnn_graph::ParamValue::make_int(4));

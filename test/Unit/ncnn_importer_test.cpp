@@ -1087,6 +1087,115 @@ TEST_F(NcnnImporterTest, ImportsQuantizedGemmWithSignedConstantB) {
   EXPECT_TRUE(shape_is(output_type(imported->get()), {2, 3}));
 }
 
+TEST_F(NcnnImporterTest, ImportsPPOCRV5AttentionOperators) {
+  ncnn_graph::Graph graph;
+  auto input = make_layer("Input", "input", {}, {"data"});
+  ncnn_graph::ParamDict inputParams;
+  inputParams.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  inputParams.set_value(1, ncnn_graph::ParamValue::make_int(3));
+  inputParams.set_value(2, ncnn_graph::ParamValue::make_int(1));
+  input.set_params(std::move(inputParams));
+  graph.add_layer(std::move(input));
+
+  auto squeeze = make_layer("Squeeze", "squeeze", {"data"}, {"sequence"});
+  ncnn_graph::ParamDict squeezeParams;
+  squeezeParams.set_value(3, ncnn_graph::ParamValue::make_int_array({0}));
+  squeeze.set_params(std::move(squeezeParams));
+  graph.add_layer(std::move(squeeze));
+
+  auto attention =
+    make_layer("MultiHeadAttention", "attention", {"sequence"}, {"attended"});
+  ncnn_graph::ParamDict attentionParams;
+  attentionParams.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  attentionParams.set_value(1, ncnn_graph::ParamValue::make_int(2));
+  attentionParams.set_value(2, ncnn_graph::ParamValue::make_int(16));
+  attentionParams.set_value(3, ncnn_graph::ParamValue::make_int(4));
+  attentionParams.set_value(4, ncnn_graph::ParamValue::make_int(4));
+  attentionParams.set_value(6, ncnn_graph::ParamValue::make_float(0.5F));
+  attention.set_params(std::move(attentionParams));
+  for (int projection = 0; projection < 4; ++projection) {
+    attention.add_weight(make_float_tensor({4, 4}, 0.0F));
+    attention.add_weight(make_float_tensor({4}, 0.0F));
+  }
+  graph.add_layer(std::move(attention));
+
+  auto layerNorm =
+    make_layer("LayerNorm", "layer_norm", {"attended"}, {"normalized"});
+  ncnn_graph::ParamDict normParams;
+  normParams.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  normParams.set_value(1, ncnn_graph::ParamValue::make_float(1.0e-5F));
+  layerNorm.set_params(std::move(normParams));
+  layerNorm.add_weight(make_float_tensor({4}, 1.0F));
+  layerNorm.add_weight(make_float_tensor({4}, 0.0F));
+  graph.add_layer(std::move(layerNorm));
+  graph.add_layer(make_layer("Swish", "swish", {"normalized"}, {"out"}));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"out"});
+  graph.set_weights_loaded(true);
+
+  auto imported = import(graph);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::MultiHeadAttentionOp>(imported->get()), 1);
+  EXPECT_EQ(count_ops<mlir::ncnn::LayerNormOp>(imported->get()), 1);
+  EXPECT_EQ(count_ops<mlir::ncnn::SwishOp>(imported->get()), 1);
+  EXPECT_TRUE(shape_is(output_type(imported->get()), {3, 4}));
+}
+
+TEST_F(NcnnImporterTest, ImportsRankTwoLayerNormWithoutAffineSize) {
+  ncnn_graph::Graph graph;
+  auto input = make_layer("Input", "input", {}, {"data"});
+  ncnn_graph::ParamDict inputParams;
+  inputParams.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  inputParams.set_value(1, ncnn_graph::ParamValue::make_int(3));
+  inputParams.set_value(2, ncnn_graph::ParamValue::make_int(1));
+  input.set_params(std::move(inputParams));
+  graph.add_layer(std::move(input));
+
+  auto squeeze = make_layer("Squeeze", "squeeze", {"data"}, {"matrix"});
+  ncnn_graph::ParamDict squeezeParams;
+  squeezeParams.set_value(3, ncnn_graph::ParamValue::make_int_array({0}));
+  squeeze.set_params(std::move(squeezeParams));
+  graph.add_layer(std::move(squeeze));
+
+  auto layerNorm = make_layer("LayerNorm", "layer_norm", {"matrix"}, {"out"});
+  ncnn_graph::ParamDict normParams;
+  normParams.set_value(0, ncnn_graph::ParamValue::make_int(0));
+  normParams.set_value(2, ncnn_graph::ParamValue::make_int(0));
+  layerNorm.set_params(std::move(normParams));
+  graph.add_layer(std::move(layerNorm));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"out"});
+  graph.set_weights_loaded(true);
+
+  auto imported = import(graph);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::LayerNormOp>(imported->get()), 1);
+  EXPECT_TRUE(shape_is(output_type(imported->get()), {3, 4}));
+}
+
+TEST_F(NcnnImporterTest, ImportsRankThreePermuteOrderFour) {
+  ncnn_graph::Graph graph;
+  auto input = make_layer("Input", "input", {}, {"data"});
+  ncnn_graph::ParamDict inputParams;
+  inputParams.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  inputParams.set_value(1, ncnn_graph::ParamValue::make_int(3));
+  inputParams.set_value(2, ncnn_graph::ParamValue::make_int(2));
+  input.set_params(std::move(inputParams));
+  graph.add_layer(std::move(input));
+  auto permute = make_layer("Permute", "permute", {"data"}, {"out"});
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  permute.set_params(std::move(params));
+  graph.add_layer(std::move(permute));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"out"});
+  graph.set_weights_loaded(true);
+
+  auto imported = import(graph);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_TRUE(shape_is(output_type(imported->get()), {4, 2, 3}));
+}
+
 TEST_F(NcnnImporterTest, RejectsDeconvolutionWeightCountMismatch) {
   auto imported = import(make_deconvolution_graph(68));
   ASSERT_FALSE(imported.has_value());

@@ -344,13 +344,19 @@ ImportResult import_permute(ImportContext& importer,
     return std::unexpected(input.error());
   }
   auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
-  if (!inputType || inputType.getRank() != 2 || (*order != 0 && *order != 1)) {
-    return std::unexpected(
-      make_error(context, "only rank-2 Permute is supported"));
+  if (!inputType ||
+      !((inputType.getRank() == 2 && (*order == 0 || *order == 1)) ||
+        (inputType.getRank() == 3 && *order == 4))) {
+    return std::unexpected(make_error(
+      context, "Permute supports rank-2 order 0/1 and rank-3 order 4 only"));
   }
   const std::array<int64_t, 2> identity{0, 1};
   const std::array<int64_t, 2> transpose{1, 0};
-  auto permutation = *order == 0 ? std::span(identity) : std::span(transpose);
+  const std::array<int64_t, 3> hcw{2, 0, 1};
+  std::span<const int64_t> permutation =
+    inputType.getRank() == 3 ? std::span<const int64_t>(hcw)
+    : *order == 0            ? std::span<const int64_t>(identity)
+                             : std::span<const int64_t>(transpose);
   auto& builder = importer.builder();
   mlir::ncnn::PermuteOp::Properties properties;
   properties.permutation = builder.getDenseI64ArrayAttr(permutation);

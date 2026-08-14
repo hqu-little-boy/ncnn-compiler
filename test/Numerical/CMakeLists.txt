@@ -32,6 +32,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     set(clang_args)
     set(linker_args)
     set(filtered_constraints)
+    set(emit_ir OFF)
+    set(emit_backend OFF)
     foreach(argument IN LISTS input_constraints)
         if(argument MATCHES "^PRECISION=(.+)$")
             list(APPEND precision_args --precision ${CMAKE_MATCH_1})
@@ -47,9 +49,11 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             list(APPEND linker_args --linker-arg ${CMAKE_MATCH_1})
         elseif(argument STREQUAL "EMIT_IR")
             list(APPEND precision_args --emit ncnn --emit tosa --emit linalg)
+            set(emit_ir ON)
         elseif(argument STREQUAL "EMIT_BACKEND")
             list(APPEND precision_args --emit linalg --emit llvm-ir
                                             --emit object --emit assembly)
+            set(emit_backend ON)
         else()
             list(APPEND filtered_constraints ${argument})
         endif()
@@ -57,6 +61,22 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     set(input_constraints ${filtered_constraints})
     set(output_dir ${CMAKE_CURRENT_BINARY_DIR}/generated/${name})
     set(library ${output_dir}/lib${name}.so)
+    set(generated_outputs
+        ${library} ${output_dir}/${name}.h ${output_dir}/${name}.json)
+    if(emit_ir)
+        list(APPEND generated_outputs
+             ${output_dir}/model.ncnn.mlir
+             ${output_dir}/model.tosa.mlir
+             ${output_dir}/model.linalg.mlir)
+    endif()
+    if(emit_backend)
+        list(APPEND generated_outputs
+             ${output_dir}/model.linalg.mlir
+             ${output_dir}/model.ll
+             ${output_dir}/model.o
+             ${output_dir}/model.s)
+    endif()
+    list(REMOVE_DUPLICATES generated_outputs)
     set(input_shape_args)
     if(NOT "${input_shape}" STREQUAL "")
         list(APPEND input_shape_args --input-shape ${input_shape})
@@ -75,7 +95,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
              --linker-arg=-lubsan)
     endif()
     add_custom_command(
-        OUTPUT ${library} ${output_dir}/${name}.h ${output_dir}/${name}.json
+        OUTPUT ${generated_outputs}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${output_dir}
         COMMAND $<TARGET_FILE:ncnn-compile>
             --driver $<TARGET_FILE:ncnn-mlir-driver>
@@ -103,7 +123,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             ${param_file}
             ${bin_file}
         VERBATIM)
-    add_custom_target(compile_${name} DEPENDS ${library})
+    add_custom_target(compile_${name} DEPENDS ${generated_outputs})
     set(${name}_LIBRARY ${library} PARENT_SCOPE)
 endfunction()
 
@@ -745,6 +765,12 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin
     3x48x320)
 ncnn_add_compiled_fixture(
+    pp_ocrv5_mobile_rec
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.bin
+    3x48x320
+    EMIT_IR)
+ncnn_add_compiled_fixture(
     pp_ocrv6_tiny_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin
@@ -1033,7 +1059,8 @@ add_dependencies(compile_chineseocr_lite_anglenet
                   compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(compile_pp_ocrv6_tiny_rec
                  compile_chineseocr_lite_anglenet)
-add_dependencies(compile_pp_ocrv6_tiny_det compile_pp_ocrv6_tiny_rec)
+add_dependencies(compile_pp_ocrv5_mobile_rec compile_pp_ocrv6_tiny_rec)
+add_dependencies(compile_pp_ocrv6_tiny_det compile_pp_ocrv5_mobile_rec)
 add_dependencies(compile_pp_ocrv6_small_det compile_pp_ocrv6_tiny_det)
 add_dependencies(compile_pp_ocrv6_medium_det compile_pp_ocrv6_small_det)
 add_dependencies(compile_pp_ocrv5_mobile_det compile_pp_ocrv6_medium_det)
@@ -1251,6 +1278,12 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_TINY_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param"
     PP_OCRV6_TINY_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin"
     PP_OCRV6_TINY_REC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_LIBRARY}"
+    PP_OCRV5_MOBILE_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.param"
+    PP_OCRV5_MOBILE_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.bin"
+    PP_OCRV5_MOBILE_REC_LIBRARY_PATH="${pp_ocrv5_mobile_rec_LIBRARY}"
+    PP_OCRV5_MOBILE_REC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_mobile_rec/pp_ocrv5_mobile_rec.json"
+    PP_OCRV5_MOBILE_REC_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_mobile_rec/model.ncnn.mlir"
+    PP_OCRV5_MOBILE_REC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_mobile_rec/model.linalg.mlir"
     PP_OCRV6_TINY_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param"
     PP_OCRV6_TINY_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin"
     PP_OCRV6_TINY_DET_LIBRARY_PATH="${pp_ocrv6_tiny_det_LIBRARY}"
@@ -1297,6 +1330,7 @@ add_dependencies(numerical_tests
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(numerical_tests compile_chineseocr_lite_anglenet)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_rec)
+add_dependencies(numerical_tests compile_pp_ocrv5_mobile_rec)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_small_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)

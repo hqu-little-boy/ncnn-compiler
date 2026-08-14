@@ -2737,6 +2737,230 @@ class ConvertPermute final : public OpConversionPattern<PermuteOp> {
   }
 };
 
+class ConvertSwish final : public OpConversionPattern<SwishOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    SwishOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto type = cast<RankedTensorType>(adaptor.getInput().getType());
+    Value sigmoid = rewriter.create<tosa::SigmoidOp>(
+      operation.getLoc(), type, adaptor.getInput());
+    Value shift = createI8Zero(rewriter, operation.getLoc());
+    rewriter.replaceOp(
+      operation,
+      rewriter.create<tosa::MulOp>(
+        operation.getLoc(), type, adaptor.getInput(), sigmoid, shift));
+    return success();
+  }
+};
+
+class ConvertLayerNorm final : public OpConversionPattern<LayerNormOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    LayerNormOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto sourceType = cast<RankedTensorType>(operation.getInput().getType());
+    Value input = restoreNCNNLayout(
+      rewriter, operation.getLoc(), adaptor.getInput(), sourceType);
+    const int64_t axis = sourceType.getRank() - 1;
+    SmallVector<int64_t> reducedShape(sourceType.getShape());
+    reducedShape[axis] = 1;
+    auto reducedType =
+      RankedTensorType::get(reducedShape, sourceType.getElementType());
+    Value sum = rewriter.create<tosa::ReduceSumOp>(
+      operation.getLoc(), reducedType, input, axis);
+    Value reciprocalCount = createSplat(rewriter,
+                                        operation.getLoc(),
+                                        reducedType,
+                                        1.0 / sourceType.getShape().back());
+    Value shift = createI8Zero(rewriter, operation.getLoc());
+    Value mean = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), reducedType, sum, reciprocalCount, shift);
+    Value centered =
+      rewriter.create<tosa::SubOp>(operation.getLoc(), sourceType, input, mean);
+    Value squared = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), sourceType, centered, centered, shift);
+    Value varianceSum = rewriter.create<tosa::ReduceSumOp>(
+      operation.getLoc(), reducedType, squared, axis);
+    Value variance = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), reducedType, varianceSum, reciprocalCount, shift);
+    Value epsilon = createSplat(rewriter,
+                                operation.getLoc(),
+                                reducedType,
+                                operation.getEpsilon().convertToDouble());
+    Value varianceWithEpsilon = rewriter.create<tosa::AddOp>(
+      operation.getLoc(), reducedType, variance, epsilon);
+    Value exponent =
+      createSplat(rewriter, operation.getLoc(), reducedType, -0.5);
+    Value inverseStd = rewriter.create<tosa::PowOp>(
+      operation.getLoc(), reducedType, varianceWithEpsilon, exponent);
+    Value result = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), sourceType, centered, inverseStd, shift);
+    if (operation.getAffine()) {
+      SmallVector<int64_t> parameterShape(sourceType.getRank(), 1);
+      parameterShape.back() = sourceType.getShape().back();
+      auto parameterType =
+        RankedTensorType::get(parameterShape, sourceType.getElementType());
+      Value gamma = reshapeValue(rewriter,
+                                 operation.getLoc(),
+                                 adaptor.getAffineParameters()[0],
+                                 parameterType);
+      Value beta = reshapeValue(rewriter,
+                                operation.getLoc(),
+                                adaptor.getAffineParameters()[1],
+                                parameterType);
+      result = rewriter.create<tosa::MulOp>(
+        operation.getLoc(), sourceType, result, gamma, shift);
+      result = rewriter.create<tosa::AddOp>(
+        operation.getLoc(), sourceType, result, beta);
+    }
+    rewriter.replaceOp(
+      operation,
+      convertNCNNLayout(rewriter, operation.getLoc(), result, sourceType));
+    return success();
+  }
+};
+
+class ConvertMultiHeadAttention final
+  : public OpConversionPattern<MultiHeadAttentionOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    MultiHeadAttentionOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    Location location = operation.getLoc();
+    auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
+    const int64_t sequence = inputType.getShape()[0];
+    const int64_t qdim = operation.getQdim();
+    const int64_t embed = operation.getEmbedDim();
+    const int64_t heads = operation.getNumHeads();
+    const int64_t headDim = embed / heads;
+    Value matrixInput = reshapeValue(
+      rewriter,
+      location,
+      adaptor.getInput(),
+      RankedTensorType::get({1, sequence, qdim}, rewriter.getF32Type()));
+    auto project = [&](Value weight, Value bias) {
+      Value transposed = rewriter.create<tosa::TransposeOp>(
+        location,
+        RankedTensorType::get({qdim, embed}, rewriter.getF32Type()),
+        weight,
+        ArrayRef<int32_t>{1, 0});
+      Value matrixWeight = reshapeValue(
+        rewriter,
+        location,
+        transposed,
+        RankedTensorType::get({1, qdim, embed}, rewriter.getF32Type()));
+      auto type =
+        RankedTensorType::get({1, sequence, embed}, rewriter.getF32Type());
+      Value projected = rewriter.create<tosa::MatMulOp>(
+        location, type, matrixInput, matrixWeight);
+      Value matrixBias = reshapeValue(
+        rewriter,
+        location,
+        bias,
+        RankedTensorType::get({1, 1, embed}, rewriter.getF32Type()));
+      return static_cast<Value>(
+        rewriter.create<tosa::AddOp>(location, type, projected, matrixBias));
+    };
+    Value query = project(adaptor.getQWeight(), adaptor.getQBias());
+    Value key = project(adaptor.getKWeight(), adaptor.getKBias());
+    Value value = project(adaptor.getVWeight(), adaptor.getVBias());
+    auto projectedType =
+      RankedTensorType::get({1, sequence, embed}, rewriter.getF32Type());
+    Value scale = createSplat(rewriter,
+                              location,
+                              getBroadcastScalarType(projectedType),
+                              operation.getScale().convertToDouble());
+    Value shift = createI8Zero(rewriter, location);
+    query = rewriter.create<tosa::MulOp>(
+      location, projectedType, query, scale, shift);
+    auto splitHeads = [&](Value projected) {
+      Value split =
+        reshapeValue(rewriter,
+                     location,
+                     projected,
+                     RankedTensorType::get({sequence, heads, headDim},
+                                           rewriter.getF32Type()));
+      return static_cast<Value>(rewriter.create<tosa::TransposeOp>(
+        location,
+        RankedTensorType::get({heads, sequence, headDim},
+                              rewriter.getF32Type()),
+        split,
+        ArrayRef<int32_t>{1, 0, 2}));
+    };
+    Value queryHeads = splitHeads(query);
+    Value keyHeads = splitHeads(key);
+    Value valueHeads = splitHeads(value);
+    Value transposedKey = rewriter.create<tosa::TransposeOp>(
+      location,
+      RankedTensorType::get({heads, headDim, sequence}, rewriter.getF32Type()),
+      keyHeads,
+      ArrayRef<int32_t>{0, 2, 1});
+    auto scoresType =
+      RankedTensorType::get({heads, sequence, sequence}, rewriter.getF32Type());
+    Value scores = rewriter.create<tosa::MatMulOp>(
+      location, scoresType, queryHeads, transposedKey);
+    auto reducedType =
+      RankedTensorType::get({heads, sequence, 1}, rewriter.getF32Type());
+    Value maximum =
+      rewriter.create<tosa::ReduceMaxOp>(location, reducedType, scores, 2);
+    Value shifted =
+      rewriter.create<tosa::SubOp>(location, scoresType, scores, maximum);
+    Value exponent =
+      rewriter.create<tosa::ExpOp>(location, scoresType, shifted);
+    Value sum =
+      rewriter.create<tosa::ReduceSumOp>(location, reducedType, exponent, 2);
+    Value reciprocal =
+      rewriter.create<tosa::ReciprocalOp>(location, reducedType, sum);
+    Value probabilities = rewriter.create<tosa::MulOp>(
+      location, scoresType, exponent, reciprocal, shift);
+    auto headsType =
+      RankedTensorType::get({heads, sequence, headDim}, rewriter.getF32Type());
+    Value context = rewriter.create<tosa::MatMulOp>(
+      location, headsType, probabilities, valueHeads);
+    Value sequenceMajor = rewriter.create<tosa::TransposeOp>(
+      location,
+      RankedTensorType::get({sequence, heads, headDim}, rewriter.getF32Type()),
+      context,
+      ArrayRef<int32_t>{1, 0, 2});
+    Value merged =
+      reshapeValue(rewriter, location, sequenceMajor, projectedType);
+    Value outWeight = rewriter.create<tosa::TransposeOp>(
+      location,
+      RankedTensorType::get({embed, qdim}, rewriter.getF32Type()),
+      adaptor.getOutWeight(),
+      ArrayRef<int32_t>{1, 0});
+    Value matrixOutWeight = reshapeValue(
+      rewriter,
+      location,
+      outWeight,
+      RankedTensorType::get({1, embed, qdim}, rewriter.getF32Type()));
+    auto matrixOutputType =
+      RankedTensorType::get({1, sequence, qdim}, rewriter.getF32Type());
+    Value result = rewriter.create<tosa::MatMulOp>(
+      location, matrixOutputType, merged, matrixOutWeight);
+    Value outBias =
+      reshapeValue(rewriter,
+                   location,
+                   adaptor.getOutBias(),
+                   RankedTensorType::get({1, 1, qdim}, rewriter.getF32Type()));
+    result =
+      rewriter.create<tosa::AddOp>(location, matrixOutputType, result, outBias);
+    rewriter.replaceOp(operation,
+                       reshapeValue(rewriter, location, result, inputType));
+    return success();
+  }
+};
+
 class ConvertGELU final : public OpConversionPattern<GELUOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
@@ -3759,6 +3983,9 @@ class ConvertNCNNToTosaPass final
                  ConvertShuffleChannel,
                  ConvertSlice,
                  ConvertReduction,
+                 ConvertSwish,
+                 ConvertLayerNorm,
+                 ConvertMultiHeadAttention,
                  ConvertGELU,
                  ConvertBatchNorm,
                  ConvertPermute,
@@ -3811,6 +4038,9 @@ class ConvertNCNNToTosaPass final
                         ShuffleChannelOp,
                         SliceOp,
                         ReductionOp,
+                        SwishOp,
+                        LayerNormOp,
+                        MultiHeadAttentionOp,
                         GELUOp,
                         BatchNormOp,
                         PermuteOp,

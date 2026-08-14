@@ -528,6 +528,92 @@ std::expected<BatchNormParams, std::string> decode_batch_norm_params(
   return BatchNormParams{.channels = *channels, .epsilon = *epsilon};
 }
 
+std::expected<LayerNormParams, std::string> decode_layer_norm_params(
+  const ParamDict& params) {
+  auto affine_size = decode_int_param(params, 0, 0, "affine_size");
+  auto epsilon = decode_float_param(params, 1, 0.001F, "eps");
+  auto affine = decode_int_param(params, 2, 1, "affine");
+  if (!affine_size || !epsilon || !affine) {
+    return std::unexpected(!affine_size ? affine_size.error()
+                           : !epsilon   ? epsilon.error()
+                                        : affine.error());
+  }
+  if (*affine != 0 && *affine != 1) {
+    return std::unexpected("LayerNorm affine must be 0 or 1");
+  }
+  if (*epsilon < 0.0F) {
+    return std::unexpected("LayerNorm eps must be non-negative");
+  }
+  if (*affine == 1 && *affine_size <= 0) {
+    return std::unexpected(
+      "LayerNorm affine_size must be positive when affine is enabled");
+  }
+  if (*affine == 0 && *affine_size < 0) {
+    return std::unexpected("LayerNorm affine_size must be non-negative");
+  }
+  return LayerNormParams{
+    .affine_size = *affine_size, .epsilon = *epsilon, .affine = *affine == 1};
+}
+
+std::expected<MultiHeadAttentionParams, std::string>
+decode_multi_head_attention_params(const ParamDict& params) {
+  auto embed_dim = decode_int_param(params, 0, 0, "embed_dim");
+  auto num_heads = decode_int_param(params, 1, 1, "num_heads");
+  auto weight_count = decode_int_param(params, 2, 0, "weight_data_size");
+  if (!embed_dim || !num_heads || !weight_count) {
+    return std::unexpected(!embed_dim   ? embed_dim.error()
+                           : !num_heads ? num_heads.error()
+                                        : weight_count.error());
+  }
+  if (*embed_dim <= 0 || *num_heads <= 0 || *embed_dim % *num_heads != 0) {
+    return std::unexpected(
+      "MultiHeadAttention embed_dim and num_heads must be positive and "
+      "embed_dim must be divisible by num_heads");
+  }
+  if (*weight_count <= 0 || *weight_count % *embed_dim != 0) {
+    return std::unexpected(
+      "MultiHeadAttention weight_data_size must be positive and divisible by "
+      "embed_dim");
+  }
+
+  auto key_dim = decode_int_param(params, 3, *embed_dim, "kdim");
+  auto value_dim = decode_int_param(params, 4, *embed_dim, "vdim");
+  auto attention_mask = decode_int_param(params, 5, 0, "attn_mask");
+  const float default_scale =
+    1.0F / std::sqrt(static_cast<float>(*embed_dim / *num_heads));
+  auto scale = decode_float_param(params, 6, default_scale, "scale");
+  auto kv_cache = decode_int_param(params, 7, 0, "kv_cache");
+  auto int8_scale_term = decode_int_param(params, 18, 0, "int8_scale_term");
+  if (!key_dim || !value_dim || !attention_mask || !scale || !kv_cache ||
+      !int8_scale_term) {
+    return std::unexpected(!key_dim          ? key_dim.error()
+                           : !value_dim      ? value_dim.error()
+                           : !attention_mask ? attention_mask.error()
+                           : !scale          ? scale.error()
+                           : !kv_cache       ? kv_cache.error()
+                                             : int8_scale_term.error());
+  }
+  if (*key_dim <= 0 || *value_dim <= 0) {
+    return std::unexpected("MultiHeadAttention kdim and vdim must be positive");
+  }
+  if ((*attention_mask != 0 && *attention_mask != 1) ||
+      (*kv_cache != 0 && *kv_cache != 1)) {
+    return std::unexpected(
+      "MultiHeadAttention attn_mask and kv_cache must be 0 or 1");
+  }
+
+  return MultiHeadAttentionParams{.embed_dim = *embed_dim,
+                                  .num_heads = *num_heads,
+                                  .weight_count = *weight_count,
+                                  .query_dim = *weight_count / *embed_dim,
+                                  .key_dim = *key_dim,
+                                  .value_dim = *value_dim,
+                                  .has_attention_mask = *attention_mask == 1,
+                                  .scale = *scale,
+                                  .kv_cache = *kv_cache == 1,
+                                  .int8_scale_term = *int8_scale_term};
+}
+
 std::expected<GemmParams, std::string> decode_gemm_params(
   const ParamDict& params) {
   GemmParams result;
@@ -1110,6 +1196,7 @@ std::expected<Tensor, std::string> load_weight(
   std::size_t element_width = 0;
   bool needs_alignment = false;
   if (type == 0) {
+    const std::size_t flag_offset = cursor.get_position();
     auto flag = cursor.read_u32_le();
     if (!flag) {
       return std::unexpected(std::format("weight flag: {}", flag.error()));
@@ -1127,7 +1214,10 @@ std::expected<Tensor, std::string> load_weight(
       element_width = sizeof(float);
     } else {
       return std::unexpected(std::format(
-        "quantized lookup-table weight flag 0x{:08x} is unsupported", *flag));
+        "quantized lookup-table weight flag 0x{:08x} at offset {} is "
+        "unsupported",
+        *flag,
+        flag_offset));
     }
   } else if (type == 1) {
     dtype = DataType::Float32;
@@ -1477,6 +1567,109 @@ std::expected<void, std::string> load_batch_norm_weights(Layer& layer,
   return {};
 }
 
+std::expected<void, std::string> load_layer_norm_weights(Layer& layer,
+                                                         BinCursor& cursor) {
+  auto params = decode_layer_norm_params(layer.get_params());
+  if (!params) {
+    return std::unexpected(params.error());
+  }
+  if (!params->affine) {
+    return {};
+  }
+  for (std::string_view name : {"gamma", "beta"}) {
+    auto weight =
+      load_weight(cursor, params->affine_size, 1, {params->affine_size});
+    if (!weight) {
+      return std::unexpected(
+        std::format("LayerNorm {}: {}", name, weight.error()));
+    }
+    layer.add_weight(std::move(*weight));
+  }
+  return {};
+}
+
+std::expected<void, std::string> load_multi_head_attention_weights(
+  Layer& layer, BinCursor& cursor) {
+  auto params = decode_multi_head_attention_params(layer.get_params());
+  if (!params) {
+    return std::unexpected(params.error());
+  }
+  if (params->int8_scale_term != 0) {
+    return std::unexpected(
+      "quantized MultiHeadAttention weights are unsupported");
+  }
+
+  auto embed_dim = positive_size(params->embed_dim, "MHA embed_dim");
+  auto query_dim = positive_size(params->query_dim, "MHA query_dim");
+  auto key_dim = positive_size(params->key_dim, "MHA key_dim");
+  auto value_dim = positive_size(params->value_dim, "MHA value_dim");
+  if (!embed_dim || !query_dim || !key_dim || !value_dim) {
+    return std::unexpected(!embed_dim   ? embed_dim.error()
+                           : !query_dim ? query_dim.error()
+                           : !key_dim   ? key_dim.error()
+                                        : value_dim.error());
+  }
+  auto key_count =
+    checked_multiply(*embed_dim, *key_dim, "MHA key weight element count");
+  auto value_count =
+    checked_multiply(*embed_dim, *value_dim, "MHA value weight element count");
+  auto out_count =
+    checked_multiply(*query_dim, *embed_dim, "MHA out weight element count");
+  if (!key_count || !value_count || !out_count) {
+    return std::unexpected(!key_count     ? key_count.error()
+                           : !value_count ? value_count.error()
+                                          : out_count.error());
+  }
+  constexpr auto kInt64Max =
+    static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max());
+  if (*key_count > kInt64Max || *value_count > kInt64Max ||
+      *out_count > kInt64Max) {
+    return std::unexpected("MHA weight element count does not fit int64_t");
+  }
+
+  struct ProjectionWeights {
+    std::string_view name;
+    std::int64_t weight_count;
+    std::vector<std::int64_t> weight_shape;
+    std::int64_t bias_count;
+  };
+  const std::array projections{
+    ProjectionWeights{.name = "q",
+                      .weight_count = params->weight_count,
+                      .weight_shape = {params->embed_dim, params->query_dim},
+                      .bias_count = params->embed_dim},
+    ProjectionWeights{.name = "k",
+                      .weight_count = static_cast<std::int64_t>(*key_count),
+                      .weight_shape = {params->embed_dim, params->key_dim},
+                      .bias_count = params->embed_dim},
+    ProjectionWeights{.name = "v",
+                      .weight_count = static_cast<std::int64_t>(*value_count),
+                      .weight_shape = {params->embed_dim, params->value_dim},
+                      .bias_count = params->embed_dim},
+    ProjectionWeights{.name = "out",
+                      .weight_count = static_cast<std::int64_t>(*out_count),
+                      .weight_shape = {params->query_dim, params->embed_dim},
+                      .bias_count = params->query_dim},
+  };
+  for (const auto& projection : projections) {
+    auto weight =
+      load_weight(cursor, projection.weight_count, 0, projection.weight_shape);
+    if (!weight) {
+      return std::unexpected(std::format(
+        "MultiHeadAttention {} weight: {}", projection.name, weight.error()));
+    }
+    layer.add_weight(std::move(*weight));
+    auto bias =
+      load_weight(cursor, projection.bias_count, 1, {projection.bias_count});
+    if (!bias) {
+      return std::unexpected(std::format(
+        "MultiHeadAttention {} bias: {}", projection.name, bias.error()));
+    }
+    layer.add_weight(std::move(*bias));
+  }
+  return {};
+}
+
 std::expected<void, std::string> load_gemm_weights(Layer& layer,
                                                    BinCursor& cursor) {
   auto params = decode_gemm_params(layer.get_params());
@@ -1622,15 +1815,25 @@ std::span<const WeightLoaderEntry> weight_loaders() noexcept {
   return kWeightLoaders;
 }
 
+std::span<const WeightLoaderEntry> graph_only_weight_loaders() noexcept {
+  static constexpr std::array kWeightLoaders{
+    WeightLoaderEntry{.type = "LayerNorm", .loader = load_layer_norm_weights},
+    WeightLoaderEntry{.type = "MultiHeadAttention",
+                      .loader = load_multi_head_attention_weights},
+  };
+  return kWeightLoaders;
+}
+
 std::expected<void, std::string> load_layer_weights(Layer& layer,
                                                     BinCursor& cursor) {
-  const auto entries = weight_loaders();
-  const auto entry =
-    std::ranges::find(entries, layer.get_type(), &WeightLoaderEntry::type);
-  if (entry == entries.end()) {
-    return {};
+  for (const auto entries : {weight_loaders(), graph_only_weight_loaders()}) {
+    const auto entry =
+      std::ranges::find(entries, layer.get_type(), &WeightLoaderEntry::type);
+    if (entry != entries.end()) {
+      return entry->loader(layer, cursor);
+    }
   }
-  return entry->loader(layer, cursor);
+  return {};
 }
 
 std::vector<std::string> split_ws(std::string_view text) {
@@ -1674,13 +1877,17 @@ std::string_view get_dtype_name(DataType dtype) {
 }  // namespace
 
 bool has_weight_loader(std::string_view layer_type) noexcept {
-  const auto entries = weight_loaders();
-  return std::ranges::find(entries, layer_type, &WeightLoaderEntry::type) !=
-         entries.end();
+  for (const auto entries : {weight_loaders(), graph_only_weight_loaders()}) {
+    if (std::ranges::find(entries, layer_type, &WeightLoaderEntry::type) !=
+        entries.end()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::size_t get_weight_loader_count() noexcept {
-  return weight_loaders().size();
+  return weight_loaders().size() + graph_only_weight_loaders().size();
 }
 
 std::expected<Graph, std::string> Graph::load(std::string_view param_path,

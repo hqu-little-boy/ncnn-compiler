@@ -905,6 +905,100 @@ FailureOr<RankedTensorType> computePermuteResult(
   return RankedTensorType::get(shape, input.getElementType());
 }
 
+FailureOr<RankedTensorType> computeLayerNormResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  ValueRange affineParameters,
+  int64_t affineSize,
+  bool affine,
+  double epsilon) {
+  if (!input || !input.getElementType().isF32() || input.getRank() < 1 ||
+      ShapedType::isDynamic(input.getShape().back()) ||
+      input.getShape().back() <= 0) {
+    return emitOptionalError(location,
+                             "LayerNorm requires ranked f32 input with a "
+                             "static positive last dimension");
+  }
+  if (affineSize != input.getShape().back()) {
+    return emitOptionalError(
+      location, "LayerNorm affine_size must equal the last input dimension");
+  }
+  if (!std::isfinite(epsilon) || epsilon < 0.0) {
+    return emitOptionalError(
+      location, "LayerNorm epsilon must be finite and non-negative");
+  }
+  if (affineParameters.size() != (affine ? 2U : 0U)) {
+    return emitOptionalError(
+      location, "LayerNorm affine mode requires exactly gamma and beta");
+  }
+  for (Value parameter : affineParameters) {
+    auto type = dyn_cast<RankedTensorType>(parameter.getType());
+    if (!type || !type.getElementType().isF32() || type.getRank() != 1 ||
+        type.getShape()[0] != input.getShape().back()) {
+      return emitOptionalError(
+        location, "LayerNorm gamma and beta must match the last dimension");
+    }
+  }
+  return input;
+}
+
+FailureOr<RankedTensorType> computeMultiHeadAttentionResult(
+  std::optional<Location> location, MultiHeadAttentionOp::Adaptor adaptor) {
+  auto input = dyn_cast<RankedTensorType>(adaptor.getInput().getType());
+  const int64_t embedDim = adaptor.getEmbedDim();
+  const int64_t numHeads = adaptor.getNumHeads();
+  const int64_t qdim = adaptor.getQdim();
+  const int64_t kdim = adaptor.getKdim();
+  const int64_t vdim = adaptor.getVdim();
+  if (!input || !input.getElementType().isF32() || input.getRank() != 2) {
+    return emitOptionalError(
+      location, "MultiHeadAttention input must be rank-2 f32 [sequence,qdim]");
+  }
+  if (input.isDynamicDim(0) || input.getShape()[0] <= 0) {
+    return emitOptionalError(
+      location,
+      "MultiHeadAttention requires a static positive sequence dimension");
+  }
+  if (input.isDynamicDim(1) || embedDim <= 0 || numHeads <= 0 || qdim <= 0 ||
+      kdim != qdim || vdim != qdim || embedDim % numHeads != 0 ||
+      input.getShape()[1] != qdim ||
+      !std::isfinite(adaptor.getScale().convertToDouble())) {
+    return emitOptionalError(
+      location,
+      "MultiHeadAttention dimensions must describe matching self attention and "
+      "embed_dim must divide num_heads");
+  }
+  auto weightCount = checkedMultiply(embedDim, qdim);
+  if (failed(weightCount) ||
+      static_cast<uint64_t>(*weightCount) != adaptor.getWeightDataSize()) {
+    return emitOptionalError(
+      location,
+      "MultiHeadAttention weight_data_size must equal embed_dim * qdim");
+  }
+  auto hasShape = [](Value value, ArrayRef<int64_t> shape) {
+    auto type = dyn_cast<RankedTensorType>(value.getType());
+    return type && type.getElementType().isF32() && type.hasStaticShape() &&
+           type.getShape() == shape;
+  };
+  const int64_t projectionShape[] = {embedDim, qdim};
+  const int64_t projectionBiasShape[] = {embedDim};
+  const int64_t outputShape[] = {qdim, embedDim};
+  const int64_t outputBiasShape[] = {qdim};
+  if (!hasShape(adaptor.getQWeight(), projectionShape) ||
+      !hasShape(adaptor.getQBias(), projectionBiasShape) ||
+      !hasShape(adaptor.getKWeight(), projectionShape) ||
+      !hasShape(adaptor.getKBias(), projectionBiasShape) ||
+      !hasShape(adaptor.getVWeight(), projectionShape) ||
+      !hasShape(adaptor.getVBias(), projectionBiasShape) ||
+      !hasShape(adaptor.getOutWeight(), outputShape) ||
+      !hasShape(adaptor.getOutBias(), outputBiasShape)) {
+    return emitOptionalError(
+      location,
+      "MultiHeadAttention projection weights or biases have invalid shapes");
+  }
+  return input;
+}
+
 FailureOr<RankedTensorType> computeBinaryResult(
   std::optional<Location> location,
   ValueRange inputs,
@@ -1636,6 +1730,14 @@ LogicalResult SigmoidOp::verify() {
   return success();
 }
 
+LogicalResult SwishOp::verify() {
+  auto input = dyn_cast<RankedTensorType>(getInput().getType());
+  if (!input || !input.getElementType().isF32()) {
+    return emitOpError("input must be a ranked f32 tensor");
+  }
+  return success();
+}
+
 LogicalResult ReshapeOp::inferReturnTypeComponents(
   MLIRContext*,
   std::optional<Location> location,
@@ -1767,6 +1869,40 @@ LogicalResult PermuteOp::inferReturnTypeComponents(
   SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
   auto input = dyn_cast<RankedTensorType>(adaptor.getInput().getType());
   auto result = computePermuteResult(location, input, adaptor.getPermutation());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult LayerNormOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  LayerNormOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeLayerNormResult(
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    adaptor.getAffineParameters(),
+    adaptor.getAffineSize(),
+    adaptor.getAffine(),
+    adaptor.getEpsilon().convertToDouble());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult MultiHeadAttentionOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  MultiHeadAttentionOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeMultiHeadAttentionResult(location, adaptor);
   if (failed(result)) {
     return failure();
   }

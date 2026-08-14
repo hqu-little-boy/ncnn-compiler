@@ -195,6 +195,46 @@ def NCNN_SigmoidOp : NCNN_LayerOp<"sigmoid", [SameOperandsAndResultType]> {
   let hasVerifier = 1;
 }
 
+def NCNN_SwishOp : NCNN_LayerOp<"swish", [SameOperandsAndResultType]> {
+  let summary = "Elementwise x * sigmoid(x).";
+  let arguments = (ins NCNN_RankedTensor:$input);
+  let results = (outs NCNN_RankedTensor:$output);
+  let hasVerifier = 1;
+}
+
+def NCNN_LayerNormOp
+  : NCNN_LayerOp<"layer_norm", [InferTensorTypeAdaptor]> {
+  let summary = "Layer normalization over the last source dimension.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    Variadic<NCNN_RankedTensor>:$affine_parameters,
+    I64Attr:$affine_size,
+    F32Attr:$epsilon,
+    BoolAttr:$affine);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_MultiHeadAttentionOp
+  : NCNN_LayerOp<"multi_head_attention", [InferTensorTypeAdaptor]> {
+  let summary = "Static-sequence FP32 self attention.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$q_weight,
+    NCNN_RankedTensor:$q_bias,
+    NCNN_RankedTensor:$k_weight,
+    NCNN_RankedTensor:$k_bias,
+    NCNN_RankedTensor:$v_weight,
+    NCNN_RankedTensor:$v_bias,
+    NCNN_RankedTensor:$out_weight,
+    NCNN_RankedTensor:$out_bias,
+    I64Attr:$embed_dim,
+    I64Attr:$num_heads,
+    I64Attr:$weight_data_size,
+    I64Attr:$qdim,
+    I64Attr:$kdim,
+    I64Attr:$vdim,
+    F32Attr:$scale);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
 def NCNN_DetectionOutputOp
   : NCNN_LayerOp<"detection_output", [InferTensorTypeAdaptor]> {
   let summary = "Decode SSD boxes, apply per-class NMS, and emit detections.";

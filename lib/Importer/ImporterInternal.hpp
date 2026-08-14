@@ -158,6 +158,11 @@ ImportResult import_interp(ImportContext& importer,
                            const LayerContext& context);
 ImportResult import_sigmoid(ImportContext& importer,
                             const LayerContext& context);
+ImportResult import_swish(ImportContext& importer, const LayerContext& context);
+ImportResult import_layer_norm(ImportContext& importer,
+                               const LayerContext& context);
+ImportResult import_multi_head_attention(ImportContext& importer,
+                                         const LayerContext& context);
 ImportResult import_detection_output(ImportContext& importer,
                                      const LayerContext& context);
 ImportResult import_hard_sigmoid(ImportContext& importer,

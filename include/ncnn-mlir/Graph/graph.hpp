@@ -154,6 +154,25 @@ struct BatchNormParams {
   float epsilon = 0.0F;
 };
 
+struct LayerNormParams {
+  std::int64_t affine_size = 0;
+  float epsilon = 0.001F;
+  bool affine = true;
+};
+
+struct MultiHeadAttentionParams {
+  std::int64_t embed_dim = 0;
+  std::int64_t num_heads = 1;
+  std::int64_t weight_count = 0;
+  std::int64_t query_dim = 0;
+  std::int64_t key_dim = 0;
+  std::int64_t value_dim = 0;
+  bool has_attention_mask = false;
+  float scale = 0.0F;
+  bool kv_cache = false;
+  std::int64_t int8_scale_term = 0;
+};
+
 struct GemmParams {
   float alpha = 1.0F;
   float beta = 1.0F;
@@ -208,6 +227,12 @@ decode_inner_product_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<BatchNormParams, std::string>
 decode_batch_norm_params(const ParamDict& params);
+
+[[nodiscard]] std::expected<LayerNormParams, std::string>
+decode_layer_norm_params(const ParamDict& params);
+
+[[nodiscard]] std::expected<MultiHeadAttentionParams, std::string>
+decode_multi_head_attention_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<GemmParams, std::string> decode_gemm_params(
   const ParamDict& params);
