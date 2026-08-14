@@ -1975,38 +1975,39 @@ LogicalResult SliceOp::inferReturnTypeComponents(
                            inferredReturnShapes);
 }
 
-LogicalResult SliceOp::verify() {
-  auto inputType = dyn_cast<RankedTensorType>(getInput().getType());
+FailureOr<std::optional<InputDimensionRequirement>>
+inferInputDimensionRequirement(SliceOp operation) {
+  auto inputType = dyn_cast<RankedTensorType>(operation.getInput().getType());
   if (!inputType) {
-    return success();
+    return std::optional<InputDimensionRequirement>{};
   }
-  int64_t axis = getAxis();
+  int64_t axis = operation.getAxis();
   if (axis < 0) {
     axis += inputType.getRank();
   }
   if (axis < 0 || axis >= inputType.getRank() ||
       !inputType.isDynamicDim(axis)) {
-    return success();
+    return std::optional<InputDimensionRequirement>{};
   }
 
-  if (getSlices().empty() || getSlices().back() != -233 ||
-      llvm::any_of(getSlices(),
+  if (operation.getSlices().empty() || operation.getSlices().back() != -233 ||
+      llvm::any_of(operation.getSlices(),
                    [](int64_t size) { return size <= 0 && size != -233; })) {
-    return success();
+    return std::optional<InputDimensionRequirement>{};
   }
 
   int64_t requiredMinimum = 0;
-  for (int64_t size : getSlices()) {
+  for (int64_t size : operation.getSlices()) {
     const int64_t contribution = size == -233 ? 1 : size;
     if (contribution <= 0 ||
         llvm::AddOverflow(requiredMinimum, contribution, requiredMinimum)) {
-      return emitOpError("has invalid dynamic slice minimum extent");
+      operation.emitOpError("has invalid dynamic slice minimum extent");
+      return failure();
     }
   }
 
   std::optional<unsigned> inputIndex;
-  Operation* constraintOwner = nullptr;
-  Value source = getInput();
+  Value source = operation.getInput();
   int64_t sourceAxis = axis;
   while (true) {
     if (auto binary = source.getDefiningOp<BinaryOp>()) {
@@ -2058,7 +2059,7 @@ LogicalResult SliceOp::verify() {
     break;
   }
   if (auto input = source.getDefiningOp<InputOp>()) {
-    if (auto model = getOperation()->getParentOfType<ModelOp>()) {
+    if (auto model = operation->getParentOfType<ModelOp>()) {
       unsigned index = 0;
       for (InputOp candidate : model.getOps<InputOp>()) {
         if (candidate == input) {
@@ -2067,31 +2068,51 @@ LogicalResult SliceOp::verify() {
         }
         ++index;
       }
-      constraintOwner = model;
     }
   } else if (auto argument = dyn_cast<BlockArgument>(source)) {
-    if (auto function = getOperation()->getParentOfType<func::FuncOp>()) {
+    if (operation->getParentOfType<func::FuncOp>()) {
       inputIndex = argument.getArgNumber();
-      constraintOwner = function;
     }
+  }
+  if (!inputIndex || sourceAxis < 0 || !std::in_range<uint32_t>(sourceAxis)) {
+    operation.emitOpError("cannot trace dynamic slice axis to a model input");
+    return failure();
+  }
+  return std::optional<InputDimensionRequirement>(
+    InputDimensionRequirement{.input = *inputIndex,
+                              .dimension = static_cast<uint32_t>(sourceAxis),
+                              .minimum = requiredMinimum});
+}
+
+LogicalResult SliceOp::verify() {
+  auto requirement = inferInputDimensionRequirement(*this);
+  if (failed(requirement)) {
+    return failure();
+  }
+  if (!*requirement) {
+    return success();
+  }
+  Operation* constraintOwner = getOperation()->getParentOfType<ModelOp>();
+  if (constraintOwner == nullptr) {
+    constraintOwner = getOperation()->getParentOfType<func::FuncOp>();
   }
   auto constraints =
     constraintOwner
       ? constraintOwner->getAttrOfType<ArrayAttr>("ncnn.shape_constraints")
       : nullptr;
-  if (inputIndex && constraints) {
+  if (constraints) {
     for (Attribute attribute : constraints) {
       auto constraint = dyn_cast<DimConstraintAttr>(attribute);
-      if (constraint && constraint.getInput() == *inputIndex &&
-          constraint.getDim() == static_cast<uint32_t>(sourceAxis) &&
-          constraint.getMin() >= requiredMinimum) {
+      if (constraint && constraint.getInput() == (*requirement)->input &&
+          constraint.getDim() == (*requirement)->dimension &&
+          constraint.getMin() >= (*requirement)->minimum) {
         return success();
       }
     }
   }
   return emitOpError()
          << "dynamic axis requires an input minimum extent of at least "
-         << requiredMinimum;
+         << (*requirement)->minimum;
 }
 
 LogicalResult ReductionOp::inferReturnTypeComponents(

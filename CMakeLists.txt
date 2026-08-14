@@ -122,6 +122,7 @@ add_custom_target(tidy
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running clang-tidy (Google)"
     VERBATIM)
+add_dependencies(tidy NCNNOpsIncGen NCNNPassesIncGen)
 add_custom_target(tidy_fix
     COMMAND ${CLANG_TIDY} -p=${CMAKE_BINARY_DIR} --fix --fix-errors
             --header-filter=${NCNN_TIDY_HEADER_FILTER}
@@ -130,3 +131,4 @@ add_custom_target(tidy_fix
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Auto-fixing with clang-tidy (Google)"
     VERBATIM)
+add_dependencies(tidy_fix NCNNOpsIncGen NCNNPassesIncGen)

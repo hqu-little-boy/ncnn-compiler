@@ -30,7 +30,7 @@ ImportResult import_input(ImportContext& importer,
   }
   const bool dimensions_omitted =
     *width == 0 && *height == 0 && *channels == 0 && *depth == 0;
-  auto shape_override = importer.next_input_shape();
+  auto shape_override = importer.next_input_shape(dimensions_omitted);
   auto valid_extent = [](std::int64_t extent) {
     return extent > 0 || extent == ncnn_importer::kDynamicExtent;
   };

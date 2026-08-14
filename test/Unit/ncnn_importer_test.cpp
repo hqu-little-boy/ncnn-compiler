@@ -393,6 +393,29 @@ TEST_F(NcnnImporterTest, ImportsDynamicInputShapeOverride) {
   EXPECT_EQ(constraint.getMultipleOf(), 32);
 }
 
+TEST_F(NcnnImporterTest, InfersOmittedInputChannelsFromConvolutionWeights) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "input", {}, {"data"}));
+  auto convolution = make_layer("Convolution", "conv", {"data"}, {"out"});
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  params.set_value(1, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(6, ncnn_graph::ParamValue::make_int(12));
+  convolution.set_params(std::move(params));
+  convolution.add_weight(
+    make_tensor({4, 3, 1, 1}, ncnn_graph::DataType::Float32));
+  graph.add_layer(std::move(convolution));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"out"});
+  graph.set_weights_loaded(true);
+
+  auto imported = import(graph);
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  EXPECT_TRUE(
+    shape_is(result_type_by_name(imported->get(), "input"),
+             {3, mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic}));
+}
+
 TEST_F(NcnnImporterTest, ImportsDynamicRankSpecializations) {
   ncnn_graph::Graph graph;
   graph.add_layer(make_layer("Input", "input", {}, {"data"}));
@@ -605,10 +628,18 @@ TEST_F(NcnnImporterTest, ImportsDynamicBinarySlicePoolingAndInnerProduct) {
 
   ncnn_importer::ImportOptions options;
   options.input_shapes = {{-1, 1, 4}, {1, 1, 4}};
-  options.input_dim_constraints = {
-    {.input = 0, .dimension = 0, .minimum = 3, .multiple_of = 1}};
   auto imported = import(graph, options);
   ASSERT_TRUE(imported) << imported.error().to_string();
+  auto model = *imported->get().getOps<mlir::ncnn::ModelOp>().begin();
+  auto constraints =
+    model->getAttrOfType<mlir::ArrayAttr>("ncnn.shape_constraints");
+  ASSERT_TRUE(constraints);
+  ASSERT_EQ(constraints.size(), 1U);
+  auto constraint = mlir::cast<mlir::ncnn::DimConstraintAttr>(constraints[0]);
+  EXPECT_EQ(constraint.getInput(), 0U);
+  EXPECT_EQ(constraint.getDim(), 0U);
+  EXPECT_EQ(constraint.getMin(), 3);
+  EXPECT_EQ(constraint.getMultipleOf(), 1);
   EXPECT_TRUE(shape_is(result_type_by_name(imported->get(), "max"),
                        {mlir::ShapedType::kDynamic, 4}));
   EXPECT_TRUE(shape_is(result_type_by_name(imported->get(), "product"),
@@ -663,7 +694,7 @@ TEST_F(NcnnImporterTest, RejectsInputShapeContractErrors) {
   mismatch.input_shapes = {{1, 2, 3}, {4, 5, 6}};
   auto mismatched = import(graph, mismatch);
   ASSERT_FALSE(mismatched.has_value());
-  EXPECT_NE(mismatched.error().get_message().find("count 2 does not match 1"),
+  EXPECT_NE(mismatched.error().get_message().find("count 2 matches neither 1"),
             std::string_view::npos);
 
   ncnn_importer::ImportOptions conflict;
@@ -680,6 +711,30 @@ TEST_F(NcnnImporterTest, RejectsInputShapeContractErrors) {
   ASSERT_FALSE(invalid_shape.has_value());
   EXPECT_NE(invalid_shape.error().get_message().find("positive or dynamic"),
             std::string_view::npos);
+}
+
+TEST_F(NcnnImporterTest, AppliesShapesOnlyToDimensionlessInputs) {
+  ncnn_graph::Graph graph;
+  auto declared = make_layer("Input", "declared", {}, {"left"});
+  ncnn_graph::ParamDict declared_params;
+  declared_params.set_value(0, ncnn_graph::ParamValue::make_int(5));
+  declared_params.set_value(1, ncnn_graph::ParamValue::make_int(4));
+  declared_params.set_value(2, ncnn_graph::ParamValue::make_int(3));
+  declared.set_params(std::move(declared_params));
+  graph.add_layer(std::move(declared));
+  graph.add_layer(make_layer("Input", "omitted", {}, {"right"}));
+  graph.set_input_blob_names({"left", "right"});
+  graph.set_output_blob_names({"left", "right"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions options;
+  options.input_shapes = {{7, 8, 9}};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_TRUE(
+    shape_is(result_type_by_name(imported->get(), "declared"), {3, 4, 5}));
+  EXPECT_TRUE(
+    shape_is(result_type_by_name(imported->get(), "omitted"), {7, 8, 9}));
 }
 
 TEST_F(NcnnImporterTest, ImportsSupportedGraph) {

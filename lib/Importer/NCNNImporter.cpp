@@ -12,6 +12,7 @@
 #include <expected>
 #include <format>
 #include <limits>
+#include <map>
 #include <span>
 #include <string>
 #include <string_view>
@@ -59,6 +60,48 @@ namespace detail {
 namespace {
 
 using ImportHandler = ImportResult (*)(ImportContext&, const LayerContext&);
+
+std::optional<std::int64_t> infer_input_channels(
+  const ncnn_graph::Graph& source, const ncnn_graph::Layer& input) {
+  if (input.get_outputs().empty()) {
+    return std::nullopt;
+  }
+  const std::string_view output = input.get_outputs().front();
+  for (const ncnn_graph::Layer& layer : source.get_layers()) {
+    if (std::ranges::find(layer.get_inputs(), output) ==
+          layer.get_inputs().end() ||
+        layer.get_type() != "Convolution" || layer.get_weights().empty()) {
+      continue;
+    }
+    const auto shape = layer.get_weights().front().get_shape();
+    if (shape.size() == 4 && shape[1] > 0) {
+      return shape[1];
+    }
+  }
+  return std::nullopt;
+}
+
+void infer_input_shapes(const ncnn_graph::Graph& source,
+                        ImportOptions& options) {
+  if (options.input_shape || !options.input_shapes.empty()) {
+    return;
+  }
+  for (const ncnn_graph::Layer& layer : source.get_layers()) {
+    if (layer.get_type() != "Input") {
+      continue;
+    }
+    constexpr std::array<int, 4> dimension_ids{0, 1, 2, 11};
+    const bool omitted = std::ranges::all_of(
+      dimension_ids, [&](int id) { return layer.get_param_int(id) == 0; });
+    if (!omitted) {
+      continue;
+    }
+    const std::int64_t channels = infer_input_channels(source, layer)
+                                    .value_or(ncnn_importer::kDynamicExtent);
+    options.input_shapes.push_back(
+      {channels, ncnn_importer::kDynamicExtent, ncnn_importer::kDynamicExtent});
+  }
+}
 
 struct ImportEntry {
   std::string_view type;
@@ -297,10 +340,9 @@ std::expected<void, std::string> validate_feature_mask(
   return {};
 }
 
-ImportContext::ImportContext(mlir::MLIRContext& context,
-                             const ImportOptions& options)
+ImportContext::ImportContext(mlir::MLIRContext& context, ImportOptions options)
   : context_(&context),
-    options_(options),
+    options_(std::move(options)),
     builder_(&context),
     module_(mlir::ModuleOp::create(builder_.getUnknownLoc())),
     model_(),
@@ -313,6 +355,22 @@ ImportContext::ImportContext(mlir::MLIRContext& context,
 std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError>
 ImportContext::run(const ncnn_graph::Graph& source) {
   const std::size_t input_count = source.layer_count_of("Input");
+  const std::size_t omitted_input_count = std::ranges::count_if(
+    source.get_layers(), [](const ncnn_graph::Layer& layer) {
+      if (layer.get_type() != "Input") {
+        return false;
+      }
+      for (int id : {0, 1, 2, 11}) {
+        const ncnn_graph::ParamValue* value =
+          find_param(layer.get_params(), id);
+        if (value != nullptr &&
+            (value->get_kind() != ncnn_graph::ParamValue::Kind::Int ||
+             *value->get_int() != 0)) {
+          return false;
+        }
+      }
+      return true;
+    });
   if (options_.dynamic_rank) {
     return std::unexpected(
       ImportError(0,
@@ -334,17 +392,23 @@ ImportContext::run(const ncnn_graph::Graph& source) {
                                        "legacy input_shape and input_shapes "
                                        "cannot both be specified"));
   }
+  infer_input_shapes(source, options_);
   if (!options_.input_shapes.empty() &&
-      options_.input_shapes.size() != input_count) {
+      options_.input_shapes.size() != input_count &&
+      options_.input_shapes.size() != omitted_input_count) {
     return std::unexpected(ImportError(
       0,
       "Input",
       "input-shape",
-      std::format("input shape override count {} does not match {} Input "
-                  "layers",
+      std::format("input shape override count {} matches neither {} Input "
+                  "layers nor {} Inputs with omitted dimensions",
                   options_.input_shapes.size(),
-                  input_count)));
+                  input_count,
+                  omitted_input_count)));
   }
+  sparse_input_shapes_ = !options_.input_shapes.empty() &&
+                         options_.input_shapes.size() == omitted_input_count &&
+                         omitted_input_count != input_count;
   auto prepared = prepare_model();
   if (!prepared) {
     return std::unexpected(prepared.error());
@@ -379,11 +443,14 @@ mlir::ncnn::ShapeMode ImportContext::shape_mode(
                                        has_dynamic_input);
 }
 
-std::optional<ncnn_importer::InputShape>
-ImportContext::next_input_shape() noexcept {
+std::optional<ncnn_importer::InputShape> ImportContext::next_input_shape(
+  bool dimensions_omitted) noexcept {
   if (options_.input_shapes.empty()) {
     ++imported_input_count_;
     return options_.input_shape;
+  }
+  if (sparse_input_shapes_ && !dimensions_omitted) {
+    return std::nullopt;
   }
   return options_.input_shapes[imported_input_count_++];
 }
@@ -480,6 +547,61 @@ ImportResult ImportContext::prepare_model() {
   return {};
 }
 
+ImportResult infer_shape_constraints(mlir::ncnn::ModelOp model) {
+  std::map<std::pair<std::uint32_t, std::uint32_t>,
+           ncnn_importer::InputDimConstraint>
+    constraints;
+  if (auto existing =
+        model->getAttrOfType<mlir::ArrayAttr>("ncnn.shape_constraints")) {
+    for (mlir::Attribute attribute : existing) {
+      auto constraint = mlir::cast<mlir::ncnn::DimConstraintAttr>(attribute);
+      constraints[{constraint.getInput(), constraint.getDim()}] = {
+        .input = constraint.getInput(),
+        .dimension = constraint.getDim(),
+        .minimum = constraint.getMin(),
+        .multiple_of = constraint.getMultipleOf()};
+    }
+  }
+
+  mlir::WalkResult result = model.walk([&](mlir::ncnn::SliceOp operation) {
+    auto requirement = mlir::ncnn::inferInputDimensionRequirement(operation);
+    if (mlir::failed(requirement)) {
+      return mlir::WalkResult::interrupt();
+    }
+    if (!*requirement) {
+      return mlir::WalkResult::advance();
+    }
+    auto& constraint =
+      constraints[{(*requirement)->input, (*requirement)->dimension}];
+    constraint.input = (*requirement)->input;
+    constraint.dimension = (*requirement)->dimension;
+    constraint.minimum = std::max(constraint.minimum, (*requirement)->minimum);
+    constraint.multiple_of = std::max<std::int64_t>(constraint.multiple_of, 1);
+    return mlir::WalkResult::advance();
+  });
+  if (result.wasInterrupted()) {
+    return std::unexpected(
+      ImportError(0, "ShapeInference", "constraints", "inference failed"));
+  }
+  if (constraints.empty()) {
+    return {};
+  }
+  mlir::Builder builder(model.getContext());
+  llvm::SmallVector<mlir::Attribute> attributes;
+  attributes.reserve(constraints.size());
+  for (const auto& [key, constraint] : constraints) {
+    (void)key;
+    attributes.push_back(
+      mlir::ncnn::DimConstraintAttr::get(model.getContext(),
+                                         constraint.input,
+                                         constraint.dimension,
+                                         constraint.minimum,
+                                         constraint.multiple_of));
+  }
+  model->setAttr("ncnn.shape_constraints", builder.getArrayAttr(attributes));
+  return {};
+}
+
 ImportResult ImportContext::import_layer(const LayerContext& context) {
   const auto entries = importers();
   const auto importer =
@@ -511,6 +633,9 @@ ImportContext::finish(const ncnn_graph::Graph& source) {
       builder_.getUnknownLoc(),
       outputs[index],
       builder_.getStringAttr(source.get_output_blob_names()[index]));
+  }
+  if (auto inferred = infer_shape_constraints(model_); !inferred) {
+    return std::unexpected(inferred.error());
   }
   captured_diag_.clear();
   mlir::ScopedDiagnosticHandler handler(context_,

@@ -52,7 +52,7 @@ std::expected<void, std::string> validate_feature_mask(
 
 class ImportContext {
  public:
-  ImportContext(mlir::MLIRContext& context, const ImportOptions& options);
+  ImportContext(mlir::MLIRContext& context, ImportOptions options);
 
   std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> run(
     const ncnn_graph::Graph& source);
@@ -61,7 +61,8 @@ class ImportContext {
   const std::optional<ncnn_importer::InputShape>& input_shape() const noexcept;
   const std::vector<ncnn_importer::InputShape>& input_shapes() const noexcept;
   mlir::ncnn::ShapeMode shape_mode(bool has_dynamic_input) const noexcept;
-  std::optional<ncnn_importer::InputShape> next_input_shape() noexcept;
+  std::optional<ncnn_importer::InputShape> next_input_shape(
+    bool dimensions_omitted) noexcept;
   std::expected<mlir::Value, ImportError> find_blob(const LayerContext& context,
                                                     std::string_view name);
   ImportResult bind_blob(const LayerContext& context,
@@ -134,13 +135,14 @@ class ImportContext {
     const ncnn_graph::Graph& source);
 
   mlir::MLIRContext* context_;
-  const ImportOptions& options_;
+  ImportOptions options_;
   mlir::OpBuilder builder_;
   mlir::OwningOpRef<mlir::ModuleOp> module_;
   mlir::ncnn::ModelOp model_;
   llvm::StringMap<mlir::Value> blobs_;
   std::string captured_diag_;
   std::size_t imported_input_count_ = 0;
+  bool sparse_input_shapes_ = false;
 };
 
 ImportResult import_input(ImportContext& importer, const LayerContext& context);

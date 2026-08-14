@@ -58,7 +58,7 @@ struct ImportOptions {
   // Used only when the model has one Input layer whose w/h/c are all omitted.
   std::optional<InputShape> input_shape;
 
-  // One shape per Input layer, in source-layer order.
+  // One shape per dimensionless Input, or one per Input for compatibility.
   std::vector<InputShape> input_shapes;
 
   // Runtime constraints for dynamic input dimensions.

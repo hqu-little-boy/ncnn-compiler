@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -28,3 +29,16 @@ enum class PoolMode : int64_t { Regular = 0, Global = 1, Adaptive = 2 };
 
 #define GET_OP_CLASSES
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.h.inc"
+
+namespace mlir::ncnn {
+
+struct InputDimensionRequirement {
+  uint32_t input;
+  uint32_t dimension;
+  int64_t minimum;
+};
+
+FailureOr<std::optional<InputDimensionRequirement>>
+inferInputDimensionRequirement(SliceOp operation);
+
+}  // namespace mlir::ncnn

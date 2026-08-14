@@ -229,6 +229,41 @@ def main():
             f"{sorted(present_forbidden_text)}"
         )
 
+    sparse_param = work_dir / "sparse_input_shapes.param"
+    sparse_bin = work_dir / "sparse_input_shapes.bin"
+    sparse_param.write_text(
+        "7767517\n"
+        "3 3\n"
+        "Input declared 0 1 left 0=2 1=2 2=1\n"
+        "Input omitted 0 1 right\n"
+        "BinaryOp add 2 1 left right output 0=0\n",
+        encoding="ascii",
+    )
+    sparse_bin.write_bytes(b"")
+    sparse_output = work_dir / "sparse-input-shapes"
+    run(
+        [
+            args.compiler,
+            sparse_param,
+            "--bin",
+            sparse_bin,
+            "--model-name",
+            "sparse_input_shapes",
+            "--output-dir",
+            sparse_output,
+            "--input-shape=1x2x2",
+            "--emit-manifest",
+            "--verify-execution",
+            "-O0",
+        ]
+    )
+    sparse_manifest = json.loads(
+        (sparse_output / "sparse_input_shapes.json").read_text()
+    )
+    sparse_shapes = [entry["shape"] for entry in sparse_manifest["inputs"]]
+    if sparse_shapes != [[1, 2, 2], [1, 2, 2]]:
+        raise RuntimeError(f"sparse input shapes were not inferred: {sparse_shapes}")
+
     dynamic_param = work_dir / "dynamic_identity.param"
     dynamic_bin = work_dir / "dynamic_identity.bin"
     dynamic_param.write_text(

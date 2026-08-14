@@ -179,8 +179,9 @@ ncnn-compile model.param --input-shape=3x224x224
 ncnn-compile model.param --input-shape=3x?x?
 ```
 
-该选项可重复。只要提供了 fixed-rank override，数量必须等于模型的全部 `Input` 层数，并按
-source-layer 顺序匹配。已有静态尺寸的 Input 不会被改写，但仍占一个对应条目：
+该选项可重复。通常只需为 `.param` 中没有声明尺寸的 `Input` 提供，并按这些 Input 的
+source-layer 顺序匹配。为兼容既有调用，也接受为全部 `Input` 各提供一个 override；已有静态
+尺寸的 Input 不会被改写：
 
 ```bash
 ncnn-compile multi_input.param \

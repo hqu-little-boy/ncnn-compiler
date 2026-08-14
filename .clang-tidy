@@ -34,7 +34,8 @@ Checks: >
   -google-runtime-int,
   -google-default-arguments,
   -readability-simplify-boolean-expr,
-  -readability-redundant-member-init
+  -readability-redundant-member-init,
+  -readability-convert-member-functions-to-static
 
 # 关掉项的理由：
 #   modernize-use-trailing-return-type  —— 强制 `auto f()->T`，Google 不强制
@@ -52,6 +53,7 @@ Checks: >
 #   google-runtime-int                 —— 用 int 而非 int32_t 在与 ncnn C 接口对齐时合理
 #   readability-simplify-boolean-expr   —— 初期不强加布尔化简
 #   readability-redundant-member-init   —— 项目约定构造函数显式初始化所有成员
+#   readability-convert-member-functions-to-static —— 不适用于 MLIR override/CRTP API
 
 # ── 警告即错误 ──────────────────────────────────────────────
 # CI/本地均把 tidy 警告当错误。开发时可临时去掉。

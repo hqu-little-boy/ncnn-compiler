@@ -60,7 +60,7 @@ llvm::cl::opt<std::string> g_model_name(
 llvm::cl::list<std::string> g_input_shapes(
   "input-shape",
   llvm::cl::desc("Input shape override as CxHxW; '?' is a dynamic extent. "
-                 "Repeat once per Input layer"),
+                 "Repeat once per Input with omitted dimensions"),
   llvm::cl::value_desc("CxHxW"),
   llvm::cl::ZeroOrMore,
   llvm::cl::cat(g_category));
