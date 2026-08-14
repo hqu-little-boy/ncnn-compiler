@@ -96,6 +96,10 @@ std::span<const ImportEntry> importers() noexcept {
     ImportEntry{.type = "ExpandDims", .handler = import_expand_dims},
     ImportEntry{.type = "Permute", .handler = import_permute},
     ImportEntry{.type = "Gemm", .handler = import_gemm},
+    ImportEntry{.type = "Quantize", .handler = import_quantize},
+    ImportEntry{.type = "Dequantize", .handler = import_dequantize},
+    ImportEntry{.type = "Requantize", .handler = import_requantize},
+    ImportEntry{.type = "Cast", .handler = import_cast},
   };
   return kImporters;
 }

@@ -6,6 +6,7 @@ add_library(NCNNImporter STATIC
     ImportOps.cpp
     ImportInput.cpp
     ImportPooling.cpp
+    ImportQuantization.cpp
     ImportTensor.cpp
     NCNNImporter.cpp
 )

@@ -958,6 +958,80 @@ TEST_F(NcnnImporterTest, DeconvolutionIgnoresReluActivationParameters) {
   EXPECT_EQ(count_ops<mlir::ncnn::ReluOp>(imported->get()), 1);
 }
 
+TEST_F(NcnnImporterTest, ImportsQuantizeAndCastBoundaries) {
+  ncnn_graph::Graph graph;
+  auto input = make_layer("Input", "input", {}, {"data"});
+  ncnn_graph::ParamDict input_params;
+  input_params.set_value(0, ncnn_graph::ParamValue::make_int(3));
+  input_params.set_value(1, ncnn_graph::ParamValue::make_int(2));
+  input_params.set_value(2, ncnn_graph::ParamValue::make_int(1));
+  input.set_params(std::move(input_params));
+  graph.add_layer(std::move(input));
+
+  auto quantize = make_layer("Quantize", "quantize", {"data"}, {"quantized"});
+  ncnn_graph::ParamDict quantize_params;
+  quantize_params.set_value(0, ncnn_graph::ParamValue::make_int(1));
+  quantize.set_params(std::move(quantize_params));
+  quantize.add_weight(make_float_tensor({1}, 2.0F));
+  graph.add_layer(std::move(quantize));
+
+  auto to_float = make_layer("Cast", "to_float", {"quantized"}, {"restored"});
+  ncnn_graph::ParamDict cast_params;
+  cast_params.set_value(0, ncnn_graph::ParamValue::make_int(3));
+  cast_params.set_value(1, ncnn_graph::ParamValue::make_int(1));
+  to_float.set_params(std::move(cast_params));
+  graph.add_layer(std::move(to_float));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"restored"});
+  graph.set_weights_loaded(true);
+
+  auto imported = import(graph);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::QuantizeOp>(imported->get()), 1);
+  EXPECT_EQ(count_ops<mlir::ncnn::CastOp>(imported->get()), 1);
+  EXPECT_TRUE(output_type(imported->get()).getElementType().isF32());
+}
+
+TEST_F(NcnnImporterTest, ImportsQuantizedGemmWithSignedConstantB) {
+  ncnn_graph::Graph graph;
+  auto input = make_layer("Input", "input", {}, {"data"});
+  ncnn_graph::ParamDict input_params;
+  input_params.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  input_params.set_value(1, ncnn_graph::ParamValue::make_int(2));
+  input_params.set_value(2, ncnn_graph::ParamValue::make_int(1));
+  input.set_params(std::move(input_params));
+  graph.add_layer(std::move(input));
+
+  auto squeeze = make_layer("Squeeze", "squeeze", {"data"}, {"matrix"});
+  ncnn_graph::ParamDict squeeze_params;
+  squeeze_params.set_value(3, ncnn_graph::ParamValue::make_int_array({0}));
+  squeeze.set_params(std::move(squeeze_params));
+  graph.add_layer(std::move(squeeze));
+
+  auto gemm = make_layer("Gemm", "gemm", {"matrix"}, {"output"});
+  ncnn_graph::ParamDict gemm_params;
+  gemm_params.set_value(3, ncnn_graph::ParamValue::make_int(1));
+  gemm_params.set_value(5, ncnn_graph::ParamValue::make_int(1));
+  gemm_params.set_value(6, ncnn_graph::ParamValue::make_int(1));
+  gemm_params.set_value(8, ncnn_graph::ParamValue::make_int(3));
+  gemm_params.set_value(9, ncnn_graph::ParamValue::make_int(4));
+  gemm_params.set_value(10, ncnn_graph::ParamValue::make_int(4));
+  gemm_params.set_value(18, ncnn_graph::ParamValue::make_int(2));
+  gemm.set_params(std::move(gemm_params));
+  gemm.add_weight(make_tensor({3, 4}, ncnn_graph::DataType::Int8));
+  gemm.add_weight(make_float_tensor({3}, 0.0F));
+  gemm.add_weight(make_float_tensor({1}, 4.0F));
+  graph.add_layer(std::move(gemm));
+  graph.set_input_blob_names({"data"});
+  graph.set_output_blob_names({"output"});
+  graph.set_weights_loaded(true);
+
+  auto imported = import(graph);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::GemmOp>(imported->get()), 1);
+  EXPECT_TRUE(shape_is(output_type(imported->get()), {2, 3}));
+}
+
 TEST_F(NcnnImporterTest, RejectsDeconvolutionWeightCountMismatch) {
   auto imported = import(make_deconvolution_graph(68));
   ASSERT_FALSE(imported.has_value());

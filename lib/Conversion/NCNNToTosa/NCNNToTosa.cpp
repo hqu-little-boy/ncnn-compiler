@@ -211,6 +211,172 @@ Value convertI32ToF32(OpBuilder& builder, Location location, Value input) {
   return converted->getResult(0);
 }
 
+Value dequantizeNcnn(OpBuilder& builder,
+                     Location location,
+                     Value input,
+                     Value scale,
+                     Value bias = {}) {
+  auto inputType = cast<RankedTensorType>(input.getType());
+  auto outputType = inputType.clone(builder.getF32Type());
+  Value empty = builder.create<tensor::EmptyOp>(
+    location,
+    outputType.getShape(),
+    outputType.getElementType(),
+    getDynamicSizeValues(builder, location, input, outputType));
+  const unsigned scaleDimension = inputType.getRank() == 4 ? 3 : 0;
+  auto scaleType = cast<RankedTensorType>(scale.getType());
+  AffineExpr scaleIndex = scaleType.getShape()[0] == 1
+                            ? builder.getAffineConstantExpr(0)
+                            : builder.getAffineDimExpr(scaleDimension);
+  AffineMap identity = builder.getMultiDimIdentityMap(inputType.getRank());
+  AffineMap parameterMap =
+    AffineMap::get(inputType.getRank(), 0, scaleIndex, builder.getContext());
+  SmallVector<Value> inputs{input, scale};
+  SmallVector<AffineMap> maps{identity, parameterMap};
+  if (bias) {
+    inputs.push_back(bias);
+    maps.push_back(parameterMap);
+  }
+  maps.push_back(identity);
+  SmallVector<utils::IteratorType> iterators(inputType.getRank(),
+                                             utils::IteratorType::parallel);
+  auto converted = builder.create<linalg::GenericOp>(
+    location,
+    outputType,
+    inputs,
+    ValueRange{empty},
+    maps,
+    iterators,
+    [hasBias = static_cast<bool>(bias)](
+      OpBuilder& nested, Location nestedLocation, ValueRange values) {
+      Value floating = nested.create<arith::SIToFPOp>(
+        nestedLocation, nested.getF32Type(), values[0]);
+      Value result =
+        nested.create<arith::MulFOp>(nestedLocation, floating, values[1]);
+      if (hasBias) {
+        result =
+          nested.create<arith::AddFOp>(nestedLocation, result, values[2]);
+      }
+      nested.create<linalg::YieldOp>(nestedLocation, result);
+    });
+  return converted->getResult(0);
+}
+
+Value convertSignedI8ToF32(OpBuilder& builder, Location location, Value input) {
+  auto inputType = cast<RankedTensorType>(input.getType());
+  auto outputType = inputType.clone(builder.getF32Type());
+  Value empty = builder.create<tensor::EmptyOp>(
+    location,
+    outputType.getShape(),
+    outputType.getElementType(),
+    getDynamicSizeValues(builder, location, input, outputType));
+  auto converted = builder.create<linalg::MapOp>(
+    location,
+    ValueRange{input},
+    empty,
+    [](OpBuilder& nested, Location nestedLocation, ValueRange values) {
+      Value result = nested.create<arith::SIToFPOp>(
+        nestedLocation, nested.getF32Type(), values.front());
+      nested.create<linalg::YieldOp>(nestedLocation, result);
+    });
+  return converted->getResult(0);
+}
+
+Value computeGemmRowScales(OpBuilder& builder, Location location, Value input) {
+  auto inputType = cast<RankedTensorType>(input.getType());
+  auto scaleType =
+    RankedTensorType::get({inputType.getShape()[0]}, builder.getF32Type());
+  Value empty = builder.create<tensor::EmptyOp>(
+    location,
+    scaleType.getShape(),
+    scaleType.getElementType(),
+    getDynamicSizeValues(builder, location, input, scaleType));
+  Value zero =
+    builder.create<arith::ConstantOp>(location, builder.getF32FloatAttr(0.0));
+  Value initialized =
+    builder.create<linalg::FillOp>(location, zero, empty).getResult(0);
+  AffineExpr row = builder.getAffineDimExpr(0);
+  AffineExpr column = builder.getAffineDimExpr(1);
+  AffineMap inputMap =
+    AffineMap::get(2, 0, {row, column}, builder.getContext());
+  AffineMap outputMap = AffineMap::get(2, 0, row, builder.getContext());
+  auto maximum = builder.create<linalg::GenericOp>(
+    location,
+    scaleType,
+    ValueRange{input},
+    ValueRange{initialized},
+    ArrayRef<AffineMap>{inputMap, outputMap},
+    ArrayRef<utils::IteratorType>{utils::IteratorType::parallel,
+                                  utils::IteratorType::reduction},
+    [](OpBuilder& nested, Location nestedLocation, ValueRange values) {
+      Value absolute =
+        nested.create<math::AbsFOp>(nestedLocation, values.front());
+      Value result = nested.create<arith::MaximumFOp>(
+        nestedLocation, absolute, values.back());
+      nested.create<linalg::YieldOp>(nestedLocation, result);
+    });
+  Value resultEmpty = builder.create<tensor::EmptyOp>(
+    location,
+    scaleType.getShape(),
+    scaleType.getElementType(),
+    getDynamicSizeValues(builder, location, input, scaleType));
+  auto scales = builder.create<linalg::MapOp>(
+    location,
+    maximum.getResults(),
+    resultEmpty,
+    [](OpBuilder& nested, Location nestedLocation, ValueRange values) {
+      Value zero = nested.create<arith::ConstantOp>(
+        nestedLocation, nested.getF32FloatAttr(0.0));
+      Value one = nested.create<arith::ConstantOp>(nestedLocation,
+                                                   nested.getF32FloatAttr(1.0));
+      Value maximum = nested.create<arith::ConstantOp>(
+        nestedLocation, nested.getF32FloatAttr(127.0));
+      Value empty = nested.create<arith::CmpFOp>(
+        nestedLocation, arith::CmpFPredicate::OEQ, values.front(), zero);
+      Value computed =
+        nested.create<arith::DivFOp>(nestedLocation, maximum, values.front());
+      Value result =
+        nested.create<arith::SelectOp>(nestedLocation, empty, one, computed);
+      nested.create<linalg::YieldOp>(nestedLocation, result);
+    });
+  return scales->getResult(0);
+}
+
+Value dequantizeGemmAccumulator(OpBuilder& builder,
+                                Location location,
+                                Value accumulator,
+                                Value rowScale,
+                                Value weightScale) {
+  Value converted = convertI32ToF32(builder, location, accumulator);
+  auto outputType = cast<RankedTensorType>(converted.getType());
+  Value empty = builder.create<tensor::EmptyOp>(
+    location,
+    outputType.getShape(),
+    outputType.getElementType(),
+    getDynamicSizeValues(builder, location, converted, outputType));
+  AffineMap identity = builder.getMultiDimIdentityMap(3);
+  AffineMap rowMap =
+    AffineMap::get(3, 0, builder.getAffineDimExpr(1), builder.getContext());
+  AffineMap scalarMap = AffineMap::get(
+    3, 0, builder.getAffineConstantExpr(0), builder.getContext());
+  SmallVector<utils::IteratorType> iterators(3, utils::IteratorType::parallel);
+  auto result = builder.create<linalg::GenericOp>(
+    location,
+    outputType,
+    ValueRange{converted, rowScale, weightScale},
+    ValueRange{empty},
+    ArrayRef<AffineMap>{identity, rowMap, scalarMap, identity},
+    iterators,
+    [](OpBuilder& nested, Location nestedLocation, ValueRange values) {
+      Value combined =
+        nested.create<arith::MulFOp>(nestedLocation, values[1], values[2]);
+      Value value =
+        nested.create<arith::DivFOp>(nestedLocation, values[0], combined);
+      nested.create<linalg::YieldOp>(nestedLocation, value);
+    });
+  return result->getResult(0);
+}
+
 Value dequantizeAccumulator(OpBuilder& builder,
                             Location location,
                             Value accumulator,
@@ -1044,7 +1210,15 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
     const auto kernelH = static_cast<int64_t>(operation.getKernelH());
     const auto kernelW = static_cast<int64_t>(operation.getKernelW());
     auto inputType = cast<RankedTensorType>(input.getType());
+    const bool signedI8 = inputType.getElementType().isSignlessInteger(8);
+    if (!signedI8) {
+      input = applyFP16Boundary(rewriter, operation.getLoc(), operation, input);
+    }
     if ((global && !inputType.hasStaticShape()) || adaptive) {
+      if (signedI8) {
+        return operation.emitOpError(
+          "dynamic or adaptive signed i8 pooling is not supported");
+      }
       Location location = operation.getLoc();
       const bool maximum =
         operation.getKind() == static_cast<int64_t>(PoolKind::Maximum);
@@ -1211,7 +1385,10 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
           }
           nested.create<linalg::YieldOp>(bodyLocation, pooled);
         });
-      rewriter.replaceOp(operation, result.getResults());
+      Value dynamicResult = result.getResult(0);
+      dynamicResult = applyFP16Boundary(
+        rewriter, operation.getLoc(), operation, dynamicResult);
+      rewriter.replaceOp(operation, dynamicResult);
       return success();
     }
     RankedTensorType outputType =
@@ -1253,6 +1430,10 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
       operation.getKind() == static_cast<int64_t>(PoolKind::Maximum) &&
       (poolPadding[0] >= kernel[0] || poolPadding[1] >= kernel[0] ||
        poolPadding[2] >= kernel[1] || poolPadding[3] >= kernel[1]);
+    if (signedI8 && materializeMaxPadding) {
+      return operation.emitOpError(
+        "signed i8 max pooling padding exceeds the kernel");
+    }
     if (materializeMaxPadding) {
       auto paddedDimension =
         [](int64_t dimension, int64_t before, int64_t after) {
@@ -1319,6 +1500,10 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
       result = rewriter.create<tosa::ReshapeOp>(
         operation.getLoc(), sourceOutput, result, shape);
     }
+    if (!signedI8) {
+      result =
+        applyFP16Boundary(rewriter, operation.getLoc(), operation, result);
+    }
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -1355,8 +1540,20 @@ class ConvertConcat final : public OpConversionPattern<ConcatOp> {
       sourceAxis += sourceType.getRank();
     }
     uint32_t axis = convertAxis(sourceAxis, sourceType.getRank());
+    SmallVector<Value> inputs(adaptor.getInputs().begin(),
+                              adaptor.getInputs().end());
+    if (sourceType.getElementType().isF32()) {
+      for (Value& input : inputs) {
+        input =
+          applyFP16Boundary(rewriter, operation.getLoc(), operation, input);
+      }
+    }
     Value result = rewriter.create<tosa::ConcatOp>(
-      operation.getLoc(), outputType, adaptor.getInputs(), axis);
+      operation.getLoc(), outputType, inputs, axis);
+    if (sourceType.getElementType().isF32()) {
+      result =
+        applyFP16Boundary(rewriter, operation.getLoc(), operation, result);
+    }
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -1654,15 +1851,21 @@ class ConvertDeconvolution final : public ConversionPattern {
     ConversionPatternRewriter& rewriter) const final {
     if (operands.size() < 2 || operation->getNumResults() != 1 ||
         !isRankedF32Tensor(operation->getOperand(0).getType()) ||
-        !isStaticF32Tensor(operation->getOperand(1).getType()) ||
+        !isa<FloatType>(cast<ShapedType>(operation->getOperand(1).getType())
+                          .getElementType()) ||
         !isRankedF32Tensor(operation->getResult(0).getType())) {
       return operation->emitOpError(
         "supports ranked f32 input/result and static f32 weight tensors only");
     }
     auto sourceInput =
       cast<RankedTensorType>(operation->getOperand(0).getType());
-    auto weightType =
-      cast<RankedTensorType>(operation->getOperand(1).getType());
+    auto weightType = cast<RankedTensorType>(operands[1].getType());
+    Value sourceWeight = operands[1];
+    if (!weightType.getElementType().isF32()) {
+      sourceWeight = convertFloatingTensor(
+        rewriter, operation->getLoc(), sourceWeight, rewriter.getF32Type());
+      weightType = cast<RankedTensorType>(sourceWeight.getType());
+    }
     auto sourceOutput =
       cast<RankedTensorType>(operation->getResult(0).getType());
     if (sourceInput.getRank() != 3 || weightType.getRank() != 4 ||
@@ -1763,7 +1966,8 @@ class ConvertDeconvolution final : public ConversionPattern {
           "padding/output padding");
       }
 
-      Value input = operands[0];
+      Value input = applyFP16Boundary(
+        rewriter, operation->getLoc(), operation, operands[0]);
       Location location = operation->getLoc();
       Value inputH = rewriter.create<tensor::DimOp>(location, input, 1);
       Value inputW = rewriter.create<tensor::DimOp>(location, input, 2);
@@ -1812,7 +2016,7 @@ class ConvertDeconvolution final : public ConversionPattern {
       auto result = rewriter.create<linalg::GenericOp>(
         location,
         outputType,
-        ValueRange{input, operands[1]},
+        ValueRange{input, sourceWeight},
         ValueRange{initialized.getResult(0)},
         ArrayRef<AffineMap>{inputMap, weightMap, resultMap},
         iterators,
@@ -1837,6 +2041,8 @@ class ConvertDeconvolution final : public ConversionPattern {
         return operation->emitOpError(
           "only no activation and ReLU activation_type=1 are supported");
       }
+      dynamicResult = applyFP16Boundary(
+        rewriter, operation->getLoc(), operation, dynamicResult);
       rewriter.replaceOp(operation, dynamicResult);
       return success();
     }
@@ -1844,7 +2050,7 @@ class ConvertDeconvolution final : public ConversionPattern {
     Value weight =
       rewriter.create<tosa::TransposeOp>(operation->getLoc(),
                                          ohwiType,
-                                         operands[1],
+                                         sourceWeight,
                                          ArrayRef<int32_t>{0, 2, 3, 1});
     Value inputZero =
       createSplat(rewriter,
@@ -1859,7 +2065,7 @@ class ConvertDeconvolution final : public ConversionPattern {
     Value result = rewriter.create<tosa::TransposeConv2DOp>(
       operation->getLoc(),
       outputType,
-      operands[0],
+      applyFP16Boundary(rewriter, operation->getLoc(), operation, operands[0]),
       weight,
       bias,
       inputZero,
@@ -1880,6 +2086,8 @@ class ConvertDeconvolution final : public ConversionPattern {
       return operation->emitOpError(
         "only no activation and ReLU activation_type=1 are supported");
     }
+    result =
+      applyFP16Boundary(rewriter, operation->getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -2632,6 +2840,194 @@ class ConvertBatchNorm final : public OpConversionPattern<BatchNormOp> {
   }
 };
 
+class ConvertQuantize final : public OpConversionPattern<QuantizeOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    QuantizeOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
+    auto scaleType = cast<RankedTensorType>(adaptor.getScale().getType());
+    std::optional<unsigned> scaleDimension;
+    if (scaleType.getShape()[0] != 1) {
+      scaleDimension = inputType.getRank() == 4 ? 3U : 0U;
+    }
+    Value result = quantizeSignedI8(rewriter,
+                                    operation.getLoc(),
+                                    adaptor.getInput(),
+                                    adaptor.getScale(),
+                                    scaleDimension);
+    rewriter.replaceOp(operation, result);
+    return success();
+  }
+};
+
+class ConvertDequantize final : public OpConversionPattern<DequantizeOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    DequantizeOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    Value bias =
+      adaptor.getBias().empty() ? Value{} : adaptor.getBias().front();
+    Value result = dequantizeNcnn(rewriter,
+                                  operation.getLoc(),
+                                  adaptor.getInput(),
+                                  adaptor.getScale(),
+                                  bias);
+    rewriter.replaceOp(operation, result);
+    return success();
+  }
+};
+
+class ConvertRequantize final : public OpConversionPattern<RequantizeOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    RequantizeOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    if (operation.getActivationType() != 0 &&
+        operation.getActivationType() != 1) {
+      return operation.emitOpError(
+        "lowering supports no activation or ReLU only");
+    }
+    Value bias =
+      adaptor.getBias().empty() ? Value{} : adaptor.getBias().front();
+    Value floating = dequantizeNcnn(rewriter,
+                                    operation.getLoc(),
+                                    adaptor.getInput(),
+                                    adaptor.getInputScale(),
+                                    bias);
+    auto floatingType = cast<RankedTensorType>(floating.getType());
+    if (operation.getActivationType() == 1) {
+      floating = rewriter.create<tosa::ClampOp>(
+        operation.getLoc(),
+        floatingType,
+        floating,
+        rewriter.getF32FloatAttr(0.0),
+        rewriter.getF32FloatAttr(std::numeric_limits<float>::infinity()));
+    }
+    auto scaleType = cast<RankedTensorType>(adaptor.getOutputScale().getType());
+    std::optional<unsigned> scaleDimension;
+    if (scaleType.getShape()[0] != 1) {
+      scaleDimension = floatingType.getRank() == 4 ? 3U : 0U;
+    }
+    Value result = quantizeSignedI8(rewriter,
+                                    operation.getLoc(),
+                                    floating,
+                                    adaptor.getOutputScale(),
+                                    scaleDimension);
+    rewriter.replaceOp(operation, result);
+    return success();
+  }
+};
+
+class ConvertCast final : public OpConversionPattern<CastOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    CastOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
+    auto outputType = cast<RankedTensorType>(
+      getTypeConverter()->convertType(operation.getOutput().getType()));
+    if (inputType.getElementType() == outputType.getElementType()) {
+      rewriter.replaceOp(operation, adaptor.getInput());
+      return success();
+    }
+    Value result =
+      inputType.getElementType().isSignlessInteger(8)
+        ? convertSignedI8ToF32(rewriter, operation.getLoc(), adaptor.getInput())
+        : convertFloatingTensor(rewriter,
+                                operation.getLoc(),
+                                adaptor.getInput(),
+                                outputType.getElementType());
+    rewriter.replaceOp(operation, result);
+    return success();
+  }
+};
+
+class ConvertZeroPointCast final : public OpConversionPattern<ZeroPointCastOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    ZeroPointCastOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto outputType = cast<RankedTensorType>(
+      getTypeConverter()->convertType(operation.getOutput().getType()));
+    Value empty = rewriter.create<tensor::EmptyOp>(
+      operation.getLoc(),
+      outputType.getShape(),
+      outputType.getElementType(),
+      getDynamicSizeValues(
+        rewriter, operation.getLoc(), adaptor.getInput(), outputType));
+    const bool toUnsigned = operation.getToUnsigned();
+    const int64_t zeroPoint = operation.getZeroPoint();
+    auto converted = rewriter.create<linalg::MapOp>(
+      operation.getLoc(),
+      ValueRange{adaptor.getInput()},
+      empty,
+      [toUnsigned, zeroPoint](
+        OpBuilder& nested, Location nestedLocation, ValueRange values) {
+        Type wide = nested.getI16Type();
+        Value source = values.front();
+        if (!toUnsigned) {
+          source = nested
+                     .create<UnrealizedConversionCastOp>(
+                       nestedLocation, nested.getI8Type(), source)
+                     .getResult(0);
+        }
+        Value widened =
+          toUnsigned
+            ? Value(nested.create<arith::ExtSIOp>(nestedLocation, wide, source))
+            : Value(
+                nested.create<arith::ExtUIOp>(nestedLocation, wide, source));
+        Value offset = nested.create<arith::ConstantOp>(
+          nestedLocation, nested.getI16IntegerAttr(zeroPoint));
+        Value rebased = toUnsigned ? Value(nested.create<arith::AddIOp>(
+                                       nestedLocation, widened, offset))
+                                   : Value(nested.create<arith::SubIOp>(
+                                       nestedLocation, widened, offset));
+        const int64_t minimum = toUnsigned ? 0 : -128;
+        const int64_t maximum = toUnsigned ? 255 : 127;
+        Value lower = nested.create<arith::ConstantOp>(
+          nestedLocation, nested.getI16IntegerAttr(minimum));
+        Value upper = nested.create<arith::ConstantOp>(
+          nestedLocation, nested.getI16IntegerAttr(maximum));
+        Value clamped = nested.create<arith::MaxSIOp>(
+          nestedLocation,
+          nested.create<arith::MinSIOp>(nestedLocation, rebased, upper),
+          lower);
+        Value result = nested.create<arith::TruncIOp>(
+          nestedLocation, nested.getI8Type(), clamped);
+        if (toUnsigned) {
+          result =
+            nested
+              .create<UnrealizedConversionCastOp>(
+                nestedLocation,
+                IntegerType::get(nested.getContext(),
+                                 8,
+                                 IntegerType::SignednessSemantics::Unsigned),
+                result)
+              .getResult(0);
+        }
+        nested.create<linalg::YieldOp>(nestedLocation, result);
+      });
+    rewriter.replaceOp(operation, converted.getResults());
+    return success();
+  }
+};
+
 class ConvertGemm final : public OpConversionPattern<GemmOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
@@ -2640,36 +3036,53 @@ class ConvertGemm final : public OpConversionPattern<GemmOp> {
     GemmOp operation,
     OpAdaptor adaptor,
     ConversionPatternRewriter& rewriter) const final {
-    auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
-    auto weightType = cast<RankedTensorType>(adaptor.getWeight().getType());
+    const bool quantized = operation.getInt8ScaleTerm() != 0;
+    Value sourceInput = applyFP16Boundary(
+      rewriter, operation.getLoc(), operation, adaptor.getInput());
+    Value sourceWeight = adaptor.getWeight();
+    auto weightType = cast<RankedTensorType>(sourceWeight.getType());
+    if (!quantized && !weightType.getElementType().isF32()) {
+      sourceWeight = convertFloatingTensor(
+        rewriter, operation.getLoc(), sourceWeight, rewriter.getF32Type());
+      weightType = cast<RankedTensorType>(sourceWeight.getType());
+    }
+    auto inputType = cast<RankedTensorType>(sourceInput.getType());
     auto outputType = cast<RankedTensorType>(operation.getOutput().getType());
     const int64_t m = inputType.getShape()[0];
     const int64_t k = inputType.getShape()[1];
     const int64_t n = weightType.getShape()[0];
+    Value rowScale;
+    if (quantized) {
+      rowScale =
+        computeGemmRowScales(rewriter, operation.getLoc(), sourceInput);
+      sourceInput = quantizeSignedI8(
+        rewriter, operation.getLoc(), sourceInput, rowScale, 0);
+      inputType = cast<RankedTensorType>(sourceInput.getType());
+    }
     auto matrixInputType =
       RankedTensorType::get({1, m, k}, inputType.getElementType());
     Value input;
     if (inputType.hasStaticShape()) {
       input = reshapeValue(
-        rewriter, operation.getLoc(), adaptor.getInput(), matrixInputType);
+        rewriter, operation.getLoc(), sourceInput, matrixInputType);
     } else {
       SmallVector<ReassociationIndices> reassociation = {{0, 1}, {2}};
       SmallVector<OpFoldResult> outputShape;
       outputShape.push_back(rewriter.getIndexAttr(1));
-      Value dynamicM = rewriter.create<tensor::DimOp>(
-        operation.getLoc(), adaptor.getInput(), 0);
+      Value dynamicM =
+        rewriter.create<tensor::DimOp>(operation.getLoc(), sourceInput, 0);
       outputShape.push_back(dynamicM);
       outputShape.push_back(rewriter.getIndexAttr(k));
       input = rewriter.create<tensor::ExpandShapeOp>(operation.getLoc(),
                                                      matrixInputType,
-                                                     adaptor.getInput(),
+                                                     sourceInput,
                                                      reassociation,
                                                      outputShape);
     }
     auto matrixWeightType =
       RankedTensorType::get({1, n, k}, weightType.getElementType());
     Value weight = reshapeValue(
-      rewriter, operation.getLoc(), adaptor.getWeight(), matrixWeightType);
+      rewriter, operation.getLoc(), sourceWeight, matrixWeightType);
     auto transposedWeightType =
       RankedTensorType::get({1, k, n}, weightType.getElementType());
     weight = rewriter.create<tosa::TransposeOp>(operation.getLoc(),
@@ -2677,9 +3090,27 @@ class ConvertGemm final : public OpConversionPattern<GemmOp> {
                                                 weight,
                                                 ArrayRef<int32_t>{0, 2, 1});
     auto matrixOutputType =
-      RankedTensorType::get({1, m, n}, outputType.getElementType());
-    Value result = rewriter.create<tosa::MatMulOp>(
-      operation.getLoc(), matrixOutputType, input, weight);
+      RankedTensorType::get({1, m, n},
+                            quantized ? static_cast<Type>(rewriter.getI32Type())
+                                      : outputType.getElementType());
+    Value result;
+    if (quantized) {
+      Value zero =
+        createIntegerZero(rewriter,
+                          operation.getLoc(),
+                          RankedTensorType::get({1}, rewriter.getI8Type()));
+      result = rewriter.create<tosa::MatMulOp>(
+        operation.getLoc(), matrixOutputType, input, weight, zero, zero);
+      result = dequantizeGemmAccumulator(rewriter,
+                                         operation.getLoc(),
+                                         result,
+                                         rowScale,
+                                         adaptor.getScales().front());
+      matrixOutputType = cast<RankedTensorType>(result.getType());
+    } else {
+      result = rewriter.create<tosa::MatMulOp>(
+        operation.getLoc(), matrixOutputType, input, weight);
+    }
     Value shift = createI8Zero(rewriter, operation.getLoc());
     auto biasType =
       RankedTensorType::get({1, 1, n}, outputType.getElementType());
@@ -2710,6 +3141,7 @@ class ConvertGemm final : public OpConversionPattern<GemmOp> {
       result = rewriter.create<tensor::CollapseShapeOp>(
         operation.getLoc(), outputType, result, reassociation);
     }
+    result = applyFP16Boundary(rewriter, operation.getLoc(), operation, result);
     rewriter.replaceOp(operation, result);
     return success();
   }
@@ -2727,20 +3159,33 @@ class ConvertBinary final : public ConversionPattern {
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
     if (operands.empty() || operands.size() > 2 ||
-        operation->getNumResults() != 1 ||
-        !isRankedF32Tensor(operation->getResult(0).getType())) {
+        operation->getNumResults() != 1) {
       return operation->emitOpError(
         "supports one result and one or two operands");
     }
     auto sourceOutput =
       cast<RankedTensorType>(operation->getResult(0).getType());
+    const bool signedI8 = sourceOutput.getElementType().isSignlessInteger(8);
+    if (!sourceOutput.getElementType().isF32() && !signedI8) {
+      return operation->emitOpError("supports f32 or signed i8 tensors only");
+    }
     auto outputType =
       sourceOutput.getRank() == 3 ? getNHWCType(sourceOutput) : sourceOutput;
     FailureOr<int64_t> opType = getRequiredIntegerAttr(operation, "op_type");
     if (failed(opType)) {
       return failure();
     }
+    if (signedI8 && (operands.size() != 2 || *opType != 4)) {
+      return operation->emitOpError(
+        "signed i8 BinaryOp only supports two-input maximum");
+    }
     SmallVector<Value> values(operands.begin(), operands.end());
+    if (!signedI8) {
+      for (Value& value : values) {
+        value =
+          applyFP16Boundary(rewriter, operation->getLoc(), operation, value);
+      }
+    }
     if (values.size() == 1) {
       values.push_back(createSplat(rewriter,
                                    operation->getLoc(),
@@ -2806,6 +3251,10 @@ class ConvertBinary final : public ConversionPattern {
       default:
         return operation->emitOpError(
           "supports ADD/SUB/MUL/DIV/MAX/MIN/POW and reverse variants only");
+    }
+    if (!signedI8) {
+      result =
+        applyFP16Boundary(rewriter, operation->getLoc(), operation, result);
     }
     rewriter.replaceOp(operation, result);
     return success();
@@ -3266,6 +3715,11 @@ class ConvertNCNNToTosaPass final
 
     RewritePatternSet patterns(context);
     patterns.add<ConvertConvolution,
+                 ConvertQuantize,
+                 ConvertDequantize,
+                 ConvertRequantize,
+                 ConvertCast,
+                 ConvertZeroPointCast,
                  ConvertRelu,
                  ConvertPooling,
                  ConvertSplit,
@@ -3307,12 +3761,18 @@ class ConvertNCNNToTosaPass final
                            tensor::TensorDialect,
                            tosa::TosaDialect>();
     target.addLegalOp<ModuleOp>();
+    target.addLegalOp<UnrealizedConversionCastOp>();
     target.addIllegalOp<ConvolutionOp>();
     target.addDynamicallyLegalOp<PoolingOp>([](PoolingOp operation) {
       return operation.getKind() == static_cast<int64_t>(PoolKind::Average) &&
              operation.getIncludePad();
     });
     target.addIllegalOp<ReluOp,
+                        QuantizeOp,
+                        DequantizeOp,
+                        RequantizeOp,
+                        CastOp,
+                        ZeroPointCastOp,
                         DetectionOutputOp,
                         SplitOp,
                         ConcatOp,

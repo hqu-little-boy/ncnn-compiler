@@ -367,29 +367,39 @@ ImportResult import_gemm(ImportContext& importer, const LayerContext& context) {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 18, 20, 21, 22};
   auto valid = arity_params(context, 1, 1, kAllowed);
   auto params = ncnn_graph::decode_gemm_params(context.layer.get_params());
-  if (!valid || !params || context.layer.get_weights().size() != 2 ||
+  if (!valid || !params ||
+      context.layer.get_weights().size() !=
+        (params && params->int8_scale_term != 0 ? 3U : 2U) ||
       params->constant_a || !params->constant_b || !params->constant_c ||
       params->transpose_a || !params->transpose_b || params->broadcast_c != 4 ||
       params->output_n1m != 0 || params->output_elempack != 0 ||
       params->output_elemtype != 0 || params->output_transpose != 0 ||
-      params->quantize_term != 0) {
+      (params->int8_scale_term != 0 && params->int8_scale_term != 1 &&
+       params->int8_scale_term != 2)) {
     return std::unexpected(
       make_error(context,
-                 "only FP32 dynamic-A, transposed constant-B Gemm with row "
-                 "bias is supported"));
+                 "only dynamic-A, transposed constant-B Gemm with row bias "
+                 "and optional int8 B is supported"));
   }
   auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
   if (!input) {
     return std::unexpected(input.error());
   }
   llvm::SmallVector<mlir::Value> values{*input};
-  for (std::size_t index = 0; index < 2; ++index) {
-    if (context.layer.get_weights()[index].get_dtype() !=
-        ncnn_graph::DataType::Float32) {
-      return std::unexpected(make_error(context, "Gemm weights must be FP32"));
+  const bool quantized = params->int8_scale_term != 0;
+  for (std::size_t index = 0; index < context.layer.get_weights().size();
+       ++index) {
+    const auto expected = index == 0 && quantized
+                            ? ncnn_graph::DataType::Int8
+                            : ncnn_graph::DataType::Float32;
+    if (context.layer.get_weights()[index].get_dtype() != expected) {
+      return std::unexpected(
+        make_error(context, "Gemm weight, bias, or scale has invalid dtype"));
     }
-    auto value = importer.make_constant(
-      context, context.layer.get_weights()[index], index);
+    auto value = importer.make_constant(context,
+                                        context.layer.get_weights()[index],
+                                        index,
+                                        index == 0 && !quantized);
     if (!value) {
       return std::unexpected(value.error());
     }
@@ -399,18 +409,23 @@ ImportResult import_gemm(ImportContext& importer, const LayerContext& context) {
   mlir::ncnn::GemmOp::Properties properties;
   properties.alpha = builder.getF32FloatAttr(params->alpha);
   properties.beta = builder.getF32FloatAttr(params->beta);
+  properties.int8_scale_term =
+    builder.getI64IntegerAttr(params->int8_scale_term);
   auto type = importer.infer_single_tensor_result<mlir::ncnn::GemmOp>(
     builder.getUnknownLoc(), values, properties);
   if (mlir::failed(type)) {
     return std::unexpected(make_error(context, importer.captured_diagnostic()));
   }
-  auto op = builder.create<mlir::ncnn::GemmOp>(builder.getUnknownLoc(),
-                                               *type,
-                                               values[0],
-                                               values[1],
-                                               values[2],
-                                               properties.alpha,
-                                               properties.beta);
+  auto op =
+    builder.create<mlir::ncnn::GemmOp>(builder.getUnknownLoc(),
+                                       *type,
+                                       values[0],
+                                       values[1],
+                                       values[2],
+                                       mlir::ValueRange(values).drop_front(3),
+                                       properties.alpha,
+                                       properties.beta,
+                                       properties.int8_scale_term);
   importer.tag_source(op, context);
   return importer.bind_blob(
     context, context.layer.get_outputs()[0], op.getOutput());

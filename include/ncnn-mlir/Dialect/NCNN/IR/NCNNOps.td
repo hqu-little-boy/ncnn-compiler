@@ -294,12 +294,58 @@ def NCNN_InnerProductOp
 }
 
 def NCNN_GemmOp : NCNN_LayerOp<"gemm", [InferTensorTypeAdaptor]> {
-  let summary = "FP32 dynamic-A Gemm with transposed constant B and row bias.";
+  let summary = "Dynamic-A Gemm with transposed constant B and row bias.";
   let arguments = (ins NCNN_RankedTensor:$input,
     NCNN_RankedTensor:$weight,
     NCNN_RankedTensor:$bias,
+    Variadic<NCNN_RankedTensor>:$scales,
     F32Attr:$alpha,
-    F32Attr:$beta);
+    F32Attr:$beta,
+    DefaultValuedOptionalAttr<I64Attr, "0">:$int8_scale_term);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_QuantizeOp : NCNN_LayerOp<"quantize", [InferTensorTypeAdaptor]> {
+  let summary = "ncnn FP32 to signed INT8 quantization.";
+  let arguments = (ins NCNN_RankedTensor:$input, NCNN_RankedTensor:$scale);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_DequantizeOp
+  : NCNN_LayerOp<"dequantize", [InferTensorTypeAdaptor]> {
+  let summary = "ncnn INT32 accumulator dequantization with optional bias.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$scale,
+    Variadic<NCNN_RankedTensor>:$bias);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_RequantizeOp
+  : NCNN_LayerOp<"requantize", [InferTensorTypeAdaptor]> {
+  let summary = "ncnn INT32 accumulator requantization to signed INT8.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$input_scale,
+    NCNN_RankedTensor:$output_scale,
+    Variadic<NCNN_RankedTensor>:$bias,
+    I64Attr:$activation_type,
+    DefaultValuedOptionalAttr<DenseF32ArrayAttr, "{}">:$activation_params);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_CastOp : NCNN_LayerOp<"cast", [InferTensorTypeAdaptor]> {
+  let summary = "Explicit ncnn storage cast.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    I64Attr:$type_from,
+    I64Attr:$type_to);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_ZeroPointCastOp
+  : NCNN_LayerOp<"zero_point_cast", [InferTensorTypeAdaptor]> {
+  let summary = "Explicit saturating rebias between unsigned and signed INT8.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    I64Attr:$zero_point,
+    BoolAttr:$to_unsigned);
   let results = (outs NCNN_RankedTensor:$output);
 }
 

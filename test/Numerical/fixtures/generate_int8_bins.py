@@ -50,6 +50,16 @@ def inner_product(term):
     )
 
 
+def gemm():
+    weights = [3, -2, 1, 4, -4, 2, 5, -1]
+    return (
+        int8_tensor(weights)
+        + struct.pack("<I", 0)
+        + floats([0.25, -0.5, 0.125, 0.75])
+        + floats([6.0])
+    )
+
+
 case = sys.argv[2]
 if case in ("convolution_int8_term1", "convolution_int8_term2"):
     term = 1 if case.endswith("term1") else 2
@@ -67,6 +77,8 @@ elif case in ("inner_product_int8_term1", "inner_product_int8_term2"):
     payload = inner_product(1 if case.endswith("term1") else 2)
 elif case == "int8_complete_chain":
     payload = convolution(101, 2, 3) + depthwise(101, 3) + convolution(1, 3, 2)
+elif case == "gemm_int8_term2":
+    payload = gemm()
 else:
     raise ValueError(f"unknown INT8 fixture {case}")
 

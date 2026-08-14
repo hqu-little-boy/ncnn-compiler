@@ -106,6 +106,17 @@ inline constexpr std::array kLayerDescriptors{
   LayerDescriptor{
     .source_type = "Gemm",
     .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
+  LayerDescriptor{
+    .source_type = "Quantize",
+    .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
+  LayerDescriptor{
+    .source_type = "Dequantize",
+    .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
+  LayerDescriptor{
+    .source_type = "Requantize",
+    .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "Cast",
+                  .capabilities = LayerCapability::Lowerable},
 };
 
 constexpr std::span<const LayerDescriptor> get_layer_descriptors() noexcept {

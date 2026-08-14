@@ -197,6 +197,7 @@ set(int8_cases
     depthwise_int8_term102
     inner_product_int8_term1
     inner_product_int8_term2
+    gemm_int8_term2
     int8_complete_chain)
 foreach(int8_case IN LISTS int8_cases)
     set(${int8_case}_bin
@@ -213,6 +214,8 @@ foreach(int8_case IN LISTS int8_cases)
         set(int8_input_shape 3x3x4)
     elseif(int8_case MATCHES "^inner_product")
         set(int8_input_shape 1x1x4)
+    elseif(int8_case MATCHES "^gemm")
+        set(int8_input_shape 2x1x3)
     else()
         set(int8_input_shape 2x3x4)
     endif()
@@ -850,6 +853,7 @@ set(numerical_fixture_targets
     compile_depthwise_int8_term102
     compile_inner_product_int8_term1
     compile_inner_product_int8_term2
+    compile_gemm_int8_term2
     compile_int8_complete_chain
     compile_convolution_scalar
     compile_convolution_no_bias
@@ -1031,6 +1035,7 @@ target_compile_definitions(numerical_tests PRIVATE
     DEPTHWISE_INT8_TERM102_BIN_PATH="${depthwise_int8_term102_bin}"
     INNER_PRODUCT_INT8_TERM1_BIN_PATH="${inner_product_int8_term1_bin}"
     INNER_PRODUCT_INT8_TERM2_BIN_PATH="${inner_product_int8_term2_bin}"
+    GEMM_INT8_TERM2_BIN_PATH="${gemm_int8_term2_bin}"
     INT8_COMPLETE_CHAIN_BIN_PATH="${int8_complete_chain_bin}"
     CONVOLUTION_INT8_TERM1_LIBRARY_PATH="${convolution_int8_term1_LIBRARY}"
     CONVOLUTION_INT8_TERM2_LIBRARY_PATH="${convolution_int8_term2_LIBRARY}"
@@ -1042,6 +1047,7 @@ target_compile_definitions(numerical_tests PRIVATE
     DEPTHWISE_INT8_TERM102_LIBRARY_PATH="${depthwise_int8_term102_LIBRARY}"
     INNER_PRODUCT_INT8_TERM1_LIBRARY_PATH="${inner_product_int8_term1_LIBRARY}"
     INNER_PRODUCT_INT8_TERM2_LIBRARY_PATH="${inner_product_int8_term2_LIBRARY}"
+    GEMM_INT8_TERM2_LIBRARY_PATH="${gemm_int8_term2_LIBRARY}"
     INT8_COMPLETE_CHAIN_LIBRARY_PATH="${int8_complete_chain_LIBRARY}"
     INT8_COMPLETE_CHAIN_TOSA_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/int8_complete_chain/model.tosa.mlir"
     INT8_COMPLETE_CHAIN_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/int8_complete_chain/int8_complete_chain.json"

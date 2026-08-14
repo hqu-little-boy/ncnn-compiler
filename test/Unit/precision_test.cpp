@@ -60,6 +60,14 @@ TEST(PrecisionTest, RegistersOperatorCapabilities) {
             OperatorPrecisionCapability::FP16Arithmetic);
   EXPECT_EQ(ncnn_mlir::operator_precision_capability("ncnn.softmax"),
             OperatorPrecisionCapability::FP16Boundary);
+  for (const char* operation : {"ncnn.deconvolution",
+                                "ncnn.gemm",
+                                "ncnn.binary",
+                                "ncnn.pooling",
+                                "ncnn.concat"}) {
+    EXPECT_EQ(ncnn_mlir::operator_precision_capability(operation),
+              OperatorPrecisionCapability::FP16Boundary);
+  }
   EXPECT_EQ(ncnn_mlir::operator_precision_capability("ncnn.relu"),
             OperatorPrecisionCapability::Float32Only);
 }

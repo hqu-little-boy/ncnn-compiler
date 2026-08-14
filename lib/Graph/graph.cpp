@@ -546,7 +546,7 @@ std::expected<GemmParams, std::string> decode_gemm_params(
   auto elempack = decode_int_param(params, 12, 0, "output_elempack");
   auto elemtype = decode_int_param(params, 13, 0, "output_elemtype");
   auto transpose = decode_int_param(params, 14, 0, "output_transpose");
-  auto quantize = decode_int_param(params, 18, 0, "quantize_term");
+  auto quantize = decode_int_param(params, 18, 0, "int8_scale_term");
   if (!alpha || !beta || !trans_a || !trans_b || !constant_a || !constant_b ||
       !constant_c || !m || !n || !k || !broadcast || !n1m || !elempack ||
       !elemtype || !transpose || !quantize) {
@@ -580,8 +580,64 @@ std::expected<GemmParams, std::string> decode_gemm_params(
                       .output_elempack = *elempack,
                       .output_elemtype = *elemtype,
                       .output_transpose = *transpose,
-                      .quantize_term = *quantize};
+                      .int8_scale_term = *quantize};
   return result;
+}
+
+std::expected<QuantizeParams, std::string> decode_quantize_params(
+  const ParamDict& params) {
+  auto count = decode_int_param(params, 0, 1, "scale_data_size");
+  if (!count || *count <= 0) {
+    return std::unexpected(count ? "Quantize scale count must be positive"
+                                 : count.error());
+  }
+  return QuantizeParams{.scale_count = *count};
+}
+
+std::expected<DequantizeParams, std::string> decode_dequantize_params(
+  const ParamDict& params) {
+  auto scale = decode_int_param(params, 0, 1, "scale_data_size");
+  auto bias = decode_int_param(params, 1, 0, "bias_data_size");
+  if (!scale || !bias) {
+    return std::unexpected(!scale ? scale.error() : bias.error());
+  }
+  if (*scale <= 0 || *bias < 0) {
+    return std::unexpected(
+      "Dequantize scale count must be positive and bias count non-negative");
+  }
+  return DequantizeParams{.scale_count = *scale, .bias_count = *bias};
+}
+
+std::expected<RequantizeParams, std::string> decode_requantize_params(
+  const ParamDict& params) {
+  auto input = decode_int_param(params, 0, 1, "scale_in_data_size");
+  auto output = decode_int_param(params, 1, 1, "scale_out_data_size");
+  auto bias = decode_int_param(params, 2, 0, "bias_data_size");
+  auto activation = decode_int_param(params, 3, 0, "activation_type");
+  if (!input || !output || !bias || !activation) {
+    return std::unexpected("invalid Requantize parameter type");
+  }
+  if (*input <= 0 || *output <= 0 || *bias < 0 || *activation < 0 ||
+      *activation > 6) {
+    return std::unexpected("invalid Requantize scale, bias, or activation");
+  }
+  return RequantizeParams{.input_scale_count = *input,
+                          .output_scale_count = *output,
+                          .bias_count = *bias,
+                          .activation_type = *activation};
+}
+
+std::expected<CastParams, std::string> decode_cast_params(
+  const ParamDict& params) {
+  auto from = decode_int_param(params, 0, 0, "type_from");
+  auto to = decode_int_param(params, 1, 0, "type_to");
+  if (!from || !to) {
+    return std::unexpected(!from ? from.error() : to.error());
+  }
+  if (*from < 0 || *from > 4 || *to < 0 || *to > 4) {
+    return std::unexpected("Cast type must be auto, fp32, fp16, int8, or bf16");
+  }
+  return CastParams{.type_from = *from, .type_to = *to};
 }
 
 // ───────────────────────── Tensor ─────────────────────────
@@ -1431,10 +1487,11 @@ std::expected<void, std::string> load_gemm_weights(Layer& layer,
       params->transpose_a || !params->transpose_b || params->broadcast_c != 4 ||
       params->output_n1m != 0 || params->output_elempack != 0 ||
       params->output_elemtype != 0 || params->output_transpose != 0 ||
-      params->quantize_term != 0) {
+      (params->int8_scale_term != 0 && params->int8_scale_term != 1 &&
+       params->int8_scale_term != 2)) {
     return std::unexpected(
-      "only FP32 dynamic-A, transposed constant-B Gemm with row bias is "
-      "supported");
+      "only dynamic-A, transposed constant-B Gemm with row bias and optional "
+      "int8 B is supported");
   }
   auto outputSize = positive_size(params->constant_n, "Gemm constantN");
   auto inputSize = positive_size(params->constant_k, "Gemm constantK");
@@ -1463,6 +1520,79 @@ std::expected<void, std::string> load_gemm_weights(Layer& layer,
     return std::unexpected(std::format("Gemm C: {}", bias.error()));
   }
   layer.add_weight(std::move(*bias));
+  if (params->int8_scale_term != 0) {
+    auto scale = load_weight(cursor, 1, 1, {1});
+    if (!scale) {
+      return std::unexpected(
+        std::format("Gemm B int8 scale: {}", scale.error()));
+    }
+    layer.add_weight(std::move(*scale));
+  }
+  return {};
+}
+
+std::expected<void, std::string> load_quantize_weights(Layer& layer,
+                                                       BinCursor& cursor) {
+  auto params = decode_quantize_params(layer.get_params());
+  if (!params) {
+    return std::unexpected(params.error());
+  }
+  auto scale =
+    load_weight(cursor, params->scale_count, 1, {params->scale_count});
+  if (!scale) {
+    return std::unexpected(std::format("Quantize scale: {}", scale.error()));
+  }
+  layer.add_weight(std::move(*scale));
+  return {};
+}
+
+std::expected<void, std::string> load_dequantize_weights(Layer& layer,
+                                                         BinCursor& cursor) {
+  auto params = decode_dequantize_params(layer.get_params());
+  if (!params) {
+    return std::unexpected(params.error());
+  }
+  auto scale =
+    load_weight(cursor, params->scale_count, 1, {params->scale_count});
+  if (!scale) {
+    return std::unexpected(std::format("Dequantize scale: {}", scale.error()));
+  }
+  layer.add_weight(std::move(*scale));
+  if (params->bias_count != 0) {
+    auto bias =
+      load_weight(cursor, params->bias_count, 1, {params->bias_count});
+    if (!bias) {
+      return std::unexpected(std::format("Dequantize bias: {}", bias.error()));
+    }
+    layer.add_weight(std::move(*bias));
+  }
+  return {};
+}
+
+std::expected<void, std::string> load_requantize_weights(Layer& layer,
+                                                         BinCursor& cursor) {
+  auto params = decode_requantize_params(layer.get_params());
+  if (!params) {
+    return std::unexpected(params.error());
+  }
+  for (auto [count, name] :
+       {std::pair{params->input_scale_count, "input scale"},
+        std::pair{params->output_scale_count, "output scale"}}) {
+    auto scale = load_weight(cursor, count, 1, {count});
+    if (!scale) {
+      return std::unexpected(
+        std::format("Requantize {}: {}", name, scale.error()));
+    }
+    layer.add_weight(std::move(*scale));
+  }
+  if (params->bias_count != 0) {
+    auto bias =
+      load_weight(cursor, params->bias_count, 1, {params->bias_count});
+    if (!bias) {
+      return std::unexpected(std::format("Requantize bias: {}", bias.error()));
+    }
+    layer.add_weight(std::move(*bias));
+  }
   return {};
 }
 
@@ -1485,6 +1615,9 @@ std::span<const WeightLoaderEntry> weight_loaders() noexcept {
                       .loader = load_inner_product_weights},
     WeightLoaderEntry{.type = "BatchNorm", .loader = load_batch_norm_weights},
     WeightLoaderEntry{.type = "Gemm", .loader = load_gemm_weights},
+    WeightLoaderEntry{.type = "Quantize", .loader = load_quantize_weights},
+    WeightLoaderEntry{.type = "Dequantize", .loader = load_dequantize_weights},
+    WeightLoaderEntry{.type = "Requantize", .loader = load_requantize_weights},
   };
   return kWeightLoaders;
 }

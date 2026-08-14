@@ -105,7 +105,10 @@ OperatorPrecisionCapability operator_precision_capability(
     return OperatorPrecisionCapability::FP16Arithmetic;
   }
   if (operation == "ncnn.sigmoid" || operation == "ncnn.gelu" ||
-      operation == "ncnn.softmax" || operation == "ncnn.batch_norm") {
+      operation == "ncnn.softmax" || operation == "ncnn.batch_norm" ||
+      operation == "ncnn.deconvolution" || operation == "ncnn.gemm" ||
+      operation == "ncnn.binary" || operation == "ncnn.pooling" ||
+      operation == "ncnn.concat") {
     return OperatorPrecisionCapability::FP16Boundary;
   }
   return OperatorPrecisionCapability::Float32Only;

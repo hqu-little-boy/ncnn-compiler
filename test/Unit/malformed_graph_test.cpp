@@ -449,3 +449,65 @@ TEST_F(MalformedGraphTest, SequentialDepthwiseAndInnerProductFp32Weights) {
   EXPECT_TRUE(inner_product_shape.size() == 2 && inner_product_shape[0] == 3 &&
               inner_product_shape[1] == 2);
 }
+
+TEST_F(MalformedGraphTest, QuantizationLayersConsumeRawFp32WeightsInOrder) {
+  constexpr std::string_view graph_text =
+    "7767517\n"
+    "4 4\n"
+    "Input input 0 1 in\n"
+    "Quantize quantize 1 1 in quantized 0=1\n"
+    "Dequantize dequantize 1 1 quantized restored 0=1 1=1\n"
+    "Requantize requantize 1 1 restored out 0=1 1=1 2=1 3=0\n";
+  std::vector<std::byte> weights;
+  for (int index = 0; index < 6; ++index) {
+    append_u32_le(weights, 0x3f800000);
+  }
+  auto bin_path = fixture_dir / "quantization-layers.bin";
+  ASSERT_TRUE(write_bytes(bin_path, weights));
+
+  auto graph = load_text("quantization-layers", graph_text, bin_path.string());
+  ASSERT_TRUE(graph) << graph.error();
+  EXPECT_EQ(graph->get_layers()[1].get_weights().size(), 1U);
+  EXPECT_EQ(graph->get_layers()[2].get_weights().size(), 2U);
+  EXPECT_EQ(graph->get_layers()[3].get_weights().size(), 3U);
+  for (std::size_t layer = 1; layer < 4; ++layer) {
+    for (const auto& tensor : graph->get_layers()[layer].get_weights()) {
+      EXPECT_EQ(tensor.get_dtype(), ncnn_graph::DataType::Float32);
+      EXPECT_EQ(tensor.element_count(), 1U);
+    }
+  }
+
+  weights.pop_back();
+  auto truncated_path = fixture_dir / "quantization-layers-truncated.bin";
+  ASSERT_TRUE(write_bytes(truncated_path, weights));
+  auto truncated = load_text(
+    "quantization-layers-truncated", graph_text, truncated_path.string());
+  EXPECT_TRUE(!truncated && contains(truncated.error(), "Requantize bias"));
+}
+
+TEST_F(MalformedGraphTest, QuantizedGemmLoadsSignedWeightAndScale) {
+  constexpr std::string_view graph_text =
+    "7767517\n"
+    "2 2\n"
+    "Input input 0 1 in\n"
+    "Gemm gemm 1 1 in out 3=1 5=1 6=1 8=3 9=4 10=4 18=2\n";
+  std::vector<std::byte> weights;
+  append_u32_le(weights, 0x000D4B38);
+  weights.insert(weights.end(), 12, std::byte{1});
+  append_u32_le(weights, 0);
+  for (int index = 0; index < 3; ++index) {
+    append_u32_le(weights, 0x3f800000);
+  }
+  append_u32_le(weights, 0x40800000);
+  auto bin_path = fixture_dir / "quantized-gemm.bin";
+  ASSERT_TRUE(write_bytes(bin_path, weights));
+
+  auto graph = load_text("quantized-gemm", graph_text, bin_path.string());
+  ASSERT_TRUE(graph) << graph.error();
+  const auto& tensors = graph->get_layers()[1].get_weights();
+  ASSERT_EQ(tensors.size(), 3U);
+  EXPECT_EQ(tensors[0].get_dtype(), ncnn_graph::DataType::Int8);
+  EXPECT_EQ(tensors[0].element_count(), 12U);
+  EXPECT_EQ(tensors[1].get_dtype(), ncnn_graph::DataType::Float32);
+  EXPECT_EQ(tensors[2].get_shape()[0], 1);
+}

@@ -73,7 +73,8 @@ std::string int8_case_name(const ::testing::TestParamInfo<Int8Case>& info) {
                              "DepthwiseTerm101",
                              "DepthwiseTerm102",
                              "InnerProductTerm1",
-                             "InnerProductTerm2"};
+                             "InnerProductTerm2",
+                             "GemmTerm2"};
   return names[info.index];
 }
 
@@ -160,7 +161,14 @@ INSTANTIATE_TEST_SUITE_P(
                              TensorShape(4, 1, 1),
                              3,
                              1.0e-5F,
-                             0x1F02U}),
+                             0x1F02U},
+                    Int8Case{"gemm_int8_term2",
+                             GEMM_INT8_TERM2_BIN_PATH,
+                             GEMM_INT8_TERM2_LIBRARY_PATH,
+                             TensorShape(3, 1, 2),
+                             12,
+                             1.0e-5F,
+                             0x6E22U}),
   int8_case_name);
 
 TEST(Int8Model, CompleteRequantizedChainMatchesNcnn) {

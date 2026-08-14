@@ -236,10 +236,10 @@ FailureOr<RankedTensorType> computeDeconvResult(
     return emitOptionalError(location, message);
   };
   if (!input || !weight || !input.getElementType().isF32() ||
-      !weight.getElementType().isF32() || !weight.hasStaticShape() ||
+      !isa<FloatType>(weight.getElementType()) || !weight.hasStaticShape() ||
       input.getRank() != 3 || weight.getRank() != 4) {
     return fail(
-      "Deconvolution requires FP32 input [I,H,W] and static weight "
+      "Deconvolution requires FP32 input [I,H,W] and static floating weight "
       "[O,I,K_h,K_w]");
   }
   if (ShapedType::isDynamic(input.getShape()[0]) ||
@@ -512,11 +512,15 @@ FailureOr<RankedTensorType> computePoolResult(std::optional<Location> location,
   if (input.getRank() != 3) {
     return fail("pooling input must have [C,H,W] layout");
   }
-  if (!input.getElementType().isF32()) {
-    return fail("pooling input must be f32");
-  }
   if (kind != PoolKind::Maximum && kind != PoolKind::Average) {
     return fail("pooling kind is invalid");
+  }
+  const bool signedI8 = input.getElementType().isSignlessInteger(8);
+  if (!input.getElementType().isF32() && !signedI8) {
+    return fail("pooling input must be f32 or signed i8");
+  }
+  if (signedI8 && kind != PoolKind::Maximum) {
+    return fail("signed i8 pooling only supports maximum");
   }
   ArrayRef<int64_t> inShape = input.getShape();
   if (!ShapedType::isDynamic(inShape[0]) && inShape[0] <= 0) {
@@ -917,9 +921,17 @@ FailureOr<RankedTensorType> computeBinaryResult(
     return emitOptionalError(location, "BinaryOp has invalid operand count");
   }
   auto first = llvm::dyn_cast<RankedTensorType>(inputs.front().getType());
-  if (!first || !first.getElementType().isF32()) {
-    return emitOptionalError(location,
-                             "BinaryOp operands must be f32 ranked tensors");
+  if (!first || (!first.getElementType().isF32() &&
+                 !first.getElementType().isSignlessInteger(8))) {
+    return emitOptionalError(
+      location,
+      "BinaryOp operands must be f32 or signed i8 ranked "
+      "tensors");
+  }
+  if (first.getElementType().isSignlessInteger(8) &&
+      (withScalar || opType != 4)) {
+    return emitOptionalError(
+      location, "signed i8 BinaryOp only supports two-input maximum");
   }
   if (withScalar) {
     return first;
@@ -1048,10 +1060,19 @@ FailureOr<RankedTensorType> computeBatchNormResult(
 FailureOr<RankedTensorType> computeGemmResult(std::optional<Location> location,
                                               RankedTensorType input,
                                               RankedTensorType weight,
-                                              RankedTensorType bias) {
+                                              RankedTensorType bias,
+                                              ValueRange scales,
+                                              int64_t int8ScaleTerm) {
+  const bool quantized = int8ScaleTerm != 0;
+  if (int8ScaleTerm != 0 && int8ScaleTerm != 1 && int8ScaleTerm != 2) {
+    return emitOptionalError(location,
+                             "Gemm int8 scale term must be 0, 1, or 2");
+  }
   if (!input || !weight || !bias || !input.getElementType().isF32() ||
-      !weight.getElementType().isF32() || !bias.getElementType().isF32() ||
-      input.getRank() != 2 || weight.getRank() != 2 || bias.getRank() != 1 ||
+      (quantized ? !weight.getElementType().isSignlessInteger(8)
+                 : !isa<FloatType>(weight.getElementType())) ||
+      !bias.getElementType().isF32() || input.getRank() != 2 ||
+      weight.getRank() != 2 || bias.getRank() != 1 ||
       ShapedType::isDynamic(input.getShape()[1]) ||
       ShapedType::isDynamic(weight.getShape()[0]) ||
       ShapedType::isDynamic(weight.getShape()[1]) ||
@@ -1062,8 +1083,179 @@ FailureOr<RankedTensorType> computeGemmResult(std::optional<Location> location,
       location,
       "Gemm expects input [M,K], weight [N,K], and bias [N] with static K/N");
   }
+  if ((!quantized && !scales.empty()) || (quantized && scales.size() != 1)) {
+    return emitOptionalError(
+      location, "Gemm scale operands do not match quantization mode");
+  }
+  if (quantized) {
+    auto scale = dyn_cast<RankedTensorType>(scales.front().getType());
+    if (!scale || !scale.getElementType().isF32() || scale.getRank() != 1 ||
+        !scale.hasStaticShape() || scale.getShape()[0] != 1) {
+      return emitOptionalError(location,
+                               "quantized Gemm B scale must be f32 [1]");
+    }
+  }
   return RankedTensorType::get({input.getShape()[0], weight.getShape()[0]},
                                input.getElementType());
+}
+
+LogicalResult validateScale(std::optional<Location> location,
+                            RankedTensorType input,
+                            RankedTensorType scale,
+                            StringRef operation) {
+  if (!scale || !scale.getElementType().isF32() || scale.getRank() != 1 ||
+      !scale.hasStaticShape() || scale.getShape()[0] <= 0) {
+    return emitOptionalError(
+      location, operation, " scale must be static f32 [N]");
+  }
+  const int64_t count = scale.getShape()[0];
+  if (count != 1 &&
+      (input.getRank() == 0 || ShapedType::isDynamic(input.getShape()[0]) ||
+       count != input.getShape()[0])) {
+    return emitOptionalError(
+      location, operation, " scale count must be one or match dimension zero");
+  }
+  return success();
+}
+
+LogicalResult validateOptionalBias(std::optional<Location> location,
+                                   RankedTensorType input,
+                                   ValueRange bias,
+                                   StringRef operation) {
+  if (bias.empty()) {
+    return success();
+  }
+  if (bias.size() != 1) {
+    return emitOptionalError(location, operation, " accepts at most one bias");
+  }
+  auto type = dyn_cast<RankedTensorType>(bias.front().getType());
+  if (!type || !type.getElementType().isF32() || type.getRank() != 1 ||
+      !type.hasStaticShape() || type.getShape()[0] <= 0 ||
+      (type.getShape()[0] != 1 &&
+       (input.getRank() == 0 || ShapedType::isDynamic(input.getShape()[0]) ||
+        type.getShape()[0] != input.getShape()[0]))) {
+    return emitOptionalError(
+      location, operation, " bias count must be one or match dimension zero");
+  }
+  return success();
+}
+
+FailureOr<RankedTensorType> computeQuantizeResult(
+  MLIRContext* context,
+  std::optional<Location> location,
+  RankedTensorType input,
+  RankedTensorType scale) {
+  if (!input || !input.getElementType().isF32()) {
+    return emitOptionalError(location, "Quantize input must be ranked f32");
+  }
+  if (failed(validateScale(location, input, scale, "Quantize"))) {
+    return failure();
+  }
+  return input.clone(IntegerType::get(context, 8));
+}
+
+FailureOr<RankedTensorType> computeDequantizeResult(
+  MLIRContext* context,
+  std::optional<Location> location,
+  RankedTensorType input,
+  RankedTensorType scale,
+  ValueRange bias) {
+  if (!input || !input.getElementType().isSignlessInteger(32)) {
+    return emitOptionalError(location, "Dequantize input must be ranked i32");
+  }
+  if (failed(validateScale(location, input, scale, "Dequantize")) ||
+      failed(validateOptionalBias(location, input, bias, "Dequantize"))) {
+    return failure();
+  }
+  return input.clone(Float32Type::get(context));
+}
+
+FailureOr<RankedTensorType> computeRequantizeResult(
+  MLIRContext* context,
+  std::optional<Location> location,
+  RankedTensorType input,
+  RankedTensorType inputScale,
+  RankedTensorType outputScale,
+  ValueRange bias,
+  int64_t activationType) {
+  if (!input || !input.getElementType().isSignlessInteger(32)) {
+    return emitOptionalError(location, "Requantize input must be ranked i32");
+  }
+  if (activationType < 0 || activationType > 6) {
+    return emitOptionalError(location, "Requantize activation type is invalid");
+  }
+  if (failed(validateScale(location, input, inputScale, "Requantize input")) ||
+      failed(
+        validateScale(location, input, outputScale, "Requantize output")) ||
+      failed(validateOptionalBias(location, input, bias, "Requantize"))) {
+    return failure();
+  }
+  return input.clone(IntegerType::get(context, 8));
+}
+
+FailureOr<RankedTensorType> computeCastResult(MLIRContext* context,
+                                              std::optional<Location> location,
+                                              RankedTensorType input,
+                                              int64_t from,
+                                              int64_t to) {
+  auto typeForCode = [&](int64_t code) -> Type {
+    switch (code) {
+      case 1:
+        return Float32Type::get(context);
+      case 2:
+        return Float16Type::get(context);
+      case 3:
+        return IntegerType::get(context, 8);
+      case 4:
+        return BFloat16Type::get(context);
+      default:
+        return {};
+    }
+  };
+  Type source = typeForCode(from);
+  Type target = typeForCode(to);
+  if (!input || !source || !target || input.getElementType() != source) {
+    return emitOptionalError(
+      location, "Cast requires explicit valid source and destination types");
+  }
+  const bool supported =
+    source == target ||
+    (source.isF32() && (target.isF16() || target.isBF16())) ||
+    (target.isF32() &&
+     (source.isF16() || source.isBF16() || source.isSignlessInteger(8)));
+  if (!supported) {
+    return emitOptionalError(location,
+                             "Cast conversion is not supported by ncnn");
+  }
+  return input.clone(target);
+}
+
+FailureOr<RankedTensorType> computeZeroPointCastResult(
+  MLIRContext* context,
+  std::optional<Location> location,
+  RankedTensorType input,
+  int64_t zeroPoint,
+  bool toUnsigned) {
+  if (!input || zeroPoint < 0 || zeroPoint > 255) {
+    return emitOptionalError(location,
+                             "ZeroPointCast requires an 8-bit zero point");
+  }
+  Type expected =
+    IntegerType::get(context,
+                     8,
+                     toUnsigned ? IntegerType::SignednessSemantics::Signless
+                                : IntegerType::SignednessSemantics::Unsigned);
+  if (input.getElementType() != expected) {
+    return emitOptionalError(
+      location,
+      "ZeroPointCast input signedness must be opposite the requested output");
+  }
+  Type result =
+    IntegerType::get(context,
+                     8,
+                     toUnsigned ? IntegerType::SignednessSemantics::Unsigned
+                                : IntegerType::SignednessSemantics::Signless);
+  return input.clone(result);
 }
 
 LogicalResult inferSliceResults(
@@ -1650,7 +1842,105 @@ LogicalResult GemmOp::inferReturnTypeComponents(
     computeGemmResult(location,
                       dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
                       dyn_cast<RankedTensorType>(adaptor.getWeight().getType()),
-                      dyn_cast<RankedTensorType>(adaptor.getBias().getType()));
+                      dyn_cast<RankedTensorType>(adaptor.getBias().getType()),
+                      adaptor.getScales(),
+                      adaptor.getInt8ScaleTerm());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult QuantizeOp::inferReturnTypeComponents(
+  MLIRContext* context,
+  std::optional<Location> location,
+  QuantizeOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeQuantizeResult(
+    context,
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    dyn_cast<RankedTensorType>(adaptor.getScale().getType()));
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult DequantizeOp::inferReturnTypeComponents(
+  MLIRContext* context,
+  std::optional<Location> location,
+  DequantizeOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeDequantizeResult(
+    context,
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    dyn_cast<RankedTensorType>(adaptor.getScale().getType()),
+    adaptor.getBias());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult RequantizeOp::inferReturnTypeComponents(
+  MLIRContext* context,
+  std::optional<Location> location,
+  RequantizeOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeRequantizeResult(
+    context,
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    dyn_cast<RankedTensorType>(adaptor.getInputScale().getType()),
+    dyn_cast<RankedTensorType>(adaptor.getOutputScale().getType()),
+    adaptor.getBias(),
+    adaptor.getActivationType());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult CastOp::inferReturnTypeComponents(
+  MLIRContext* context,
+  std::optional<Location> location,
+  CastOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result =
+    computeCastResult(context,
+                      location,
+                      dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+                      adaptor.getTypeFrom(),
+                      adaptor.getTypeTo());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult ZeroPointCastOp::inferReturnTypeComponents(
+  MLIRContext* context,
+  std::optional<Location> location,
+  ZeroPointCastOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeZeroPointCastResult(
+    context,
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    adaptor.getZeroPoint(),
+    adaptor.getToUnsigned());
   if (failed(result)) {
     return failure();
   }

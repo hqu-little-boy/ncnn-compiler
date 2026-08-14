@@ -193,5 +193,12 @@ ImportResult import_expand_dims(ImportContext& importer,
 ImportResult import_permute(ImportContext& importer,
                             const LayerContext& context);
 ImportResult import_gemm(ImportContext& importer, const LayerContext& context);
+ImportResult import_quantize(ImportContext& importer,
+                             const LayerContext& context);
+ImportResult import_dequantize(ImportContext& importer,
+                               const LayerContext& context);
+ImportResult import_requantize(ImportContext& importer,
+                               const LayerContext& context);
+ImportResult import_cast(ImportContext& importer, const LayerContext& context);
 
 }  // namespace ncnn_importer::detail

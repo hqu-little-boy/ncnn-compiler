@@ -170,7 +170,28 @@ struct GemmParams {
   std::int64_t output_elempack = 0;
   std::int64_t output_elemtype = 0;
   std::int64_t output_transpose = 0;
-  std::int64_t quantize_term = 0;
+  std::int64_t int8_scale_term = 0;
+};
+
+struct QuantizeParams {
+  std::int64_t scale_count = 1;
+};
+
+struct DequantizeParams {
+  std::int64_t scale_count = 1;
+  std::int64_t bias_count = 0;
+};
+
+struct RequantizeParams {
+  std::int64_t input_scale_count = 1;
+  std::int64_t output_scale_count = 1;
+  std::int64_t bias_count = 0;
+  std::int64_t activation_type = 0;
+};
+
+struct CastParams {
+  std::int64_t type_from = 0;
+  std::int64_t type_to = 0;
 };
 
 [[nodiscard]] std::expected<ConvolutionParams, std::string>
@@ -189,6 +210,15 @@ decode_inner_product_params(const ParamDict& params);
 decode_batch_norm_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<GemmParams, std::string> decode_gemm_params(
+  const ParamDict& params);
+
+[[nodiscard]] std::expected<QuantizeParams, std::string> decode_quantize_params(
+  const ParamDict& params);
+[[nodiscard]] std::expected<DequantizeParams, std::string>
+decode_dequantize_params(const ParamDict& params);
+[[nodiscard]] std::expected<RequantizeParams, std::string>
+decode_requantize_params(const ParamDict& params);
+[[nodiscard]] std::expected<CastParams, std::string> decode_cast_params(
   const ParamDict& params);
 
 bool has_weight_loader(std::string_view layer_type) noexcept;

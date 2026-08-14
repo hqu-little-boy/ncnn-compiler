@@ -275,14 +275,20 @@ ImportResult import_deconvolution(ImportContext& importer,
                  "Deconvolution weight shape or weight_data_size is "
                  "inconsistent"));
   }
-  for (const auto& weight : context.layer.get_weights()) {
-    if (weight.get_dtype() != ncnn_graph::DataType::Float32) {
-      return std::unexpected(
-        make_error(context, "Deconvolution weights must be FP32"));
-    }
+  const auto weightType = context.layer.get_weights()[0].get_dtype();
+  if (weightType != ncnn_graph::DataType::Float32 &&
+      weightType != ncnn_graph::DataType::Float16 &&
+      weightType != ncnn_graph::DataType::BFloat16) {
+    return std::unexpected(
+      make_error(context, "Deconvolution weight must be floating point"));
+  }
+  if (params.has_bias && context.layer.get_weights()[1].get_dtype() !=
+                           ncnn_graph::DataType::Float32) {
+    return std::unexpected(
+      make_error(context, "Deconvolution bias must be FP32"));
   }
   auto weight =
-    importer.make_constant(context, context.layer.get_weights()[0], 0);
+    importer.make_constant(context, context.layer.get_weights()[0], 0, true);
   if (!weight) {
     return std::unexpected(weight.error());
   }

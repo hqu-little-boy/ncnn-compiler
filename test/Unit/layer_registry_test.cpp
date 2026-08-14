@@ -35,4 +35,8 @@ TEST(LayerRegistryTest, DescriptorsMatchRuntimeRegistries) {
   EXPECT_TRUE(ncnn_graph::has_weight_loader("BatchNorm"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("Gemm"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("Deconvolution"));
+  EXPECT_TRUE(ncnn_graph::has_weight_loader("Quantize"));
+  EXPECT_TRUE(ncnn_graph::has_weight_loader("Dequantize"));
+  EXPECT_TRUE(ncnn_graph::has_weight_loader("Requantize"));
+  EXPECT_FALSE(ncnn_graph::has_weight_loader("Cast"));
 }
