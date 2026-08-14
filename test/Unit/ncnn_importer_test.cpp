@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <initializer_list>
 #include <iostream>
 #include <limits>
@@ -103,6 +104,25 @@ ncnn_graph::Tensor make_tensor(std::vector<std::int64_t> shape,
   return tensor;
 }
 
+ncnn_graph::Tensor make_float_tensor(std::vector<std::int64_t> shape,
+                                     float value) {
+  ncnn_graph::Tensor tensor =
+    make_tensor(std::move(shape), ncnn_graph::DataType::Float32);
+  std::vector<std::byte> data(tensor.byte_size());
+  for (std::size_t offset = 0; offset < data.size(); offset += sizeof(value)) {
+    std::memcpy(data.data() + offset, &value, sizeof(value));
+  }
+  std::vector<std::int64_t> tensor_shape(tensor.get_shape().begin(),
+                                         tensor.get_shape().end());
+  auto contents = tensor.set_contents(
+    std::move(tensor_shape), ncnn_graph::DataType::Float32, std::move(data));
+  if (!contents) {
+    std::cerr << contents.error() << '\n';
+    std::terminate();
+  }
+  return tensor;
+}
+
 ncnn_graph::Layer make_layer(std::string type,
                              std::string name,
                              std::vector<std::string> inputs,
@@ -184,9 +204,9 @@ ncnn_graph::Graph make_int8_graph() {
   params.set_value(8, ncnn_graph::ParamValue::make_int(101));
   convolution.set_params(std::move(params));
   convolution.add_weight(make_tensor({1, 1, 1, 1}, ncnn_graph::DataType::Int8));
-  convolution.add_weight(make_tensor({1}, ncnn_graph::DataType::Float32));
-  convolution.add_weight(make_tensor({1}, ncnn_graph::DataType::Float32));
-  convolution.add_weight(make_tensor({1}, ncnn_graph::DataType::Float32));
+  convolution.add_weight(make_float_tensor({1}, 2.0F));
+  convolution.add_weight(make_float_tensor({1}, 4.0F));
+  convolution.add_weight(make_float_tensor({1}, 8.0F));
   graph.add_layer(std::move(convolution));
   graph.set_input_blob_names({"data"});
   graph.set_output_blob_names({"out"});
@@ -220,10 +240,10 @@ ncnn_graph::Graph make_int8_chain_graph() {
     convolution.set_params(std::move(params));
     convolution.add_weight(
       make_tensor({1, 1, 1, 1}, ncnn_graph::DataType::Int8));
-    convolution.add_weight(make_tensor({1}, ncnn_graph::DataType::Float32));
-    convolution.add_weight(make_tensor({1}, ncnn_graph::DataType::Float32));
+    convolution.add_weight(make_float_tensor({1}, 2.0F));
+    convolution.add_weight(make_float_tensor({1}, 4.0F));
     if (scale_term > 100) {
-      convolution.add_weight(make_tensor({1}, ncnn_graph::DataType::Float32));
+      convolution.add_weight(make_float_tensor({1}, 8.0F));
     }
     graph.add_layer(std::move(convolution));
   };

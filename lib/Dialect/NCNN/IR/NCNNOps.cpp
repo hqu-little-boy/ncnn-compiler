@@ -57,7 +57,8 @@ FailureOr<RankedTensorType> computeConvResult(MLIRContext* context,
                                               int64_t padTop,
                                               int64_t padBottom,
                                               int64_t padLeft,
-                                              int64_t padRight) {
+                                              int64_t padRight,
+                                              int64_t weightScaleSize) {
   auto fail = [&](const Twine& msg) -> FailureOr<RankedTensorType> {
     return emitOptionalError(location, msg);
   };
@@ -129,7 +130,7 @@ FailureOr<RankedTensorType> computeConvResult(MLIRContext* context,
   for (std::size_t scaleIndex = 0; scaleIndex < scaleCount; ++scaleIndex) {
     Value scaleValue = tail[minimumOperands - 2 + scaleIndex];
     auto scale = llvm::dyn_cast<RankedTensorType>(scaleValue.getType());
-    const int64_t expectedSize = scaleIndex == 0 ? wShape[0] : 1;
+    const int64_t expectedSize = scaleIndex == 0 ? weightScaleSize : 1;
     if (scale == nullptr || scale.getRank() != 1 ||
         scale.getShape()[0] != expectedSize) {
       return fail("convolution scale has the wrong role or shape");
@@ -958,12 +959,24 @@ FailureOr<RankedTensorType> computeInnerProductResult(
   std::optional<Location> location,
   RankedTensorType input,
   RankedTensorType weight,
-  ValueRange bias,
-  bool hasBias) {
-  if (!input || !weight || !input.getElementType().isF32() ||
-      !weight.getElementType().isF32()) {
+  ValueRange tail,
+  bool hasBias,
+  int64_t term) {
+  if (term != 0 && term != 1 && term != 2) {
     return emitOptionalError(location,
-                             "InnerProduct input and weight must be f32");
+                             "InnerProduct has unsupported int8_scale_term");
+  }
+  const bool quantized = term != 0;
+  if (!input || !weight || !input.getElementType().isF32() ||
+      (!weight.getElementType().isF32() &&
+       !(quantized && weight.getElementType().isInteger(8)))) {
+    return emitOptionalError(location,
+                             "InnerProduct input must be f32 and weight must "
+                             "be f32 or quantized i8");
+  }
+  if (!quantized && weight.getElementType().isInteger(8)) {
+    return emitOptionalError(location,
+                             "non-quantized InnerProduct weight cannot be i8");
   }
   const bool dynamicMatrix =
     input.getRank() == 2 && input.isDynamicDim(0) && !input.isDynamicDim(1);
@@ -976,19 +989,31 @@ FailureOr<RankedTensorType> computeInnerProductResult(
     return emitOptionalError(
       location, "InnerProduct input elements must match weight [O,I]");
   }
+  const std::size_t expectedOperands = (hasBias ? 1 : 0) + (quantized ? 2 : 0);
+  if (tail.size() != expectedOperands) {
+    return emitOptionalError(
+      location,
+      "InnerProduct operands do not match bias and quantization mode");
+  }
   if (hasBias) {
-    if (bias.size() != 1) {
-      return emitOptionalError(location, "InnerProduct bias is required");
-    }
-    auto type = llvm::dyn_cast<RankedTensorType>(bias[0].getType());
+    auto type = llvm::dyn_cast<RankedTensorType>(tail[0].getType());
     if (!type || type.getRank() != 1 ||
         type.getShape()[0] != weight.getShape()[0] ||
         !type.getElementType().isF32()) {
       return emitOptionalError(location,
                                "InnerProduct bias must have shape [O]");
     }
-  } else if (!bias.empty()) {
-    return emitOptionalError(location, "InnerProduct has unexpected bias");
+  }
+  const std::size_t scaleOffset = hasBias ? 1 : 0;
+  for (std::size_t index = 0; index < (quantized ? 2U : 0U); ++index) {
+    auto type =
+      llvm::dyn_cast<RankedTensorType>(tail[scaleOffset + index].getType());
+    const int64_t expectedSize = index == 0 ? weight.getShape()[0] : 1;
+    if (!type || !type.getElementType().isF32() || type.getRank() != 1 ||
+        type.getShape()[0] != expectedSize) {
+      return emitOptionalError(
+        location, "InnerProduct scale has the wrong dtype or shape");
+    }
   }
   if (dynamicMatrix) {
     return RankedTensorType::get({input.getShape()[0], weight.getShape()[0]},
@@ -1244,7 +1269,8 @@ LogicalResult ConvolutionOp::inferReturnTypeComponents(
                       adaptor.getPadTop(),
                       adaptor.getPadBottom(),
                       adaptor.getPadLeft(),
-                      adaptor.getPadRight());
+                      adaptor.getPadRight(),
+                      weight.getShape()[0]);
   if (failed(result)) {
     return failure();
   }
@@ -1260,16 +1286,19 @@ LogicalResult ConvolutionDepthWiseOp::inferReturnTypeComponents(
   SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
   auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
   auto weight = llvm::dyn_cast<RankedTensorType>(adaptor.getWeight().getType());
-  const bool floatingWeight = weight && (weight.getElementType().isF32() ||
-                                         weight.getElementType().isF16() ||
-                                         weight.getElementType().isBF16());
+  const bool quantized = adaptor.getInt8ScaleTerm() != 0;
+  const bool supportedWeight =
+    weight &&
+    (weight.getElementType().isF32() || weight.getElementType().isF16() ||
+     weight.getElementType().isBF16() || weight.getElementType().isInteger(8));
   if (!input || !weight || input.getRank() != 3 || weight.getRank() != 4 ||
-      !input.getElementType().isF32() || !floatingWeight ||
-      !weight.hasStaticShape() || ShapedType::isDynamic(input.getShape()[0]) ||
-      weight.getShape()[1] != 1 ||
+      (!input.getElementType().isF32() &&
+       !(quantized && input.getElementType().isInteger(8))) ||
+      !supportedWeight || !weight.hasStaticShape() ||
+      ShapedType::isDynamic(input.getShape()[0]) || weight.getShape()[1] != 1 ||
       weight.getShape()[0] != input.getShape()[0]) {
     return emitOptionalError(location,
-                             "ConvolutionDepthWise requires floating pure "
+                             "ConvolutionDepthWise requires pure "
                              "depthwise weights [C,1,H,W]");
   }
   auto convolutionWeight = RankedTensorType::get({weight.getShape()[0],
@@ -1277,23 +1306,27 @@ LogicalResult ConvolutionDepthWiseOp::inferReturnTypeComponents(
                                                   weight.getShape()[2],
                                                   weight.getShape()[3]},
                                                  weight.getElementType());
-  FailureOr<RankedTensorType> result = computeConvResult(context,
-                                                         location,
-                                                         input,
-                                                         convolutionWeight,
-                                                         adaptor.getBias(),
-                                                         adaptor.getHasBias(),
-                                                         0,
-                                                         adaptor.getKernelH(),
-                                                         adaptor.getKernelW(),
-                                                         adaptor.getStrideH(),
-                                                         adaptor.getStrideW(),
-                                                         adaptor.getDilationH(),
-                                                         adaptor.getDilationW(),
-                                                         adaptor.getPadTop(),
-                                                         adaptor.getPadBottom(),
-                                                         adaptor.getPadLeft(),
-                                                         adaptor.getPadRight());
+  FailureOr<RankedTensorType> result = computeConvResult(
+    context,
+    location,
+    input,
+    convolutionWeight,
+    adaptor.getBiasAndScales(),
+    adaptor.getHasBias(),
+    adaptor.getInt8ScaleTerm(),
+    adaptor.getKernelH(),
+    adaptor.getKernelW(),
+    adaptor.getStrideH(),
+    adaptor.getStrideW(),
+    adaptor.getDilationH(),
+    adaptor.getDilationW(),
+    adaptor.getPadTop(),
+    adaptor.getPadBottom(),
+    adaptor.getPadLeft(),
+    adaptor.getPadRight(),
+    adaptor.getInt8ScaleTerm() == 1 || adaptor.getInt8ScaleTerm() == 101
+      ? input.getShape()[0]
+      : 1);
   if (failed(result)) {
     return failure();
   }
@@ -1575,8 +1608,12 @@ LogicalResult InnerProductOp::inferReturnTypeComponents(
   SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
   auto input = llvm::dyn_cast<RankedTensorType>(adaptor.getInput().getType());
   auto weight = llvm::dyn_cast<RankedTensorType>(adaptor.getWeight().getType());
-  auto result = computeInnerProductResult(
-    location, input, weight, adaptor.getBias(), adaptor.getHasBias());
+  auto result = computeInnerProductResult(location,
+                                          input,
+                                          weight,
+                                          adaptor.getBiasAndScales(),
+                                          adaptor.getHasBias(),
+                                          adaptor.getInt8ScaleTerm());
   if (failed(result)) {
     return failure();
   }

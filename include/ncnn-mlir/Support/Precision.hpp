@@ -35,8 +35,7 @@ struct PrecisionPolicy {
 std::string_view precision_mode_name(PrecisionMode mode) noexcept;
 [[nodiscard]] std::expected<FP16AccumulatorMode, std::string>
 parse_fp16_accumulator_mode(std::string_view value);
-std::string_view fp16_accumulator_mode_name(
-  FP16AccumulatorMode mode) noexcept;
+std::string_view fp16_accumulator_mode_name(FP16AccumulatorMode mode) noexcept;
 OperatorPrecisionCapability operator_precision_capability(
   std::string_view operation) noexcept;
 

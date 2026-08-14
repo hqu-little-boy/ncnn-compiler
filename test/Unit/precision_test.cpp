@@ -38,16 +38,16 @@ TEST(PrecisionTest, ChecksTargetCapabilities) {
   target.features = {"+f16c"};
   EXPECT_TRUE(ncnn_mlir::infer_target_capabilities(target).fp16_storage);
   EXPECT_FALSE(ncnn_mlir::infer_target_capabilities(target).fp16_arithmetic);
-  EXPECT_FALSE(ncnn_mlir::resolve_precision_policy(
-    ncnn_mlir::PrecisionMode::Float16,
-    ncnn_mlir::FP16AccumulatorMode::Float16,
-    false,
-    target));
-  auto fallback = ncnn_mlir::resolve_precision_policy(
-    ncnn_mlir::PrecisionMode::Float16,
-    ncnn_mlir::FP16AccumulatorMode::Float16,
-    true,
-    target);
+  EXPECT_FALSE(
+    ncnn_mlir::resolve_precision_policy(ncnn_mlir::PrecisionMode::Float16,
+                                        ncnn_mlir::FP16AccumulatorMode::Float16,
+                                        false,
+                                        target));
+  auto fallback =
+    ncnn_mlir::resolve_precision_policy(ncnn_mlir::PrecisionMode::Float16,
+                                        ncnn_mlir::FP16AccumulatorMode::Float16,
+                                        true,
+                                        target);
   ASSERT_TRUE(fallback);
   EXPECT_EQ(fallback->fp16_accumulator,
             ncnn_mlir::FP16AccumulatorMode::Float32);

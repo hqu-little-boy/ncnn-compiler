@@ -1,0 +1,4 @@
+7767517
+2 2
+Input input 0 1 data
+ConvolutionDepthWise dw 1 1 data output 0=3 1=1 5=1 6=3 7=3 8=1

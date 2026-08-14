@@ -122,10 +122,10 @@ def NCNN_ConvolutionOp : NCNN_LayerOp<"convolution", [InferTensorTypeAdaptor]> {
 
 def NCNN_ConvolutionDepthWiseOp
   : NCNN_LayerOp<"convolution_depthwise", [InferTensorTypeAdaptor]> {
-  let summary = "Pure depthwise FP32 convolution.";
+  let summary = "Pure depthwise convolution with explicit quantization data.";
   let arguments = (ins NCNN_RankedTensor:$input,
     NCNN_RankedTensor:$weight,
-    Variadic<NCNN_RankedTensor>:$bias,
+    Variadic<NCNN_RankedTensor>:$bias_and_scales,
     I64Attr:$kernel_h,
     I64Attr:$kernel_w,
     I64Attr:$stride_h,
@@ -136,7 +136,8 @@ def NCNN_ConvolutionDepthWiseOp
     I64Attr:$pad_bottom,
     I64Attr:$pad_left,
     I64Attr:$pad_right,
-    BoolAttr:$has_bias);
+    BoolAttr:$has_bias,
+    DefaultValuedOptionalAttr<I64Attr, "0">:$int8_scale_term);
   let results = (outs NCNN_RankedTensor:$output);
 }
 
@@ -286,8 +287,9 @@ def NCNN_InnerProductOp
   : NCNN_LayerOp<"inner_product", [InferTensorTypeAdaptor]> {
   let arguments = (ins NCNN_RankedTensor:$input,
     NCNN_RankedTensor:$weight,
-    Variadic<NCNN_RankedTensor>:$bias,
-    BoolAttr:$has_bias);
+    Variadic<NCNN_RankedTensor>:$bias_and_scales,
+    BoolAttr:$has_bias,
+    DefaultValuedOptionalAttr<I64Attr, "0">:$int8_scale_term);
   let results = (outs NCNN_RankedTensor:$output);
 }
 

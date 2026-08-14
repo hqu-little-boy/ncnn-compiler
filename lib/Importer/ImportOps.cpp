@@ -1,9 +1,34 @@
 #include "ImporterInternal.hpp"
 
+#include <cmath>
+#include <cstring>
 #include <format>
 
 namespace ncnn_importer::detail {
 namespace {
+
+std::expected<void, std::string> validate_scale(
+  const ncnn_graph::Tensor& tensor,
+  std::size_t expectedSize,
+  std::string_view role) {
+  if (tensor.get_dtype() != ncnn_graph::DataType::Float32 ||
+      tensor.get_shape().size() != 1 ||
+      tensor.get_shape()[0] !=
+        static_cast<decltype(tensor.get_shape()[0])>(expectedSize)) {
+    return std::unexpected(
+      std::format("{} scale must be FP32 [{}]", role, expectedSize));
+  }
+  const auto data = tensor.get_data();
+  for (std::size_t offset = 0; offset < data.size(); offset += sizeof(float)) {
+    float value;
+    std::memcpy(&value, data.data() + offset, sizeof(value));
+    if (!std::isfinite(value) || value <= 0.0F) {
+      return std::unexpected(
+        std::format("{} scale values must be finite and positive", role));
+    }
+  }
+  return {};
+}
 
 std::expected<llvm::SmallVector<int64_t>, std::string> parse_shape_expression(
   std::string_view expression, mlir::ValueRange inputs) {
@@ -398,22 +423,43 @@ ImportResult import_inner_product(ImportContext& importer,
   if (!valid) {
     return std::unexpected(valid.error());
   }
-  auto out = get_int(context.layer.get_params(), 0, 0, "num_output");
-  auto bias = get_int(context.layer.get_params(), 1, 0, "bias_term");
-  auto count = get_int(context.layer.get_params(), 2, 0, "weight_data_size");
-  auto term = get_int(context.layer.get_params(), 8, 0, "int8_scale_term");
+  auto decoded =
+    ncnn_graph::decode_inner_product_params(context.layer.get_params());
   auto act = get_int(context.layer.get_params(), 9, 0, "activation_type");
-  if (!out || !bias || !count || !term || !act || *out <= 0 || *count <= 0 ||
-      *bias < 0 || *bias > 1 || *term != 0 || (*act != 0 && *act != 1) ||
-      (*act == 1 && context.layer.get_params().has(10)) ||
-      context.layer.get_weights().size() != static_cast<size_t>(1 + *bias)) {
-    return std::unexpected(
-      make_error(context, "only static FP32 InnerProduct is supported"));
+  if (!decoded) {
+    return std::unexpected(make_error(context, decoded.error()));
   }
-  for (const auto& w : context.layer.get_weights()) {
-    if (w.get_dtype() != ncnn_graph::DataType::Float32) {
-      return std::unexpected(
-        make_error(context, "InnerProduct weights must be FP32"));
+  const auto& params = *decoded;
+  const bool quantized = params.int8_scale_term != 0;
+  if (!act || (*act != 0 && *act != 1) ||
+      (*act == 1 && context.layer.get_params().has(10)) ||
+      context.layer.get_weights().size() != params.expected_weight_tensors()) {
+    return std::unexpected(
+      make_error(context, "unsupported InnerProduct configuration"));
+  }
+  const auto kernelType = context.layer.get_weights()[0].get_dtype();
+  if ((!quantized && kernelType != ncnn_graph::DataType::Float32) ||
+      (quantized && kernelType != ncnn_graph::DataType::Float32 &&
+       kernelType != ncnn_graph::DataType::Int8)) {
+    return std::unexpected(make_error(
+      context, "InnerProduct kernel element type does not match scale term"));
+  }
+  if (params.has_bias && context.layer.get_weights()[1].get_dtype() !=
+                           ncnn_graph::DataType::Float32) {
+    return std::unexpected(
+      make_error(context, "InnerProduct bias must be FP32"));
+  }
+  const std::size_t scaleOffset = 1 + static_cast<std::size_t>(params.has_bias);
+  if (quantized) {
+    auto weightScale =
+      validate_scale(context.layer.get_weights()[scaleOffset],
+                     static_cast<std::size_t>(params.output_channels),
+                     "InnerProduct weight");
+    auto inputScale = validate_scale(
+      context.layer.get_weights()[scaleOffset + 1], 1, "InnerProduct input");
+    if (!weightScale || !inputScale) {
+      return std::unexpected(make_error(
+        context, !weightScale ? weightScale.error() : inputScale.error()));
     }
   }
   auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
@@ -421,13 +467,15 @@ ImportResult import_inner_product(ImportContext& importer,
     return std::unexpected(input.error());
   }
   auto weight = importer.make_constant(
-    context, context.layer.get_weights()[0], 0, true);
+    context, context.layer.get_weights()[0], 0, !quantized);
   if (!weight) {
     return std::unexpected(weight.error());
   }
   llvm::SmallVector<mlir::Value> tail;
-  if (*bias) {
-    auto v = importer.make_constant(context, context.layer.get_weights()[1], 1);
+  for (std::size_t index = 1; index < params.expected_weight_tensors();
+       ++index) {
+    auto v = importer.make_constant(
+      context, context.layer.get_weights()[index], index);
     if (!v) {
       return std::unexpected(v.error());
     }
@@ -435,7 +483,8 @@ ImportResult import_inner_product(ImportContext& importer,
   }
   auto& b = importer.builder();
   mlir::ncnn::InnerProductOp::Properties props;
-  props.has_bias = b.getBoolAttr(*bias);
+  props.has_bias = b.getBoolAttr(params.has_bias);
+  props.int8_scale_term = b.getI64IntegerAttr(params.int8_scale_term);
   llvm::SmallVector<mlir::Value> operands{*input, *weight};
   operands.append(tail);
   auto result = importer.infer_single_tensor_result<mlir::ncnn::InnerProductOp>(
@@ -443,8 +492,13 @@ ImportResult import_inner_product(ImportContext& importer,
   if (mlir::failed(result)) {
     return std::unexpected(make_error(context, importer.captured_diagnostic()));
   }
-  auto op = b.create<mlir::ncnn::InnerProductOp>(
-    b.getUnknownLoc(), *result, *input, *weight, tail, props.has_bias);
+  auto op = b.create<mlir::ncnn::InnerProductOp>(b.getUnknownLoc(),
+                                                 *result,
+                                                 *input,
+                                                 *weight,
+                                                 tail,
+                                                 props.has_bias,
+                                                 props.int8_scale_term);
   importer.tag_source(op.getOperation(), context);
   mlir::Value output = op.getResult();
   if (*act == 1) {
@@ -476,9 +530,8 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
     return std::unexpected(
       make_error(context, !activation ? activation.error() : padValue.error()));
   }
-  if (p->dynamic_weight || p->int8_scale_term != 0 || *activation < 0 ||
-      *activation > 1 || context.layer.get_params().has(10) ||
-      *padValue != 0.0F) {
+  if (p->dynamic_weight || *activation < 0 || *activation > 1 ||
+      context.layer.get_params().has(10) || *padValue != 0.0F) {
     return std::unexpected(make_error(
       context,
       "only static pure depthwise convolution with FP32 computation is "
@@ -487,11 +540,14 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
   const auto kernelType = context.layer.get_weights().empty()
                             ? ncnn_graph::DataType::Unknown
                             : context.layer.get_weights()[0].get_dtype();
+  const bool quantized = p->int8_scale_term != 0;
   if (context.layer.get_weights().size() != p->expected_weight_tensors() ||
       context.layer.get_weights().empty() ||
-      (kernelType != ncnn_graph::DataType::Float32 &&
+      (!quantized && kernelType != ncnn_graph::DataType::Float32 &&
        kernelType != ncnn_graph::DataType::Float16 &&
-       kernelType != ncnn_graph::DataType::BFloat16)) {
+       kernelType != ncnn_graph::DataType::BFloat16) ||
+      (quantized && kernelType != ncnn_graph::DataType::Float32 &&
+       kernelType != ncnn_graph::DataType::Int8)) {
     return std::unexpected(make_error(
       context,
       "depthwise weights must use static FP32 or FP16-storage kernel and "
@@ -518,7 +574,7 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
   if (!weight) {
     return std::unexpected(weight.error());
   }
-  llvm::SmallVector<mlir::Value> bias;
+  llvm::SmallVector<mlir::Value> tail;
   if (p->has_bias) {
     if (context.layer.get_weights()[1].get_dtype() !=
         ncnn_graph::DataType::Float32) {
@@ -530,7 +586,39 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
     if (!value) {
       return std::unexpected(value.error());
     }
-    bias.push_back(*value);
+    tail.push_back(*value);
+  }
+  if (quantized) {
+    const std::size_t scaleOffset = 1 + static_cast<std::size_t>(p->has_bias);
+    const std::size_t weightScaleSize =
+      p->int8_scale_term == 1 || p->int8_scale_term == 101
+        ? static_cast<std::size_t>(p->group)
+        : 1;
+    auto weightScale = validate_scale(context.layer.get_weights()[scaleOffset],
+                                      weightScaleSize,
+                                      "depthwise weight");
+    auto inputScale = validate_scale(
+      context.layer.get_weights()[scaleOffset + 1], 1, "depthwise input");
+    if (!weightScale || !inputScale) {
+      return std::unexpected(make_error(
+        context, !weightScale ? weightScale.error() : inputScale.error()));
+    }
+    if (p->int8_scale_term > 100) {
+      auto outputScale = validate_scale(
+        context.layer.get_weights()[scaleOffset + 2], 1, "depthwise output");
+      if (!outputScale) {
+        return std::unexpected(make_error(context, outputScale.error()));
+      }
+    }
+    for (std::size_t index = scaleOffset; index < p->expected_weight_tensors();
+         ++index) {
+      auto value = importer.make_constant(
+        context, context.layer.get_weights()[index], index);
+      if (!value) {
+        return std::unexpected(value.error());
+      }
+      tail.push_back(*value);
+    }
   }
   auto& b = importer.builder();
   auto i64 = [&b](int64_t x) {
@@ -548,8 +636,9 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
   props.pad_left = i64(p->pad_left);
   props.pad_right = i64(p->pad_right);
   props.has_bias = b.getBoolAttr(p->has_bias);
+  props.int8_scale_term = i64(p->int8_scale_term);
   llvm::SmallVector<mlir::Value> operands{*input, *weight};
-  operands.append(bias);
+  operands.append(tail);
   auto type =
     importer.infer_single_tensor_result<mlir::ncnn::ConvolutionDepthWiseOp>(
       b.getUnknownLoc(), operands, props);
@@ -560,7 +649,7 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
                                                          *type,
                                                          *input,
                                                          *weight,
-                                                         bias,
+                                                         tail,
                                                          props.kernel_h,
                                                          props.kernel_w,
                                                          props.stride_h,
@@ -571,7 +660,8 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
                                                          props.pad_bottom,
                                                          props.pad_left,
                                                          props.pad_right,
-                                                         props.has_bias);
+                                                         props.has_bias,
+                                                         props.int8_scale_term);
   importer.tag_source(op.getOperation(), context);
   mlir::Value output = op.getResult();
   if (*activation == 1) {

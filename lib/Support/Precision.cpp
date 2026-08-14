@@ -82,20 +82,19 @@ std::string_view precision_mode_name(PrecisionMode mode) noexcept {
   return "auto";
 }
 
-std::expected<FP16AccumulatorMode, std::string>
-parse_fp16_accumulator_mode(std::string_view value) {
+std::expected<FP16AccumulatorMode, std::string> parse_fp16_accumulator_mode(
+  std::string_view value) {
   if (value == "f16" || value == "fp16") {
     return FP16AccumulatorMode::Float16;
   }
   if (value == "f32" || value == "fp32") {
     return FP16AccumulatorMode::Float32;
   }
-  return std::unexpected(std::format(
-    "invalid FP16 accumulator '{}'; expected f16 or f32", value));
+  return std::unexpected(
+    std::format("invalid FP16 accumulator '{}'; expected f16 or f32", value));
 }
 
-std::string_view fp16_accumulator_mode_name(
-  FP16AccumulatorMode mode) noexcept {
+std::string_view fp16_accumulator_mode_name(FP16AccumulatorMode mode) noexcept {
   return mode == FP16AccumulatorMode::Float16 ? "f16" : "f32";
 }
 
@@ -156,8 +155,8 @@ std::expected<void, std::string> validate_precision_target(
   const TargetCapabilities capabilities = infer_target_capabilities(target);
   const bool supported = mode == PrecisionMode::Float16
                            ? capabilities.fp16_storage
-                          : mode == PrecisionMode::BFloat16 ? capabilities.bf16
-                                                            : capabilities.int8;
+                         : mode == PrecisionMode::BFloat16 ? capabilities.bf16
+                                                           : capabilities.int8;
   if (supported) {
     return {};
   }

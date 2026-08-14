@@ -12,6 +12,8 @@
 
 namespace ncnn_compiler::test {
 
+enum class ReferenceInferenceMode { Float32, Int8 };
+
 class TensorShape final {
  public:
   explicit TensorShape(int width, int height, int channels);
@@ -116,12 +118,16 @@ std::vector<float> make_random_input(std::size_t size,
                                      float minimum,
                                      float maximum);
 [[nodiscard]] std::expected<std::vector<float>, std::string> run_ncnn_reference(
-  const ReferenceModel& model, std::span<const float> input);
+  const ReferenceModel& model,
+  std::span<const float> input,
+  ReferenceInferenceMode mode = ReferenceInferenceMode::Float32);
 [[nodiscard]] std::expected<std::vector<std::vector<float>>, std::string>
-run_ncnn_reference(std::string_view param_path,
-                   std::string_view bin_path,
-                   std::span<const ReferenceInput> inputs,
-                   std::span<const std::string_view> output_blob_names);
+run_ncnn_reference(
+  std::string_view param_path,
+  std::string_view bin_path,
+  std::span<const ReferenceInput> inputs,
+  std::span<const std::string_view> output_blob_names,
+  ReferenceInferenceMode mode = ReferenceInferenceMode::Float32);
 ::testing::AssertionResult compare_values(std::span<const float> actual,
                                           std::span<const float> expected,
                                           float maximum_absolute_error);

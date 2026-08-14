@@ -30,6 +30,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     endif()
     set(precision_args)
     set(clang_args)
+    set(linker_args)
     set(filtered_constraints)
     foreach(argument IN LISTS input_constraints)
         if(argument MATCHES "^PRECISION=(.+)$")
@@ -42,6 +43,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             list(APPEND precision_args --target-feature ${CMAKE_MATCH_1})
         elseif(argument MATCHES "^CLANG_ARG=(.+)$")
             list(APPEND clang_args --clang-arg ${CMAKE_MATCH_1})
+        elseif(argument MATCHES "^LINKER_ARG=(.+)$")
+            list(APPEND linker_args --linker-arg ${CMAKE_MATCH_1})
         elseif(argument STREQUAL "EMIT_IR")
             list(APPEND precision_args --emit ncnn --emit tosa --emit linalg)
         elseif(argument STREQUAL "EMIT_BACKEND")
@@ -88,6 +91,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             ${input_constraint_args}
             ${precision_args}
             ${clang_args}
+            ${linker_args}
             ${sanitizer_args}
             --output-dir ${output_dir}
             --emit-manifest
@@ -114,6 +118,12 @@ function(ncnn_add_compiled_shape_pair
 endfunction()
 
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fixtures)
+set(int8_math_shim ${CMAKE_CURRENT_BINARY_DIR}/fixtures/int8_math_shim.o)
+execute_process(
+    COMMAND ${CLANG} -c -fPIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/support/int8_math_shim.c
+            -o ${int8_math_shim}
+    COMMAND_ERROR_IS_FATAL ANY)
 set(empty_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/empty.bin)
 set(convolution_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution.bin)
 set(convolution_no_bias_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_no_bias.bin)
@@ -175,6 +185,43 @@ foreach(weighted_case IN ITEMS
                 ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${weighted_case}.bin
                 ${weighted_case}
         COMMAND_ERROR_IS_FATAL ANY)
+endforeach()
+set(int8_cases
+    convolution_int8_term1
+    convolution_int8_term2
+    convolution_int8_term101
+    convolution_int8_term102
+    depthwise_int8_term1
+    depthwise_int8_term2
+    depthwise_int8_term101
+    depthwise_int8_term102
+    inner_product_int8_term1
+    inner_product_int8_term2
+    int8_complete_chain)
+foreach(int8_case IN LISTS int8_cases)
+    set(${int8_case}_bin
+        ${CMAKE_CURRENT_BINARY_DIR}/fixtures/${int8_case}.bin)
+    execute_process(
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_int8_bins.py
+                ${${int8_case}_bin} ${int8_case}
+        COMMAND_ERROR_IS_FATAL ANY)
+    set(int8_fixture_options LINKER_ARG=${int8_math_shim})
+    if(int8_case STREQUAL "int8_complete_chain")
+        list(APPEND int8_fixture_options EMIT_IR)
+    endif()
+    if(int8_case MATCHES "^depthwise")
+        set(int8_input_shape 3x3x4)
+    elseif(int8_case MATCHES "^inner_product")
+        set(int8_input_shape 1x1x4)
+    else()
+        set(int8_input_shape 2x3x4)
+    endif()
+    ncnn_add_compiled_fixture(
+        ${int8_case}
+        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/${int8_case}.param
+        ${${int8_case}_bin}
+        ${int8_input_shape}
+        ${int8_fixture_options})
 endforeach()
 ncnn_add_compiled_fixture(
     convolution_scalar
@@ -658,6 +705,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin
     3x224x224)
 ncnn_add_compiled_fixture(
+    pp_lcnet_x1_0_doc_ori_int8
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.bin
+    3x224x224)
+ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_textline_ori
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin
@@ -788,6 +840,17 @@ ncnn_add_compiled_fixture(
     1x384x384
     PRECISION=fp16 FP16_ACCUMULATOR=f32 TARGET_FEATURE=+f16c EMIT_IR)
 set(numerical_fixture_targets
+    compile_convolution_int8_term1
+    compile_convolution_int8_term2
+    compile_convolution_int8_term101
+    compile_convolution_int8_term102
+    compile_depthwise_int8_term1
+    compile_depthwise_int8_term2
+    compile_depthwise_int8_term101
+    compile_depthwise_int8_term102
+    compile_inner_product_int8_term1
+    compile_inner_product_int8_term2
+    compile_int8_complete_chain
     compile_convolution_scalar
     compile_convolution_no_bias
     compile_convolution_dilated
@@ -902,7 +965,7 @@ endforeach()
 add_dependencies(compile_squeezenet_v1_1 compile_sigmoid)
 add_dependencies(compile_pp_lcnet_x1_0_doc_ori compile_squeezenet_v1_1)
 add_dependencies(compile_pp_lcnet_x1_0_textline_ori
-                  compile_pp_lcnet_x1_0_doc_ori)
+                   compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(compile_chineseocr_lite_anglenet
                   compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(compile_pp_ocrv6_tiny_rec
@@ -947,6 +1010,7 @@ target_link_libraries(numerical_test_support PUBLIC ncnn GTest::gtest)
 
 add_executable(numerical_tests
     operators/supported_ops_test.cpp
+    operators/int8_ops_test.cpp
     models/squeezenet_test.cpp
     models/pp_lcnet_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
@@ -957,6 +1021,31 @@ target_compile_definitions(numerical_tests PRIVATE
     GTEST_HAS_CXXABI_H_=0
     NUMERICAL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
     NUMERICAL_EMPTY_BIN_PATH="${empty_bin}"
+    CONVOLUTION_INT8_TERM1_BIN_PATH="${convolution_int8_term1_bin}"
+    CONVOLUTION_INT8_TERM2_BIN_PATH="${convolution_int8_term2_bin}"
+    CONVOLUTION_INT8_TERM101_BIN_PATH="${convolution_int8_term101_bin}"
+    CONVOLUTION_INT8_TERM102_BIN_PATH="${convolution_int8_term102_bin}"
+    DEPTHWISE_INT8_TERM1_BIN_PATH="${depthwise_int8_term1_bin}"
+    DEPTHWISE_INT8_TERM2_BIN_PATH="${depthwise_int8_term2_bin}"
+    DEPTHWISE_INT8_TERM101_BIN_PATH="${depthwise_int8_term101_bin}"
+    DEPTHWISE_INT8_TERM102_BIN_PATH="${depthwise_int8_term102_bin}"
+    INNER_PRODUCT_INT8_TERM1_BIN_PATH="${inner_product_int8_term1_bin}"
+    INNER_PRODUCT_INT8_TERM2_BIN_PATH="${inner_product_int8_term2_bin}"
+    INT8_COMPLETE_CHAIN_BIN_PATH="${int8_complete_chain_bin}"
+    CONVOLUTION_INT8_TERM1_LIBRARY_PATH="${convolution_int8_term1_LIBRARY}"
+    CONVOLUTION_INT8_TERM2_LIBRARY_PATH="${convolution_int8_term2_LIBRARY}"
+    CONVOLUTION_INT8_TERM101_LIBRARY_PATH="${convolution_int8_term101_LIBRARY}"
+    CONVOLUTION_INT8_TERM102_LIBRARY_PATH="${convolution_int8_term102_LIBRARY}"
+    DEPTHWISE_INT8_TERM1_LIBRARY_PATH="${depthwise_int8_term1_LIBRARY}"
+    DEPTHWISE_INT8_TERM2_LIBRARY_PATH="${depthwise_int8_term2_LIBRARY}"
+    DEPTHWISE_INT8_TERM101_LIBRARY_PATH="${depthwise_int8_term101_LIBRARY}"
+    DEPTHWISE_INT8_TERM102_LIBRARY_PATH="${depthwise_int8_term102_LIBRARY}"
+    INNER_PRODUCT_INT8_TERM1_LIBRARY_PATH="${inner_product_int8_term1_LIBRARY}"
+    INNER_PRODUCT_INT8_TERM2_LIBRARY_PATH="${inner_product_int8_term2_LIBRARY}"
+    INT8_COMPLETE_CHAIN_LIBRARY_PATH="${int8_complete_chain_LIBRARY}"
+    INT8_COMPLETE_CHAIN_TOSA_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/int8_complete_chain/model.tosa.mlir"
+    INT8_COMPLETE_CHAIN_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/int8_complete_chain/int8_complete_chain.json"
+    INT8_COMPLETE_CHAIN_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/int8_complete_chain/int8_complete_chain.h"
     CONVOLUTION_BIN_PATH="${convolution_bin}"
     CONVOLUTION_NO_BIAS_BIN_PATH="${convolution_no_bias_bin}"
     CONVOLUTION_DILATED_BIN_PATH="${convolution_dilated_bin}"
@@ -1109,6 +1198,19 @@ target_compile_definitions(numerical_tests PRIVATE
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
+add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori_int8)
+add_dependencies(numerical_tests
+    compile_convolution_int8_term1
+    compile_convolution_int8_term2
+    compile_convolution_int8_term101
+    compile_convolution_int8_term102
+    compile_depthwise_int8_term1
+    compile_depthwise_int8_term2
+    compile_depthwise_int8_term101
+    compile_depthwise_int8_term102
+    compile_inner_product_int8_term1
+    compile_inner_product_int8_term2
+    compile_int8_complete_chain)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(numerical_tests compile_chineseocr_lite_anglenet)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_rec)

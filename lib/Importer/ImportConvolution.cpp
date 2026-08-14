@@ -1,12 +1,40 @@
 #include "ImporterInternal.hpp"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <format>
 
 #include "llvm/ADT/SmallVector.h"
 
 namespace ncnn_importer::detail {
+namespace {
+
+std::expected<void, std::string> validate_scale(
+  const ncnn_graph::Tensor& tensor,
+  std::size_t expected_size,
+  std::string_view role) {
+  if (tensor.get_dtype() != ncnn_graph::DataType::Float32 ||
+      tensor.get_shape().size() != 1 ||
+      tensor.get_shape()[0] !=
+        static_cast<decltype(tensor.get_shape()[0])>(expected_size)) {
+    return std::unexpected(
+      std::format("{} scale must be FP32 [{}]", role, expected_size));
+  }
+  const auto data = tensor.get_data();
+  for (std::size_t offset = 0; offset < data.size(); offset += sizeof(float)) {
+    float value;
+    std::memcpy(&value, data.data() + offset, sizeof(value));
+    if (!std::isfinite(value) || value <= 0.0F) {
+      return std::unexpected(
+        std::format("{} scale values must be finite and positive", role));
+    }
+  }
+  return {};
+}
+
+}  // namespace
 
 ImportResult import_convolution(ImportContext& importer,
                                 const LayerContext& context) {
@@ -51,6 +79,31 @@ ImportResult import_convolution(ImportContext& importer,
                      weight_dtype == ncnn_graph::DataType::BFloat16))) {
     return std::unexpected(make_error(
       context, "convolution kernel element type does not match scale term"));
+  }
+  const std::size_t bias_offset = convolution.has_bias ? 1 : 0;
+  if (convolution.has_bias && context.layer.get_weights()[1].get_dtype() !=
+                                ncnn_graph::DataType::Float32) {
+    return std::unexpected(
+      make_error(context, "convolution bias must be FP32"));
+  }
+  if (quantized) {
+    auto weight_scale =
+      validate_scale(context.layer.get_weights()[1 + bias_offset],
+                     static_cast<std::size_t>(convolution.output_channels),
+                     "convolution weight");
+    auto input_scale = validate_scale(
+      context.layer.get_weights()[2 + bias_offset], 1, "convolution input");
+    if (!weight_scale || !input_scale) {
+      return std::unexpected(make_error(
+        context, !weight_scale ? weight_scale.error() : input_scale.error()));
+    }
+    if (convolution.int8_scale_term > 100) {
+      auto output_scale = validate_scale(
+        context.layer.get_weights()[3 + bias_offset], 1, "convolution output");
+      if (!output_scale) {
+        return std::unexpected(make_error(context, output_scale.error()));
+      }
+    }
   }
   const auto weight_shape = context.layer.get_weights()[0].get_shape();
   if (weight_shape.size() != 4 ||

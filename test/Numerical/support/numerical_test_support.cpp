@@ -313,14 +313,17 @@ std::vector<float> make_random_input(std::size_t size,
 }
 
 std::expected<std::vector<float>, std::string> run_ncnn_reference(
-  const ReferenceModel& model, std::span<const float> input) {
+  const ReferenceModel& model,
+  std::span<const float> input,
+  ReferenceInferenceMode mode) {
   const ReferenceInput reference_input(
     model.get_input_blob(), model.get_input_shape(), input);
   const std::string_view output_name = model.get_output_blob();
   auto outputs = run_ncnn_reference(model.get_param_path(),
                                     model.get_bin_path(),
                                     std::span(&reference_input, 1),
-                                    std::span(&output_name, 1));
+                                    std::span(&output_name, 1),
+                                    mode);
   if (!outputs) {
     return std::unexpected(outputs.error());
   }
@@ -331,14 +334,15 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
   std::string_view param_path,
   std::string_view bin_path,
   std::span<const ReferenceInput> inputs,
-  std::span<const std::string_view> output_blob_names) {
+  std::span<const std::string_view> output_blob_names,
+  ReferenceInferenceMode mode) {
   if (inputs.empty() || output_blob_names.empty()) {
     return std::unexpected("reference model requires inputs and outputs");
   }
   ncnn::Net network;
   network.opt.lightmode = false;
   network.opt.use_vulkan_compute = false;
-  network.opt.use_int8_inference = false;
+  network.opt.use_int8_inference = mode == ReferenceInferenceMode::Int8;
   network.opt.use_fp16_packed = false;
   network.opt.use_fp16_storage = false;
   network.opt.use_fp16_arithmetic = false;

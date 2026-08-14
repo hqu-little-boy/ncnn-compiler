@@ -129,6 +129,33 @@ class NormalizeF32Attribute final : public OpRewritePattern<Op> {
   double defaultValue_;
 };
 
+template <typename Op>
+class NormalizeI64Attribute final : public OpRewritePattern<Op> {
+ public:
+  NormalizeI64Attribute(MLIRContext* context,
+                        StringRef attributeName,
+                        int64_t defaultValue)
+    : OpRewritePattern<Op>(context),
+      attributeName_(attributeName),
+      defaultValue_(defaultValue) {}
+
+  LogicalResult matchAndRewrite(Op operation,
+                                PatternRewriter& rewriter) const final {
+    if (operation->getAttr(attributeName_)) {
+      return failure();
+    }
+    rewriter.modifyOpInPlace(operation, [&] {
+      operation->setAttr(attributeName_,
+                         rewriter.getI64IntegerAttr(defaultValue_));
+    });
+    return success();
+  }
+
+ private:
+  StringRef attributeName_;
+  int64_t defaultValue_;
+};
+
 class NormalizeConvolution final : public OpRewritePattern<ConvolutionOp> {
  public:
   NormalizeConvolution(MLIRContext* context, const PaddingMap& explicitPadding)
@@ -206,14 +233,19 @@ class NormalizeDepthwiseConvolution final
   LogicalResult matchAndRewrite(ConvolutionDepthWiseOp operation,
                                 PatternRewriter& rewriter) const final {
     auto padding = explicitPadding_->find(operation);
-    if (padding == explicitPadding_->end()) {
+    const bool normalizeScale =
+      operation->getAttr("int8_scale_term") == nullptr;
+    if (padding == explicitPadding_->end() && !normalizeScale) {
       return failure();
     }
     rewriter.modifyOpInPlace(operation, [&] {
-      setI64(operation, "pad_top", padding->second[0]);
-      setI64(operation, "pad_bottom", padding->second[1]);
-      setI64(operation, "pad_left", padding->second[2]);
-      setI64(operation, "pad_right", padding->second[3]);
+      setI64(operation, "int8_scale_term", operation.getInt8ScaleTerm());
+      if (padding != explicitPadding_->end()) {
+        setI64(operation, "pad_top", padding->second[0]);
+        setI64(operation, "pad_bottom", padding->second[1]);
+        setI64(operation, "pad_left", padding->second[2]);
+        setI64(operation, "pad_right", padding->second[3]);
+      }
     });
     return success();
   }
@@ -268,6 +300,9 @@ class NormalizeNCNNPass final
     applyPattern(module,
                  NormalizeDepthwiseConvolution(&getContext(), explicitPadding));
     applyPattern(module, NormalizePooling(&getContext(), explicitPadding));
+    applyPattern(module,
+                 NormalizeI64Attribute<InnerProductOp>(
+                   &getContext(), "int8_scale_term", 0));
     applyPattern(module, NormalizeAxis<ConcatOp>(&getContext()));
     applyPattern(module, NormalizeAxis<SoftmaxOp>(&getContext()));
     applyPattern(

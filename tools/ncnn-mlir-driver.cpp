@@ -257,8 +257,7 @@ int main(int argc, char** argv) {
     llvm::errs() << "error: " << precision.error() << "\n";
     return 1;
   }
-  auto accumulator =
-    ncnn_mlir::parse_fp16_accumulator_mode(g_fp16_accumulator);
+  auto accumulator = ncnn_mlir::parse_fp16_accumulator_mode(g_fp16_accumulator);
   if (!accumulator) {
     llvm::errs() << "error: " << accumulator.error() << "\n";
     return 1;

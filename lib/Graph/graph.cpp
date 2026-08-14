@@ -504,8 +504,8 @@ std::expected<InnerProductParams, std::string> decode_inner_product_params(
   if (*bias_term != 0 && *bias_term != 1) {
     return std::unexpected("inner product bias_term must be 0 or 1");
   }
-  if (*int8_scale_term != 0 && *int8_scale_term != 1) {
-    return std::unexpected("inner product int8_scale_term must be 0 or 1");
+  if (*int8_scale_term != 0 && *int8_scale_term != 1 && *int8_scale_term != 2) {
+    return std::unexpected("inner product int8_scale_term must be 0, 1, or 2");
   }
   result.output_channels = *output_channels;
   result.has_bias = *bias_term == 1;
@@ -1269,7 +1269,11 @@ std::expected<void, std::string> load_convolution_depthwise_weights(
     layer.add_weight(std::move(*bias));
   }
   if (params.int8_scale_term != 0) {
-    auto scales = load_weight(cursor, params.group, 1, {params.group});
+    const std::int64_t scale_count =
+      params.int8_scale_term == 1 || params.int8_scale_term == 101
+        ? params.group
+        : 1;
+    auto scales = load_weight(cursor, scale_count, 1, {scale_count});
     if (!scales) {
       return std::unexpected(
         std::format("depthwise weight int8 scales: {}", scales.error()));

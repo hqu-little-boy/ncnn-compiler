@@ -1,0 +1,5 @@
+7767517
+3 3
+Input input 0 1 data
+ConvolutionDepthWise requant 1 1 data int8 0=3 1=1 5=1 6=3 7=3 8=101
+ConvolutionDepthWise dequant 1 1 int8 output 0=3 1=1 5=1 6=3 7=3 8=1

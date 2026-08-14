@@ -1875,8 +1875,16 @@ int main(int argc, char** argv) {
     return fail(text.error());
   }
   const std::set<std::string> undefined = symbols(*text);
-  const std::set<std::string> allowed = {
-    "erfcf", "erff", "expf", "free", "malloc", "memcpy", "memset", "powf"};
+  const std::set<std::string> allowed = {"ceilf",
+                                         "erfcf",
+                                         "erff",
+                                         "expf",
+                                         "floorf",
+                                         "free",
+                                         "malloc",
+                                         "memcpy",
+                                         "memset",
+                                         "powf"};
   const auto is_allowed_undefined = [&](const std::string& symbol) {
     return allowed.contains(symbol) ||
            (uses_openmp && symbol.starts_with("__kmpc_")) ||
