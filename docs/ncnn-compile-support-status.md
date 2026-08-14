@@ -42,14 +42,14 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 
 | ncnn 层类型 | 方言 op | 关键属性 | 备注 |
 |---|---|---|---|
-| `Convolution` | `ncnn.convolution` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias, int8_scale_term | 支持静态 FP32 或 FP16-storage 权重，统一以 FP32 计算；融合 ReLU/Sigmoid 拆为显式 op；交叉相关 |
+| `Convolution` | `ncnn.convolution` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias, int8_scale_term | 支持静态 FP32/FP16-storage 权重、INT8 scale-term 和 FP16/BF16 混合边界；融合 ReLU/Sigmoid 拆为显式 op；交叉相关 |
 | `ReLU` | `ncnn.relu` | negative_slope（0=ReLU，≠0=LeakyReLU） | |
 | `Pooling` | `ncnn.pooling` | kind(0=max/1=avg), mode(0=regular/1=global/2=adaptive), kernel/stride/pad_*, pad_mode(0–3), include_pad | 见 §2.3 限制 |
 | `Split` | `ncnn.split` | 无 | 纯路由，≥2 输出；SSA 化后被消除 |
 | `Concat` | `ncnn.concat` | axis | 沿 axis 拼接 |
 | `Dropout` | `ncnn.dropout` | scale（默认 1.0） | 推理时 scale=1.0 为恒等 |
 | `Softmax` | `ncnn.softmax` | axis | |
-| `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 当前支持纯 depthwise、静态 FP32 或 FP16-storage 权重和融合 ReLU，统一以 FP32 计算；不是通用 group conv |
+| `ConvolutionDepthWise` | `ncnn.convolution_depthwise` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, has_bias | 支持纯 depthwise、静态 FP32/FP16-storage 权重、INT8 scale-term 和融合 ReLU；不是通用 group conv |
 | `Deconvolution` | `ncnn.deconvolution` | kernel_h/w, stride_h/w, dilation_h/w, pad_top/bottom/left/right, output_pad_bottom/right, has_bias | 静态 FP32 2x2 stride-2 子集；可选 bias 和融合 ReLU |
 | `Padding` | `ncnn.padding` | top, bottom, left, right, value | FP32 constant spatial padding；支持动态 H/W |
 | `Interp` | `ncnn.interp` | height_scale, width_scale, output_h/w | FP32 rank-3 nearest；支持正整数倍或显式静态目标，scale 模式支持动态 H/W |
@@ -74,11 +74,11 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 
 ### 2.3 算子级限制
 
-- **Convolution**：FP16-storage kernel 在导入常量时按 ncnn 语义提升为 FP32。动态权重（param 19）、除 ReLU/Sigmoid 外的融合激活、非零 `pad_value`（param 18）
-  在导入时拒绝。`int8_scale_term` 可解析但 **int8 量化卷积不会被 lowering**——残留 ncnn op
-  被严格流水线拒绝。
-- **ConvolutionDepthWise**：当前只接受纯 depthwise FP32 计算，FP16-storage kernel 在导入时提升为 FP32；支持无激活或融合 ReLU，通用 group
-  convolution、动态权重、量化和其他融合激活仍然拒绝；显式 padding 和 SAME_UPPER/LOWER 均支持。
+- **Convolution**：支持 FP16/BF16 storage boundary、FP16 原生算术或 FP32 accumulator fallback，以及
+  `int8_scale_term` 的 INT8→INT32→FP32 重定标路径。动态权重（param 19）、除 ReLU/Sigmoid 外的融合激活、
+  非零 `pad_value`（param 18）在导入时拒绝。
+- **ConvolutionDepthWise**：只接受纯 depthwise；支持 FP16/BF16 storage boundary、INT8 重定标、无激活或融合
+  ReLU。通用 group convolution、动态权重和其他融合激活仍然拒绝；显式 padding 和 SAME_UPPER/LOWER 均支持。
 - **Deconvolution**：当前只支持静态 FP32、2x2 kernel、stride 2、dilation 1、零 crop/output
   padding、无显式输出 shape override；融合激活仅支持无激活或 ReLU。直接 NCNN IR lowering
   会拒绝超出 TOSA `transpose_conv2d` `out_pad` 表示范围的 crop。无激活/ReLU 携带的
@@ -217,9 +217,11 @@ regular average include-pad 和尚未分配目标路径的 ncnn op 可以残留�
 
 ### 5.1 CLI 接受与已验证目标
 
-- CLI 接受 64 位 Linux ELF triple；**已验证**的是宿主 Linux x86-64（CTest 和数值测试）。
-- Linux AArch64 仅是可尝试的交叉编译目标，需配套 Clang 工具链和 sysroot，当前没有本项目
-  的端到端运行验证。`--verify-execution` 不能用于不能在当前宿主执行的交叉产物。
+- CLI 接受 64 位 Linux ELF triple。宿主 Linux x86-64 已通过完整 Release 构建、`216/216` CTest、
+  数值模型和动态库执行验证。
+- AArch64 FP16 和 RISC-V Zfh/Zvfh FP16 已使用编译器生成的 LLVM IR 做静态 assembly 指令验证；
+  这不等同于在目标硬件上运行。交叉编译仍需匹配的 Clang 工具链和 sysroot，`--verify-execution` 不能
+  用于当前宿主无法执行的目标产物。
 
 不支持：Windows DLL、macOS dylib、32-bit ELF。
 
@@ -356,11 +358,11 @@ DetectionOutput 当前未注册 naive override，使用 ncnn 内建层路径。
 | 类别 | 限制 |
 |---|---|
 | 算子覆盖 | 27 个计算 op 的受限实例；DetectionOutput 仅 Caffe SSD；无 PriorBox/Proposal/Yolo、通用 group conv、RNN |
-| 量化 | int8 参数可解析但不被 lowering；f16-storage 权重导入时提升为 f32，端到端计算路径仅 f32 |
+| 量化 | 支持已覆盖的 INT8 scale-term 卷积/InnerProduct 重定标链；未覆盖的量化层仍由严格 lowering gate 拒绝；FP16/BF16 storage boundary 按精度策略处理 |
 | 形状 | 静态 shape 广泛覆盖；固定 rank 动态 extent 覆盖空间 Concat、可证明的 Binary 同 rank 广播、Reshape `0/-1`、Slice 动态轴 `-233`、global/adaptive Pooling、Pooling 动态通道和 InnerProduct 动态 M。V2 shape program 支持多输入 Add/Multiply/FloorDiv/CeilDiv/Max。动态 rank 仅一入一出 identity/ReLU rank 1..4；DetectionOutput 动态 prior、动态权重及一般动态图仍不支持 |
 | 数据类型 | GenerateCAPI 支持 typed f16/bf16/f32/f64 与整数 ABI；当前 ncnn 模型数据主路径为 f32 |
 | 入口 | 一个执行入口；shape-only 动态输出另有 inference 入口；执行 ABI 按输入组、输出 data、数据依赖元数据排列 |
-| 平台 | 仅 Linux 64-bit ELF |
+| 平台 | Linux 64-bit ELF；x86-64 原生运行验证，AArch64/RISC-V 低精度指令静态验证 |
 | GPU/NPU | 无，仅 CPU（LLVM 后端） |
 | 图优化 | 无算子融合、无常量折叠 |
 

@@ -59,6 +59,12 @@ ncnn-mlir-driver [options] <input .param file>
 | `--input-shape=<CxHxW>` | 可重复；extent 为正整数或 `?`，按 Input source order 匹配 | 无 |
 | `--input-shape=*` | 受限动态 rank 1..4；必须是唯一 occurrence | 无 |
 | `--input-dim-constraint=<INPUT:DIM:min=N,multiple=N>` | 可重复；约束 fixed-rank 动态输入维 | 无 |
+| `--precision=<mode>` | `auto`、`f32`、`fp16`、`bf16` 或 `int8` | `auto` |
+| `--fp16-accumulator=<mode>` | FP16 accumulator：`f16` 或 `f32` | `f16` |
+| `--allow-fallback` | 允许目标缺少原生 FP16 arithmetic 时使用 FP32 accumulator | 关闭 |
+| `--target-triple=<triple>` | 目标 Linux ELF triple，用于 capability 检查 | 空 |
+| `--march=<arch>` / `--mcpu=<cpu>` | 目标 ISA 或具体 CPU | 空 |
+| `--target-feature=<feature>` | 可重复的 `+feature`/`-feature` | 无 |
 | `-o <path>` | 产物输出路径，`-` 写到 stdout | `-`（stdout） |
 | `--emit=<stage>` | 选择要发出的阶段（见下） | `mlir` |
 | `--verify` | 对导入的 MLIR 模块跑校验器 | 开 |
@@ -72,6 +78,10 @@ ncnn-mlir-driver [options] <input .param file>
 
 > `ncnn-mlir-driver` 当前只输出 `parsed-graph` 或 ncnn 方言 MLIR。后续产品阶段由
 > `ncnn-compile` 调用固定 pipeline；这里的 `--emit` 不是多路径产品接口。
+
+精度策略在导入的 `ncnn.model` 上保存为 `ncnn.precision`、`ncnn.fp16_accumulator`，以及必要时的
+`ncnn.precision_fallback`。目标参数必须和最终 Clang 代码生成使用的参数一致；通常应通过
+`ncnn-compile` 传递，而不是单独调用 driver。
 
 查看帮助（`--help` 已用 `OptionCategory` 收窄，不会被链接 libLLVM 引入的海量
 codegen option 淹没）：

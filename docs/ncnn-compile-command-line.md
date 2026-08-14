@@ -354,6 +354,14 @@ manifest 描述导出函数以及输入、输出的名称、shape、元素类型
 ```json
 {
   "function": "model",
+  "target": {
+    "triple": "x86_64-pc-linux-gnu",
+    "cpu": "",
+    "march": "",
+    "tune": "",
+    "features": [],
+    "execution_profile": "x86-64-auto"
+  },
   "inputs": [
     {
       "name": "input1",
@@ -381,6 +389,12 @@ manifest 描述导出函数以及输入、输出的名称、shape、元素类型
 `multiple_of`。生成头文件同时提供 `<MODEL>_<INPUT>_DIM<N>_MINIMUM` 与
 `<MODEL>_<INPUT>_DIM<N>_MULTIPLE_OF` 宏。
 
+`target` 记录最终代码生成使用的 target provenance：Clang target triple、`mcpu`、`march`、`mtune`、
+显式 target features，以及解析后的 `execution_profile`。典型 profile 包括
+`x86-64-avx512-fp16`、`x86-64-avx512-bf16`、`aarch64-fp16`、`riscv-rvv-fp16` 和
+`x86-64-fp16-storage-fp32`。后者明确表示 FP16 storage 但 FP32 accumulation，不表示原生 FP16
+arithmetic。
+
 manifest 默认只是生成头文件所需的内部临时产物，不会发布。以下情况适合显式开启：
 
 - ABI 自动化测试。
@@ -391,6 +405,34 @@ manifest 默认只是生成头文件所需的内部临时产物，不会发布�
 
 ## 5. 目标平台和 CPU
 
+### 5.0 精度策略
+
+`--precision` 选择模型的存储和计算策略：
+
+| 值 | 语义 |
+|---|---|
+| `auto` | 保持模型和算子默认策略；Manifest profile 使用 `*-auto`，不宣称纯 FP32 |
+| `f32` | FP32 storage 和 FP32 arithmetic |
+| `fp16` | FP16 storage；卷积 accumulator 由 `--fp16-accumulator` 选择 |
+| `bf16` | BF16 storage boundary，复杂算子按已实现的 FP32 boundary 规则处理 |
+| `int8` | INT8 量化路径；支持的卷积/InnerProduct 使用 INT32 累加和重定标 |
+
+```bash
+# 需要目标具备原生 FP16 arithmetic；不满足时编译失败
+ncnn-compile model.param --precision=fp16 --fp16-accumulator=f16
+
+# 只使用 FP16 storage，使用 FP32 accumulator
+ncnn-compile model.param --precision=fp16 --fp16-accumulator=f32
+
+# 显式允许不具备原生 FP16 arithmetic 的目标回退
+ncnn-compile model.param --precision=fp16 --fp16-accumulator=f16 \
+  --target-feature=+f16c --allow-fallback
+```
+
+目标 capability 会同时根据 triple、march、mcpu 和 target features 检查。缺少 capability 时，
+编译器会报告目标和缺失的原生能力；`--allow-fallback` 只允许 FP16 arithmetic 使用 FP32
+accumulator，不会把 fallback 报告为原生 FP16。
+
 ### 5.1 `--target-triple=<triple>`
 
 指定 Clang target triple：
@@ -400,8 +442,9 @@ ncnn-compile model.param \
   --target-triple=x86_64-unknown-linux-gnu
 ```
 
-CLI 只接受 64 位 Linux ELF triple。当前源码和 CTest 已验证的是宿主 Linux x86-64；Linux
-AArch64 可在提供匹配 Clang 工具链和 sysroot 时尝试交叉编译，但当前不属于已验证的运行目标。
+CLI 只接受 64 位 Linux ELF triple。宿主 Linux x86-64 已通过完整 Release、数值模型和动态库执行验证；
+AArch64 FP16 与 RISC-V Zfh/Zvfh FP16 已通过编译器生成 LLVM IR 的静态 assembly 检查，但不等同于
+目标硬件运行验证。
 Windows DLL、macOS dylib 和 32 位 ELF 不属于当前产物契约。
 
 AArch64 交叉编译示例：
