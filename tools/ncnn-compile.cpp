@@ -26,6 +26,7 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
+#include "ncnn-mlir/Support/Precision.hpp"
 #include "ncnn-mlir/Support/ShapeProgram.hpp"
 
 namespace {
@@ -223,10 +224,20 @@ struct Manifest {
     bool fallback;
   };
 
+  struct Target {
+    std::string triple;
+    std::string cpu;
+    std::string march;
+    std::string tune;
+    std::vector<std::string> features;
+    std::string execution_profile;
+  };
+
   std::string function;
   std::vector<Argument> inputs;
   std::vector<Argument> outputs;
   std::optional<PrecisionPolicy> precision_policy;
+  std::optional<Target> target;
 };
 
 class ScopedDirectory {
@@ -488,7 +499,8 @@ int run(const std::vector<std::string>& command,
   Manifest manifest{.function = std::string(*function),
                     .inputs = {},
                     .outputs = {},
-                    .precision_policy = std::nullopt};
+                    .precision_policy = std::nullopt,
+                    .target = std::nullopt};
   if (auto* policy = object->getObject("precision_policy")) {
     auto storage = policy->getString("storage");
     auto complex_math = policy->getString("complex_math");
@@ -819,6 +831,20 @@ int run(const std::vector<std::string>& command,
     }
     policy["fallback"] = manifest.precision_policy->fallback;
     object["precision_policy"] = std::move(policy);
+  }
+  if (manifest.target) {
+    llvm::json::Array features;
+    for (const std::string& feature : manifest.target->features) {
+      features.push_back(feature);
+    }
+    llvm::json::Object target;
+    target["triple"] = manifest.target->triple;
+    target["cpu"] = manifest.target->cpu;
+    target["march"] = manifest.target->march;
+    target["tune"] = manifest.target->tune;
+    target["features"] = std::move(features);
+    target["execution_profile"] = manifest.target->execution_profile;
+    object["target"] = std::move(target);
   }
   return write_file(
     path, llvm::formatv("{0:2}\n", llvm::json::Value(std::move(object))).str());
@@ -1672,6 +1698,21 @@ int main(int argc, char** argv) {
     return fail("cannot create staging directory");
   }
   ScopedDirectory staging(fs::path(staging_storage.str().str()));
+  std::string effective_target_triple = g_target_triple;
+  if (effective_target_triple.empty()) {
+    const fs::path target_capture = staging.path() / "target-triple.txt";
+    if (int status = run({clang_path, "-dumpmachine"}, target_capture)) {
+      return status;
+    }
+    auto target_text = read_text(target_capture);
+    if (!target_text) {
+      return fail(target_text.error());
+    }
+    effective_target_triple = llvm::StringRef(*target_text).trim().str();
+    if (effective_target_triple.empty()) {
+      return fail("clang returned an empty native target triple");
+    }
+  }
   const fs::path ncnn_ir = staging.path() / "model.ncnn.mlir";
   const fs::path tosa_ir = staging.path() / "model.tosa.mlir";
   const fs::path linalg_ir = staging.path() / "model.linalg.mlir";
@@ -1693,9 +1734,7 @@ int main(int argc, char** argv) {
   if (g_allow_fallback) {
     driver_command.emplace_back("--allow-fallback");
   }
-  if (!g_target_triple.empty()) {
-    driver_command.push_back("--target-triple=" + g_target_triple);
-  }
+  driver_command.push_back("--target-triple=" + effective_target_triple);
   if (!g_march.empty()) {
     driver_command.push_back("--march=" + g_march);
   }
@@ -1763,9 +1802,7 @@ int main(int argc, char** argv) {
 
   std::vector<std::string> target_args;
   std::vector<std::string> codegen_args;
-  if (!g_target_triple.empty()) {
-    target_args.push_back("--target=" + g_target_triple);
-  }
+  target_args.push_back("--target=" + effective_target_triple);
   if (!g_sysroot.empty()) {
     target_args.push_back("--sysroot=" + g_sysroot);
   }
@@ -1818,6 +1855,29 @@ int main(int argc, char** argv) {
     return fail(llvm::Twine("ABI manifest function '") + manifest->function +
                 "' does not match requested model name '" + model_name + "'");
   }
+  auto precision = ncnn_mlir::parse_precision_mode(g_precision);
+  auto accumulator = ncnn_mlir::parse_fp16_accumulator_mode(g_fp16_accumulator);
+  if (!precision || !accumulator) {
+    return fail(!precision ? precision.error() : accumulator.error());
+  }
+  ncnn_mlir::TargetSpec target_spec{
+    .triple = effective_target_triple,
+    .march = g_march,
+    .mcpu = g_mcpu,
+    .features = {g_target_features.begin(), g_target_features.end()}};
+  auto policy = ncnn_mlir::resolve_precision_policy(
+    *precision, *accumulator, g_allow_fallback, target_spec);
+  if (!policy) {
+    return fail(policy.error());
+  }
+  manifest->target = Manifest::Target{
+    .triple = effective_target_triple,
+    .cpu = g_mcpu,
+    .march = g_march,
+    .tune = g_mtune,
+    .features = {g_target_features.begin(), g_target_features.end()},
+    .execution_profile =
+      ncnn_mlir::precision_execution_profile(*policy, target_spec)};
   auto manifest_result = write_manifest(manifest_path, *manifest);
   if (!manifest_result) {
     return fail(manifest_result.error());

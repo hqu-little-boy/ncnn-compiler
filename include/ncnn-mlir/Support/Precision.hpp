@@ -54,6 +54,9 @@ struct TargetCapabilities {
 };
 
 TargetCapabilities infer_target_capabilities(const TargetSpec& target);
+std::string target_architecture_name(const TargetSpec& target);
+std::string precision_execution_profile(const PrecisionPolicy& policy,
+                                        const TargetSpec& target);
 [[nodiscard]] std::expected<void, std::string> validate_precision_target(
   PrecisionMode mode, const TargetSpec& target);
 [[nodiscard]] std::expected<PrecisionPolicy, std::string>

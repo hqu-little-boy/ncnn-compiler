@@ -178,6 +178,11 @@ def main():
     input1 = manifest["inputs"][0]
     if input1["element_type"] != "f32" or input1["dynamic_dim_mask"] != 0:
         raise RuntimeError(f"missing typed ABI metadata: {input1}")
+    target = manifest.get("target")
+    if target is None or target["triple"] != native_target:
+        raise RuntimeError(f"missing target provenance: {target}")
+    if target["execution_profile"] != "x86-64-auto":
+        raise RuntimeError(f"unexpected execution profile: {target}")
     all_header = (all_output / "relu_all.h").read_text()
     required_header_text = {
         "#include <stdint.h>",

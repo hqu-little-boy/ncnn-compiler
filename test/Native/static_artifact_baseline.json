@@ -9,10 +9,18 @@
         "files": {
           "librelu_all.so": 13720,
           "relu_all.h": 1217,
-          "relu_all.json": 371
+          "relu_all.json": 534
         },
         "manifest": {
           "function": "relu_all",
+          "target": {
+            "cpu": "",
+            "execution_profile": "x86-64-auto",
+            "features": [],
+            "march": "",
+            "triple": "x86_64-pc-linux-gnu",
+            "tune": ""
+          },
           "inputs": [
             {
               "dynamic_dim_mask": 0,

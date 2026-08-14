@@ -79,7 +79,12 @@ def main():
         compiler_command(
             args,
             work_dir / "fallback",
-            ["--target-feature=+f16c", "--allow-fallback", "--emit=ncnn"],
+            [
+                "--target-feature=+f16c",
+                "--allow-fallback",
+                "--emit=ncnn",
+                "--emit-manifest",
+            ],
         ),
         capture_output=True,
         text=True,
@@ -89,6 +94,12 @@ def main():
     fallback_ir = (work_dir / "fallback" / "model.ncnn.mlir").read_text()
     if 'ncnn.fp16_accumulator = "f32"' not in fallback_ir:
         raise RuntimeError("fallback policy was not persisted in IR")
+    fallback_manifest = json.loads(
+        (work_dir / "fallback" / "fp16_policy.json").read_text()
+    )
+    fallback_profile = fallback_manifest["target"]["execution_profile"]
+    if fallback_profile != "x86-64-fp16-storage-fp32":
+        raise RuntimeError(f"fallback was reported as native FP16: {fallback_profile}")
 
     codegen_dir = pathlib.Path(args.codegen_dir)
     linalg_ir = (codegen_dir / "model.linalg.mlir").read_text()
@@ -97,6 +108,50 @@ def main():
         raise RuntimeError("FP16 Linalg convolution was not generated")
     if "fmul half" not in llvm_ir or "fadd half" not in llvm_ir:
         raise RuntimeError("LLVM IR does not contain FP16 multiply and accumulation")
+    manifest = json.loads((codegen_dir / "convolution_codegen_fp16.json").read_text())
+    target = manifest.get("target")
+    if target is None or target["execution_profile"] != "x86-64-avx512-fp16":
+        raise RuntimeError(f"native FP16 target profile was not reported: {target}")
+    if "+avx512fp16" not in target["features"]:
+        raise RuntimeError(f"native FP16 feature provenance is missing: {target}")
+
+    cross_target_checks = {}
+    for name, target_args, pattern in (
+        (
+            "aarch64-armv8.2-fp16",
+            ["-target", "aarch64-unknown-linux-gnu", "-march=armv8.2-a+fp16"],
+            r"\bf(?:mul|add|mla)\s+h",
+        ),
+        (
+            "riscv64-zfh-zvfh",
+            [
+                "-target",
+                "riscv64-unknown-linux-gnu",
+                "-march=rv64gcv_zfh_zvfh",
+            ],
+            r"\b(?:fmul|fadd|fmadd)\.h\b",
+        ),
+    ):
+        assembly_path = work_dir / f"{name}.s"
+        run(
+            [
+                args.clang,
+                *target_args,
+                "-x",
+                "ir",
+                "-S",
+                str(codegen_dir / "model.ll"),
+                "-o",
+                str(assembly_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assembly = assembly_path.read_text()
+        instruction_count = len(re.findall(pattern, assembly))
+        if instruction_count == 0:
+            raise RuntimeError(f"{name} did not contain native FP16 instructions")
+        cross_target_checks[name] = {"fp16_instruction_count": instruction_count}
 
     disassembly = run(
         [args.objdump, "-d", "--no-show-raw-insn", codegen_dir / "model.o"],
@@ -143,6 +198,7 @@ def main():
             )
         },
         "object_sections_bytes": sections,
+        "cross_target_instruction_checks": cross_target_checks,
         "peak_tensor_memory_bytes": {
             "input_f32": 1 * 4 * 4 * 4,
             "input_f16_padded": 1 * 6 * 6 * 1 * 2,

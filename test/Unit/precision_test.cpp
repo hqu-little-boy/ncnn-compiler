@@ -52,6 +52,46 @@ TEST(PrecisionTest, ChecksTargetCapabilities) {
   EXPECT_EQ(fallback->fp16_accumulator,
             ncnn_mlir::FP16AccumulatorMode::Float32);
   EXPECT_TRUE(fallback->used_fallback);
+  EXPECT_EQ(ncnn_mlir::precision_execution_profile(*fallback, target),
+            "x86-64-fp16-storage-fp32");
+}
+
+TEST(PrecisionTest, RecognizesArchitectureSpecificProfiles) {
+  using ncnn_mlir::FP16AccumulatorMode;
+  using ncnn_mlir::PrecisionMode;
+
+  ncnn_mlir::TargetSpec arm{.triple = "aarch64-unknown-linux-gnu",
+                            .march = "armv8.6-a+fp16+bf16+i8mm",
+                            .mcpu = "",
+                            .features = {}};
+  auto capabilities = ncnn_mlir::infer_target_capabilities(arm);
+  EXPECT_TRUE(capabilities.fp16_storage);
+  EXPECT_TRUE(capabilities.fp16_arithmetic);
+  EXPECT_TRUE(capabilities.bf16);
+  EXPECT_TRUE(capabilities.int8);
+
+  ncnn_mlir::TargetSpec riscv{.triple = "riscv64-unknown-linux-gnu",
+                              .march = "rv64gcv_zfh_zvfh",
+                              .mcpu = "",
+                              .features = {}};
+  capabilities = ncnn_mlir::infer_target_capabilities(riscv);
+  EXPECT_TRUE(capabilities.fp16_storage);
+  EXPECT_TRUE(capabilities.fp16_arithmetic);
+  EXPECT_TRUE(capabilities.int8);
+  auto policy = ncnn_mlir::resolve_precision_policy(
+    PrecisionMode::Float16, FP16AccumulatorMode::Float16, false, riscv);
+  ASSERT_TRUE(policy);
+  EXPECT_EQ(ncnn_mlir::precision_execution_profile(*policy, riscv),
+            "riscv-rvv-fp16");
+
+  ncnn_mlir::TargetSpec x86{.triple = "x86_64-unknown-linux-gnu",
+                            .march = "",
+                            .mcpu = "sapphirerapids",
+                            .features = {}};
+  capabilities = ncnn_mlir::infer_target_capabilities(x86);
+  EXPECT_TRUE(capabilities.fp16_arithmetic);
+  EXPECT_TRUE(capabilities.bf16);
+  EXPECT_TRUE(capabilities.int8);
 }
 
 TEST(PrecisionTest, RegistersOperatorCapabilities) {
