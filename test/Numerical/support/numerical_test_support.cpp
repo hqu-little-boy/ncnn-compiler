@@ -189,6 +189,19 @@ int CompiledModel::run_dynamic(std::span<const float> input,
     input.data(), input_shape.data(), output.data(), output_capacity);
 }
 
+int CompiledModel::run_dynamic_fixed_output(
+  std::span<const float> input,
+  std::span<const std::int64_t> input_shape,
+  std::span<float> output) const {
+  if (symbol_ == nullptr || input_shape.size() != 3) {
+    return -1;
+  }
+  using Function = int (*)(const float*, const std::int64_t*, float*);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(
+    input.data(), input_shape.data(), output.data());
+}
+
 int CompiledModel::run_dynamic_two_outputs(
   std::span<const float> input,
   std::span<const std::int64_t> input_shape,

@@ -1262,12 +1262,6 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
         return operation.emitOpError(
           "dynamic or adaptive signed i8 pooling is not supported");
       }
-      if (dynamicRegular &&
-          (operation.getPadTop() != 0 || operation.getPadBottom() != 0 ||
-           operation.getPadLeft() != 0 || operation.getPadRight() != 0)) {
-        return operation.emitOpError(
-          "dynamic regular pooling requires zero padding");
-      }
       Location location = operation.getLoc();
       const bool maximum =
         operation.getKind() == static_cast<int64_t>(PoolKind::Maximum);
@@ -1281,23 +1275,43 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
         runtimeOutputType = sourceOutput;
       } else {
         if (dynamicRegular) {
-          auto outputExtent =
-            [&](Value inputExtent, int64_t kernel, int64_t stride) {
-              Value reduced = rewriter.create<arith::SubIOp>(
-                location,
-                inputExtent,
-                createIndexConstant(rewriter, location, kernel));
-              Value quotient = rewriter.create<arith::DivUIOp>(
+          auto outputExtent = [&](Value inputExtent,
+                                  int64_t kernel,
+                                  int64_t stride,
+                                  int64_t padBefore,
+                                  int64_t padAfter) {
+            Value padded = rewriter.create<arith::AddIOp>(
+              location,
+              inputExtent,
+              createIndexConstant(rewriter, location, padBefore + padAfter));
+            Value reduced = rewriter.create<arith::SubIOp>(
+              location,
+              padded,
+              createIndexConstant(rewriter, location, kernel));
+            if (operation.getPadMode() == 0) {
+              reduced = rewriter.create<arith::AddIOp>(
                 location,
                 reduced,
-                createIndexConstant(rewriter, location, stride));
-              return rewriter.create<arith::AddIOp>(
-                location, quotient, createIndexConstant(rewriter, location, 1));
-            };
-          outputH = outputExtent(
-            inputH, kernelH, static_cast<int64_t>(operation.getStrideH()));
-          outputW = outputExtent(
-            inputW, kernelW, static_cast<int64_t>(operation.getStrideW()));
+                createIndexConstant(rewriter, location, stride - 1));
+            }
+            Value quotient = rewriter.create<arith::DivUIOp>(
+              location,
+              reduced,
+              createIndexConstant(rewriter, location, stride));
+            return rewriter.create<arith::AddIOp>(
+              location, quotient, createIndexConstant(rewriter, location, 1));
+          };
+          outputH =
+            outputExtent(inputH,
+                         kernelH,
+                         static_cast<int64_t>(operation.getStrideH()),
+                         static_cast<int64_t>(operation.getPadTop()),
+                         static_cast<int64_t>(operation.getPadBottom()));
+          outputW = outputExtent(inputW,
+                                 kernelW,
+                                 static_cast<int64_t>(operation.getStrideW()),
+                                 static_cast<int64_t>(operation.getPadLeft()),
+                                 static_cast<int64_t>(operation.getPadRight()));
         } else {
           outputH = kernelH == -233
                       ? inputH
@@ -1394,6 +1408,7 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
           } else if (dynamicRegular) {
             Value oh = nested.create<linalg::IndexOp>(bodyLocation, 1);
             Value ow = nested.create<linalg::IndexOp>(bodyLocation, 2);
+            Value zero = createIndexConstant(nested, bodyLocation, 0);
             Value strideH =
               createIndexConstant(nested,
                                   bodyLocation,
@@ -1402,18 +1417,47 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
               createIndexConstant(nested,
                                   bodyLocation,
                                   static_cast<int64_t>(operation.getStrideW()));
-            heightBegin =
-              nested.create<arith::MulIOp>(bodyLocation, oh, strideH);
-            widthBegin =
-              nested.create<arith::MulIOp>(bodyLocation, ow, strideW);
-            heightEnd = nested.create<arith::AddIOp>(
+            Value logicalHeightBegin = nested.create<arith::SubIOp>(
               bodyLocation,
-              heightBegin,
+              nested.create<arith::MulIOp>(bodyLocation, oh, strideH),
+              createIndexConstant(nested,
+                                  bodyLocation,
+                                  static_cast<int64_t>(operation.getPadTop())));
+            Value logicalWidthBegin = nested.create<arith::SubIOp>(
+              bodyLocation,
+              nested.create<arith::MulIOp>(bodyLocation, ow, strideW),
+              createIndexConstant(
+                nested,
+                bodyLocation,
+                static_cast<int64_t>(operation.getPadLeft())));
+            Value logicalHeightEnd = nested.create<arith::AddIOp>(
+              bodyLocation,
+              logicalHeightBegin,
               createIndexConstant(nested, bodyLocation, kernelH));
-            widthEnd = nested.create<arith::AddIOp>(
+            Value logicalWidthEnd = nested.create<arith::AddIOp>(
               bodyLocation,
-              widthBegin,
+              logicalWidthBegin,
               createIndexConstant(nested, bodyLocation, kernelW));
+            heightBegin = nested.create<arith::MinSIOp>(
+              bodyLocation,
+              nested.create<arith::MaxSIOp>(
+                bodyLocation, logicalHeightBegin, zero),
+              inputH);
+            widthBegin = nested.create<arith::MinSIOp>(
+              bodyLocation,
+              nested.create<arith::MaxSIOp>(
+                bodyLocation, logicalWidthBegin, zero),
+              inputW);
+            heightEnd = nested.create<arith::MinSIOp>(
+              bodyLocation,
+              nested.create<arith::MaxSIOp>(
+                bodyLocation, logicalHeightEnd, zero),
+              inputH);
+            widthEnd = nested.create<arith::MinSIOp>(
+              bodyLocation,
+              nested.create<arith::MaxSIOp>(
+                bodyLocation, logicalWidthEnd, zero),
+              inputW);
           }
 
           Value initial = nested.create<arith::ConstantFloatOp>(
@@ -1459,15 +1503,20 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
             });
           Value pooled = rows.getResult(0);
           if (!maximum) {
+            Value rowsExtent =
+              dynamicRegular && operation.getIncludePad()
+                ? createIndexConstant(nested, bodyLocation, kernelH)
+                : nested.create<arith::SubIOp>(
+                    bodyLocation, heightEnd, heightBegin);
+            Value columnsExtent =
+              dynamicRegular && operation.getIncludePad()
+                ? createIndexConstant(nested, bodyLocation, kernelW)
+                : nested.create<arith::SubIOp>(
+                    bodyLocation, widthEnd, widthBegin);
             Value rowsCount = nested.create<arith::IndexCastOp>(
-              bodyLocation,
-              nested.getI64Type(),
-              nested.create<arith::SubIOp>(
-                bodyLocation, heightEnd, heightBegin));
+              bodyLocation, nested.getI64Type(), rowsExtent);
             Value columnsCount = nested.create<arith::IndexCastOp>(
-              bodyLocation,
-              nested.getI64Type(),
-              nested.create<arith::SubIOp>(bodyLocation, widthEnd, widthBegin));
+              bodyLocation, nested.getI64Type(), columnsExtent);
             Value count = nested.create<arith::MulIOp>(
               bodyLocation, rowsCount, columnsCount);
             Value countFloat = nested.create<arith::UIToFPOp>(
@@ -4552,8 +4601,9 @@ class ConvertNCNNToTosaPass final
     target.addLegalOp<UnrealizedConversionCastOp>();
     target.addIllegalOp<ConvolutionOp>();
     target.addDynamicallyLegalOp<PoolingOp>([](PoolingOp operation) {
+      auto inputType = cast<RankedTensorType>(operation.getInput().getType());
       return operation.getKind() == static_cast<int64_t>(PoolKind::Average) &&
-             operation.getIncludePad();
+             operation.getIncludePad() && inputType.hasStaticShape();
     });
     target.addIllegalOp<ReluOp,
                         QuantizeOp,

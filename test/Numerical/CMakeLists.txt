@@ -693,6 +693,27 @@ ncnn_add_compiled_fixture(
     0:1:min=1,multiple=1
     0:2:min=1,multiple=1)
 ncnn_add_compiled_fixture(
+    pooling_padded_max_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_padded_max_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    pooling_padded_average_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_padded_average_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
+    pooling_padded_average_include_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_padded_average_include_dynamic.param
+    ${empty_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
     pooling_global_max_dynamic
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pooling_global_max_dynamic.param
     ${empty_bin}
@@ -766,6 +787,14 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin
     3x32x192)
+ncnn_add_compiled_fixture(
+    chineseocr_lite_anglenet_dynamic
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1
+    EMIT_IR)
 ncnn_add_compiled_fixture(
     pp_ocrv6_tiny_rec
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param
@@ -1065,6 +1094,9 @@ set(numerical_fixture_targets
     compile_reduction_dynamic_mean
     compile_gemm_dynamic
     compile_slice_dynamic
+    compile_pooling_padded_max_dynamic
+    compile_pooling_padded_average_dynamic
+    compile_pooling_padded_average_include_dynamic
     compile_pooling_global_max_dynamic
     compile_pooling_global_average_dynamic
     compile_pooling_adaptive_max_dynamic
@@ -1102,9 +1134,11 @@ add_dependencies(compile_pp_lcnet_x1_0_doc_ori compile_squeezenet_v1_1)
 add_dependencies(compile_pp_lcnet_x1_0_textline_ori
                    compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(compile_chineseocr_lite_anglenet
-                  compile_pp_lcnet_x1_0_textline_ori)
+                   compile_pp_lcnet_x1_0_textline_ori)
+add_dependencies(compile_chineseocr_lite_anglenet_dynamic
+                 compile_chineseocr_lite_anglenet)
 add_dependencies(compile_pp_ocrv6_tiny_rec
-                   compile_chineseocr_lite_anglenet)
+                 compile_chineseocr_lite_anglenet_dynamic)
 add_dependencies(compile_pp_ocrv6_tiny_rec_dynamic
                  compile_pp_ocrv6_tiny_rec)
 add_dependencies(compile_pp_ocrv5_mobile_rec
@@ -1455,6 +1489,9 @@ target_compile_definitions(numerical_dynamic_operator_tests PRIVATE
     REDUCTION_DYNAMIC_MEAN_LIBRARY_PATH="${reduction_dynamic_mean_LIBRARY}"
     GEMM_DYNAMIC_LIBRARY_PATH="${gemm_dynamic_LIBRARY}"
     SLICE_DYNAMIC_LIBRARY_PATH="${slice_dynamic_LIBRARY}"
+    POOLING_PADDED_MAX_DYNAMIC_LIBRARY_PATH="${pooling_padded_max_dynamic_LIBRARY}"
+    POOLING_PADDED_AVERAGE_DYNAMIC_LIBRARY_PATH="${pooling_padded_average_dynamic_LIBRARY}"
+    POOLING_PADDED_AVERAGE_INCLUDE_DYNAMIC_LIBRARY_PATH="${pooling_padded_average_include_dynamic_LIBRARY}"
     POOLING_GLOBAL_MAX_DYNAMIC_LIBRARY_PATH="${pooling_global_max_dynamic_LIBRARY}"
     POOLING_GLOBAL_AVERAGE_DYNAMIC_LIBRARY_PATH="${pooling_global_average_dynamic_LIBRARY}"
     POOLING_ADAPTIVE_MAX_DYNAMIC_LIBRARY_PATH="${pooling_adaptive_max_dynamic_LIBRARY}"
@@ -1484,6 +1521,9 @@ add_dependencies(numerical_dynamic_operator_tests
     compile_reduction_dynamic_mean
     compile_gemm_dynamic
     compile_slice_dynamic
+    compile_pooling_padded_max_dynamic
+    compile_pooling_padded_average_dynamic
+    compile_pooling_padded_average_include_dynamic
     compile_pooling_global_max_dynamic
     compile_pooling_global_average_dynamic
     compile_pooling_adaptive_max_dynamic
@@ -1509,6 +1549,12 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
     PP_OCRV6_MEDIUM_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param"
     PP_OCRV6_MEDIUM_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin"
     PP_OCRV6_MEDIUM_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv6_medium_det_dynamic_LIBRARY}"
+    CHINESEOCR_LITE_ANGLENET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param"
+    CHINESEOCR_LITE_ANGLENET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin"
+    CHINESEOCR_LITE_ANGLENET_DYNAMIC_LIBRARY_PATH="${chineseocr_lite_anglenet_dynamic_LIBRARY}"
+    CHINESEOCR_LITE_ANGLENET_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/chineseocr_lite_anglenet_dynamic/chineseocr_lite_anglenet_dynamic.json"
+    CHINESEOCR_LITE_ANGLENET_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/chineseocr_lite_anglenet_dynamic/chineseocr_lite_anglenet_dynamic.h"
+    CHINESEOCR_LITE_ANGLENET_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/chineseocr_lite_anglenet_dynamic/model.linalg.mlir"
     PP_OCRV6_TINY_REC_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param"
     PP_OCRV6_TINY_REC_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin"
     PP_OCRV6_TINY_REC_DYNAMIC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_dynamic_LIBRARY}"
@@ -1532,6 +1578,7 @@ add_dependencies(numerical_dynamic_tests
     compile_pp_ocrv6_tiny_det_dynamic
     compile_pp_ocrv6_small_det_dynamic
     compile_pp_ocrv6_medium_det_dynamic
+    compile_chineseocr_lite_anglenet_dynamic
     compile_pp_ocrv6_tiny_rec_dynamic
     compile_pp_ocrv5_mobile_rec_dynamic
     compile_pp_ocrv5_server_det_dynamic)

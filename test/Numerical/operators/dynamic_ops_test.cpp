@@ -378,6 +378,63 @@ TEST(NumericalDynamicOperator, GlobalPoolingMatchesNcnnAcrossShapes) {
   }
 }
 
+TEST(NumericalDynamicOperator, PaddedRegularPoolingMatchesNcnnAcrossShapes) {
+  constexpr std::array<Case, 4> kPaddedCases{{
+    Case{.height = 1, .width = 1},
+    Case{.height = 3, .width = 5},
+    Case{.height = 4, .width = 6},
+    Case{.height = 7, .width = 11},
+  }};
+  for (const auto& [fixture, library, symbol, tolerance] :
+       {std::tuple{"pooling_padded_max_dynamic",
+                   POOLING_PADDED_MAX_DYNAMIC_LIBRARY_PATH,
+                   "pooling_padded_max_dynamic",
+                   0.0F},
+        std::tuple{"pooling_padded_average_dynamic",
+                   POOLING_PADDED_AVERAGE_DYNAMIC_LIBRARY_PATH,
+                   "pooling_padded_average_dynamic",
+                   1.0e-6F},
+        std::tuple{"pooling_padded_average_include_dynamic",
+                   POOLING_PADDED_AVERAGE_INCLUDE_DYNAMIC_LIBRARY_PATH,
+                   "pooling_padded_average_include_dynamic",
+                   1.0e-6F}}) {
+    CompiledModel compiled(library, symbol);
+    ASSERT_TRUE(compiled.valid()) << compiled.error();
+    CompiledModel infer(library, std::string(symbol) + "_infer_output_shapes");
+    ASSERT_TRUE(infer.valid()) << infer.error();
+
+    for (const Case shape : kPaddedCases) {
+      const std::array<std::int64_t, 3> dimensions{
+        3, shape.height, shape.width};
+      const std::array<std::int64_t, 3> expectedShape{
+        3, (shape.height + 1) / 2, (shape.width + 1) / 2};
+      const std::vector<float> input = make_random_input(
+        3U * shape.height * shape.width, 0x50AD00U, -2.0F, 2.0F);
+      std::array<std::int64_t, 3> inferred{};
+      ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
+      EXPECT_EQ(inferred, expectedShape);
+
+      const ReferenceModel reference(fixture_path(fixture),
+                                     NUMERICAL_EMPTY_BIN_PATH,
+                                     "data",
+                                     "output",
+                                     TensorShape(shape.width, shape.height, 3));
+      const auto expected = run_ncnn_reference(reference, input);
+      ASSERT_TRUE(expected.has_value()) << expected.error();
+      const std::size_t outputElements =
+        3U * static_cast<std::size_t>(expectedShape[1]) *
+        static_cast<std::size_t>(expectedShape[2]);
+      ASSERT_EQ(expected->size(), outputElements);
+
+      std::vector<float> actual(outputElements);
+      ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+                kSuccess);
+      EXPECT_TRUE(compare_values(actual, *expected, tolerance))
+        << fixture << " at " << shape.height << "x" << shape.width;
+    }
+  }
+}
+
 TEST(NumericalDynamicOperator, AdaptivePoolingMatchesNcnnAcrossShapes) {
   for (const auto& [fixture, library, symbol, tolerance] :
        {std::tuple{"pooling_adaptive_max_dynamic",

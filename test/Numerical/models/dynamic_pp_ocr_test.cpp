@@ -482,6 +482,138 @@ TEST(NumericalDynamicModel, PPOCRv5ServerDetSupportsAlternatingShapes) {
   record_peak_rss();
 }
 
+TEST(NumericalDynamicModel, ChineseOCRLiteAngleNetMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(CHINESEOCR_LITE_ANGLENET_DYNAMIC_LIBRARY_PATH,
+                         "chineseocr_lite_anglenet_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const DetectionCase& shape : std::array<DetectionCase, 4>{
+         DetectionCase{.height = 1, .width = 1},
+         DetectionCase{.height = 31, .width = 191},
+         DetectionCase{.height = 32, .width = 192},
+         DetectionCase{.height = 33, .width = 193},
+       }) {
+    const auto dimensions = input_shape(shape);
+    const std::vector<float> input =
+      make_random_input(element_count(shape),
+                        static_cast<std::uint32_t>(
+                          0x414E0000U + (shape.height * 131) + shape.width),
+                        -1.0F,
+                        1.0F);
+    const ReferenceModel reference(
+      CHINESEOCR_LITE_ANGLENET_DYNAMIC_PARAM_PATH,
+      CHINESEOCR_LITE_ANGLENET_DYNAMIC_BIN_PATH,
+      "in0",
+      "out0",
+      TensorShape(
+        static_cast<int>(shape.width), static_cast<int>(shape.height), 3));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    ASSERT_EQ(expected->size(), 2U);
+
+    std::vector<float> actual(2);
+    ASSERT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, actual),
+              kSuccess)
+      << "shape " << shape.height << 'x' << shape.width;
+    EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F))
+      << "shape " << shape.height << 'x' << shape.width;
+    EXPECT_TRUE(check_softmax(actual, *expected));
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, ChineseOCRLiteAngleNetSupportsAlternatingShapes) {
+  CompiledModel compiled(CHINESEOCR_LITE_ANGLENET_DYNAMIC_LIBRARY_PATH,
+                         "chineseocr_lite_anglenet_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const DetectionCase& shape : std::array<DetectionCase, 4>{
+         DetectionCase{.height = 33, .width = 193},
+         DetectionCase{.height = 1, .width = 1},
+         DetectionCase{.height = 32, .width = 192},
+         DetectionCase{.height = 33, .width = 193},
+       }) {
+    const auto dimensions = input_shape(shape);
+    const std::vector<float> input(element_count(shape), 0.001F);
+    std::vector<float> output(2);
+    EXPECT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, output),
+              kSuccess)
+      << "shape " << shape.height << 'x' << shape.width;
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, ChineseOCRLiteAngleNetRejectsInvalidShapes) {
+  CompiledModel compiled(CHINESEOCR_LITE_ANGLENET_DYNAMIC_LIBRARY_PATH,
+                         "chineseocr_lite_anglenet_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  const std::array<std::int64_t, 3> normal_shape = {3, 32, 192};
+  const std::vector<float> input(3 * 32 * 192, 0.0F);
+  std::vector<float> output(2);
+  ASSERT_EQ(compiled.run_dynamic_fixed_output(input, normal_shape, output),
+            kSuccess);
+
+  for (const auto dimensions : std::array<std::array<std::int64_t, 3>, 3>{
+         {{3, 0, 192}, {3, 32, 0}, {1, 32, 192}}}) {
+    EXPECT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, output),
+              kInvalidShape);
+  }
+
+  const std::array<std::int64_t, 3> overflow_shape = {
+    3,
+    std::numeric_limits<std::int64_t>::max(),
+    std::numeric_limits<std::int64_t>::max(),
+  };
+  EXPECT_EQ(compiled.run_dynamic_fixed_output(input, overflow_shape, output),
+            kShapeArithmeticOverflow);
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, ChineseOCRLiteAngleNetArtifactsDescribeDynamicAbi) {
+  EXPECT_GT(
+    std::filesystem::file_size(CHINESEOCR_LITE_ANGLENET_DYNAMIC_LIBRARY_PATH),
+    0U);
+
+  const std::string manifest =
+    read_text(CHINESEOCR_LITE_ANGLENET_DYNAMIC_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("chineseocr_lite_anglenet_dynamic"),
+            std::string::npos);
+  EXPECT_NE(manifest.find("\"minimum\": 1"), std::string::npos);
+  EXPECT_NE(manifest.find("\"multiple_of\": 1"), std::string::npos);
+  EXPECT_NE(manifest.find("\"dynamic_dim_mask\": 6"), std::string::npos);
+  EXPECT_NE(manifest.find("\"shape\": [\n        2\n      ]"),
+            std::string::npos);
+
+  const std::string header =
+    read_text(CHINESEOCR_LITE_ANGLENET_DYNAMIC_HEADER_PATH);
+  for (const std::string_view required : {
+         "#define CHINESEOCR_LITE_ANGLENET_DYNAMIC_INPUT1_RANK 3",
+         "#define CHINESEOCR_LITE_ANGLENET_DYNAMIC_INPUT1_DIM1 "
+         "NCNN_DYNAMIC_DIM",
+         "#define CHINESEOCR_LITE_ANGLENET_DYNAMIC_INPUT1_DIM2 "
+         "NCNN_DYNAMIC_DIM",
+         "#define CHINESEOCR_LITE_ANGLENET_DYNAMIC_INPUT1_DYNAMIC_DIM_MASK "
+         "UINT32_C(0x6)",
+         "#define CHINESEOCR_LITE_ANGLENET_DYNAMIC_INPUT1_DIM1_MINIMUM "
+         "INT64_C(1)",
+         "#define CHINESEOCR_LITE_ANGLENET_DYNAMIC_INPUT1_DIM2_MINIMUM "
+         "INT64_C(1)",
+         "#define CHINESEOCR_LITE_ANGLENET_DYNAMIC_OUTPUT1_RANK 1",
+         "#define CHINESEOCR_LITE_ANGLENET_DYNAMIC_OUTPUT1_DIM0 INT64_C(2)",
+         "#define CHINESEOCR_LITE_ANGLENET_DYNAMIC_OUTPUT1_ELEMENTS "
+         "UINT64_C(2)",
+       }) {
+    EXPECT_NE(header.find(required), std::string::npos) << required;
+  }
+
+  const std::string linalg_ir =
+    read_text(CHINESEOCR_LITE_ANGLENET_DYNAMIC_LINALG_IR_PATH);
+  EXPECT_EQ(linalg_ir.find("ncnn.pooling"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("math.exp"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("linalg.reduce"), std::string::npos);
+}
+
 TEST(NumericalDynamicModel, PPOCRv6TinyRecInfersSequenceAcrossWidths) {
   CompiledModel infer(PP_OCRV6_TINY_REC_DYNAMIC_LIBRARY_PATH,
                       "pp_ocrv6_tiny_rec_dynamic_infer_output_shapes");
