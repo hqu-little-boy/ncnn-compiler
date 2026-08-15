@@ -397,6 +397,40 @@ TEST(NumericalModel, PPStructureV2SLANetPlusCNNMatchesNcnn) {
   EXPECT_EQ(repeated, actual);
 }
 
+TEST(NumericalModel, PPStructureV2SLANetArtifactsRemainStaticSpecialization) {
+  const std::string manifest =
+    read_text(PP_STRUCTRUREV2_SLANET_PLUS_CNN_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_structrurev2_slanet_plus_cnn"),
+            std::string::npos);
+  EXPECT_NE(manifest.find("\"dynamic_dim_mask\": 0"), std::string::npos);
+  EXPECT_EQ(manifest.find("-1"), std::string::npos);
+
+  const std::string header =
+    read_text(PP_STRUCTRUREV2_SLANET_PLUS_CNN_HEADER_PATH);
+  for (const std::string_view required : {
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_CNN_INPUT1_DIM0 INT64_C(3)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_CNN_INPUT1_DIM1 INT64_C(488)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_CNN_INPUT1_DIM2 INT64_C(488)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_CNN_INPUT1_DYNAMIC_DIM_MASK "
+         "UINT32_C(0x0)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_CNN_OUTPUT1_DIM0 "
+         "INT64_C(256)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_CNN_OUTPUT1_DIM1 INT64_C(96)",
+         "int pp_structrurev2_slanet_plus_cnn(const float *input1, float "
+         "*output1);",
+       }) {
+    EXPECT_NE(header.find(required), std::string::npos) << required;
+  }
+  EXPECT_EQ(header.find("input1_shape"), std::string::npos);
+  EXPECT_EQ(header.find("_infer_output_shapes"), std::string::npos);
+
+  const std::string linalg_ir =
+    read_text(PP_STRUCTRUREV2_SLANET_PLUS_CNN_LINALG_IR_PATH);
+  EXPECT_NE(linalg_ir.find("tensor<3x488x488xf32>"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("tensor<256x96xf32>"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("?"), std::string::npos);
+}
+
 TEST(NumericalModel, PPStructureV2SLANetPlusCNNFp16StorageMatchesNcnn) {
   const TensorShape inputShape(488, 488, 3);
   constexpr std::size_t kOutputElements = 256 * 96;
@@ -451,6 +485,38 @@ TEST(NumericalModel, PPFormulaNetPlusSEncoderMatchesNcnn) {
   std::vector<float> repeated(kOutputElements);
   ASSERT_EQ(compiled.run(input, repeated), 0);
   EXPECT_EQ(repeated, actual);
+}
+
+TEST(NumericalModel, PPFormulaNetArtifactsRemainStaticSpecialization) {
+  const std::string manifest =
+    read_text(PP_FORMULANET_PLUS_S_ENCODER_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_formulanet_plus_s_encoder"), std::string::npos);
+  EXPECT_NE(manifest.find("\"dynamic_dim_mask\": 0"), std::string::npos);
+  EXPECT_EQ(manifest.find("-1"), std::string::npos);
+
+  const std::string header =
+    read_text(PP_FORMULANET_PLUS_S_ENCODER_HEADER_PATH);
+  for (const std::string_view required : {
+         "#define PP_FORMULANET_PLUS_S_ENCODER_INPUT1_DIM0 INT64_C(1)",
+         "#define PP_FORMULANET_PLUS_S_ENCODER_INPUT1_DIM1 INT64_C(384)",
+         "#define PP_FORMULANET_PLUS_S_ENCODER_INPUT1_DIM2 INT64_C(384)",
+         "#define PP_FORMULANET_PLUS_S_ENCODER_INPUT1_DYNAMIC_DIM_MASK "
+         "UINT32_C(0x0)",
+         "#define PP_FORMULANET_PLUS_S_ENCODER_OUTPUT1_DIM0 INT64_C(144)",
+         "#define PP_FORMULANET_PLUS_S_ENCODER_OUTPUT1_DIM1 INT64_C(2048)",
+         "int pp_formulanet_plus_s_encoder(const float *input1, float "
+         "*output1);",
+       }) {
+    EXPECT_NE(header.find(required), std::string::npos) << required;
+  }
+  EXPECT_EQ(header.find("input1_shape"), std::string::npos);
+  EXPECT_EQ(header.find("_infer_output_shapes"), std::string::npos);
+
+  const std::string linalg_ir =
+    read_text(PP_FORMULANET_PLUS_S_ENCODER_LINALG_IR_PATH);
+  EXPECT_NE(linalg_ir.find("tensor<1x384x384xf32>"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("tensor<144x2048xf32>"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("?"), std::string::npos);
 }
 
 TEST(NumericalModel, PPFormulaNetPlusSEncoderFp16StorageMatchesNcnn) {

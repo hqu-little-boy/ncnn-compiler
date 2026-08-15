@@ -43,6 +43,20 @@ struct DynamicDetectionModel {
   std::uint32_t seed;
 };
 
+struct DynamicLCNetModel {
+  const char* test_name;
+  const char* library_path;
+  const char* param_path;
+  const char* bin_path;
+  const char* symbol;
+  const char* manifest_path;
+  const char* header_path;
+  const char* linalg_ir_path;
+  const char* header_prefix;
+  std::size_t output_elements;
+  std::uint32_t seed;
+};
+
 constexpr std::array<DetectionCase, 5> kDetectionCases = {{
   DetectionCase{.height = 32, .width = 32},
   DetectionCase{.height = 320, .width = 320},
@@ -99,6 +113,35 @@ const std::array<DynamicDetectionModel, 3> kV6DynamicDetectionModels = {{
   },
 }};
 
+const std::array<DynamicLCNetModel, 2> kDynamicLCNetModels = {{
+  DynamicLCNetModel{
+    .test_name = "DocOri",
+    .library_path = PP_LCNET_DOC_ORI_DYNAMIC_LIBRARY_PATH,
+    .param_path = PP_LCNET_DOC_ORI_DYNAMIC_PARAM_PATH,
+    .bin_path = PP_LCNET_DOC_ORI_DYNAMIC_BIN_PATH,
+    .symbol = "pp_lcnet_x1_0_doc_ori_dynamic",
+    .manifest_path = PP_LCNET_DOC_ORI_DYNAMIC_MANIFEST_PATH,
+    .header_path = PP_LCNET_DOC_ORI_DYNAMIC_HEADER_PATH,
+    .linalg_ir_path = PP_LCNET_DOC_ORI_DYNAMIC_LINALG_IR_PATH,
+    .header_prefix = "PP_LCNET_X1_0_DOC_ORI_DYNAMIC",
+    .output_elements = 4,
+    .seed = 0x4C43444FU,
+  },
+  DynamicLCNetModel{
+    .test_name = "TextlineOri",
+    .library_path = PP_LCNET_TEXTLINE_ORI_DYNAMIC_LIBRARY_PATH,
+    .param_path = PP_LCNET_TEXTLINE_ORI_DYNAMIC_PARAM_PATH,
+    .bin_path = PP_LCNET_TEXTLINE_ORI_DYNAMIC_BIN_PATH,
+    .symbol = "pp_lcnet_x1_0_textline_ori_dynamic",
+    .manifest_path = PP_LCNET_TEXTLINE_ORI_DYNAMIC_MANIFEST_PATH,
+    .header_path = PP_LCNET_TEXTLINE_ORI_DYNAMIC_HEADER_PATH,
+    .linalg_ir_path = PP_LCNET_TEXTLINE_ORI_DYNAMIC_LINALG_IR_PATH,
+    .header_prefix = "PP_LCNET_X1_0_TEXTLINE_ORI_DYNAMIC",
+    .output_elements = 2,
+    .seed = 0x4C43544CU,
+  },
+}};
+
 std::size_t element_count(const DetectionCase& shape) {
   return static_cast<std::size_t>(shape.height) *
          static_cast<std::size_t>(shape.width) * 3U;
@@ -145,6 +188,9 @@ void record_peak_rss() {
 
 class PPOCRv6DynamicDetTest
   : public ::testing::TestWithParam<DynamicDetectionModel> {};
+
+class PPLCNetDynamicTest : public ::testing::TestWithParam<DynamicLCNetModel> {
+};
 
 TEST_P(PPOCRv6DynamicDetTest, MatchesNcnnAcrossShapes) {
   const DynamicDetectionModel& model = GetParam();
@@ -481,6 +527,138 @@ TEST(NumericalDynamicModel, PPOCRv5ServerDetSupportsAlternatingShapes) {
   }
   record_peak_rss();
 }
+
+TEST_P(PPLCNetDynamicTest, MatchesNcnnAcrossShapes) {
+  const DynamicLCNetModel& model = GetParam();
+  CompiledModel compiled(model.library_path, model.symbol);
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const DetectionCase& shape : std::array<DetectionCase, 4>{
+         DetectionCase{.height = 1, .width = 1},
+         DetectionCase{.height = 79, .width = 159},
+         DetectionCase{.height = 80, .width = 160},
+         DetectionCase{.height = 224, .width = 224},
+       }) {
+    const auto dimensions = input_shape(shape);
+    const std::vector<float> input = make_random_input(
+      element_count(shape),
+      model.seed +
+        static_cast<std::uint32_t>((shape.height * 131) + shape.width),
+      -1.0F,
+      1.0F);
+    const ReferenceModel reference(
+      model.param_path,
+      model.bin_path,
+      "in0",
+      "out0",
+      TensorShape(
+        static_cast<int>(shape.width), static_cast<int>(shape.height), 3));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    ASSERT_EQ(expected->size(), model.output_elements);
+
+    std::vector<float> actual(model.output_elements);
+    ASSERT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, actual),
+              kSuccess)
+      << "shape " << shape.height << 'x' << shape.width;
+    EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F))
+      << "shape " << shape.height << 'x' << shape.width;
+    EXPECT_TRUE(check_softmax(actual, *expected));
+  }
+  record_peak_rss();
+}
+
+TEST_P(PPLCNetDynamicTest, SupportsAlternatingShapes) {
+  const DynamicLCNetModel& model = GetParam();
+  CompiledModel compiled(model.library_path, model.symbol);
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const DetectionCase& shape : std::array<DetectionCase, 4>{
+         DetectionCase{.height = 81, .width = 161},
+         DetectionCase{.height = 1, .width = 1},
+         DetectionCase{.height = 80, .width = 160},
+         DetectionCase{.height = 81, .width = 161},
+       }) {
+    const auto dimensions = input_shape(shape);
+    const std::vector<float> input(element_count(shape), 0.001F);
+    std::vector<float> output(model.output_elements);
+    EXPECT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, output),
+              kSuccess)
+      << "shape " << shape.height << 'x' << shape.width;
+  }
+  record_peak_rss();
+}
+
+TEST_P(PPLCNetDynamicTest, RejectsInvalidShapes) {
+  const DynamicLCNetModel& model = GetParam();
+  CompiledModel compiled(model.library_path, model.symbol);
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  const std::array<std::int64_t, 3> normal_shape = {3, 80, 160};
+  const std::vector<float> input(3 * 80 * 160, 0.0F);
+  std::vector<float> output(model.output_elements);
+  ASSERT_EQ(compiled.run_dynamic_fixed_output(input, normal_shape, output),
+            kSuccess);
+
+  for (const auto dimensions : std::array<std::array<std::int64_t, 3>, 3>{
+         {{3, 0, 160}, {3, 80, 0}, {1, 80, 160}}}) {
+    EXPECT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, output),
+              kInvalidShape);
+  }
+
+  const std::array<std::int64_t, 3> overflow_shape = {
+    3,
+    std::numeric_limits<std::int64_t>::max(),
+    std::numeric_limits<std::int64_t>::max(),
+  };
+  EXPECT_EQ(compiled.run_dynamic_fixed_output(input, overflow_shape, output),
+            kShapeArithmeticOverflow);
+  record_peak_rss();
+}
+
+TEST_P(PPLCNetDynamicTest, ArtifactsDescribeDynamicInputAndFixedOutput) {
+  const DynamicLCNetModel& model = GetParam();
+  EXPECT_GT(std::filesystem::file_size(model.library_path), 0U);
+
+  const std::string manifest = read_text(model.manifest_path);
+  EXPECT_NE(manifest.find(model.symbol), std::string::npos);
+  EXPECT_NE(manifest.find("\"minimum\": 1"), std::string::npos);
+  EXPECT_NE(manifest.find("\"multiple_of\": 1"), std::string::npos);
+  EXPECT_NE(manifest.find("\"dynamic_dim_mask\": 6"), std::string::npos);
+
+  const std::string prefix = model.header_prefix;
+  const std::string header = read_text(model.header_path);
+  for (const std::string& required : {
+         "#define " + prefix + "_INPUT1_RANK 3",
+         "#define " + prefix + "_INPUT1_DIM1 NCNN_DYNAMIC_DIM",
+         "#define " + prefix + "_INPUT1_DIM2 NCNN_DYNAMIC_DIM",
+         "#define " + prefix + "_INPUT1_DYNAMIC_DIM_MASK UINT32_C(0x6)",
+         "#define " + prefix + "_INPUT1_DIM1_MINIMUM INT64_C(1)",
+         "#define " + prefix + "_INPUT1_DIM2_MINIMUM INT64_C(1)",
+         "#define " + prefix + "_OUTPUT1_RANK 1",
+         "#define " + prefix + "_OUTPUT1_DIM0 INT64_C(" +
+           std::to_string(model.output_elements) + ")",
+         "#define " + prefix + "_OUTPUT1_DYNAMIC_DIM_MASK UINT32_C(0x0)",
+       }) {
+    EXPECT_NE(header.find(required), std::string::npos) << required;
+  }
+  EXPECT_EQ(header.find("_infer_output_shapes"), std::string::npos);
+  EXPECT_EQ(header.find("output1_capacity"), std::string::npos);
+
+  const std::string linalg_ir = read_text(model.linalg_ir_path);
+  EXPECT_NE(linalg_ir.find("tensor<3x?x?xf32>"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("linalg.reduce"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("math.exp"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.pooling"), std::string::npos);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  PPLCNet,
+  PPLCNetDynamicTest,
+  ::testing::ValuesIn(kDynamicLCNetModels),
+  [](const ::testing::TestParamInfo<DynamicLCNetModel>& info) {
+    return info.param.test_name;
+  });
 
 TEST(NumericalDynamicModel, ChineseOCRLiteAngleNetMatchesNcnnAcrossShapes) {
   CompiledModel compiled(CHINESEOCR_LITE_ANGLENET_DYNAMIC_LIBRARY_PATH,

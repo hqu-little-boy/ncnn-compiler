@@ -773,6 +773,14 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin
     3x224x224)
 ncnn_add_compiled_fixture(
+    pp_lcnet_x1_0_doc_ori_dynamic
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1
+    EMIT_IR)
+ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_doc_ori_int8
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.bin
@@ -782,6 +790,14 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin
     3x80x160)
+ncnn_add_compiled_fixture(
+    pp_lcnet_x1_0_textline_ori_dynamic
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1
+    EMIT_IR)
 ncnn_add_compiled_fixture(
     chineseocr_lite_anglenet
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param
@@ -876,12 +892,14 @@ ncnn_add_compiled_fixture(
     pp_structrurev2_slanet_plus_cnn
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin
-    3x488x488)
+    3x488x488
+    EMIT_IR)
 ncnn_add_compiled_fixture(
     pp_formulanet_plus_s_encoder
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin
-    1x384x384)
+    1x384x384
+    EMIT_IR)
 ncnn_add_compiled_fixture(
     convolution_mixed_fp16
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
@@ -1131,10 +1149,14 @@ foreach(index RANGE ${numerical_fixture_last_index})
 endforeach()
 add_dependencies(compile_squeezenet_v1_1 compile_sigmoid)
 add_dependencies(compile_pp_lcnet_x1_0_doc_ori compile_squeezenet_v1_1)
+add_dependencies(compile_pp_lcnet_x1_0_doc_ori_dynamic
+                 compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(compile_pp_lcnet_x1_0_textline_ori
-                   compile_pp_lcnet_x1_0_doc_ori)
+                 compile_pp_lcnet_x1_0_doc_ori_dynamic)
+add_dependencies(compile_pp_lcnet_x1_0_textline_ori_dynamic
+                 compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(compile_chineseocr_lite_anglenet
-                   compile_pp_lcnet_x1_0_textline_ori)
+                 compile_pp_lcnet_x1_0_textline_ori_dynamic)
 add_dependencies(compile_chineseocr_lite_anglenet_dynamic
                  compile_chineseocr_lite_anglenet)
 add_dependencies(compile_pp_ocrv6_tiny_rec
@@ -1400,10 +1422,16 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param"
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin"
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH="${pp_structrurev2_slanet_plus_cnn_LIBRARY}"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_structrurev2_slanet_plus_cnn/pp_structrurev2_slanet_plus_cnn.json"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_structrurev2_slanet_plus_cnn/pp_structrurev2_slanet_plus_cnn.h"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_structrurev2_slanet_plus_cnn/model.linalg.mlir"
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_FP16_LIBRARY_PATH="${pp_structrurev2_slanet_plus_cnn_fp16_LIBRARY}"
     PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param"
     PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin"
     PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH="${pp_formulanet_plus_s_encoder_LIBRARY}"
+    PP_FORMULANET_PLUS_S_ENCODER_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_encoder/pp_formulanet_plus_s_encoder.json"
+    PP_FORMULANET_PLUS_S_ENCODER_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_encoder/pp_formulanet_plus_s_encoder.h"
+    PP_FORMULANET_PLUS_S_ENCODER_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_encoder/model.linalg.mlir"
     PP_FORMULANET_PLUS_S_ENCODER_FP16_LIBRARY_PATH="${pp_formulanet_plus_s_encoder_fp16_LIBRARY}"
     PP_FORMULANET_PLUS_S_ENCODER_FP16_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_encoder_fp16/pp_formulanet_plus_s_encoder_fp16.json"
     PP_FORMULANET_PLUS_S_ENCODER_FP16_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_encoder_fp16/model.ncnn.mlir"
@@ -1549,6 +1577,18 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
     PP_OCRV6_MEDIUM_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param"
     PP_OCRV6_MEDIUM_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin"
     PP_OCRV6_MEDIUM_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv6_medium_det_dynamic_LIBRARY}"
+    PP_LCNET_DOC_ORI_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
+    PP_LCNET_DOC_ORI_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
+    PP_LCNET_DOC_ORI_DYNAMIC_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_dynamic_LIBRARY}"
+    PP_LCNET_DOC_ORI_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_dynamic/pp_lcnet_x1_0_doc_ori_dynamic.json"
+    PP_LCNET_DOC_ORI_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_dynamic/pp_lcnet_x1_0_doc_ori_dynamic.h"
+    PP_LCNET_DOC_ORI_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_dynamic/model.linalg.mlir"
+    PP_LCNET_TEXTLINE_ORI_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param"
+    PP_LCNET_TEXTLINE_ORI_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin"
+    PP_LCNET_TEXTLINE_ORI_DYNAMIC_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_dynamic_LIBRARY}"
+    PP_LCNET_TEXTLINE_ORI_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_textline_ori_dynamic/pp_lcnet_x1_0_textline_ori_dynamic.json"
+    PP_LCNET_TEXTLINE_ORI_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_textline_ori_dynamic/pp_lcnet_x1_0_textline_ori_dynamic.h"
+    PP_LCNET_TEXTLINE_ORI_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_textline_ori_dynamic/model.linalg.mlir"
     CHINESEOCR_LITE_ANGLENET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param"
     CHINESEOCR_LITE_ANGLENET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin"
     CHINESEOCR_LITE_ANGLENET_DYNAMIC_LIBRARY_PATH="${chineseocr_lite_anglenet_dynamic_LIBRARY}"
@@ -1578,6 +1618,8 @@ add_dependencies(numerical_dynamic_tests
     compile_pp_ocrv6_tiny_det_dynamic
     compile_pp_ocrv6_small_det_dynamic
     compile_pp_ocrv6_medium_det_dynamic
+    compile_pp_lcnet_x1_0_doc_ori_dynamic
+    compile_pp_lcnet_x1_0_textline_ori_dynamic
     compile_chineseocr_lite_anglenet_dynamic
     compile_pp_ocrv6_tiny_rec_dynamic
     compile_pp_ocrv5_mobile_rec_dynamic
