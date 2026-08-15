@@ -710,6 +710,9 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           }
           for (unsigned dimension = 0; dimension < resultType.getRank();
                ++dimension) {
+            if (!ShapedType::isDynamic(resultType.getShape()[dimension])) {
+              continue;
+            }
             if (firstType.getShape()[dimension] == 1) {
               transform.dimensions[dimension] =
                 candidate->second.dimensions[dimension];

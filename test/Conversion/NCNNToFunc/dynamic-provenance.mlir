@@ -87,3 +87,19 @@ module {
 // CHECK-LABEL: func.func @static_unit_broadcast
 // CHECK-SAME: ncnn.shape_program = [array<i64>, array<i64>, array<i64>]
 // CHECK-SAME: ncnn.shape_source_input = 0 : i32
+
+// -----
+
+module {
+  ncnn.model @provenance_unit_broadcast {
+    %input = ncnn.input {blob_name = "data", layer_name = "input"} : tensor<4x?x?xf32>
+    %pooled = ncnn.pooling %input {include_pad = false, kernel_h = 0 : i64, kernel_w = 0 : i64, kind = 1 : i64, mode = 1 : i64, pad_bottom = 0 : i64, pad_left = 0 : i64, pad_mode = 0 : i64, pad_right = 0 : i64, pad_top = 0 : i64, stride_h = 1 : i64, stride_w = 1 : i64} : (tensor<4x?x?xf32>) -> tensor<4xf32>
+    %scale = ncnn.reshape %pooled {shape = array<i64: 4, 1, 1>} : (tensor<4xf32>) -> tensor<4x1x1xf32>
+    %output = ncnn.binary %input, %scale {op_type = 2 : i64, scalar = 0.000000e+00 : f32, with_scalar = false} : (tensor<4x?x?xf32>, tensor<4x1x1xf32>) -> tensor<4x?x?xf32>
+    ncnn.output %output {blob_name = "output"} : tensor<4x?x?xf32>
+  }
+}
+
+// CHECK-LABEL: func.func @provenance_unit_broadcast
+// CHECK-SAME: ncnn.shape_program = [array<i64>, array<i64>, array<i64>]
+// CHECK-SAME: ncnn.shape_source_input = 0 : i32

@@ -324,7 +324,7 @@ TEST(NumericalModel, PPOCRv5MobileDetMatchesNcnn) {
   ASSERT_EQ(expected->size(), kOutputElements);
 
   CompiledModel compiled(PP_OCRV5_MOBILE_DET_LIBRARY_PATH,
-                         "pp_ocrv5_mobile_det");
+                         "pp_ocrv5_mobile_det_static");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(kOutputElements);
   ASSERT_EQ(compiled.run(input, actual), 0);

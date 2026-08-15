@@ -77,6 +77,113 @@ void record_peak_rss() {
                                   std::to_string(usage.ru_maxrss));
 }
 
+TEST(NumericalDynamicModel, PPOCRv5MobileDetMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(PP_OCRV5_MOBILE_DET_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_det_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  CompiledModel infer(PP_OCRV5_MOBILE_DET_DYNAMIC_LIBRARY_PATH,
+                      "pp_ocrv5_mobile_det_dynamic_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+
+  for (const DetectionCase& shape : kDetectionCases) {
+    const auto inputDimensions = input_shape(shape);
+    const auto outputDimensions = expected_output_shape(shape);
+    const std::size_t outputElements = static_cast<std::size_t>(shape.height) *
+                                       static_cast<std::size_t>(shape.width);
+    const std::vector<float> input = make_random_input(
+      element_count(shape),
+      static_cast<std::uint32_t>((shape.height * 137) + shape.width),
+      -0.01F,
+      0.01F);
+    std::array<std::int64_t, 3> inferredShape{};
+    ASSERT_EQ(infer.infer_dynamic(inputDimensions, inferredShape), kSuccess);
+    EXPECT_EQ(inferredShape, outputDimensions);
+
+    const ReferenceModel reference(
+      PP_OCRV5_MOBILE_DET_DYNAMIC_PARAM_PATH,
+      PP_OCRV5_MOBILE_DET_DYNAMIC_BIN_PATH,
+      "in0",
+      "out0",
+      TensorShape(shape.width, static_cast<int>(shape.height), 3));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    ASSERT_EQ(expected->size(), outputElements);
+
+    std::vector<float> actual(outputElements);
+    ASSERT_EQ(
+      compiled.run_dynamic(input, inputDimensions, actual, outputElements),
+      kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 1.0e-4F));
+    EXPECT_TRUE(std::ranges::all_of(actual, [](float value) {
+      return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+    }));
+
+    std::vector<float> repeated(outputElements);
+    ASSERT_EQ(
+      compiled.run_dynamic(input, inputDimensions, repeated, outputElements),
+      kSuccess);
+    EXPECT_EQ(repeated, actual);
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv5MobileDetRejectsInvalidShapesAndCapacity) {
+  CompiledModel compiled(PP_OCRV5_MOBILE_DET_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_det_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  const std::array<std::int64_t, 3> normalShape = {3, 32, 32};
+  const std::vector<float> input(3 * 32 * 32, 0.0F);
+  std::vector<float> output(32 * 32, 0.0F);
+  EXPECT_EQ(compiled.run_dynamic(input, normalShape, output, output.size()),
+            kSuccess);
+
+  for (const auto dimensions : std::array<std::array<std::int64_t, 3>, 5>{{
+         {3, 31, 32},
+         {3, 32, 31},
+         {3, 33, 32},
+         {3, 320, 321},
+         {3, 0, 320},
+       }}) {
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, 1),
+              dimensions[1] == 0 ? kInvalidShape : kConstraintViolation);
+  }
+
+  std::vector<float> shortOutput((32 * 32) - 1);
+  EXPECT_EQ(
+    compiled.run_dynamic(input, normalShape, shortOutput, shortOutput.size()),
+    kOutputCapacityInsufficient);
+
+  const std::array<std::int64_t, 3> overflowShape = {
+    3,
+    std::numeric_limits<std::int64_t>::max() - 31,
+    std::numeric_limits<std::int64_t>::max() - 31,
+  };
+  EXPECT_EQ(compiled.run_dynamic(input, overflowShape, output, 1),
+            kShapeArithmeticOverflow);
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv5MobileDetSupportsAlternatingShapes) {
+  CompiledModel compiled(PP_OCRV5_MOBILE_DET_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_det_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  for (const DetectionCase& shape : std::array<DetectionCase, 3>{{
+         DetectionCase{.height = 320, .width = 960},
+         DetectionCase{.height = 640, .width = 640},
+         DetectionCase{.height = 736, .width = 1280},
+       }}) {
+    const auto dimensions = input_shape(shape);
+    const std::vector<float> input(element_count(shape), 0.001F);
+    const std::size_t outputElements = static_cast<std::size_t>(shape.height) *
+                                       static_cast<std::size_t>(shape.width);
+    std::vector<float> output(outputElements);
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, output.size()),
+              kSuccess);
+  }
+  record_peak_rss();
+}
+
 TEST(NumericalDynamicModel, PPOCRv5ServerDetMatchesNcnnAcrossShapes) {
   CompiledModel compiled(PP_OCRV5_SERVER_DET_DYNAMIC_LIBRARY_PATH,
                          "pp_ocrv5_server_det_dynamic");

@@ -792,11 +792,14 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_compiled_shape_pair(
     pp_ocrv5_mobile_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin
-    3x640x640)
+    3x640x640
+    3x?x?
+    0:1:min=32,multiple=32
+    0:2:min=32,multiple=32)
 ncnn_add_compiled_shape_pair(
     pp_ocrv5_server_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param
@@ -1073,8 +1076,11 @@ add_dependencies(compile_pp_ocrv6_tiny_det
                  compile_pp_ocrv5_mobile_rec_dynamic)
 add_dependencies(compile_pp_ocrv6_small_det compile_pp_ocrv6_tiny_det)
 add_dependencies(compile_pp_ocrv6_medium_det compile_pp_ocrv6_small_det)
-add_dependencies(compile_pp_ocrv5_mobile_det compile_pp_ocrv6_medium_det)
-add_dependencies(compile_pp_ocrv5_server_det_static compile_pp_ocrv5_mobile_det)
+add_dependencies(compile_pp_ocrv5_mobile_det_static compile_pp_ocrv6_medium_det)
+add_dependencies(compile_pp_ocrv5_mobile_det_dynamic
+                 compile_pp_ocrv5_mobile_det_static)
+add_dependencies(compile_pp_ocrv5_server_det_static
+                 compile_pp_ocrv5_mobile_det_dynamic)
 add_dependencies(compile_pp_ocrv5_server_det_dynamic
                   compile_pp_ocrv5_server_det_static)
 add_dependencies(compile_pp_structrurev2_slanet_plus_cnn
@@ -1306,7 +1312,7 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_MEDIUM_DET_LIBRARY_PATH="${pp_ocrv6_medium_det_LIBRARY}"
     PP_OCRV5_MOBILE_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param"
     PP_OCRV5_MOBILE_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin"
-    PP_OCRV5_MOBILE_DET_LIBRARY_PATH="${pp_ocrv5_mobile_det_LIBRARY}"
+    PP_OCRV5_MOBILE_DET_LIBRARY_PATH="${pp_ocrv5_mobile_det_static_LIBRARY}"
     PP_OCRV5_SERVER_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
     PP_OCRV5_SERVER_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
     PP_OCRV5_SERVER_DET_STATIC_LIBRARY_PATH="${pp_ocrv5_server_det_static_LIBRARY}"
@@ -1344,7 +1350,7 @@ add_dependencies(numerical_tests compile_pp_ocrv5_mobile_rec)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_small_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
-add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det)
+add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det_static)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_det_static)
 add_dependencies(numerical_tests compile_pp_structrurev2_slanet_plus_cnn)
 add_dependencies(numerical_tests compile_pp_formulanet_plus_s_encoder)
@@ -1451,10 +1457,14 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
     PP_OCRV5_MOBILE_REC_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_mobile_rec_dynamic/pp_ocrv5_mobile_rec_dynamic.json"
     PP_OCRV5_MOBILE_REC_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_mobile_rec_dynamic/pp_ocrv5_mobile_rec_dynamic.h"
     PP_OCRV5_MOBILE_REC_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_mobile_rec_dynamic/model.linalg.mlir"
+    PP_OCRV5_MOBILE_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param"
+    PP_OCRV5_MOBILE_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin"
+    PP_OCRV5_MOBILE_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_mobile_det_dynamic_LIBRARY}"
     PP_OCRV5_SERVER_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
     PP_OCRV5_SERVER_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
     PP_OCRV5_SERVER_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_server_det_dynamic_LIBRARY}")
 add_dependencies(numerical_dynamic_tests
+    compile_pp_ocrv5_mobile_det_dynamic
     compile_pp_ocrv5_mobile_rec_dynamic
     compile_pp_ocrv5_server_det_dynamic)
 
