@@ -157,9 +157,10 @@ TOSA pool 还要求 padded extent、kernel 和 stride 满足其 verifier 约束�
 6. TOSA 的输出 shape 和传入 pad 数组是否完全一致。
 
 小型单算子 fixture 建议先使用无歧义、可整除的 valid shape，分别增加专门 fixture 覆盖
-full-tail、SAME_UPPER、SAME_LOWER 和 average exclude-pad。当前 average `include_pad=1`
-会保留 `ncnn.pooling`，因此严格 native pipeline 会拒绝该组合；它应作为明确的未支持
-参数边界，而不是 numerical golden。类似地，`pad_mode=0` 在某些 `stride > kernel` 的
+full-tail、SAME_UPPER、SAME_LOWER 和 average exclude-pad。静态 regular average
+`include_pad=1` 尚无 TOSA lowering，会保留 `ncnn.pooling` 并由严格 native pipeline 拒绝；
+动态 H/W 路径则直接 lower 为 Linalg/SCF，已有 padded max、average exclude-pad 和 average
+include-pad numerical golden。类似地，`pad_mode=0` 在某些 `stride > kernel` 的
 组合下可能产生超过 TOSA kernel 约束的 padding，需要单独修复 lowering 后再纳入矩阵。
 真实模型测试不能替代这些分支，但可继续覆盖 SqueezeNet 的实际 `pad_mode=0` 路径。
 
@@ -168,7 +169,9 @@ SAME_UPPER/LOWER；ReLU 的普通、零/负输入和 leaky slope；Pooling 的 m
 SAME_UPPER/LOWER 与 tail；Concat 的 rank-3 正负 axis；Softmax 的 rank-3 正负 axis；以及
 三路 Split 输出经过多级 consumer 的拓扑。`ConvolutionDepthWise` 当前支持纯 depthwise 的
 FP32、FP16/BF16 边界、INT8 scale-term 和融合 ReLU；这不等于支持通用 group convolution、
-动态权重或其他融合激活。
+动态权重或其他融合激活。动态算子二进制还覆盖 regular/global/adaptive Pooling、运行时元素数
+Reduction、Reshape/Slice 和动态 M 的 Gemm/InnerProduct；动态模型二进制覆盖十个 LiteOCR
+产物，并检查多尺寸、交替尺寸、非法 shape、容量、manifest、header 和 lowering IR。
 
 完整 34 个 source 计算层，以及包含 `Input` 在内的 35 个 importer source layer type，能力矩阵以 [`ncnn-compile-support-status.md`](ncnn-compile-support-status.md)
 为准；本节只列 numerical fixture 已覆盖的参数组合。

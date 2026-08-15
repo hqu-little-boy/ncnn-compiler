@@ -217,7 +217,9 @@ conv 输出尺寸公式（显式 pad）：
 SAME（`-233`/`-234`）：`out = 1 + (in-1)/stride`。
 
 显式非负 padding 的 Convolution 可传播动态 H/W；动态 nearest Interp 以运行时 H/W 乘静态
-scale；DetectionOutput 根据输入和 top-k 参数推导最大 storage，实际行数由执行时 shape carrier
+scale；regular/global/adaptive Pooling 可传播动态空间 extent；mean Reduction 保留未归约动态维，
+并在 lowering 中使用运行时归约元素数；rank-2 self-attention 保持动态 sequence extent。
+DetectionOutput 根据输入和 top-k 参数推导最大 storage，实际行数由执行时 shape carrier
 返回。动态 SAME 在对应 stride 为 1 时可直接化为零显式 padding；stride 大于 1 时仍无法在
 静态 `pad` 属性中表达运行时分配，编译器会拒绝。
 

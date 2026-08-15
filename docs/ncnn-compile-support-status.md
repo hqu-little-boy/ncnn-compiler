@@ -18,6 +18,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 `PP-OCRv6_medium_det`、`PP-OCRv5_mobile_det`、`PP-OCRv5_server_det`、
 `PP-OCRv5_mobile_rec`、
 `PP-StructrureV2_SLANet_plus_cnn`、`PP-FormulaNet_plus_S_encoder` 作为端到端验证目标。
+其中 PP-LCNet 两个方向模型、AngleNet、PP-OCRv5/v6 识别模型和五个检测模型还具有独立的
+fixed-rank 动态输入产物与跨 shape 数值回归；SLANet 和 FormulaNet 保持静态 specialization。
 
 ---
 
@@ -59,13 +61,13 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | `HardSwish` | `ncnn.hard_swish` | alpha, beta | 支持 FP16/BF16 mixed boundary |
 | `Swish` | `ncnn.swish` | 无 | FP32 ranked tensor，逐元素 SiLU |
 | `LayerNorm` | `ncnn.layer_norm` | affine_size, epsilon, affine | FP32，沿静态最后一维归一化；支持有/无 gamma、beta |
-| `MultiHeadAttention` | `ncnn.multi_head_attention` | embed_dim, num_heads, qdim/kdim/vdim, scale | 静态 FP32 rank-2 单输入 self-attention 子集；见 §2.3 限制 |
+| `MultiHeadAttention` | `ncnn.multi_head_attention` | embed_dim, num_heads, qdim/kdim/vdim, scale | FP32 rank-2 单输入 self-attention 子集，sequence extent 可动态；见 §2.3 限制 |
 | `Reshape` | `ncnn.reshape` | shape、shape_spec、shape_zero_sources、shape_sources、shape_expression | 支持静态 shape、单个 `-1`、`0` 复制维度，并保留原始 shape 语义；也支持引用单一 shape 输入并保持维序的表达式（如 `1w,1h,1c`） |
 | `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 加法/乘法/最大值；支持标量和同 rank 双向广播，动态 extent 保守推断 |
 | `InnerProduct` | `ncnn.inner_product` | has_bias, int8_scale_term | 支持 FP32 和受限 INT8 scale-term；静态输入按元素展平，另支持 rank-2 动态 M、静态 K 的 `[M,K] -> [M,O]` |
 | `ShuffleChannel` | `ncnn.shuffle_channel` | group, reverse | 静态 FP32；group 必须整除通道数 |
 | `Slice` | `ncnn.slice` | slices, axis | FP32；支持显式 sizes 和 `-233` 按序切分；动态切分轴上的显式 size 保持精确，`-233` 结果为动态 |
-| `Reduction` | `ncnn.reduction` | kind, reduce_all, coeff, axes, keepdims | 静态 FP32 mean 子集 |
+| `Reduction` | `ncnn.reduction` | kind, reduce_all, coeff, axes, keepdims | FP32 mean 子集；动态归约范围使用运行时元素数计算除数 |
 | `GELU` | `ncnn.gelu` | fast | 当前支持标准 erfc 形式（`fast=0`） |
 | `Squeeze` | `ncnn.squeeze` | axes | 显式静态 axes |
 | `BatchNorm` | `ncnn.batch_norm` | epsilon | 静态 FP32，按首维归一化 |
@@ -98,18 +100,22 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
   lower 为 Linalg。整数 scale 的静态实例可走 TOSA resize，动态 H/W 直接 lower 为
   `tensor.dim + tensor.empty + linalg.generic`。
 - **Pooling**：NCNN IR 类型推断允许安全的动态通道，并在 regular/adaptive 结果中保留通道、global
-  结果为 `[C]`。动态 H/W 的 global 和固定 target adaptive 直接 lower 为运行时 Linalg/SCF 归约；
-  adaptive 窗口按 `floor(input * output_index / output)` 与
-  `ceil(input * (output_index + 1) / output)` 计算。regular `Average + include_pad=1` 仍明确拒绝。
+  结果为 `[C]`。动态 H/W 的 regular、global 和固定 target adaptive 直接 lower 为运行时
+  Linalg/SCF 归约；动态 regular 覆盖 padded max、average exclude-pad 和 average include-pad，
+  max padding 使用负无穷，average 除数按 `include_pad` 选择有效窗口或完整 kernel。adaptive
+  窗口按 `floor(input * output_index / output)` 与
+  `ceil(input * (output_index + 1) / output)` 计算。静态 regular `Average + include_pad=1` 尚无
+  对应 TOSA 路径，仍会保留为 `ncnn.pooling` 并由严格 gate 拒绝。
   `pad_mode=0`（full + tail padding）通过尾部填充计算正常支持；global 模式按 ncnn 语义忽略
   regular-only 的 padding 和 `include_pad` 参数。
 - **Softmax**：旧版 `fixbug0=0` 仅允许 `axis=0`。
 - **LayerNorm**：输入必须为 FP32 ranked tensor，最后一维静态、为正且等于 `affine_size`；affine
   模式严格要求一组 FP32 gamma/beta。当前不支持按多个尾维联合归一化。
-- **MultiHeadAttention**：当前只支持静态 FP32 `[sequence,qdim]`、单输入单输出、
+- **MultiHeadAttention**：当前只支持 FP32 `[sequence,qdim]`、单输入单输出、
   `qdim=kdim=vdim` 的 self-attention；要求 `embed_dim` 可被 `num_heads` 整除，并完整携带
-  q/k/v/out projection weight 和 bias。不支持 attention mask、KV cache、cross-attention、动态
-  sequence 或量化权重。
+  q/k/v/out projection weight 和 bias。sequence extent 可以动态，并通过 Tensor/Linalg 构造
+  projection、分头、稳定 Softmax 和输出 projection。不支持 attention mask、KV cache、
+  cross-attention 或量化权重。
 - **Reshape**：非 expression 形式通过 `shape_spec` 保留原始 `0/-1`，并以
   `shape_zero_sources` 明确每个 `0` 映射的输入维；只允许单个 `-1`，缺失维的 `0` 明确拒绝。
   shape expression 当前支持直接引用单一输入 blob 的 `w/h/d/c` 维度，并要求输出
@@ -125,7 +131,8 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
   运行时析取广播条件继续拒绝。不支持的 op_type 和 rank 组合继续拒绝。
 - **InnerProduct**：权重及 K/O 必须静态；rank-2 输入允许动态 M，并推断 `[M,O]`。动态 K、
   动态权重和其他非静态输入形态继续拒绝。
-- **Reduction**：当前只支持 `operation=3`（mean）；显式 axes 要求新版 `fixbug0=1`。
+- **Reduction**：当前只支持 `operation=3`（mean）；显式 axes 要求新版 `fixbug0=1`。当被归约
+  extent 动态时，lowering 从 `tensor.dim` 计算运行时元素数并缩放结果，不使用静态常量除数。
 - **Gemm**：仅支持 `constantA=0, constantB=1, constantC=1, transA=0, transB=1`、
   `broadcast_type_C=4` 的 FP32 或 `int8_scale_term=1/2` 子集；不支持 packing 和输出转置。
 - **DetectionOutput**：仅支持 Caffe-style SSD，要求三个静态 FP32 输入且满足 location、confidence、
@@ -236,8 +243,8 @@ include-pad 和尚未分配目标路径的 ncnn op 可以残留。单 pass 成�
 
 ### 5.1 CLI 接受与已验证目标
 
-- CLI 接受 64 位 Linux ELF triple。本次全新 Release 构建在宿主 Linux x86-64 注册 227 项 CTest，
-  包含数值模型和动态库执行验证；数量会随构建配置和测试增减变化。
+- CLI 接受 64 位 Linux ELF triple。当前宿主 Linux x86-64 的全新 Release 验收为 `265/265`
+  CTest；数量会随构建配置和测试增减变化，权威实时值使用 `ctest --test-dir build -N` 查询。
 - AArch64 FP16 和 RISC-V Zfh/Zvfh FP16 已使用编译器生成的 LLVM IR 做静态 assembly 指令验证；
   这不等同于在目标硬件上运行。交叉编译仍需匹配的 Clang 工具链和 sysroot，`--verify-execution` 不能
   用于当前宿主无法执行的目标产物。
@@ -269,8 +276,8 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
   H/W shape inference 和 NCNN-to-TOSA lowering；动态 `SAME` 仅支持对应 stride 为 1。
 - Concat 非拼接动态维与 Binary 非静态-1 广播维必须由输入约束下的符号 shape program 证明
   等价，否则编译失败；Concat 拼接轴使用 V2 加法表达式，Binary 输出广播维可使用 V2 Max。
-  完整动态 M09 已通过约束 shape、容量、溢出、重复调用和交替 shape 测试；其他模型仍须逐算子
-  验证下游动态 lowering 能力。
+  当前十个动态 LiteOCR 产物均通过模型对应的约束 shape、容量或固定输出 ABI、溢出、重复调用和
+  交替 shape 测试；其他模型仍须逐算子验证下游动态 lowering 能力。
 - shape-only 动态输出由 `<model>_infer_output_shapes` 返回，调用方据此分配 output buffer；执行
   入口为每个此类输出接收 `uint64_t capacity`，单位是 data buffer 元素数。
 - 数据依赖输出由执行入口返回 actual shape/rank，并接收 shape metadata capacity；调用方按
@@ -361,6 +368,10 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
   绝对误差约 `2.256e-4`
   - 全有限输出、softmax 求和误差 ≤1e-5（PP-OCRv6 的 6906 类输出为 ≤2e-5，
     PP-OCRv5 mobile rec 的 18385 类输出为 ≤2e-4）、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4
+- `models/dynamic_pp_ocr_test.cpp`：十个 fixed-rank 动态产物：PP-LCNet doc/textline、AngleNet、
+  PP-OCRv5 mobile rec、PP-OCRv6 tiny rec、PP-OCRv5 mobile/server det 和 PP-OCRv6
+  tiny/small/medium det。覆盖多尺寸与交替尺寸、upstream ncnn 对齐、minimum/multiple 约束、
+  零维/错误通道/shape 算术溢出、输出容量，以及 header/manifest/Linalg IR 审计。
 
 ### 7.4 运行时测试
 
@@ -370,14 +381,16 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
   lowering/数值测试、SqueezeNet、PP-LCNet、PP-OCR，以及固定 target 的导出符号、
   manifest、header 和共享库产物大小。静态产物不得导出 `_infer_output_shapes`；原生 artifact/CLI
   基线另使用 `static-baseline` label。
-- 动态数值测试编译为独立的 `numerical_dynamic_tests`，通过 `ctest -L numerical-dynamic`
-  执行；另有动态算子测试覆盖 global/adaptive pooling、Reshape `0/-1`、Slice `-233` 和
-  InnerProduct 动态 M，并在多个运行时 shape 上与 ncnn 对齐。静态与动态测试不共享 expected。
+- 动态模型和动态算子分别编译为 `numerical_dynamic_tests` 与
+  `numerical_dynamic_operator_tests`，通过 `ctest -L numerical-dynamic` 一并执行。动态算子测试
+  覆盖 regular padded max/average（exclude/include pad）、global/adaptive pooling、动态 Reduction
+  除数、Reshape `0/-1`、Slice `-233`、Gemm/InnerProduct 动态 M，并在多个运行时 shape 上与
+  ncnn 对齐。静态与动态测试不共享 expected。
 
 ### 7.5 未覆盖（明确排除）
 
 - 通用 `ConvolutionDepthWise` / 分组卷积；当前仅支持纯 depthwise 子集
-- Average pooling `include_pad=1`（严格流水线拒绝）
+- 静态 regular Average pooling `include_pad=1` 的 TOSA 路径；动态 H/W 的 Linalg/SCF 路径已覆盖
 - DetectionOutput 动态 prior 数量、动态权重，以及需要跨输入运行时 shape 等式的动态通道实例
 
 ---

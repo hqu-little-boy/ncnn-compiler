@@ -223,6 +223,45 @@ Importer 还会为可追溯到模型输入的动态 `Slice` 轴自动推导 mini
 `multiple_of` 默认为 1。追溯可穿过受支持的 BinaryOp 广播和 Squeeze 轴映射；同一维同时有
 显式约束时取更严格的 minimum，并保留显式 `multiple_of`。
 
+### 2.7 当前 LiteOCR 动态输入配置
+
+下表对应默认数值回归中的产品实例。它描述已经由源码和测试证明的 fixed-rank 动态范围，
+不是对同族任意模型的自动承诺：
+
+| 模型族 | 输入 override 与约束 | 输出 ABI |
+|---|---|---|
+| PP-LCNet doc/textline、AngleNet | `3x?x?`，H/W `min=1,multiple=1` | 固定分类向量；无 shape inference、无 output capacity |
+| PP-OCRv5 mobile rec、PP-OCRv6 tiny rec | `3x48x?`，W `min=5,multiple=1` | shape-only 动态序列；先 inference，再传 data capacity |
+| PP-OCRv5 mobile/server det、PP-OCRv6 tiny/small/medium det | `3x?x?`，H/W `min=32,multiple=32` | shape-only 动态概率图 `[1,H,W]` |
+
+PP-LCNet 文档方向模型示例：
+
+```bash
+./build/tools/ncnn-compile \
+  ../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param \
+  --input-shape=3x?x? \
+  --input-dim-constraint=0:1:min=1,multiple=1 \
+  --input-dim-constraint=0:2:min=1,multiple=1 \
+  --emit-manifest --output-dir=/tmp/pp_lcnet_doc_dynamic
+```
+
+OCR 识别模型把高度固定为 48，仅动态化宽度；检测模型则对 H/W 同时增加 32 对齐约束：
+
+```bash
+# recognition
+./build/tools/ncnn-compile rec.param --input-shape=3x48x? \
+  --input-dim-constraint=0:2:min=5,multiple=1
+
+# detection
+./build/tools/ncnn-compile det.param --input-shape=3x?x? \
+  --input-dim-constraint=0:1:min=32,multiple=32 \
+  --input-dim-constraint=0:2:min=32,multiple=32
+```
+
+识别输出 sequence extent 为 `(W + 3) / 8`；PP-OCRv6 tiny rec 类别数为 6906，
+PP-OCRv5 mobile rec 类别数为 18385。PP-LCNet doc/textline 的固定输出分别为 4 和 2，
+AngleNet 固定输出为 2。
+
 ## 3. 优化和调试信息
 
 ### 3.1 `-O0`、`-O1`、`-O2`、`-O3`
@@ -436,7 +475,11 @@ manifest 默认只是生成头文件所需的内部临时产物，不会发布�
 | `f32` | FP32 storage 和 FP32 arithmetic |
 | `fp16` | FP16 storage；卷积 accumulator 由 `--fp16-accumulator` 选择 |
 | `bf16` | BF16 storage boundary，复杂算子按已实现的 FP32 boundary 规则处理 |
-| `int8` | 受限 Convolution、ConvolutionDepthWise、InnerProduct、Gemm 使用 INT8/I32 累加和 FP32 边界；支持受限 Quantize、Dequantize、Requantize、Cast 链路 |
+| `int8` | 验证并标记模型已有的受限 INT8 路径；带 INT8 权重/scale-term 的 Convolution、ConvolutionDepthWise、InnerProduct、Gemm 使用 I32 累加和 FP32 边界，并支持受限 Quantize、Dequantize、Requantize、Cast 链路 |
+
+`--precision=int8` 不会把 FP32 权重或算子自动量化。INT8 计算仍由模型中已有的 INT8 权重、
+`int8_scale_term` 和量化边界层决定；该选项用于选择/验证 precision policy 和记录 manifest
+provenance，超出支持子集的已量化模型仍会编译失败。
 
 ```bash
 # 需要目标具备原生 FP16 arithmetic；不满足时编译失败
@@ -782,6 +825,21 @@ ncnn-compile model.param \
   --sysroot=/opt/aarch64-sysroot \
   --output-dir=dist/aarch64/model
 ```
+
+### 9.8 验证 fixed-rank 动态模型 ABI
+
+```bash
+ncnn-compile model.param \
+  --input-shape=3x?x? \
+  --input-dim-constraint=0:1:min=32,multiple=32 \
+  --input-dim-constraint=0:2:min=32,multiple=32 \
+  --emit=all --emit-manifest --verify-execution \
+  --output-dir=/tmp/model_dynamic
+```
+
+检查生成头文件和 manifest，而不是仅凭输入含 `?` 推断调用形式：固定分类输出不会生成
+`_infer_output_shapes` 或 capacity 参数；动态概率图/序列输出会生成 inference 入口并要求 data
+capacity；DetectionOutput 的数据依赖输出则返回 actual shape/rank。
 
 ## 10. Python 调试流水线
 
