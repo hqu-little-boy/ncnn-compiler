@@ -14,9 +14,9 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 编译为具有稳定 C ABI 的 Linux 共享库（`.so`）。技术栈为 LLVM/MLIR 21、C++23，当前以
 **SqueezeNet v1.1** 以及静态 FP32 的 `PP-LCNet_x1_0_doc_ori`、
 `PP-LCNet_x1_0_textline_ori`、`Chineseocr_Lite_AngleNet`、
-`PP-OCRv6_tiny_rec`、`PP-OCRv6_tiny_det`、`PP-OCRv6_small_det`、
+`PP-OCRv6_tiny_rec`、`PP-OCRv6_medium_rec`、`PP-OCRv6_tiny_det`、`PP-OCRv6_small_det`、
 `PP-OCRv6_medium_det`、`PP-OCRv5_mobile_det`、`PP-OCRv5_server_det`、
-`PP-OCRv5_mobile_rec`、
+`PP-OCRv5_mobile_rec`、`PP-OCRv5_server_rec`、
 `PP-StructrureV2_SLANet_plus_cnn`、`PP-FormulaNet_plus_S_encoder` 作为端到端验证目标。
 其中 PP-LCNet 两个方向模型、AngleNet、PP-OCRv5/v6 识别模型和五个检测模型还具有独立的
 fixed-rank 动态输入产物与跨 shape 数值回归；SLANet 和 FormulaNet 保持静态 specialization。
@@ -276,7 +276,7 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
   H/W shape inference 和 NCNN-to-TOSA lowering；动态 `SAME` 仅支持对应 stride 为 1。
 - Concat 非拼接动态维与 Binary 非静态-1 广播维必须由输入约束下的符号 shape program 证明
   等价，否则编译失败；Concat 拼接轴使用 V2 加法表达式，Binary 输出广播维可使用 V2 Max。
-  当前十个动态 LiteOCR 产物均通过模型对应的约束 shape、容量或固定输出 ABI、溢出、重复调用和
+  当前十二个动态 LiteOCR 产物均通过模型对应的约束 shape、容量或固定输出 ABI、溢出、重复调用和
   交替 shape 测试；其他模型仍须逐算子验证下游动态 lowering 能力。
 - shape-only 动态输出由 `<model>_infer_output_shapes` 返回，调用方据此分配 output buffer；执行
   入口为每个此类输出接收 `uint64_t capacity`，单位是 data buffer 元素数。
@@ -362,14 +362,17 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
     同时验证最大 storage 与实际 `[count,6]` shape
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet、PP-OCRv6
-  tiny rec、tiny det、small det、medium det 和 PP-OCRv5 mobile/server det、mobile rec 与 upstream ncnn 数值对齐；
+  tiny/medium rec、tiny det、small det、medium det 和 PP-OCRv5 mobile/server det、mobile/server rec
+  与 upstream ncnn 数值对齐；
   五个 det 模型均使用 `3x640x640` 输入并验证 `1x640x640` 概率图及重复调用一致性。tiny、
   medium、v5 mobile 和 v5 server 使用 `1e-4` 预算；small 使用独立 `3e-4` 预算，固定输入下实测最大
-  绝对误差约 `2.256e-4`
-  - 全有限输出、softmax 求和误差 ≤1e-5（PP-OCRv6 的 6906 类输出为 ≤2e-5，
-    PP-OCRv5 mobile rec 的 18385 类输出为 ≤2e-4）、top-1 匹配、top-5 集合匹配、最大绝对误差 ≤1e-4
-- `models/dynamic_pp_ocr_test.cpp`：十个 fixed-rank 动态产物：PP-LCNet doc/textline、AngleNet、
-  PP-OCRv5 mobile rec、PP-OCRv6 tiny rec、PP-OCRv5 mobile/server det 和 PP-OCRv6
+  绝对误差约 `2.256e-4`；PP-OCRv6 medium rec 使用独立 `3e-4` 预算，固定输入下实测最大绝对误差约
+  `1.853e-4`
+  - 全有限输出、softmax 求和误差 ≤1e-5（PP-OCRv6 tiny rec 的 6906 类输出为 ≤2e-5，
+    PP-OCRv5 mobile/server rec 的 18385 类与 PP-OCRv6 medium rec 的 18710 类输出为 ≤2e-4）、
+    top-1 匹配、top-5 集合匹配；除上述独立预算外最大绝对误差 ≤1e-4
+- `models/dynamic_pp_ocr_test.cpp`：十二个 fixed-rank 动态产物：PP-LCNet doc/textline、AngleNet、
+  PP-OCRv5 mobile/server rec、PP-OCRv6 tiny/medium rec、PP-OCRv5 mobile/server det 和 PP-OCRv6
   tiny/small/medium det。覆盖多尺寸与交替尺寸、upstream ncnn 对齐、minimum/multiple 约束、
   零维/错误通道/shape 算术溢出、输出容量，以及 header/manifest/Linalg IR 审计。
 

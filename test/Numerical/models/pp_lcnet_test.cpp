@@ -244,6 +244,61 @@ TEST(NumericalModel, PPOCRv5ServerRecArtifactsCoverAttentionPipeline) {
   EXPECT_NE(linalg_ir.find("linalg.batch_matmul"), std::string::npos);
 }
 
+TEST(NumericalModel, PPOCRv6MediumRecMatchesNcnn) {
+  const TensorShape input_shape(320, 48, 3);
+  constexpr std::size_t kSequenceLength = 40;
+  constexpr std::size_t kClasses = 18710;
+  const auto input_elements = input_shape.element_count();
+  ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
+  const std::vector<float> input =
+    make_random_input(*input_elements, 0x364D5245U, -1.0F, 1.0F);
+  const ReferenceModel reference(PP_OCRV6_MEDIUM_REC_PARAM_PATH,
+                                 PP_OCRV6_MEDIUM_REC_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 input_shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), kSequenceLength * kClasses);
+
+  CompiledModel compiled(PP_OCRV6_MEDIUM_REC_LIBRARY_PATH,
+                         "pp_ocrv6_medium_rec");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(expected->size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 3.0e-4F));
+  std::vector<float> repeated(actual.size());
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+  for (std::size_t index = 0; index < kSequenceLength; ++index) {
+    const std::span<const float> actual_row(actual.data() + (index * kClasses),
+                                            kClasses);
+    const std::span<const float> expected_row(
+      expected->data() + (index * kClasses), kClasses);
+    EXPECT_TRUE(check_softmax(actual_row, expected_row, 2.0e-4))
+      << "row " << index;
+  }
+}
+
+TEST(NumericalModel, PPOCRv6MediumRecArtifactsCoverAttentionPipeline) {
+  EXPECT_GT(std::filesystem::file_size(PP_OCRV6_MEDIUM_REC_LIBRARY_PATH), 0U);
+
+  const std::string manifest = read_text(PP_OCRV6_MEDIUM_REC_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_ocrv6_medium_rec"), std::string::npos);
+  EXPECT_NE(manifest.find("18710"), std::string::npos);
+
+  const std::string ncnn_ir = read_text(PP_OCRV6_MEDIUM_REC_NCNN_IR_PATH);
+  EXPECT_NE(ncnn_ir.find("ncnn.layer_norm"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("num_heads = 8"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("scale = 0.204124"), std::string::npos);
+
+  const std::string linalg_ir = read_text(PP_OCRV6_MEDIUM_REC_LINALG_IR_PATH);
+  EXPECT_EQ(linalg_ir.find("ncnn.layer_norm"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("linalg.batch_matmul"), std::string::npos);
+}
+
 TEST(NumericalModel, PPOCRv6TinyDetMatchesNcnn) {
   const TensorShape inputShape(640, 640, 3);
   constexpr std::size_t kOutputElements = 640 * 640;

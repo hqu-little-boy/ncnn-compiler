@@ -850,6 +850,19 @@ ncnn_add_compiled_fixture(
     0:2:min=5,multiple=1
     EMIT_IR)
 ncnn_add_compiled_fixture(
+    pp_ocrv6_medium_rec
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.bin
+    3x48x320
+    EMIT_IR)
+ncnn_add_compiled_fixture(
+    pp_ocrv6_medium_rec_dynamic
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.bin
+    3x48x?
+    0:2:min=5,multiple=1
+    EMIT_IR)
+ncnn_add_compiled_fixture(
     pp_ocrv6_tiny_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin
@@ -1207,8 +1220,12 @@ add_dependencies(compile_pp_ocrv5_server_rec
                  compile_pp_formulanet_plus_s_encoder)
 add_dependencies(compile_pp_ocrv5_server_rec_dynamic
                  compile_pp_ocrv5_server_rec)
-add_dependencies(compile_convolution_mixed_fp16
+add_dependencies(compile_pp_ocrv6_medium_rec
                  compile_pp_ocrv5_server_rec_dynamic)
+add_dependencies(compile_pp_ocrv6_medium_rec_dynamic
+                 compile_pp_ocrv6_medium_rec)
+add_dependencies(compile_convolution_mixed_fp16
+                 compile_pp_ocrv6_medium_rec_dynamic)
 add_dependencies(compile_convolution_mixed_bf16
                  compile_convolution_codegen_fp16)
 add_dependencies(compile_convolution_codegen_fp16
@@ -1426,6 +1443,12 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV5_SERVER_REC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_server_rec/pp_ocrv5_server_rec.json"
     PP_OCRV5_SERVER_REC_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_server_rec/model.ncnn.mlir"
     PP_OCRV5_SERVER_REC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_server_rec/model.linalg.mlir"
+    PP_OCRV6_MEDIUM_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.param"
+    PP_OCRV6_MEDIUM_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.bin"
+    PP_OCRV6_MEDIUM_REC_LIBRARY_PATH="${pp_ocrv6_medium_rec_LIBRARY}"
+    PP_OCRV6_MEDIUM_REC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_medium_rec/pp_ocrv6_medium_rec.json"
+    PP_OCRV6_MEDIUM_REC_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_medium_rec/model.ncnn.mlir"
+    PP_OCRV6_MEDIUM_REC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_medium_rec/model.linalg.mlir"
     PP_OCRV6_TINY_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param"
     PP_OCRV6_TINY_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin"
     PP_OCRV6_TINY_DET_LIBRARY_PATH="${pp_ocrv6_tiny_det_LIBRARY}"
@@ -1480,6 +1503,7 @@ add_dependencies(numerical_tests compile_chineseocr_lite_anglenet)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_rec)
 add_dependencies(numerical_tests compile_pp_ocrv5_mobile_rec)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_rec)
+add_dependencies(numerical_tests compile_pp_ocrv6_medium_rec)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_small_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
@@ -1637,6 +1661,12 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
     PP_OCRV5_SERVER_REC_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_server_rec_dynamic/pp_ocrv5_server_rec_dynamic.json"
     PP_OCRV5_SERVER_REC_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_server_rec_dynamic/pp_ocrv5_server_rec_dynamic.h"
     PP_OCRV5_SERVER_REC_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_server_rec_dynamic/model.linalg.mlir"
+    PP_OCRV6_MEDIUM_REC_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.param"
+    PP_OCRV6_MEDIUM_REC_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.bin"
+    PP_OCRV6_MEDIUM_REC_DYNAMIC_LIBRARY_PATH="${pp_ocrv6_medium_rec_dynamic_LIBRARY}"
+    PP_OCRV6_MEDIUM_REC_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_medium_rec_dynamic/pp_ocrv6_medium_rec_dynamic.json"
+    PP_OCRV6_MEDIUM_REC_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_medium_rec_dynamic/pp_ocrv6_medium_rec_dynamic.h"
+    PP_OCRV6_MEDIUM_REC_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_medium_rec_dynamic/model.linalg.mlir"
     PP_OCRV5_MOBILE_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param"
     PP_OCRV5_MOBILE_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin"
     PP_OCRV5_MOBILE_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_mobile_det_dynamic_LIBRARY}"
@@ -1654,6 +1684,7 @@ add_dependencies(numerical_dynamic_tests
     compile_pp_ocrv6_tiny_rec_dynamic
     compile_pp_ocrv5_mobile_rec_dynamic
     compile_pp_ocrv5_server_rec_dynamic
+    compile_pp_ocrv6_medium_rec_dynamic
     compile_pp_ocrv5_server_det_dynamic)
 
 set(numerical_test_timeout 900)
