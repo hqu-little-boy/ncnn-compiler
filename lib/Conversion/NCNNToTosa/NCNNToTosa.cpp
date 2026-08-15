@@ -1103,13 +1103,15 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
         trailing += stride - remainder;
       }
     };
-    if (!dynamicSpatial) {
+    if (!ShapedType::isDynamic(inputShape[1])) {
       adjustTrailingPadding(inputShape[1],
                             operation.getKernelH(),
                             operation.getStrideH(),
                             operation.getDilationH(),
                             padTop,
                             padding[1]);
+    }
+    if (!ShapedType::isDynamic(inputShape[2])) {
       adjustTrailingPadding(inputShape[2],
                             operation.getKernelW(),
                             operation.getStrideW(),
@@ -1121,20 +1123,21 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
       ((operation.getKernelH() - 1) * operation.getDilationH()) + 1;
     int64_t effectiveW =
       ((operation.getKernelW() - 1) * operation.getDilationW()) + 1;
-    auto paddedOutputType = outputType;
-    if (!dynamicSpatial) {
-      int64_t paddedHeight =
-        ((inputShape[1] + padding[0] + padding[1] - effectiveH) /
-         operation.getStrideH()) +
-        1;
-      int64_t paddedWidth =
-        ((inputShape[2] + padding[2] + padding[3] - effectiveW) /
-         operation.getStrideW()) +
-        1;
-      paddedOutputType = RankedTensorType::get(
-        {1, paddedHeight, paddedWidth, sourceOutput.getShape()[0]},
-        sourceOutput.getElementType());
-    }
+    int64_t paddedHeight =
+      ShapedType::isDynamic(inputShape[1])
+        ? ShapedType::kDynamic
+        : ((inputShape[1] + padding[0] + padding[1] - effectiveH) /
+           operation.getStrideH()) +
+            1;
+    int64_t paddedWidth =
+      ShapedType::isDynamic(inputShape[2])
+        ? ShapedType::kDynamic
+        : ((inputShape[2] + padding[2] + padding[3] - effectiveW) /
+           operation.getStrideW()) +
+            1;
+    auto paddedOutputType = RankedTensorType::get(
+      {1, paddedHeight, paddedWidth, sourceOutput.getShape()[0]},
+      sourceOutput.getElementType());
     Value result = rewriter.create<tosa::Conv2DOp>(
       operation.getLoc(),
       paddedOutputType,
@@ -1150,11 +1153,28 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
                         static_cast<int64_t>(operation.getDilationW())},
       rewriter.getF32Type());
     if (paddedOutputType != outputType) {
-      Value start = createShape(rewriter, operation.getLoc(), {0, 0, 0, 0});
-      Value size =
-        createShape(rewriter, operation.getLoc(), outputType.getShape());
-      result = rewriter.create<tosa::SliceOp>(
-        operation.getLoc(), outputType, result, start, size);
+      if (dynamicSpatial) {
+        SmallVector<OpFoldResult> offsets(outputType.getRank(),
+                                          rewriter.getIndexAttr(0));
+        SmallVector<OpFoldResult> sizes;
+        SmallVector<OpFoldResult> strides(outputType.getRank(),
+                                          rewriter.getIndexAttr(1));
+        for (auto [dimension, extent] :
+             llvm::enumerate(outputType.getShape())) {
+          sizes.push_back(ShapedType::isDynamic(extent)
+                            ? OpFoldResult(rewriter.create<tensor::DimOp>(
+                                operation.getLoc(), result, dimension))
+                            : OpFoldResult(rewriter.getIndexAttr(extent)));
+        }
+        result = rewriter.create<tensor::ExtractSliceOp>(
+          operation.getLoc(), outputType, result, offsets, sizes, strides);
+      } else {
+        Value start = createShape(rewriter, operation.getLoc(), {0, 0, 0, 0});
+        Value size =
+          createShape(rewriter, operation.getLoc(), outputType.getShape());
+        result = rewriter.create<tosa::SliceOp>(
+          operation.getLoc(), outputType, result, start, size);
+      }
     }
     if (lowPrecisionWeight) {
       result = roundStoragePrecision(
@@ -1230,15 +1250,23 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
     const auto kernelH = static_cast<int64_t>(operation.getKernelH());
     const auto kernelW = static_cast<int64_t>(operation.getKernelW());
     auto inputType = cast<RankedTensorType>(input.getType());
+    const bool dynamicRegular =
+      !global && !adaptive && !inputType.hasStaticShape();
     const bool signedI8 = inputType.getElementType().isSignlessInteger(8);
     if (!signedI8) {
       input = applyLowPrecisionBoundary(
         rewriter, operation.getLoc(), operation, input);
     }
-    if ((global && !inputType.hasStaticShape()) || adaptive) {
+    if ((global && !inputType.hasStaticShape()) || adaptive || dynamicRegular) {
       if (signedI8) {
         return operation.emitOpError(
           "dynamic or adaptive signed i8 pooling is not supported");
+      }
+      if (dynamicRegular &&
+          (operation.getPadTop() != 0 || operation.getPadBottom() != 0 ||
+           operation.getPadLeft() != 0 || operation.getPadRight() != 0)) {
+        return operation.emitOpError(
+          "dynamic regular pooling requires zero padding");
       }
       Location location = operation.getLoc();
       const bool maximum =
@@ -1252,12 +1280,32 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
       if (global) {
         runtimeOutputType = sourceOutput;
       } else {
-        outputH = kernelH == -233
-                    ? inputH
-                    : createIndexConstant(rewriter, location, kernelH);
-        outputW = kernelW == -233
-                    ? inputW
-                    : createIndexConstant(rewriter, location, kernelW);
+        if (dynamicRegular) {
+          auto outputExtent =
+            [&](Value inputExtent, int64_t kernel, int64_t stride) {
+              Value reduced = rewriter.create<arith::SubIOp>(
+                location,
+                inputExtent,
+                createIndexConstant(rewriter, location, kernel));
+              Value quotient = rewriter.create<arith::DivUIOp>(
+                location,
+                reduced,
+                createIndexConstant(rewriter, location, stride));
+              return rewriter.create<arith::AddIOp>(
+                location, quotient, createIndexConstant(rewriter, location, 1));
+            };
+          outputH = outputExtent(
+            inputH, kernelH, static_cast<int64_t>(operation.getStrideH()));
+          outputW = outputExtent(
+            inputW, kernelW, static_cast<int64_t>(operation.getStrideW()));
+        } else {
+          outputH = kernelH == -233
+                      ? inputH
+                      : createIndexConstant(rewriter, location, kernelH);
+          outputW = kernelW == -233
+                      ? inputW
+                      : createIndexConstant(rewriter, location, kernelW);
+        }
         runtimeOutputType = getNHWCType(sourceOutput);
       }
 
@@ -1343,6 +1391,29 @@ class ConvertPooling final : public OpConversionPattern<PoolingOp> {
               widthBegin = boundary(ow, inputW, outputW, false);
               widthEnd = boundary(nextW, inputW, outputW, true);
             }
+          } else if (dynamicRegular) {
+            Value oh = nested.create<linalg::IndexOp>(bodyLocation, 1);
+            Value ow = nested.create<linalg::IndexOp>(bodyLocation, 2);
+            Value strideH =
+              createIndexConstant(nested,
+                                  bodyLocation,
+                                  static_cast<int64_t>(operation.getStrideH()));
+            Value strideW =
+              createIndexConstant(nested,
+                                  bodyLocation,
+                                  static_cast<int64_t>(operation.getStrideW()));
+            heightBegin =
+              nested.create<arith::MulIOp>(bodyLocation, oh, strideH);
+            widthBegin =
+              nested.create<arith::MulIOp>(bodyLocation, ow, strideW);
+            heightEnd = nested.create<arith::AddIOp>(
+              bodyLocation,
+              heightBegin,
+              createIndexConstant(nested, bodyLocation, kernelH));
+            widthEnd = nested.create<arith::AddIOp>(
+              bodyLocation,
+              widthBegin,
+              createIndexConstant(nested, bodyLocation, kernelW));
           }
 
           Value initial = nested.create<arith::ConstantFloatOp>(
@@ -2488,6 +2559,24 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
       rewriter.replaceOp(operation, result);
       return success();
     }
+    if (dynamicSpatial) {
+      if (!inputType.isDynamicDim(1)) {
+        adjustTrailingPadding(inputType.getShape()[1],
+                              weightType.getShape()[2],
+                              (*stride)[0],
+                              (*dilation)[0],
+                              pad[0],
+                              pad[1]);
+      }
+      if (!inputType.isDynamicDim(2)) {
+        adjustTrailingPadding(inputType.getShape()[2],
+                              weightType.getShape()[3],
+                              (*stride)[1],
+                              (*dilation)[1],
+                              pad[2],
+                              pad[3]);
+      }
+    }
     Value inputZero =
       createSplat(rewriter,
                   operation->getLoc(),
@@ -2498,23 +2587,22 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
                   operation->getLoc(),
                   RankedTensorType::get({1}, weightType.getElementType()),
                   0.0);
-    auto paddedOutputType = outputType;
-    if (!dynamicSpatial) {
-      int64_t effectiveH =
-        ((weightType.getShape()[2] - 1) * (*dilation)[0]) + 1;
-      int64_t effectiveW =
-        ((weightType.getShape()[3] - 1) * (*dilation)[1]) + 1;
-      int64_t paddedHeight =
-        ((inputType.getShape()[1] + pad[0] + pad[1] - effectiveH) /
-         (*stride)[0]) +
-        1;
-      int64_t paddedWidth =
-        ((inputType.getShape()[2] + pad[2] + pad[3] - effectiveW) /
-         (*stride)[1]) +
-        1;
-      paddedOutputType = RankedTensorType::get(
-        {1, paddedHeight, paddedWidth, outputs}, sourceOutput.getElementType());
-    }
+    int64_t effectiveH = ((weightType.getShape()[2] - 1) * (*dilation)[0]) + 1;
+    int64_t effectiveW = ((weightType.getShape()[3] - 1) * (*dilation)[1]) + 1;
+    int64_t paddedHeight =
+      inputType.isDynamicDim(1)
+        ? ShapedType::kDynamic
+        : ((inputType.getShape()[1] + pad[0] + pad[1] - effectiveH) /
+           (*stride)[0]) +
+            1;
+    int64_t paddedWidth =
+      inputType.isDynamicDim(2)
+        ? ShapedType::kDynamic
+        : ((inputType.getShape()[2] + pad[2] + pad[3] - effectiveW) /
+           (*stride)[1]) +
+            1;
+    auto paddedOutputType = RankedTensorType::get(
+      {1, paddedHeight, paddedWidth, outputs}, sourceOutput.getElementType());
     Value result =
       rewriter.create<tosa::DepthwiseConv2DOp>(operation->getLoc(),
                                                paddedOutputType,
@@ -2528,11 +2616,28 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
                                                *dilation,
                                                rewriter.getF32Type());
     if (paddedOutputType != outputType) {
-      Value start = createShape(rewriter, operation->getLoc(), {0, 0, 0, 0});
-      Value size =
-        createShape(rewriter, operation->getLoc(), outputType.getShape());
-      result = rewriter.create<tosa::SliceOp>(
-        operation->getLoc(), outputType, result, start, size);
+      if (dynamicSpatial) {
+        SmallVector<OpFoldResult> offsets(outputType.getRank(),
+                                          rewriter.getIndexAttr(0));
+        SmallVector<OpFoldResult> sizes;
+        SmallVector<OpFoldResult> strides(outputType.getRank(),
+                                          rewriter.getIndexAttr(1));
+        for (auto [dimension, extent] :
+             llvm::enumerate(outputType.getShape())) {
+          sizes.push_back(ShapedType::isDynamic(extent)
+                            ? OpFoldResult(rewriter.create<tensor::DimOp>(
+                                operation->getLoc(), result, dimension))
+                            : OpFoldResult(rewriter.getIndexAttr(extent)));
+        }
+        result = rewriter.create<tensor::ExtractSliceOp>(
+          operation->getLoc(), outputType, result, offsets, sizes, strides);
+      } else {
+        Value start = createShape(rewriter, operation->getLoc(), {0, 0, 0, 0});
+        Value size =
+          createShape(rewriter, operation->getLoc(), outputType.getShape());
+        result = rewriter.create<tosa::SliceOp>(
+          operation->getLoc(), outputType, result, start, size);
+      }
     }
     if (lowPrecisionWeight) {
       result = roundStoragePrecision(
@@ -2775,9 +2880,10 @@ class ConvertLayerNorm final : public OpConversionPattern<LayerNormOp> {
       RankedTensorType::get(reducedShape, sourceType.getElementType());
     Value sum = rewriter.create<tosa::ReduceSumOp>(
       operation.getLoc(), reducedType, input, axis);
+    auto scalarType = getBroadcastScalarType(reducedType);
     Value reciprocalCount = createSplat(rewriter,
                                         operation.getLoc(),
-                                        reducedType,
+                                        scalarType,
                                         1.0 / sourceType.getShape().back());
     Value shift = createI8Zero(rewriter, operation.getLoc());
     Value mean = rewriter.create<tosa::MulOp>(
@@ -2792,12 +2898,12 @@ class ConvertLayerNorm final : public OpConversionPattern<LayerNormOp> {
       operation.getLoc(), reducedType, varianceSum, reciprocalCount, shift);
     Value epsilon = createSplat(rewriter,
                                 operation.getLoc(),
-                                reducedType,
+                                scalarType,
                                 operation.getEpsilon().convertToDouble());
     Value varianceWithEpsilon = rewriter.create<tosa::AddOp>(
       operation.getLoc(), reducedType, variance, epsilon);
     Value exponent =
-      createSplat(rewriter, operation.getLoc(), reducedType, -0.5);
+      createSplat(rewriter, operation.getLoc(), scalarType, -0.5);
     Value inverseStd = rewriter.create<tosa::PowOp>(
       operation.getLoc(), reducedType, varianceWithEpsilon, exponent);
     Value result = rewriter.create<tosa::MulOp>(
@@ -2832,6 +2938,386 @@ class ConvertMultiHeadAttention final
  public:
   using OpConversionPattern::OpConversionPattern;
 
+ private:
+  static Value lowerDynamic(MultiHeadAttentionOp operation,
+                            OpAdaptor adaptor,
+                            ConversionPatternRewriter& rewriter) {
+    Location location = operation.getLoc();
+    MLIRContext* context = rewriter.getContext();
+    Type elementType = rewriter.getF32Type();
+    const int64_t embed = operation.getEmbedDim();
+    const int64_t heads = operation.getNumHeads();
+    const int64_t headDim = embed / heads;
+    Value sequence =
+      rewriter.create<tensor::DimOp>(location, adaptor.getInput(), 0);
+
+    auto projectionType =
+      RankedTensorType::get({ShapedType::kDynamic, embed}, elementType);
+    auto project = [&](Value weight, Value bias) {
+      Value empty = rewriter.create<tensor::EmptyOp>(
+        location, projectionType, ValueRange{sequence});
+      AffineExpr row = rewriter.getAffineDimExpr(0);
+      AffineExpr column = rewriter.getAffineDimExpr(1);
+      AffineMap biasMap = AffineMap::get(2, 0, column, context);
+      AffineMap outputMap = rewriter.getMultiDimIdentityMap(2);
+      SmallVector<utils::IteratorType> parallel(2,
+                                                utils::IteratorType::parallel);
+      Value initialized =
+        rewriter
+          .create<linalg::GenericOp>(location,
+                                     projectionType,
+                                     ValueRange{bias},
+                                     ValueRange{empty},
+                                     ArrayRef<AffineMap>{biasMap, outputMap},
+                                     parallel,
+                                     [](OpBuilder& nested,
+                                        Location nestedLocation,
+                                        ValueRange arguments) {
+                                       nested.create<linalg::YieldOp>(
+                                         nestedLocation, arguments.front());
+                                     })
+          .getResult(0);
+
+      AffineExpr reduction = rewriter.getAffineDimExpr(2);
+      AffineMap inputMap = AffineMap::get(3, 0, {row, reduction}, context);
+      AffineMap weightMap = AffineMap::get(3, 0, {column, reduction}, context);
+      AffineMap resultMap = AffineMap::get(3, 0, {row, column}, context);
+      SmallVector<utils::IteratorType> iterators(2,
+                                                 utils::IteratorType::parallel);
+      iterators.push_back(utils::IteratorType::reduction);
+      return rewriter
+        .create<linalg::GenericOp>(
+          location,
+          projectionType,
+          ValueRange{adaptor.getInput(), weight},
+          ValueRange{initialized},
+          ArrayRef<AffineMap>{inputMap, weightMap, resultMap},
+          iterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value product = nested.create<arith::MulFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value sum = nested.create<arith::AddFOp>(
+              nestedLocation, product, arguments[2]);
+            nested.create<linalg::YieldOp>(nestedLocation, sum);
+          })
+        .getResult(0);
+    };
+
+    Value query = project(adaptor.getQWeight(), adaptor.getQBias());
+    Value key = project(adaptor.getKWeight(), adaptor.getKBias());
+    Value value = project(adaptor.getVWeight(), adaptor.getVBias());
+
+    Value scaledEmpty = rewriter.create<tensor::EmptyOp>(
+      location, projectionType, ValueRange{sequence});
+    const double scale = operation.getScale().convertToDouble();
+    query =
+      rewriter
+        .create<linalg::MapOp>(
+          location,
+          ValueRange{query},
+          scaledEmpty,
+          [scale](
+            OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value factor = nested.create<arith::ConstantOp>(
+              nestedLocation, nested.getF32FloatAttr(scale));
+            Value result = nested.create<arith::MulFOp>(
+              nestedLocation, arguments.front(), factor);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        ->getResult(0);
+
+    auto sequenceMajorType = RankedTensorType::get(
+      {ShapedType::kDynamic, heads, headDim}, elementType);
+    auto headMajorType = RankedTensorType::get(
+      {heads, ShapedType::kDynamic, headDim}, elementType);
+    SmallVector<ReassociationIndices> splitEmbedding = {{0}, {1, 2}};
+    SmallVector<OpFoldResult> splitShape = {
+      sequence, rewriter.getIndexAttr(heads), rewriter.getIndexAttr(headDim)};
+    auto splitHeads = [&](Value projected) {
+      Value sequenceMajor = rewriter.create<tensor::ExpandShapeOp>(
+        location, sequenceMajorType, projected, splitEmbedding, splitShape);
+      Value empty = rewriter.create<tensor::EmptyOp>(
+        location, headMajorType, ValueRange{sequence});
+      AffineExpr sequenceIndex = rewriter.getAffineDimExpr(0);
+      AffineExpr head = rewriter.getAffineDimExpr(1);
+      AffineExpr feature = rewriter.getAffineDimExpr(2);
+      AffineMap inputMap =
+        AffineMap::get(3, 0, {sequenceIndex, head, feature}, context);
+      AffineMap outputMap =
+        AffineMap::get(3, 0, {head, sequenceIndex, feature}, context);
+      SmallVector<utils::IteratorType> iterators(3,
+                                                 utils::IteratorType::parallel);
+      return rewriter
+        .create<linalg::GenericOp>(
+          location,
+          headMajorType,
+          ValueRange{sequenceMajor},
+          ValueRange{empty},
+          ArrayRef<AffineMap>{inputMap, outputMap},
+          iterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            nested.create<linalg::YieldOp>(nestedLocation, arguments.front());
+          })
+        .getResult(0);
+    };
+    Value queryHeads = splitHeads(query);
+    Value keyHeads = splitHeads(key);
+    Value valueHeads = splitHeads(value);
+
+    auto scoresType = RankedTensorType::get(
+      {heads, ShapedType::kDynamic, ShapedType::kDynamic}, elementType);
+    Value scoresEmpty = rewriter.create<tensor::EmptyOp>(
+      location, scoresType, ValueRange{sequence, sequence});
+    Value zero = rewriter.create<arith::ConstantOp>(
+      location, rewriter.getF32FloatAttr(0.0));
+    Value initializedScores =
+      rewriter.create<linalg::FillOp>(location, zero, scoresEmpty).getResult(0);
+    AffineExpr head = rewriter.getAffineDimExpr(0);
+    AffineExpr queryIndex = rewriter.getAffineDimExpr(1);
+    AffineExpr keyIndex = rewriter.getAffineDimExpr(2);
+    AffineExpr feature = rewriter.getAffineDimExpr(3);
+    AffineMap queryMap =
+      AffineMap::get(4, 0, {head, queryIndex, feature}, context);
+    AffineMap keyMap = AffineMap::get(4, 0, {head, keyIndex, feature}, context);
+    AffineMap scoresMap =
+      AffineMap::get(4, 0, {head, queryIndex, keyIndex}, context);
+    SmallVector<utils::IteratorType> scoreIterators(
+      3, utils::IteratorType::parallel);
+    scoreIterators.push_back(utils::IteratorType::reduction);
+    Value scores =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          ValueRange{queryHeads, keyHeads},
+          ValueRange{initializedScores},
+          ArrayRef<AffineMap>{queryMap, keyMap, scoresMap},
+          scoreIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value product = nested.create<arith::MulFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value sum = nested.create<arith::AddFOp>(
+              nestedLocation, product, arguments[2]);
+            nested.create<linalg::YieldOp>(nestedLocation, sum);
+          })
+        .getResult(0);
+
+    auto reducedType =
+      RankedTensorType::get({heads, ShapedType::kDynamic}, elementType);
+    Value reducedEmpty = rewriter.create<tensor::EmptyOp>(
+      location, reducedType, ValueRange{sequence});
+    Value negativeInfinity = rewriter.create<arith::ConstantOp>(
+      location,
+      rewriter.getF32FloatAttr(-std::numeric_limits<float>::infinity()));
+    Value initializedMaximum =
+      rewriter.create<linalg::FillOp>(location, negativeInfinity, reducedEmpty)
+        .getResult(0);
+    AffineExpr reductionHead = rewriter.getAffineDimExpr(0);
+    AffineExpr reductionRow = rewriter.getAffineDimExpr(1);
+    AffineExpr reductionColumn = rewriter.getAffineDimExpr(2);
+    AffineMap softmaxInputMap = AffineMap::get(
+      3, 0, {reductionHead, reductionRow, reductionColumn}, context);
+    AffineMap reductionMap =
+      AffineMap::get(3, 0, {reductionHead, reductionRow}, context);
+    SmallVector<utils::IteratorType> reductionIterators = {
+      utils::IteratorType::parallel,
+      utils::IteratorType::parallel,
+      utils::IteratorType::reduction};
+    Value maximum =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          reducedType,
+          ValueRange{scores},
+          ValueRange{initializedMaximum},
+          ArrayRef<AffineMap>{softmaxInputMap, reductionMap},
+          reductionIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value result = nested.create<arith::MaximumFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value exponentEmpty = rewriter.create<tensor::EmptyOp>(
+      location, scoresType, ValueRange{sequence, sequence});
+    AffineMap scoresIdentity = rewriter.getMultiDimIdentityMap(3);
+    AffineMap maximumMap = AffineMap::get(
+      3,
+      0,
+      {rewriter.getAffineDimExpr(0), rewriter.getAffineDimExpr(1)},
+      context);
+    SmallVector<utils::IteratorType> softmaxParallel(
+      3, utils::IteratorType::parallel);
+    Value exponent =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          ValueRange{scores, maximum},
+          ValueRange{exponentEmpty},
+          ArrayRef<AffineMap>{scoresIdentity, maximumMap, scoresIdentity},
+          softmaxParallel,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value shifted = nested.create<arith::SubFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value result = nested.create<math::ExpOp>(nestedLocation, shifted);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value sumEmpty = rewriter.create<tensor::EmptyOp>(
+      location, reducedType, ValueRange{sequence});
+    Value initializedSum =
+      rewriter.create<linalg::FillOp>(location, zero, sumEmpty).getResult(0);
+    Value sum =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          reducedType,
+          ValueRange{exponent},
+          ValueRange{initializedSum},
+          ArrayRef<AffineMap>{softmaxInputMap, reductionMap},
+          reductionIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value result = nested.create<arith::AddFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value probabilitiesEmpty = rewriter.create<tensor::EmptyOp>(
+      location, scoresType, ValueRange{sequence, sequence});
+    Value probabilities =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          ValueRange{exponent, sum},
+          ValueRange{probabilitiesEmpty},
+          ArrayRef<AffineMap>{scoresIdentity, maximumMap, scoresIdentity},
+          softmaxParallel,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value result = nested.create<arith::DivFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value contextEmpty = rewriter.create<tensor::EmptyOp>(
+      location, headMajorType, ValueRange{sequence});
+    Value initializedContext =
+      rewriter.create<linalg::FillOp>(location, zero, contextEmpty)
+        .getResult(0);
+    AffineExpr contextHead = rewriter.getAffineDimExpr(0);
+    AffineExpr contextRow = rewriter.getAffineDimExpr(1);
+    AffineExpr contextFeature = rewriter.getAffineDimExpr(2);
+    AffineExpr contextReduction = rewriter.getAffineDimExpr(3);
+    AffineMap probabilityMap = AffineMap::get(
+      4, 0, {contextHead, contextRow, contextReduction}, context);
+    AffineMap valueMap = AffineMap::get(
+      4, 0, {contextHead, contextReduction, contextFeature}, context);
+    AffineMap contextMap =
+      AffineMap::get(4, 0, {contextHead, contextRow, contextFeature}, context);
+    SmallVector<utils::IteratorType> contextIterators(
+      3, utils::IteratorType::parallel);
+    contextIterators.push_back(utils::IteratorType::reduction);
+    Value attentionContext =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          headMajorType,
+          ValueRange{probabilities, valueHeads},
+          ValueRange{initializedContext},
+          ArrayRef<AffineMap>{probabilityMap, valueMap, contextMap},
+          contextIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value product = nested.create<arith::MulFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value result = nested.create<arith::AddFOp>(
+              nestedLocation, product, arguments[2]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value sequenceMajorEmpty = rewriter.create<tensor::EmptyOp>(
+      location, sequenceMajorType, ValueRange{sequence});
+    AffineExpr contextSequence = rewriter.getAffineDimExpr(0);
+    AffineExpr contextHeadIndex = rewriter.getAffineDimExpr(1);
+    AffineExpr contextFeatureIndex = rewriter.getAffineDimExpr(2);
+    AffineMap headMajorMap = AffineMap::get(
+      3, 0, {contextHeadIndex, contextSequence, contextFeatureIndex}, context);
+    AffineMap sequenceMajorMap = AffineMap::get(
+      3, 0, {contextSequence, contextHeadIndex, contextFeatureIndex}, context);
+    SmallVector<utils::IteratorType> transposeIterators(
+      3, utils::IteratorType::parallel);
+    Value sequenceMajor =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          sequenceMajorType,
+          ValueRange{attentionContext},
+          ValueRange{sequenceMajorEmpty},
+          ArrayRef<AffineMap>{headMajorMap, sequenceMajorMap},
+          transposeIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            nested.create<linalg::YieldOp>(nestedLocation, arguments.front());
+          })
+        .getResult(0);
+    Value merged = rewriter.create<tensor::CollapseShapeOp>(
+      location, projectionType, sequenceMajor, splitEmbedding);
+
+    auto outputType = cast<RankedTensorType>(operation.getType());
+    Value outputEmpty = rewriter.create<tensor::EmptyOp>(
+      location, outputType, ValueRange{sequence});
+    AffineExpr outputRow = rewriter.getAffineDimExpr(0);
+    AffineExpr outputColumn = rewriter.getAffineDimExpr(1);
+    AffineMap outBiasMap = AffineMap::get(2, 0, outputColumn, context);
+    AffineMap outputIdentity = rewriter.getMultiDimIdentityMap(2);
+    SmallVector<utils::IteratorType> outputParallel(
+      2, utils::IteratorType::parallel);
+    Value initializedOutput =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          outputType,
+          ValueRange{adaptor.getOutBias()},
+          ValueRange{outputEmpty},
+          ArrayRef<AffineMap>{outBiasMap, outputIdentity},
+          outputParallel,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            nested.create<linalg::YieldOp>(nestedLocation, arguments.front());
+          })
+        .getResult(0);
+    AffineExpr outputReduction = rewriter.getAffineDimExpr(2);
+    AffineMap mergedMap =
+      AffineMap::get(3, 0, {outputRow, outputReduction}, context);
+    AffineMap outWeightMap =
+      AffineMap::get(3, 0, {outputColumn, outputReduction}, context);
+    AffineMap outResultMap =
+      AffineMap::get(3, 0, {outputRow, outputColumn}, context);
+    SmallVector<utils::IteratorType> outputIterators(
+      2, utils::IteratorType::parallel);
+    outputIterators.push_back(utils::IteratorType::reduction);
+    return rewriter
+      .create<linalg::GenericOp>(
+        location,
+        outputType,
+        ValueRange{merged, adaptor.getOutWeight()},
+        ValueRange{initializedOutput},
+        ArrayRef<AffineMap>{mergedMap, outWeightMap, outResultMap},
+        outputIterators,
+        [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+          Value product = nested.create<arith::MulFOp>(
+            nestedLocation, arguments[0], arguments[1]);
+          Value result =
+            nested.create<arith::AddFOp>(nestedLocation, product, arguments[2]);
+          nested.create<linalg::YieldOp>(nestedLocation, result);
+        })
+      .getResult(0);
+  }
+
+ public:
   LogicalResult matchAndRewrite(
     MultiHeadAttentionOp operation,
     OpAdaptor adaptor,
@@ -2843,11 +3329,27 @@ class ConvertMultiHeadAttention final
     const int64_t embed = operation.getEmbedDim();
     const int64_t heads = operation.getNumHeads();
     const int64_t headDim = embed / heads;
-    Value matrixInput = reshapeValue(
-      rewriter,
-      location,
-      adaptor.getInput(),
-      RankedTensorType::get({1, sequence, qdim}, rewriter.getF32Type()));
+    if (ShapedType::isDynamic(sequence)) {
+      rewriter.replaceOp(operation, lowerDynamic(operation, adaptor, rewriter));
+      return success();
+    }
+    auto reshapeSequence = [&](Value input,
+                               RankedTensorType outputType,
+                               unsigned outputDimension,
+                               unsigned inputDimension) {
+      if (outputType.hasStaticShape()) {
+        return reshapeValue(rewriter, location, input, outputType);
+      }
+      SmallVector<std::optional<unsigned>> sourceDimensions(
+        outputType.getRank());
+      sourceDimensions[outputDimension] = inputDimension;
+      return reshapeValue(
+        rewriter, location, input, outputType, sourceDimensions);
+    };
+    auto matrixInputType =
+      RankedTensorType::get({1, sequence, qdim}, rewriter.getF32Type());
+    Value matrixInput =
+      reshapeSequence(adaptor.getInput(), matrixInputType, 1, 0);
     auto project = [&](Value weight, Value bias) {
       Value transposed = rewriter.create<tosa::TransposeOp>(
         location,
@@ -2885,11 +3387,11 @@ class ConvertMultiHeadAttention final
       location, projectedType, query, scale, shift);
     auto splitHeads = [&](Value projected) {
       Value split =
-        reshapeValue(rewriter,
-                     location,
-                     projected,
-                     RankedTensorType::get({sequence, heads, headDim},
-                                           rewriter.getF32Type()));
+        reshapeSequence(projected,
+                        RankedTensorType::get({sequence, heads, headDim},
+                                              rewriter.getF32Type()),
+                        0,
+                        1);
       return static_cast<Value>(rewriter.create<tosa::TransposeOp>(
         location,
         RankedTensorType::get({heads, sequence, headDim},
@@ -2932,8 +3434,7 @@ class ConvertMultiHeadAttention final
       RankedTensorType::get({sequence, heads, headDim}, rewriter.getF32Type()),
       context,
       ArrayRef<int32_t>{1, 0, 2});
-    Value merged =
-      reshapeValue(rewriter, location, sequenceMajor, projectedType);
+    Value merged = reshapeSequence(sequenceMajor, projectedType, 1, 0);
     Value outWeight = rewriter.create<tosa::TransposeOp>(
       location,
       RankedTensorType::get({embed, qdim}, rewriter.getF32Type()),
@@ -2955,8 +3456,7 @@ class ConvertMultiHeadAttention final
                    RankedTensorType::get({1, 1, qdim}, rewriter.getF32Type()));
     result =
       rewriter.create<tosa::AddOp>(location, matrixOutputType, result, outBias);
-    rewriter.replaceOp(operation,
-                       reshapeValue(rewriter, location, result, inputType));
+    rewriter.replaceOp(operation, reshapeSequence(result, inputType, 0, 1));
     return success();
   }
 };

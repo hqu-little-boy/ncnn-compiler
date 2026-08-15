@@ -4,7 +4,10 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -20,30 +23,51 @@ constexpr int kConstraintViolation = 3;
 constexpr int kShapeArithmeticOverflow = 4;
 constexpr int kOutputCapacityInsufficient = 5;
 
-struct DynamicCase {
+constexpr std::size_t kRecClasses = 18385;
+
+struct DetectionCase {
   std::int64_t height;
   std::int64_t width;
 };
 
-constexpr std::array<DynamicCase, 5> kCases = {{
-  DynamicCase{.height = 32, .width = 32},
-  DynamicCase{.height = 320, .width = 320},
-  DynamicCase{.height = 320, .width = 960},
-  DynamicCase{.height = 736, .width = 1280},
-  DynamicCase{.height = 640, .width = 640},
+constexpr std::array<DetectionCase, 5> kDetectionCases = {{
+  DetectionCase{.height = 32, .width = 32},
+  DetectionCase{.height = 320, .width = 320},
+  DetectionCase{.height = 320, .width = 960},
+  DetectionCase{.height = 736, .width = 1280},
+  DetectionCase{.height = 640, .width = 640},
 }};
 
-std::size_t element_count(const DynamicCase& shape) {
+std::size_t element_count(const DetectionCase& shape) {
   return static_cast<std::size_t>(shape.height) *
          static_cast<std::size_t>(shape.width) * 3U;
 }
 
-std::array<std::int64_t, 3> input_shape(const DynamicCase& shape) {
+std::array<std::int64_t, 3> input_shape(const DetectionCase& shape) {
   return {3, shape.height, shape.width};
 }
 
-std::array<std::int64_t, 3> expected_output_shape(const DynamicCase& shape) {
+std::array<std::int64_t, 3> expected_output_shape(const DetectionCase& shape) {
   return {1, shape.height, shape.width};
+}
+
+std::size_t recognition_input_elements(std::int64_t width) {
+  return 3U * 48U * static_cast<std::size_t>(width);
+}
+
+std::int64_t recognition_sequence_length(std::int64_t width) {
+  return (width + 3) / 8;
+}
+
+std::size_t recognition_output_elements(std::int64_t width) {
+  return static_cast<std::size_t>(recognition_sequence_length(width)) *
+         kRecClasses;
+}
+
+std::string read_text(const std::filesystem::path& path) {
+  std::ifstream stream(path);
+  return {std::istreambuf_iterator<char>(stream),
+          std::istreambuf_iterator<char>()};
 }
 
 void record_peak_rss() {
@@ -61,7 +85,7 @@ TEST(NumericalDynamicModel, PPOCRv5ServerDetMatchesNcnnAcrossShapes) {
                       "pp_ocrv5_server_det_dynamic_infer_output_shapes");
   ASSERT_TRUE(infer.valid()) << infer.error();
 
-  for (const DynamicCase& shape : kCases) {
+  for (const DetectionCase& shape : kDetectionCases) {
     const auto input_dimensions = input_shape(shape);
     const auto output_dimensions = expected_output_shape(shape);
     const std::size_t input_elements = element_count(shape);
@@ -147,10 +171,10 @@ TEST(NumericalDynamicModel, PPOCRv5ServerDetSupportsAlternatingShapes) {
   CompiledModel compiled(PP_OCRV5_SERVER_DET_DYNAMIC_LIBRARY_PATH,
                          "pp_ocrv5_server_det_dynamic");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
-  for (const DynamicCase& shape : std::array<DynamicCase, 3>{{
-         DynamicCase{.height = 320, .width = 960},
-         DynamicCase{.height = 640, .width = 640},
-         DynamicCase{.height = 736, .width = 1280},
+  for (const DetectionCase& shape : std::array<DetectionCase, 3>{{
+         DetectionCase{.height = 320, .width = 960},
+         DetectionCase{.height = 640, .width = 640},
+         DetectionCase{.height = 736, .width = 1280},
        }}) {
     const auto dimensions = input_shape(shape);
     const std::vector<float> input(element_count(shape), 0.001F);
@@ -161,6 +185,147 @@ TEST(NumericalDynamicModel, PPOCRv5ServerDetSupportsAlternatingShapes) {
               kSuccess);
   }
   record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv5MobileRecInfersSequenceAcrossWidths) {
+  CompiledModel infer(PP_OCRV5_MOBILE_REC_DYNAMIC_LIBRARY_PATH,
+                      "pp_ocrv5_mobile_rec_dynamic_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+
+  for (const std::int64_t width :
+       std::array<std::int64_t, 9>{5, 8, 12, 13, 20, 21, 64, 319, 320}) {
+    const std::array<std::int64_t, 3> dimensions = {3, 48, width};
+    std::array<std::int64_t, 2> inferred{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess)
+      << "width " << width;
+    EXPECT_EQ(
+      inferred,
+      (std::array<std::int64_t, 2>{recognition_sequence_length(width),
+                                   static_cast<std::int64_t>(kRecClasses)}))
+      << "width " << width;
+  }
+}
+
+TEST(NumericalDynamicModel, PPOCRv5MobileRecMatchesNcnnAcrossWidths) {
+  CompiledModel compiled(PP_OCRV5_MOBILE_REC_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_rec_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const std::int64_t width : std::array<std::int64_t, 4>{5, 13, 64, 320}) {
+    const std::array<std::int64_t, 3> dimensions = {3, 48, width};
+    const std::vector<float> input =
+      make_random_input(recognition_input_elements(width),
+                        static_cast<std::uint32_t>(0x354D0000U + width),
+                        -1.0F,
+                        1.0F);
+    const ReferenceModel reference(PP_OCRV5_MOBILE_REC_DYNAMIC_PARAM_PATH,
+                                   PP_OCRV5_MOBILE_REC_DYNAMIC_BIN_PATH,
+                                   "in0",
+                                   "out0",
+                                   TensorShape(static_cast<int>(width), 48, 3));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    ASSERT_EQ(expected->size(), recognition_output_elements(width));
+
+    std::vector<float> actual(expected->size());
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess)
+      << "width " << width;
+    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F))
+      << "width " << width;
+    for (std::int64_t row = 0; row < recognition_sequence_length(width);
+         ++row) {
+      const std::size_t offset = static_cast<std::size_t>(row) * kRecClasses;
+      EXPECT_TRUE(check_softmax(
+        std::span<const float>(actual).subspan(offset, kRecClasses),
+        std::span<const float>(*expected).subspan(offset, kRecClasses),
+        5.0e-4))
+        << "width " << width << ", row " << row;
+    }
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv5MobileRecSupportsAlternatingWidths) {
+  CompiledModel compiled(PP_OCRV5_MOBILE_REC_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_rec_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const std::int64_t width : std::array<std::int64_t, 4>{320, 5, 64, 13}) {
+    const std::array<std::int64_t, 3> dimensions = {3, 48, width};
+    const std::vector<float> input(recognition_input_elements(width), 0.001F);
+    std::vector<float> output(recognition_output_elements(width));
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, output.size()),
+              kSuccess)
+      << "width " << width;
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv5MobileRecRejectsInvalidShapesAndCapacity) {
+  CompiledModel compiled(PP_OCRV5_MOBILE_REC_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_rec_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  const std::array<std::int64_t, 3> normalShape = {3, 48, 5};
+  const std::vector<float> input(recognition_input_elements(5), 0.0F);
+  std::vector<float> output(recognition_output_elements(5));
+  ASSERT_EQ(compiled.run_dynamic(input, normalShape, output, output.size()),
+            kSuccess);
+
+  for (const auto dimensions : std::array<std::array<std::int64_t, 3>, 4>{
+         {{3, 48, 0}, {3, 48, 4}, {3, 47, 5}, {1, 48, 5}}}) {
+    const int expectedStatus =
+      dimensions[2] == 4 ? kConstraintViolation : kInvalidShape;
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, output.size()),
+              expectedStatus);
+  }
+
+  std::vector<float> shortOutput(recognition_output_elements(5) - 1);
+  EXPECT_EQ(
+    compiled.run_dynamic(input, normalShape, shortOutput, shortOutput.size()),
+    kOutputCapacityInsufficient);
+
+  const std::array<std::int64_t, 3> overflowShape = {
+    3, 48, std::numeric_limits<std::int64_t>::max()};
+  EXPECT_EQ(compiled.run_dynamic(input, overflowShape, output, output.size()),
+            kShapeArithmeticOverflow);
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv5MobileRecArtifactsDescribeDynamicAbi) {
+  EXPECT_GT(
+    std::filesystem::file_size(PP_OCRV5_MOBILE_REC_DYNAMIC_LIBRARY_PATH), 0U);
+
+  const std::string manifest =
+    read_text(PP_OCRV5_MOBILE_REC_DYNAMIC_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_ocrv5_mobile_rec_dynamic"), std::string::npos);
+  EXPECT_NE(manifest.find("18385"), std::string::npos);
+  EXPECT_NE(manifest.find("\"minimum\": 5"), std::string::npos);
+  EXPECT_NE(manifest.find("\"multiple_of\": 1"), std::string::npos);
+  EXPECT_NE(manifest.find("\"shape_program\""), std::string::npos);
+
+  const std::string header = read_text(PP_OCRV5_MOBILE_REC_DYNAMIC_HEADER_PATH);
+  for (const std::string_view required : {
+         "#define PP_OCRV5_MOBILE_REC_DYNAMIC_INPUT1_RANK 3",
+         "#define PP_OCRV5_MOBILE_REC_DYNAMIC_INPUT1_DIM2 NCNN_DYNAMIC_DIM",
+         "#define PP_OCRV5_MOBILE_REC_DYNAMIC_INPUT1_DYNAMIC_DIM_MASK "
+         "UINT32_C(0x4)",
+         "#define PP_OCRV5_MOBILE_REC_DYNAMIC_INPUT1_DIM2_MINIMUM "
+         "INT64_C(5)",
+         "#define PP_OCRV5_MOBILE_REC_DYNAMIC_OUTPUT1_RANK 2",
+         "#define PP_OCRV5_MOBILE_REC_DYNAMIC_OUTPUT1_DIM1 INT64_C(18385)",
+         "pp_ocrv5_mobile_rec_dynamic_infer_output_shapes",
+         "uint64_t output1_capacity",
+       }) {
+    EXPECT_NE(header.find(required), std::string::npos) << required;
+  }
+
+  const std::string linalgIr =
+    read_text(PP_OCRV5_MOBILE_REC_DYNAMIC_LINALG_IR_PATH);
+  EXPECT_EQ(linalgIr.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_NE(linalgIr.find("math.exp"), std::string::npos);
+  EXPECT_NE(linalgIr.find("tensor.expand_shape"), std::string::npos);
 }
 
 }  // namespace

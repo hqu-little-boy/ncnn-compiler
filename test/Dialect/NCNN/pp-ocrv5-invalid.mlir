@@ -1,16 +1,7 @@
 // RUN: ncnn-mlir-opt --verify-diagnostics --split-input-file %s
 
-func.func @dynamic_attention(%input: tensor<?x4xf32>, %weight: tensor<4x4xf32>, %bias: tensor<4xf32>) {
-  // expected-error@+2 {{MultiHeadAttention requires a static positive sequence dimension}}
-  // expected-error@+1 {{'ncnn.multi_head_attention' op failed to infer returned types}}
-  %0 = ncnn.multi_head_attention %input, %weight, %bias, %weight, %bias, %weight, %bias, %weight, %bias {embed_dim = 4 : i64, kdim = 4 : i64, num_heads = 2 : i64, qdim = 4 : i64, scale = 0.5 : f32, vdim = 4 : i64, weight_data_size = 16 : i64} : (tensor<?x4xf32>, tensor<4x4xf32>, tensor<4xf32>, tensor<4x4xf32>, tensor<4xf32>, tensor<4x4xf32>, tensor<4xf32>, tensor<4x4xf32>, tensor<4xf32>) -> tensor<?x4xf32>
-  return
-}
-
-// -----
-
 func.func @empty_attention(%input: tensor<0x4xf32>, %weight: tensor<4x4xf32>, %bias: tensor<4xf32>) {
-  // expected-error@+2 {{MultiHeadAttention requires a static positive sequence dimension}}
+  // expected-error@+2 {{MultiHeadAttention sequence dimension must be positive when static}}
   // expected-error@+1 {{'ncnn.multi_head_attention' op failed to infer returned types}}
   %0 = ncnn.multi_head_attention %input, %weight, %bias, %weight, %bias, %weight, %bias, %weight, %bias {embed_dim = 4 : i64, kdim = 4 : i64, num_heads = 2 : i64, qdim = 4 : i64, scale = 0.5 : f32, vdim = 4 : i64, weight_data_size = 16 : i64} : (tensor<0x4xf32>, tensor<4x4xf32>, tensor<4xf32>, tensor<4x4xf32>, tensor<4xf32>, tensor<4x4xf32>, tensor<4xf32>, tensor<4x4xf32>, tensor<4xf32>) -> tensor<0x4xf32>
   return

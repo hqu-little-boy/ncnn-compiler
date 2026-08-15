@@ -954,10 +954,10 @@ FailureOr<RankedTensorType> computeMultiHeadAttentionResult(
     return emitOptionalError(
       location, "MultiHeadAttention input must be rank-2 f32 [sequence,qdim]");
   }
-  if (input.isDynamicDim(0) || input.getShape()[0] <= 0) {
+  if (!input.isDynamicDim(0) && input.getShape()[0] <= 0) {
     return emitOptionalError(
       location,
-      "MultiHeadAttention requires a static positive sequence dimension");
+      "MultiHeadAttention sequence dimension must be positive when static");
   }
   if (input.isDynamicDim(1) || embedDim <= 0 || numHeads <= 0 || qdim <= 0 ||
       kdim != qdim || vdim != qdim || embedDim % numHeads != 0 ||

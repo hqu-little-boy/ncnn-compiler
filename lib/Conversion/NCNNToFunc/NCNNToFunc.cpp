@@ -6,6 +6,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/MathExtras.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -190,6 +191,7 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
         if (inputType.getRank() == resultType.getRank() &&
             isa<ReluOp,
                 SigmoidOp,
+                SwishOp,
                 SplitOp,
                 HardSigmoidOp,
                 HardSwishOp,
@@ -197,6 +199,8 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
                 DropoutOp,
                 SoftmaxOp,
                 BatchNormOp,
+                LayerNormOp,
+                MultiHeadAttentionOp,
                 ShuffleChannelOp>(operation)) {
           if (source != shapeTransforms.end()) {
             ShapeTransform propagated = source->second;
@@ -277,6 +281,42 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
             continue;
           }
           if (inferredDimension) {
+            std::optional<unsigned> dynamicSource;
+            int64_t inputStaticElements = 1;
+            bool canCopyDynamicSource = true;
+            for (auto [dimension, extent] :
+                 llvm::enumerate(inputType.getShape())) {
+              if (ShapedType::isDynamic(extent)) {
+                if (dynamicSource) {
+                  canCopyDynamicSource = false;
+                  break;
+                }
+                dynamicSource = dimension;
+              } else if (llvm::MulOverflow(
+                           inputStaticElements, extent, inputStaticElements)) {
+                canCopyDynamicSource = false;
+                break;
+              }
+            }
+            int64_t outputStaticElements = 1;
+            for (auto [dimension, extent] : llvm::enumerate(shape)) {
+              if (dimension == *inferredDimension) {
+                continue;
+              }
+              if (extent <= 0 ||
+                  llvm::MulOverflow(
+                    outputStaticElements, extent, outputStaticElements)) {
+                canCopyDynamicSource = false;
+                break;
+              }
+            }
+            if (canCopyDynamicSource && dynamicSource &&
+                inputStaticElements == outputStaticElements) {
+              dimensions[*inferredDimension] =
+                reshapeSource->second.dimensions[*dynamicSource];
+              shapeTransforms[result] = {.dimensions = std::move(dimensions)};
+              continue;
+            }
             ShapeExpr elements = ShapeExpr::constant(1);
             for (const ShapeDimension& dimension :
                  reshapeSource->second.dimensions) {
@@ -646,15 +686,28 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
             shapeTransforms[result] = std::move(transform);
             continue;
           }
-          auto candidate = shapeTransforms.find(binary.getInputs()[1]);
-          if (candidate == shapeTransforms.end()) {
-            return binary.emitOpError(
-              "cannot prove dynamic binary input shapes broadcastable");
-          }
           auto firstType =
             cast<RankedTensorType>(binary.getInputs()[0].getType());
           auto secondType =
             cast<RankedTensorType>(binary.getInputs()[1].getType());
+          auto candidate = shapeTransforms.find(binary.getInputs()[1]);
+          if (candidate == shapeTransforms.end()) {
+            bool staticUnitBroadcast = true;
+            for (unsigned dimension = 0; dimension < resultType.getRank();
+                 ++dimension) {
+              if (ShapedType::isDynamic(resultType.getShape()[dimension]) &&
+                  secondType.getShape()[dimension] != 1) {
+                staticUnitBroadcast = false;
+                break;
+              }
+            }
+            if (!staticUnitBroadcast) {
+              return binary.emitOpError(
+                "cannot prove dynamic binary input shapes broadcastable");
+            }
+            shapeTransforms[result] = std::move(transform);
+            continue;
+          }
           for (unsigned dimension = 0; dimension < resultType.getRank();
                ++dimension) {
             if (firstType.getShape()[dimension] == 1) {

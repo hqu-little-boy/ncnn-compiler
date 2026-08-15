@@ -15,8 +15,9 @@ module {
 
 // NCNN-LABEL: func.func @dynamic_lowering
 // NCNN: tosa.depthwise_conv2d
-// NCNN: tosa.max_pool2d
 // NCNN: tensor.dim
+// NCNN: linalg.generic
+// NCNN: scf.for
 // NCNN: arith.muli
 // NCNN: tensor.empty
 // NCNN: linalg.generic
@@ -25,6 +26,6 @@ module {
 
 // LINALG-LABEL: func.func @dynamic_lowering
 // LINALG: linalg.depthwise_conv_2d_nhwc_hwcm
-// LINALG: linalg.pooling_nhwc_max
 // LINALG: linalg.generic
+// LINALG: scf.for
 // LINALG-NOT: tosa.

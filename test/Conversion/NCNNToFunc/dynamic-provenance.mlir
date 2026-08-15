@@ -72,3 +72,18 @@ module {
 // CHECK-LABEL: func.func @same_type_is_provenance
 // CHECK-SAME: ncnn.shape_program = [array<i64>, array<i64>, array<i64>]
 // CHECK-SAME: ncnn.shape_source_input = 0 : i32
+
+// -----
+
+module {
+  ncnn.model @static_unit_broadcast {
+    %input = ncnn.input {blob_name = "data", layer_name = "input"} : tensor<4x?x?xf32>
+    %scale = ncnn.const {name = "scale", value = dense<1.000000e+00> : tensor<4x1x1xf32>} : tensor<4x1x1xf32>
+    %output = ncnn.binary %input, %scale {op_type = 2 : i64, scalar = 0.000000e+00 : f32, with_scalar = false} : (tensor<4x?x?xf32>, tensor<4x1x1xf32>) -> tensor<4x?x?xf32>
+    ncnn.output %output {blob_name = "output"} : tensor<4x?x?xf32>
+  }
+}
+
+// CHECK-LABEL: func.func @static_unit_broadcast
+// CHECK-SAME: ncnn.shape_program = [array<i64>, array<i64>, array<i64>]
+// CHECK-SAME: ncnn.shape_source_input = 0 : i32
