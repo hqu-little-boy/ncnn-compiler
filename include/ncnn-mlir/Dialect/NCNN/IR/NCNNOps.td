@@ -195,6 +195,11 @@ def NCNN_SigmoidOp : NCNN_LayerOp<"sigmoid", [SameOperandsAndResultType]> {
   let hasVerifier = 1;
 }
 
+def NCNN_TanHOp : NCNN_LayerOp<"tanh", [SameOperandsAndResultType]> {
+  let arguments = (ins NCNN_RankedTensor:$input);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
 def NCNN_SwishOp : NCNN_LayerOp<"swish", [SameOperandsAndResultType]> {
   let summary = "Elementwise x * sigmoid(x).";
   let arguments = (ins NCNN_RankedTensor:$input);

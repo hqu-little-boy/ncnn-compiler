@@ -36,24 +36,18 @@ ImportResult import_input(ImportContext& importer,
   };
   if (dimensions_omitted && shape_override) {
     const auto& shape = *shape_override;
-    const bool has_dynamic_input =
-      std::ranges::any_of(shape, [](std::int64_t extent) {
-        return extent == ncnn_importer::kDynamicExtent;
-      });
-    const bool specialized_dynamic_rank =
-      importer.shape_mode(has_dynamic_input) ==
-      mlir::ncnn::ShapeMode::DynamicRankSpecialization;
-    if ((!specialized_dynamic_rank && shape.size() != 3) ||
+    if ((shape.empty() || shape.size() > 4) ||
         !std::ranges::all_of(shape, valid_extent)) {
       return std::unexpected(
         make_error(context,
                    "input shape override must have rank 1..4 with positive or "
                    "dynamic extents"));
     }
-    if (specialized_dynamic_rank && shape.size() != 3) {
+    if (shape.size() != 3) {
       auto& builder = importer.builder();
-      llvm::SmallVector<std::int64_t> dimensions(shape.size(),
-                                                 mlir::ShapedType::kDynamic);
+      llvm::SmallVector<std::int64_t> dimensions(shape.begin(), shape.end());
+      std::ranges::replace(
+        dimensions, ncnn_importer::kDynamicExtent, mlir::ShapedType::kDynamic);
       auto type = mlir::RankedTensorType::get(dimensions, builder.getF32Type());
       auto input = builder.create<mlir::ncnn::InputOp>(
         builder.getUnknownLoc(),

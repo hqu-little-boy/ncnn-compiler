@@ -36,8 +36,14 @@ std::vector<std::size_t> top_indices(std::span<const float> values,
 
 }  // namespace
 
+TensorShape::TensorShape(int width)
+  : width_(width), height_(1), channels_(1), rank_(1) {}
+
+TensorShape::TensorShape(int width, int height)
+  : width_(width), height_(height), channels_(1), rank_(2) {}
+
 TensorShape::TensorShape(int width, int height, int channels)
-  : width_(width), height_(height), channels_(channels) {}
+  : width_(width), height_(height), channels_(channels), rank_(3) {}
 
 int TensorShape::get_width() const noexcept {
   return width_;
@@ -49,6 +55,10 @@ int TensorShape::get_height() const noexcept {
 
 int TensorShape::get_channels() const noexcept {
   return channels_;
+}
+
+int TensorShape::get_rank() const noexcept {
+  return rank_;
 }
 
 std::expected<std::size_t, std::string> TensorShape::element_count() const {
@@ -313,6 +323,27 @@ int CompiledModel::run_three_inputs_two_outputs(
   return status == 0 && rank != second_output.size() ? -2 : status;
 }
 
+int CompiledModel::run_three_inputs_three_outputs(
+  std::span<const float> first_input,
+  std::span<const float> second_input,
+  std::span<const float> third_input,
+  std::span<float> first_output,
+  std::span<float> second_output,
+  std::span<float> third_output) const {
+  if (symbol_ == nullptr) {
+    return -1;
+  }
+  using Function =
+    int (*)(const float*, const float*, const float*, float*, float*, float*);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(first_input.data(),
+                                          second_input.data(),
+                                          third_input.data(),
+                                          first_output.data(),
+                                          second_output.data(),
+                                          third_output.data());
+}
+
 std::vector<float> make_random_input(std::size_t size,
                                      std::uint32_t seed,
                                      float minimum,
@@ -391,9 +422,22 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
         "reference input blob '{}': value count does not match its shape",
         input.get_blob_name()));
     }
-    input_mats.emplace_back(input.get_shape().get_width(),
-                            input.get_shape().get_height(),
-                            input.get_shape().get_channels());
+    switch (input.get_shape().get_rank()) {
+      case 1:
+        input_mats.emplace_back(input.get_shape().get_width());
+        break;
+      case 2:
+        input_mats.emplace_back(input.get_shape().get_width(),
+                                input.get_shape().get_height());
+        break;
+      case 3:
+        input_mats.emplace_back(input.get_shape().get_width(),
+                                input.get_shape().get_height(),
+                                input.get_shape().get_channels());
+        break;
+      default:
+        return std::unexpected("reference input rank must be 1 through 3");
+    }
     if (input_mats.back().empty()) {
       return std::unexpected(std::format(
         "ncnn failed to allocate input blob '{}'", input.get_blob_name()));
@@ -408,12 +452,17 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
         ? 0
         : *input_bytes /
             static_cast<std::size_t>(input.get_shape().get_channels());
-    for (int channel = 0; channel < input.get_shape().get_channels();
-         ++channel) {
-      std::memcpy(input_mats.back().channel(channel),
-                  input.get_values().data() +
-                    (static_cast<std::size_t>(channel) * channel_elements),
-                  channel_bytes);
+    if (input.get_shape().get_rank() < 3) {
+      std::memcpy(
+        input_mats.back().data, input.get_values().data(), *input_bytes);
+    } else {
+      for (int channel = 0; channel < input.get_shape().get_channels();
+           ++channel) {
+        std::memcpy(input_mats.back().channel(channel),
+                    input.get_values().data() +
+                      (static_cast<std::size_t>(channel) * channel_elements),
+                    channel_bytes);
+      }
     }
     if (extractor.input(std::string(input.get_blob_name()).c_str(),
                         input_mats.back()) != 0) {

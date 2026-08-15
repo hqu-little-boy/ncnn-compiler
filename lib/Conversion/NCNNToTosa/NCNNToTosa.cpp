@@ -2847,7 +2847,10 @@ class ConvertShapeChange final : public ConversionPattern {
         auto squeeze = cast<SqueezeOp>(operation);
         llvm::SmallDenseSet<int64_t> axes;
         for (int64_t axis : squeeze.getAxes()) {
-          axes.insert(axis < 0 ? axis + inputType.getRank() : axis);
+          axis = axis < 0 ? axis + inputType.getRank() : axis;
+          if (inputType.getShape()[axis] == 1) {
+            axes.insert(axis);
+          }
         }
         unsigned outputDimension = 0;
         for (int64_t axis = 0; axis < inputType.getRank(); ++axis) {
@@ -2907,6 +2910,22 @@ class ConvertSwish final : public OpConversionPattern<SwishOp> {
       operation,
       rewriter.create<tosa::MulOp>(
         operation.getLoc(), type, adaptor.getInput(), sigmoid, shift));
+    return success();
+  }
+};
+
+class ConvertTanH final : public OpConversionPattern<TanHOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    TanHOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto type = cast<RankedTensorType>(adaptor.getInput().getType());
+    rewriter.replaceOp(operation,
+                       rewriter.create<tosa::TanhOp>(
+                         operation.getLoc(), type, adaptor.getInput()));
     return success();
   }
 };
@@ -4564,6 +4583,7 @@ class ConvertNCNNToTosaPass final
                  ConvertSlice,
                  ConvertReduction,
                  ConvertSwish,
+                 ConvertTanH,
                  ConvertLayerNorm,
                  ConvertMultiHeadAttention,
                  ConvertGELU,
@@ -4620,6 +4640,7 @@ class ConvertNCNNToTosaPass final
                         SliceOp,
                         ReductionOp,
                         SwishOp,
+                        TanHOp,
                         LayerNormOp,
                         MultiHeadAttentionOp,
                         GELUOp,

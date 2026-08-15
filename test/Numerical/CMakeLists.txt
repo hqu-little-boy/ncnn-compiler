@@ -32,6 +32,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     set(clang_args)
     set(linker_args)
     set(filtered_constraints)
+    set(additional_input_shapes)
     set(emit_ir OFF)
     set(emit_backend OFF)
     foreach(argument IN LISTS input_constraints)
@@ -47,6 +48,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             list(APPEND clang_args --clang-arg ${CMAKE_MATCH_1})
         elseif(argument MATCHES "^LINKER_ARG=(.+)$")
             list(APPEND linker_args --linker-arg ${CMAKE_MATCH_1})
+        elseif(argument MATCHES "^INPUT_SHAPE=(.+)$")
+            list(APPEND additional_input_shapes ${CMAKE_MATCH_1})
         elseif(argument STREQUAL "EMIT_IR")
             list(APPEND precision_args --emit ncnn --emit tosa --emit linalg)
             set(emit_ir ON)
@@ -81,6 +84,9 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     if(NOT "${input_shape}" STREQUAL "")
         list(APPEND input_shape_args --input-shape ${input_shape})
     endif()
+    foreach(additional_input_shape IN LISTS additional_input_shapes)
+        list(APPEND input_shape_args --input-shape ${additional_input_shape})
+    endforeach()
     set(input_constraint_args)
     foreach(constraint IN LISTS input_constraints)
         list(APPEND input_constraint_args --input-dim-constraint ${constraint})
@@ -921,6 +927,12 @@ ncnn_add_compiled_fixture(
     3x488x488
     EMIT_IR)
 ncnn_add_compiled_fixture(
+    pp_structrurev2_slanet_plus_slahead
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_slahead.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_slahead.bin
+    ""
+    INPUT_SHAPE=1x256 INPUT_SHAPE=256x96 INPUT_SHAPE=1x50 EMIT_IR)
+ncnn_add_compiled_fixture(
     pp_formulanet_plus_s_encoder
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin
@@ -1215,7 +1227,9 @@ add_dependencies(compile_pp_ocrv5_server_det_dynamic
 add_dependencies(compile_pp_structrurev2_slanet_plus_cnn
                   compile_pp_ocrv5_server_det_dynamic)
 add_dependencies(compile_pp_formulanet_plus_s_encoder
-                  compile_pp_structrurev2_slanet_plus_cnn)
+                  compile_pp_structrurev2_slanet_plus_slahead)
+add_dependencies(compile_pp_structrurev2_slanet_plus_slahead
+                 compile_pp_structrurev2_slanet_plus_cnn)
 add_dependencies(compile_pp_ocrv5_server_rec
                  compile_pp_formulanet_plus_s_encoder)
 add_dependencies(compile_pp_ocrv5_server_rec_dynamic
@@ -1472,6 +1486,12 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_structrurev2_slanet_plus_cnn/pp_structrurev2_slanet_plus_cnn.h"
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_structrurev2_slanet_plus_cnn/model.linalg.mlir"
     PP_STRUCTRUREV2_SLANET_PLUS_CNN_FP16_LIBRARY_PATH="${pp_structrurev2_slanet_plus_cnn_fp16_LIBRARY}"
+    PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_slahead.param"
+    PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_slahead.bin"
+    PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_LIBRARY_PATH="${pp_structrurev2_slanet_plus_slahead_LIBRARY}"
+    PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_structrurev2_slanet_plus_slahead/pp_structrurev2_slanet_plus_slahead.json"
+    PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_structrurev2_slanet_plus_slahead/pp_structrurev2_slanet_plus_slahead.h"
+    PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_structrurev2_slanet_plus_slahead/model.linalg.mlir"
     PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param"
     PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin"
     PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH="${pp_formulanet_plus_s_encoder_LIBRARY}"
@@ -1510,6 +1530,7 @@ add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det_static)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_det_static)
 add_dependencies(numerical_tests compile_pp_structrurev2_slanet_plus_cnn)
+add_dependencies(numerical_tests compile_pp_structrurev2_slanet_plus_slahead)
 add_dependencies(numerical_tests compile_pp_formulanet_plus_s_encoder)
 add_dependencies(numerical_tests
     compile_convolution_mixed_fp16

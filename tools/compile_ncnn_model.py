@@ -584,7 +584,7 @@ def main():
     )
 
     undefined = symbols(capture([args.nm, "-D", "--undefined-only", library]))
-    allowed_undefined = {"expf", "free", "malloc", "memcpy", "memset"}
+    allowed_undefined = {"expf", "free", "malloc", "memcpy", "memset", "tanhf"}
     if not undefined.issubset(allowed_undefined):
         print(
             f"unexpected undefined symbols: {sorted(undefined - allowed_undefined)}",

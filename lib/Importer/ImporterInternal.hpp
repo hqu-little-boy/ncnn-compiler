@@ -158,6 +158,9 @@ ImportResult import_interp(ImportContext& importer,
                            const LayerContext& context);
 ImportResult import_sigmoid(ImportContext& importer,
                             const LayerContext& context);
+ImportResult import_tanh(ImportContext& importer, const LayerContext& context);
+ImportResult import_memory_data(ImportContext& importer,
+                                const LayerContext& context);
 ImportResult import_swish(ImportContext& importer, const LayerContext& context);
 ImportResult import_layer_norm(ImportContext& importer,
                                const LayerContext& context);

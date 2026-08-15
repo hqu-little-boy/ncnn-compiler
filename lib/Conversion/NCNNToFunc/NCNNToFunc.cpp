@@ -191,6 +191,7 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
         if (inputType.getRank() == resultType.getRank() &&
             isa<ReluOp,
                 SigmoidOp,
+                TanHOp,
                 SwishOp,
                 SplitOp,
                 HardSigmoidOp,

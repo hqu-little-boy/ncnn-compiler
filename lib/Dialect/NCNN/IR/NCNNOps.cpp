@@ -842,8 +842,11 @@ FailureOr<RankedTensorType> computeSqueezeResult(
       return emitOptionalError(location,
                                "Squeeze axes must be unique and in range");
     }
-    if (input.getShape()[axis] != 1) {
+    if (ShapedType::isDynamic(input.getShape()[axis])) {
       return emitOptionalError(location, "Squeeze axis must have unit extent");
+    }
+    if (input.getShape()[axis] != 1) {
+      axes.erase(axis);
     }
   }
   SmallVector<int64_t> shape;
@@ -1006,9 +1009,10 @@ FailureOr<RankedTensorType> computeBinaryResult(
   llvm::APFloat scalar,
   int64_t opType) {
   (void)scalar;
-  if (opType != 0 && opType != 2 && opType != 4) {
+  if (opType != 0 && opType != 1 && opType != 2 && opType != 4) {
     return emitOptionalError(location,
-                             "BinaryOp only supports add, multiply, and max");
+                             "BinaryOp only supports add, subtract, multiply, "
+                             "and max");
   }
   if ((withScalar && inputs.size() != 1) ||
       (!withScalar && inputs.size() != 2)) {
@@ -1031,16 +1035,19 @@ FailureOr<RankedTensorType> computeBinaryResult(
     return first;
   }
   auto second = llvm::dyn_cast<RankedTensorType>(inputs[1].getType());
-  if (!second || second.getElementType() != first.getElementType() ||
-      second.getRank() != first.getRank()) {
-    return emitOptionalError(
-      location, "BinaryOp inputs must have matching rank and element type");
+  if (!second || second.getElementType() != first.getElementType()) {
+    return emitOptionalError(location,
+                             "BinaryOp inputs must have matching element type");
   }
+  const int64_t resultRank = std::max(first.getRank(), second.getRank());
   SmallVector<int64_t> shape;
-  shape.reserve(first.getRank());
-  for (int64_t i = 0; i < first.getRank(); ++i) {
-    const int64_t left = first.getShape()[i];
-    const int64_t right = second.getShape()[i];
+  shape.reserve(resultRank);
+  for (int64_t i = 0; i < resultRank; ++i) {
+    const int64_t leftOffset = resultRank - first.getRank();
+    const int64_t rightOffset = resultRank - second.getRank();
+    const int64_t left = i < leftOffset ? 1 : first.getShape()[i - leftOffset];
+    const int64_t right =
+      i < rightOffset ? 1 : second.getShape()[i - rightOffset];
     if (left == 1) {
       shape.push_back(right);
     } else if (right == 1) {
@@ -1718,8 +1725,8 @@ LogicalResult DetectionOutputOp::inferReturnTypeComponents(
 
 LogicalResult SigmoidOp::verify() {
   auto input = dyn_cast<RankedTensorType>(getInput().getType());
-  if (!input || !input.getElementType().isF32() || input.getRank() != 3) {
-    return emitOpError("input must be an FP32 CHW tensor");
+  if (!input || !input.getElementType().isF32()) {
+    return emitOpError("input must be a ranked f32 tensor");
   }
   return success();
 }

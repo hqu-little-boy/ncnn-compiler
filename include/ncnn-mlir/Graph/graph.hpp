@@ -192,6 +192,14 @@ struct GemmParams {
   std::int64_t int8_scale_term = 0;
 };
 
+struct MemoryDataParams {
+  std::int64_t width = 0;
+  std::int64_t height = 0;
+  std::int64_t depth = 0;
+  std::int64_t channels = 0;
+  std::int64_t load_type = 1;
+};
+
 struct QuantizeParams {
   std::int64_t scale_count = 1;
 };
@@ -236,6 +244,8 @@ decode_multi_head_attention_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<GemmParams, std::string> decode_gemm_params(
   const ParamDict& params);
+[[nodiscard]] std::expected<MemoryDataParams, std::string>
+decode_memory_data_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<QuantizeParams, std::string> decode_quantize_params(
   const ParamDict& params);

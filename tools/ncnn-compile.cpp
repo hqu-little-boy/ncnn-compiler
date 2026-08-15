@@ -1985,7 +1985,8 @@ int main(int argc, char** argv) {
                                          "malloc",
                                          "memcpy",
                                          "memset",
-                                         "powf"};
+                                         "powf",
+                                         "tanhf"};
   const auto is_allowed_undefined = [&](const std::string& symbol) {
     return allowed.contains(symbol) ||
            (uses_openmp && symbol.starts_with("__kmpc_")) ||

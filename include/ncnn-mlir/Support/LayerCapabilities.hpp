@@ -53,6 +53,11 @@ inline constexpr std::array kLayerDescriptors{
                   .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "Sigmoid",
                   .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "TanH",
+                  .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{
+    .source_type = "MemoryData",
+    .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "Swish",
                   .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{

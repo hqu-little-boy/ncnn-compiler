@@ -4,6 +4,47 @@
 
 namespace ncnn_importer::detail {
 
+ImportResult import_tanh(ImportContext& importer, const LayerContext& context) {
+  constexpr std::array<int, 0> kAllowed{};
+  auto arity = expect_source_arity(context.layer, 1, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!arity || !allowed || !mask || !context.layer.get_weights().empty()) {
+    return std::unexpected(make_error(
+      context, "TanH requires one input, one output, and no parameters"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto& builder = importer.builder();
+  auto op = builder.create<mlir::ncnn::TanHOp>(
+    builder.getUnknownLoc(), input->getType(), *input);
+  importer.tag_source(op, context);
+  return importer.bind_blob(
+    context, context.layer.get_outputs()[0], op.getOutput());
+}
+
+ImportResult import_memory_data(ImportContext& importer,
+                                const LayerContext& context) {
+  constexpr int kAllowed[] = {0, 1, 2, 11, 21};
+  auto arity = expect_source_arity(context.layer, 0, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto params =
+    ncnn_graph::decode_memory_data_params(context.layer.get_params());
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!arity || !allowed || !params || !mask ||
+      context.layer.get_weights().size() != 1) {
+    return std::unexpected(make_error(context, "invalid MemoryData layer"));
+  }
+  auto value =
+    importer.make_constant(context, context.layer.get_weights()[0], 0);
+  if (!value) {
+    return std::unexpected(value.error());
+  }
+  return importer.bind_blob(context, context.layer.get_outputs()[0], *value);
+}
+
 ImportResult import_swish(ImportContext& importer,
                           const LayerContext& context) {
   constexpr std::array<int, 0> kAllowed{};
@@ -339,6 +380,10 @@ ImportResult import_softmax(ImportContext& importer,
   auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
   if (!input) {
     return std::unexpected(input.error());
+  }
+  auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
+  if (inputType && inputType.getRank() == 1) {
+    *axis = 0;
   }
   auto& builder = importer.builder();
   auto softmax =

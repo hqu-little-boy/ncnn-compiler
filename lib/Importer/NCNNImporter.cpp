@@ -118,6 +118,8 @@ std::span<const ImportEntry> importers() noexcept {
     ImportEntry{.type = "Padding", .handler = import_padding},
     ImportEntry{.type = "Interp", .handler = import_interp},
     ImportEntry{.type = "Sigmoid", .handler = import_sigmoid},
+    ImportEntry{.type = "TanH", .handler = import_tanh},
+    ImportEntry{.type = "MemoryData", .handler = import_memory_data},
     ImportEntry{.type = "Swish", .handler = import_swish},
     ImportEntry{.type = "LayerNorm", .handler = import_layer_norm},
     ImportEntry{.type = "MultiHeadAttention",

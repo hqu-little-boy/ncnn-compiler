@@ -182,7 +182,7 @@ std::optional<std::vector<std::int64_t>> parse_input_shape(
     }
     begin = end + 1;
   }
-  if (shape.size() != 3) {
+  if (shape.empty() || shape.size() > 4) {
     return std::nullopt;
   }
   return shape;

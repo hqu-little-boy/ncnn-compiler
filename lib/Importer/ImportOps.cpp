@@ -326,12 +326,14 @@ ImportResult import_binary_op(ImportContext& importer,
   auto type = get_int(context.layer.get_params(), 0, 0, "op_type");
   auto scalar = get_float(context.layer.get_params(), 2, 0.0F, "scalar");
   auto ws = get_int(context.layer.get_params(), 1, 0, "with_scalar");
-  if (!type || !scalar || !ws || (*type != 0 && *type != 2 && *type != 4) ||
+  if (!type || !scalar || !ws ||
+      (*type != 0 && *type != 1 && *type != 2 && *type != 4) ||
       (*ws != 0 && *ws != 1) ||
       ((*ws == 1) != (context.layer.get_inputs().size() == 1))) {
     return std::unexpected(make_error(
       context,
-      "BinaryOp supports add/multiply/max with scalar or two inputs only"));
+      "BinaryOp supports add/subtract/multiply/max with scalar or two inputs "
+      "only"));
   }
   llvm::SmallVector<mlir::Value> inputs;
   for (const auto& n : context.layer.get_inputs()) {
@@ -365,11 +367,168 @@ ImportResult import_binary_op(ImportContext& importer,
 ImportResult import_gemm(ImportContext& importer, const LayerContext& context) {
   constexpr int kAllowed[] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 18, 20, 21, 22};
-  auto valid = arity_params(context, 1, 1, kAllowed);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
   auto params = ncnn_graph::decode_gemm_params(context.layer.get_params());
-  if (!valid || !params ||
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!allowed || !params || !mask) {
+    return std::unexpected(make_error(context,
+                                      !allowed  ? allowed.error()
+                                      : !params ? params.error()
+                                                : mask.error()));
+  }
+  const bool dynamicMatrices =
+    !params->constant_a && !params->constant_b && !params->constant_c;
+  if (dynamicMatrices) {
+    auto arity = expect_source_arity(context.layer, 2, 1);
+    if (!arity || !context.layer.get_weights().empty() || params->transpose_a ||
+        params->transpose_b || params->output_n1m != 0 ||
+        params->output_elempack != 0 || params->output_elemtype != 0 ||
+        params->output_transpose != 0 || params->int8_scale_term != 0) {
+      return std::unexpected(make_error(
+        context, "dynamic Gemm requires plain rank-2 A and B inputs"));
+    }
+    auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+    auto weight = importer.find_blob(context, context.layer.get_inputs()[1]);
+    if (!input || !weight) {
+      return std::unexpected(!input ? input.error() : weight.error());
+    }
+    auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
+    auto weightType = mlir::dyn_cast<mlir::RankedTensorType>(weight->getType());
+    if (!inputType || !weightType || inputType.getRank() != 2 ||
+        weightType.getRank() != 2 || !inputType.hasStaticShape() ||
+        !weightType.hasStaticShape() ||
+        inputType.getShape()[1] != weightType.getShape()[0]) {
+      return std::unexpected(make_error(
+        context, "dynamic Gemm A [M,K] and B [K,N] shapes must match"));
+    }
+    auto& builder = importer.builder();
+    auto transposedType = mlir::RankedTensorType::get(
+      {weightType.getShape()[1], weightType.getShape()[0]},
+      weightType.getElementType());
+    auto transposed = builder.create<mlir::ncnn::PermuteOp>(
+      builder.getUnknownLoc(),
+      transposedType,
+      *weight,
+      builder.getDenseI64ArrayAttr({1, 0}));
+    importer.tag_source(transposed, context);
+    auto biasType = mlir::RankedTensorType::get({weightType.getShape()[1]},
+                                                builder.getF32Type());
+    auto biasValue =
+      mlir::DenseElementsAttr::get(biasType, builder.getF32FloatAttr(0.0F));
+    auto bias = builder.create<mlir::ncnn::ConstOp>(
+      builder.getUnknownLoc(),
+      biasType,
+      builder.getStringAttr(
+        std::format("{}.zero_bias", context.layer.get_name())),
+      biasValue);
+    importer.tag_source(bias, context);
+    mlir::ncnn::GemmOp::Properties properties;
+    properties.alpha = builder.getF32FloatAttr(params->alpha);
+    properties.beta = builder.getF32FloatAttr(params->beta);
+    properties.int8_scale_term = builder.getI64IntegerAttr(0);
+    llvm::SmallVector<mlir::Value> values{
+      *input, transposed.getOutput(), bias.getOutput()};
+    auto type = importer.infer_single_tensor_result<mlir::ncnn::GemmOp>(
+      builder.getUnknownLoc(), values, properties);
+    if (mlir::failed(type)) {
+      return std::unexpected(
+        make_error(context, importer.captured_diagnostic()));
+    }
+    auto op = builder.create<mlir::ncnn::GemmOp>(builder.getUnknownLoc(),
+                                                 *type,
+                                                 values[0],
+                                                 values[1],
+                                                 values[2],
+                                                 mlir::ValueRange{},
+                                                 properties.alpha,
+                                                 properties.beta,
+                                                 properties.int8_scale_term);
+    importer.tag_source(op, context);
+    return importer.bind_blob(
+      context, context.layer.get_outputs()[0], op.getOutput());
+  }
+  if (!params->constant_a && params->constant_b && params->constant_c &&
+      !params->transpose_a && params->transpose_b &&
+      params->broadcast_c == -1 && params->output_n1m == 0 &&
+      params->output_elempack == 0 && params->output_elemtype == 0 &&
+      params->output_transpose == 0 && params->int8_scale_term == 0) {
+    auto arity = expect_source_arity(context.layer, 1, 1);
+    if (!arity || context.layer.get_weights().size() != 1 ||
+        context.layer.get_weights()[0].get_dtype() !=
+          ncnn_graph::DataType::Float32) {
+      return std::unexpected(make_error(
+        context, "constant Gemm without C requires one FP32 B tensor"));
+    }
+    auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+    if (!input) {
+      return std::unexpected(input.error());
+    }
+    auto weight =
+      importer.make_constant(context, context.layer.get_weights()[0], 0, true);
+    if (!weight) {
+      return std::unexpected(weight.error());
+    }
+    auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
+    auto weightType = mlir::dyn_cast<mlir::RankedTensorType>(weight->getType());
+    if (!inputType || !weightType || inputType.getRank() != 2 ||
+        weightType.getRank() != 2 || !inputType.hasStaticShape() ||
+        !weightType.hasStaticShape()) {
+      return std::unexpected(make_error(
+        context,
+        std::format("constant Gemm requires static rank-2 input and weight; "
+                    "got ranks {} and {} (static {} and {})",
+                    inputType ? inputType.getRank() : -1,
+                    weightType ? weightType.getRank() : -1,
+                    inputType && inputType.hasStaticShape(),
+                    weightType && weightType.hasStaticShape())));
+    }
+    if (inputType.getShape()[1] != weightType.getShape()[1]) {
+      return std::unexpected(make_error(
+        context,
+        std::format("constant Gemm K mismatch: input {} vs weight {}",
+                    inputType.getShape()[1],
+                    weightType.getShape()[1])));
+    }
+    auto& builder = importer.builder();
+    auto biasType =
+      mlir::RankedTensorType::get({params->constant_n}, builder.getF32Type());
+    auto biasValue =
+      mlir::DenseElementsAttr::get(biasType, builder.getF32FloatAttr(0.0F));
+    auto bias = builder.create<mlir::ncnn::ConstOp>(
+      builder.getUnknownLoc(),
+      biasType,
+      builder.getStringAttr(
+        std::format("{}.zero_bias", context.layer.get_name())),
+      biasValue);
+    importer.tag_source(bias, context);
+    mlir::ncnn::GemmOp::Properties properties;
+    properties.alpha = builder.getF32FloatAttr(params->alpha);
+    properties.beta = builder.getF32FloatAttr(params->beta);
+    properties.int8_scale_term = builder.getI64IntegerAttr(0);
+    llvm::SmallVector<mlir::Value> values{*input, *weight, bias.getOutput()};
+    auto type = importer.infer_single_tensor_result<mlir::ncnn::GemmOp>(
+      builder.getUnknownLoc(), values, properties);
+    if (mlir::failed(type)) {
+      return std::unexpected(
+        make_error(context, importer.captured_diagnostic()));
+    }
+    auto op = builder.create<mlir::ncnn::GemmOp>(builder.getUnknownLoc(),
+                                                 *type,
+                                                 values[0],
+                                                 values[1],
+                                                 values[2],
+                                                 mlir::ValueRange{},
+                                                 properties.alpha,
+                                                 properties.beta,
+                                                 properties.int8_scale_term);
+    importer.tag_source(op, context);
+    return importer.bind_blob(
+      context, context.layer.get_outputs()[0], op.getOutput());
+  }
+  auto arity = expect_source_arity(context.layer, 1, 1);
+  if (!arity ||
       context.layer.get_weights().size() !=
-        (params && params->int8_scale_term != 0 ? 3U : 2U) ||
+        (params->int8_scale_term != 0 ? 3U : 2U) ||
       params->constant_a || !params->constant_b || !params->constant_c ||
       params->transpose_a || !params->transpose_b || params->broadcast_c != 4 ||
       params->output_n1m != 0 || params->output_elempack != 0 ||
@@ -446,8 +605,8 @@ ImportResult import_inner_product(ImportContext& importer,
   }
   const auto& params = *decoded;
   const bool quantized = params.int8_scale_term != 0;
-  if (!act || (*act != 0 && *act != 1) ||
-      (*act == 1 && context.layer.get_params().has(10)) ||
+  if (!act || (*act != 0 && *act != 1 && *act != 4) ||
+      (*act != 0 && context.layer.get_params().has(10)) ||
       context.layer.get_weights().size() != params.expected_weight_tensors()) {
     return std::unexpected(
       make_error(context, "unsupported InnerProduct configuration"));
@@ -520,6 +679,10 @@ ImportResult import_inner_product(ImportContext& importer,
     auto relu = b.create<mlir::ncnn::ReluOp>(
       b.getUnknownLoc(), *result, output, b.getF32FloatAttr(0.0F));
     output = relu.getResult();
+  } else if (*act == 4) {
+    auto sigmoid =
+      b.create<mlir::ncnn::SigmoidOp>(b.getUnknownLoc(), *result, output);
+    output = sigmoid.getOutput();
   }
   return importer.bind_blob(
     context, std::string(context.layer.get_outputs()[0]), output);

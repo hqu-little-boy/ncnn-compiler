@@ -16,11 +16,14 @@ enum class ReferenceInferenceMode { Float32, Int8 };
 
 class TensorShape final {
  public:
+  explicit TensorShape(int width);
+  explicit TensorShape(int width, int height);
   explicit TensorShape(int width, int height, int channels);
 
   [[nodiscard]] int get_width() const noexcept;
   [[nodiscard]] int get_height() const noexcept;
   [[nodiscard]] int get_channels() const noexcept;
+  [[nodiscard]] int get_rank() const noexcept;
 
   [[nodiscard]] std::expected<std::size_t, std::string> element_count() const;
   [[nodiscard]] std::expected<std::size_t, std::string> byte_count(
@@ -30,6 +33,7 @@ class TensorShape final {
   int width_;
   int height_;
   int channels_;
+  int rank_;
 };
 
 class ReferenceModel final {
@@ -109,6 +113,12 @@ class CompiledModel final {
                                    std::span<const float> third_input,
                                    std::span<float> first_output,
                                    std::span<std::int64_t> second_output) const;
+  int run_three_inputs_three_outputs(std::span<const float> first_input,
+                                     std::span<const float> second_input,
+                                     std::span<const float> third_input,
+                                     std::span<float> first_output,
+                                     std::span<float> second_output,
+                                     std::span<float> third_output) const;
 
  private:
   void* handle_;

@@ -670,6 +670,33 @@ std::expected<GemmParams, std::string> decode_gemm_params(
   return result;
 }
 
+std::expected<MemoryDataParams, std::string> decode_memory_data_params(
+  const ParamDict& params) {
+  auto width = decode_int_param(params, 0, 0, "width");
+  auto height = decode_int_param(params, 1, 0, "height");
+  auto channels = decode_int_param(params, 2, 0, "channels");
+  auto depth = decode_int_param(params, 11, 0, "depth");
+  auto loadType = decode_int_param(params, 21, 1, "load_type");
+  if (!width || !height || !channels || !depth || !loadType) {
+    return std::unexpected("invalid MemoryData parameter type");
+  }
+  if (*width <= 0 || *height < 0 || *depth < 0 || *channels < 0 ||
+      (*loadType != 0 && *loadType != 1)) {
+    return std::unexpected(
+      "MemoryData requires positive width, non-negative dimensions, and "
+      "load_type 0 or 1");
+  }
+  if ((*depth != 0 && (*height == 0 || *channels == 0)) ||
+      (*channels != 0 && *height == 0)) {
+    return std::unexpected("MemoryData dimensions must be densely specified");
+  }
+  return MemoryDataParams{.width = *width,
+                          .height = *height,
+                          .depth = *depth,
+                          .channels = *channels,
+                          .load_type = *loadType};
+}
+
 std::expected<QuantizeParams, std::string> decode_quantize_params(
   const ParamDict& params) {
   auto count = decode_int_param(params, 0, 1, "scale_data_size");
@@ -1676,15 +1703,24 @@ std::expected<void, std::string> load_gemm_weights(Layer& layer,
   if (!params) {
     return std::unexpected(params.error());
   }
+  const bool dynamicMatrices =
+    !params->constant_a && !params->constant_b && !params->constant_c;
+  if (dynamicMatrices && !params->transpose_a && !params->transpose_b &&
+      params->output_n1m == 0 && params->output_elempack == 0 &&
+      params->output_elemtype == 0 && params->output_transpose == 0 &&
+      params->int8_scale_term == 0) {
+    return {};
+  }
   if (params->constant_a || !params->constant_b || !params->constant_c ||
-      params->transpose_a || !params->transpose_b || params->broadcast_c != 4 ||
+      params->transpose_a || !params->transpose_b ||
+      (params->broadcast_c != -1 && params->broadcast_c != 4) ||
       params->output_n1m != 0 || params->output_elempack != 0 ||
       params->output_elemtype != 0 || params->output_transpose != 0 ||
       (params->int8_scale_term != 0 && params->int8_scale_term != 1 &&
        params->int8_scale_term != 2)) {
     return std::unexpected(
-      "only dynamic-A, transposed constant-B Gemm with row bias and optional "
-      "int8 B is supported");
+      "only dynamic-A, transposed constant-B Gemm with optional row bias and "
+      "optional int8 B is supported");
   }
   auto outputSize = positive_size(params->constant_n, "Gemm constantN");
   auto inputSize = positive_size(params->constant_k, "Gemm constantK");
@@ -1708,11 +1744,14 @@ std::expected<void, std::string> load_gemm_weights(Layer& layer,
     return std::unexpected(std::format("Gemm B: {}", weight.error()));
   }
   layer.add_weight(std::move(*weight));
-  auto bias = load_weight(cursor, params->constant_n, 0, {params->constant_n});
-  if (!bias) {
-    return std::unexpected(std::format("Gemm C: {}", bias.error()));
+  if (params->broadcast_c == 4) {
+    auto bias =
+      load_weight(cursor, params->constant_n, 0, {params->constant_n});
+    if (!bias) {
+      return std::unexpected(std::format("Gemm C: {}", bias.error()));
+    }
+    layer.add_weight(std::move(*bias));
   }
-  layer.add_weight(std::move(*bias));
   if (params->int8_scale_term != 0) {
     auto scale = load_weight(cursor, 1, 1, {1});
     if (!scale) {
@@ -1721,6 +1760,38 @@ std::expected<void, std::string> load_gemm_weights(Layer& layer,
     }
     layer.add_weight(std::move(*scale));
   }
+  return {};
+}
+
+std::expected<void, std::string> load_memory_data_weights(Layer& layer,
+                                                          BinCursor& cursor) {
+  auto params = decode_memory_data_params(layer.get_params());
+  if (!params) {
+    return std::unexpected(params.error());
+  }
+  std::vector<std::int64_t> shape;
+  if (params->depth != 0) {
+    shape = {params->channels, params->depth, params->height, params->width};
+  } else if (params->channels != 0) {
+    shape = {params->channels, params->height, params->width};
+  } else if (params->height != 0) {
+    shape = {params->height, params->width};
+  } else {
+    shape = {params->width};
+  }
+  std::int64_t elementCount = 1;
+  for (std::int64_t extent : shape) {
+    if (elementCount > std::numeric_limits<std::int64_t>::max() / extent) {
+      return std::unexpected("MemoryData element count overflows int64_t");
+    }
+    elementCount *= extent;
+  }
+  auto data = load_weight(
+    cursor, elementCount, static_cast<int>(params->load_type), shape);
+  if (!data) {
+    return std::unexpected(std::format("MemoryData: {}", data.error()));
+  }
+  layer.add_weight(std::move(*data));
   return {};
 }
 
@@ -1808,6 +1879,7 @@ std::span<const WeightLoaderEntry> weight_loaders() noexcept {
                       .loader = load_inner_product_weights},
     WeightLoaderEntry{.type = "BatchNorm", .loader = load_batch_norm_weights},
     WeightLoaderEntry{.type = "Gemm", .loader = load_gemm_weights},
+    WeightLoaderEntry{.type = "MemoryData", .loader = load_memory_data_weights},
     WeightLoaderEntry{.type = "Quantize", .loader = load_quantize_weights},
     WeightLoaderEntry{.type = "Dequantize", .loader = load_dequantize_weights},
     WeightLoaderEntry{.type = "Requantize", .loader = load_requantize_weights},

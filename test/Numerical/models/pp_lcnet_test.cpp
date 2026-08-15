@@ -1,6 +1,7 @@
 #include "numerical_test_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -505,6 +506,125 @@ TEST(NumericalModel, PPStructureV2SLANetPlusCNNMatchesNcnn) {
   std::vector<float> repeated(kOutputElements);
   ASSERT_EQ(compiled.run(input, repeated), 0);
   EXPECT_EQ(repeated, actual);
+}
+
+TEST(NumericalModel, PPStructureV2SLANetPlusSLAHeadMatchesNcnn) {
+  std::vector<float> hidden = make_random_input(256, 0x534C4844U, -0.1F, 0.1F);
+  const std::vector<float> memory =
+    make_random_input(256 * 96, 0x534C4D45U, -0.1F, 0.1F);
+  const std::vector<float> token =
+    make_random_input(50, 0x534C544BU, -0.1F, 0.1F);
+  const std::array inputs{
+    ReferenceInput("in0", TensorShape(256, 1), hidden),
+    ReferenceInput("in1", TensorShape(96, 256), memory),
+    ReferenceInput("in2", TensorShape(50, 1), token),
+  };
+  constexpr std::array<std::string_view, 3> kOutputs = {"out0", "out1", "out2"};
+  const auto expected =
+    run_ncnn_reference(PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_PARAM_PATH,
+                       PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_BIN_PATH,
+                       inputs,
+                       kOutputs);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ((*expected)[0].size(), 256U);
+  ASSERT_EQ((*expected)[1].size(), 50U);
+  ASSERT_EQ((*expected)[2].size(), 8U);
+
+  CompiledModel compiled(PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_LIBRARY_PATH,
+                         "pp_structrurev2_slanet_plus_slahead");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual_hidden(256);
+  std::vector<float> actual_token(50);
+  std::vector<float> actual_location(8);
+  ASSERT_EQ(
+    compiled.run_three_inputs_three_outputs(
+      hidden, memory, token, actual_hidden, actual_token, actual_location),
+    0);
+  EXPECT_TRUE(compare_values(actual_hidden, (*expected)[0], 1.0e-4F));
+  EXPECT_TRUE(compare_values(actual_token, (*expected)[1], 1.0e-4F));
+  EXPECT_TRUE(compare_values(actual_location, (*expected)[2], 1.0e-4F));
+  EXPECT_TRUE(check_softmax(actual_token, (*expected)[1]));
+}
+
+TEST(NumericalModel, PPStructureV2SLANetCNNAndHeadDecodeMultipleSteps) {
+  const TensorShape imageShape(488, 488, 3);
+  const auto imageElements = imageShape.element_count();
+  ASSERT_TRUE(imageElements.has_value()) << imageElements.error();
+  const std::vector<float> image =
+    make_random_input(*imageElements, 0x534C4443U, -0.1F, 0.1F);
+  CompiledModel cnn(PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH,
+                    "pp_structrurev2_slanet_plus_cnn");
+  CompiledModel head(PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_LIBRARY_PATH,
+                     "pp_structrurev2_slanet_plus_slahead");
+  ASSERT_TRUE(cnn.valid()) << cnn.error();
+  ASSERT_TRUE(head.valid()) << head.error();
+
+  std::vector<float> memory(256 * 96);
+  ASSERT_EQ(cnn.run(image, memory), 0);
+  std::vector<float> actualHidden(256, 0.0F);
+  std::vector<float> expectedHidden(256, 0.0F);
+  std::vector<float> token(50, 0.0F);
+  token[0] = 1.0F;
+  constexpr std::array<std::string_view, 3> kOutputs = {"out0", "out1", "out2"};
+  for (int step = 0; step < 3; ++step) {
+    const std::array inputs{
+      ReferenceInput("in0", TensorShape(256, 1), expectedHidden),
+      ReferenceInput("in1", TensorShape(96, 256), memory),
+      ReferenceInput("in2", TensorShape(50, 1), token),
+    };
+    const auto expected =
+      run_ncnn_reference(PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_PARAM_PATH,
+                         PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_BIN_PATH,
+                         inputs,
+                         kOutputs);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    std::vector<float> nextHidden(256);
+    std::vector<float> structure(50);
+    std::vector<float> location(8);
+    ASSERT_EQ(head.run_three_inputs_three_outputs(
+                actualHidden, memory, token, nextHidden, structure, location),
+              0);
+    EXPECT_TRUE(compare_values(nextHidden, (*expected)[0], 2.0e-4F));
+    EXPECT_TRUE(compare_values(structure, (*expected)[1], 2.0e-4F));
+    EXPECT_TRUE(compare_values(location, (*expected)[2], 2.0e-4F));
+    actualHidden = std::move(nextHidden);
+    expectedHidden = (*expected)[0];
+    const auto nextToken = static_cast<std::size_t>(std::distance(
+      (*expected)[1].begin(), std::ranges::max_element((*expected)[1])));
+    std::ranges::fill(token, 0.0F);
+    token[nextToken] = 1.0F;
+  }
+}
+
+TEST(NumericalModel, PPStructureV2SLANetSLAHeadArtifactsRemainStatic) {
+  const std::string manifest =
+    read_text(PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_structrurev2_slanet_plus_slahead"),
+            std::string::npos);
+  EXPECT_EQ(manifest.find("-1"), std::string::npos);
+
+  const std::string header =
+    read_text(PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_HEADER_PATH);
+  for (const std::string_view required : {
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_INPUT1_DIM0 INT64_C(1)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_INPUT1_DIM1 INT64_C(256)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_INPUT2_DIM0 INT64_C(256)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_INPUT2_DIM1 INT64_C(96)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_INPUT3_DIM1 INT64_C(50)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_OUTPUT1_DIM1 "
+         "INT64_C(256)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_OUTPUT2_DIM0 INT64_C(50)",
+         "#define PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_OUTPUT3_DIM0 INT64_C(8)",
+       }) {
+    EXPECT_NE(header.find(required), std::string::npos) << required;
+  }
+  EXPECT_EQ(header.find("_infer_output_shapes"), std::string::npos);
+
+  const std::string linalgIr =
+    read_text(PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_LINALG_IR_PATH);
+  EXPECT_NE(linalgIr.find("tensor<256x96xf32>"), std::string::npos);
+  EXPECT_NE(linalgIr.find("tensor<1x256xf32>"), std::string::npos);
+  EXPECT_EQ(linalgIr.find("?"), std::string::npos);
 }
 
 TEST(NumericalModel, PPStructureV2SLANetArtifactsRemainStaticSpecialization) {
