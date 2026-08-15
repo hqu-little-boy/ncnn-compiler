@@ -258,6 +258,29 @@ TEST(NumericalDynamicOperator, ReductionMatchesNcnnAcrossShapes) {
   }
 }
 
+TEST(NumericalDynamicOperator, ReductionMeanUsesRuntimeElementCount) {
+  CompiledModel compiled(REDUCTION_DYNAMIC_MEAN_LIBRARY_PATH,
+                         "reduction_dynamic_mean");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  for (const Case shape : kCases) {
+    const std::array<std::int64_t, 3> dimensions{4, shape.height, shape.width};
+    const std::vector<float> input =
+      make_random_input(4U * shape.height * shape.width, 0xC0A17U, -2.0F, 2.0F);
+    const ReferenceModel reference(fixture_path("reduction_dynamic_mean"),
+                                   NUMERICAL_EMPTY_BIN_PATH,
+                                   "data",
+                                   "output",
+                                   TensorShape(shape.width, shape.height, 4));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    ASSERT_EQ(expected->size(), 4U);
+    std::vector<float> actual(4);
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 1.0e-6F));
+  }
+}
+
 TEST(NumericalDynamicOperator, GemmDynamicMMatchesNcnnAcrossShapes) {
   CompiledModel compiled(GEMM_DYNAMIC_LIBRARY_PATH, "gemm_dynamic");
   ASSERT_TRUE(compiled.valid()) << compiled.error();

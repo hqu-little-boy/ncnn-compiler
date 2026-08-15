@@ -1441,12 +1441,6 @@ FailureOr<RankedTensorType> computeReductionResult(
       }
     }
   }
-  for (int64_t axis : reducedAxes) {
-    if (ShapedType::isDynamic(input.getShape()[axis])) {
-      return emitOptionalError(location,
-                               "Reduction axes must have static extents");
-    }
-  }
   SmallVector<int64_t> shape;
   for (int64_t axis = 0; axis < rank; ++axis) {
     if (!reducedAxes.contains(axis)) {

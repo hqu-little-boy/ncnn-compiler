@@ -673,6 +673,13 @@ ncnn_add_compiled_fixture(
     0:0:min=1,multiple=1
     0:2:min=1,multiple=1)
 ncnn_add_compiled_fixture(
+    reduction_dynamic_mean
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/reduction_dynamic_mean.param
+    ${empty_bin}
+    4x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
     gemm_dynamic
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gemm_dynamic.param
     ${gemm_bin}
@@ -1027,6 +1034,7 @@ set(numerical_fixture_targets
     compile_permute_dynamic
     compile_expand_dims_dynamic
     compile_reduction_dynamic
+    compile_reduction_dynamic_mean
     compile_gemm_dynamic
     compile_slice_dynamic
     compile_pooling_global_max_dynamic
@@ -1405,6 +1413,7 @@ target_compile_definitions(numerical_dynamic_operator_tests PRIVATE
     PERMUTE_DYNAMIC_LIBRARY_PATH="${permute_dynamic_LIBRARY}"
     EXPAND_DIMS_DYNAMIC_LIBRARY_PATH="${expand_dims_dynamic_LIBRARY}"
     REDUCTION_DYNAMIC_LIBRARY_PATH="${reduction_dynamic_LIBRARY}"
+    REDUCTION_DYNAMIC_MEAN_LIBRARY_PATH="${reduction_dynamic_mean_LIBRARY}"
     GEMM_DYNAMIC_LIBRARY_PATH="${gemm_dynamic_LIBRARY}"
     SLICE_DYNAMIC_LIBRARY_PATH="${slice_dynamic_LIBRARY}"
     POOLING_GLOBAL_MAX_DYNAMIC_LIBRARY_PATH="${pooling_global_max_dynamic_LIBRARY}"
@@ -1433,6 +1442,7 @@ add_dependencies(numerical_dynamic_operator_tests
     compile_permute_dynamic
     compile_expand_dims_dynamic
     compile_reduction_dynamic
+    compile_reduction_dynamic_mean
     compile_gemm_dynamic
     compile_slice_dynamic
     compile_pooling_global_max_dynamic

@@ -4332,14 +4332,18 @@ class ConvertReduction final : public OpConversionPattern<ReductionOp> {
     }
     SmallVector<uint32_t> axes;
     int64_t reducedElements = 1;
+    bool hasDynamicReducedExtent = false;
     for (int64_t sourceAxis : sourceAxes) {
       if (sourceAxis < 0) {
         sourceAxis += sourceInput.getRank();
       }
       axes.push_back(convertAxis(sourceAxis, sourceInput.getRank()));
-      if (llvm::MulOverflow(reducedElements,
-                            sourceInput.getShape()[sourceAxis],
-                            reducedElements)) {
+      const int64_t extent = sourceInput.getShape()[sourceAxis];
+      if (ShapedType::isDynamic(extent)) {
+        hasDynamicReducedExtent = true;
+        continue;
+      }
+      if (llvm::MulOverflow(reducedElements, extent, reducedElements)) {
         return operation.emitOpError("reduced element count overflows");
       }
     }
@@ -4354,10 +4358,37 @@ class ConvertReduction final : public OpConversionPattern<ReductionOp> {
         operation.getLoc(), reducedType, result, axis);
     }
     auto reducedType = cast<RankedTensorType>(result.getType());
-    const double scale = operation.getCoeff().convertToDouble() /
-                         static_cast<double>(reducedElements);
-    Value factor = createSplat(
-      rewriter, operation.getLoc(), getBroadcastScalarType(reducedType), scale);
+    auto scalarType = getBroadcastScalarType(reducedType);
+    Value factor;
+    if (hasDynamicReducedExtent) {
+      Value count =
+        createIndexConstant(rewriter, operation.getLoc(), reducedElements);
+      for (int64_t sourceAxis : sourceAxes) {
+        if (!sourceInput.isDynamicDim(sourceAxis)) {
+          continue;
+        }
+        Value extent = rewriter.create<tensor::DimOp>(
+          operation.getLoc(),
+          adaptor.getInput(),
+          convertAxis(sourceAxis, sourceInput.getRank()));
+        count =
+          rewriter.create<arith::MulIOp>(operation.getLoc(), count, extent);
+      }
+      Value countI64 = rewriter.create<arith::IndexCastUIOp>(
+        operation.getLoc(), rewriter.getI64Type(), count);
+      Value countFloat = rewriter.create<arith::UIToFPOp>(
+        operation.getLoc(), rewriter.getF32Type(), countI64);
+      Value coefficient = rewriter.create<arith::ConstantFloatOp>(
+        operation.getLoc(), rewriter.getF32Type(), operation.getCoeff());
+      Value scale = rewriter.create<arith::DivFOp>(
+        operation.getLoc(), coefficient, countFloat);
+      factor = rewriter.create<tensor::FromElementsOp>(
+        operation.getLoc(), scalarType, scale);
+    } else {
+      const double scale = operation.getCoeff().convertToDouble() /
+                           static_cast<double>(reducedElements);
+      factor = createSplat(rewriter, operation.getLoc(), scalarType, scale);
+    }
     result =
       rewriter.create<tosa::MulOp>(operation.getLoc(),
                                    reducedType,

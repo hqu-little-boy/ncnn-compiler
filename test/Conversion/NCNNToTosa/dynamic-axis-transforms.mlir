@@ -54,3 +54,20 @@ func.func @reduction(%arg0: tensor<4x?x?xf32>) -> tensor<?x?xf32> {
 // CHECK-LABEL: func.func @reduction
 // CHECK: tosa.reduce_sum
 // CHECK: tensor.reshape
+
+// -----
+
+func.func @reduction_dynamic_count(%arg0: tensor<4x?x?xf32>) -> tensor<4xf32> {
+  %0 = ncnn.reduction %arg0 {axes = array<i64: 1, 2>, coeff = 5.000000e-01 : f32, keepdims = false, kind = 3 : i64, reduce_all = false} : (tensor<4x?x?xf32>) -> tensor<4xf32>
+  return %0 : tensor<4xf32>
+}
+
+// CHECK-LABEL: func.func @reduction_dynamic_count
+// CHECK-COUNT-2: tosa.reduce_sum
+// CHECK: tensor.dim
+// CHECK: arith.muli
+// CHECK: tensor.dim
+// CHECK: arith.muli
+// CHECK: arith.uitofp
+// CHECK: arith.divf
+// CHECK: tensor.from_elements
