@@ -79,7 +79,10 @@ elif case == "int8_complete_chain":
     payload = convolution(101, 2, 3) + depthwise(101, 3) + convolution(1, 3, 2)
 elif case == "gemm_int8_term2":
     payload = gemm()
-elif case == "pp_lcnet_doc_ori_int8_backbone":
+elif case in {
+    "pp_lcnet_doc_ori_int8_backbone",
+    "pp_lcnet_textline_ori_int8_backbone",
+}:
     source = pathlib.Path(sys.argv[3]).read_bytes()
     backbone_bytes = 466080
     if len(source) <= backbone_bytes:

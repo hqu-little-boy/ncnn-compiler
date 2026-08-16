@@ -184,6 +184,27 @@ TEST(NumericalModel, PPLCNetTextlineOriMatchesNcnn) {
   EXPECT_TRUE(check_softmax(actual, *expected));
 }
 
+TEST(NumericalModel, PPLCNetTextlineOriInt8ProducesStableSoftmax) {
+  const TensorShape input_shape(160, 80, 3);
+  const auto input_elements = input_shape.element_count();
+  ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
+  const std::vector<float> input =
+    make_random_input(*input_elements, 0x544C4938U, -1.0F, 1.0F);
+  CompiledModel compiled(PP_LCNET_TEXTLINE_ORI_INT8_LIBRARY_PATH,
+                         "pp_lcnet_x1_0_textline_ori_int8");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(2);
+  std::vector<float> repeated(2);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+  EXPECT_TRUE(std::ranges::all_of(actual, [](float value) {
+    return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+  }));
+  EXPECT_NEAR(
+    std::accumulate(actual.begin(), actual.end(), 0.0F), 1.0F, 1.0e-5F);
+}
+
 TEST(NumericalModel, ChineseOCRLiteAngleNetMatchesNcnn) {
   const TensorShape inputShape(192, 32, 3);
   const auto inputElements = inputShape.element_count();

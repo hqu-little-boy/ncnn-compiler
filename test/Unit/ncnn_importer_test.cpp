@@ -955,6 +955,44 @@ TEST_F(NcnnImporterTest, ImportsInt8Quantization) {
   EXPECT_EQ(count_ops<mlir::ncnn::ConstOp>(int8->get()), 4)
     << "int8 kernel and three quantization scales become constants";
 
+  auto zero_weight_scale = make_int8_graph();
+  std::vector<ncnn_graph::Layer> zero_weight_scale_layers(
+    zero_weight_scale.get_layers().begin(),
+    zero_weight_scale.get_layers().end());
+  zero_weight_scale_layers[1].set_weights(
+    {make_tensor({1, 1, 1, 1}, ncnn_graph::DataType::Int8),
+     make_float_tensor({1}, 0.0F),
+     make_float_tensor({1}, 4.0F),
+     make_float_tensor({1}, 8.0F)});
+  zero_weight_scale.set_layers(std::move(zero_weight_scale_layers));
+  EXPECT_TRUE(import(zero_weight_scale))
+    << "zero weight scale preserves ncnn's empty-channel semantics";
+
+  auto infinite_weight_scale = make_int8_graph();
+  std::vector<ncnn_graph::Layer> infinite_weight_scale_layers(
+    infinite_weight_scale.get_layers().begin(),
+    infinite_weight_scale.get_layers().end());
+  infinite_weight_scale_layers[1].set_weights(
+    {make_tensor({1, 1, 1, 1}, ncnn_graph::DataType::Int8),
+     make_float_tensor({1}, std::numeric_limits<float>::infinity()),
+     make_float_tensor({1}, 4.0F),
+     make_float_tensor({1}, 8.0F)});
+  infinite_weight_scale.set_layers(std::move(infinite_weight_scale_layers));
+  EXPECT_TRUE(import(infinite_weight_scale))
+    << "infinite weight scale preserves ncnn's empty-channel semantics";
+
+  auto zero_input_scale = make_int8_graph();
+  std::vector<ncnn_graph::Layer> zero_input_scale_layers(
+    zero_input_scale.get_layers().begin(), zero_input_scale.get_layers().end());
+  zero_input_scale_layers[1].set_weights(
+    {make_tensor({1, 1, 1, 1}, ncnn_graph::DataType::Int8),
+     make_float_tensor({1}, 2.0F),
+     make_float_tensor({1}, 0.0F),
+     make_float_tensor({1}, 8.0F)});
+  zero_input_scale.set_layers(std::move(zero_input_scale_layers));
+  EXPECT_FALSE(import(zero_input_scale))
+    << "zero activation scale remains invalid";
+
   auto int8_chain = import(make_int8_chain_graph());
   ASSERT_TRUE(int8_chain.has_value()) << int8_chain.error().to_string();
   auto out_type = output_type(int8_chain->get());

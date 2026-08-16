@@ -10,7 +10,8 @@ namespace {
 std::expected<void, std::string> validate_scale(
   const ncnn_graph::Tensor& tensor,
   std::size_t expectedSize,
-  std::string_view role) {
+  std::string_view role,
+  bool allowEmptyChannel = false) {
   if (tensor.get_dtype() != ncnn_graph::DataType::Float32 ||
       tensor.get_shape().size() != 1 ||
       tensor.get_shape()[0] !=
@@ -22,9 +23,14 @@ std::expected<void, std::string> validate_scale(
   for (std::size_t offset = 0; offset < data.size(); offset += sizeof(float)) {
     float value;
     std::memcpy(&value, data.data() + offset, sizeof(value));
-    if (!std::isfinite(value) || value <= 0.0F) {
-      return std::unexpected(
-        std::format("{} scale values must be finite and positive", role));
+    const bool invalid = allowEmptyChannel
+                           ? std::isnan(value) || value < 0.0F
+                           : !std::isfinite(value) || value <= 0.0F;
+    if (invalid) {
+      return std::unexpected(std::format(
+        "{} scale values must be {}",
+        role,
+        allowEmptyChannel ? "nonnegative and not NaN" : "finite and positive"));
     }
   }
   return {};
@@ -708,7 +714,8 @@ ImportResult import_inner_product(ImportContext& importer,
     auto weightScale =
       validate_scale(context.layer.get_weights()[scaleOffset],
                      static_cast<std::size_t>(params.output_channels),
-                     "InnerProduct weight");
+                     "InnerProduct weight",
+                     true);
     auto inputScale = validate_scale(
       context.layer.get_weights()[scaleOffset + 1], 1, "InnerProduct input");
     if (!weightScale || !inputScale) {
@@ -854,7 +861,8 @@ ImportResult import_convolution_depthwise(ImportContext& importer,
         : 1;
     auto weightScale = validate_scale(context.layer.get_weights()[scaleOffset],
                                       weightScaleSize,
-                                      "depthwise weight");
+                                      "depthwise weight",
+                                      true);
     auto inputScale = validate_scale(
       context.layer.get_weights()[scaleOffset + 1], 1, "depthwise input");
     if (!weightScale || !inputScale) {

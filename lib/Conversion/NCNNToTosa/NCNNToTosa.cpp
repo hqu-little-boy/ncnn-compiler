@@ -409,6 +409,13 @@ Value dequantizeAccumulator(OpBuilder& builder,
     location, weightScaleType, weightScale, inputScale, shift);
   Value reciprocal =
     builder.create<tosa::ReciprocalOp>(location, weightScaleType, combined);
+  Value zero = createSplat(builder, location, weightScaleType, 0.0);
+  auto conditionType =
+    RankedTensorType::get(weightScaleType.getShape(), builder.getI1Type());
+  Value zeroWeightScale =
+    builder.create<tosa::EqualOp>(location, conditionType, weightScale, zero);
+  reciprocal = builder.create<tosa::SelectOp>(
+    location, weightScaleType, zeroWeightScale, zero, reciprocal);
   SmallVector<int64_t> scaleShape(accumulatorType.getRank(), 1);
   scaleShape[channelDimension] = weightScaleType.getShape()[0];
   Value broadcastScale =

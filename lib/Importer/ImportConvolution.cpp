@@ -14,7 +14,8 @@ namespace {
 std::expected<void, std::string> validate_scale(
   const ncnn_graph::Tensor& tensor,
   std::size_t expected_size,
-  std::string_view role) {
+  std::string_view role,
+  bool allow_empty_channel = false) {
   if (tensor.get_dtype() != ncnn_graph::DataType::Float32 ||
       tensor.get_shape().size() != 1 ||
       tensor.get_shape()[0] !=
@@ -26,9 +27,15 @@ std::expected<void, std::string> validate_scale(
   for (std::size_t offset = 0; offset < data.size(); offset += sizeof(float)) {
     float value;
     std::memcpy(&value, data.data() + offset, sizeof(value));
-    if (!std::isfinite(value) || value <= 0.0F) {
-      return std::unexpected(
-        std::format("{} scale values must be finite and positive", role));
+    const bool invalid = allow_empty_channel
+                           ? std::isnan(value) || value < 0.0F
+                           : !std::isfinite(value) || value <= 0.0F;
+    if (invalid) {
+      return std::unexpected(std::format("{} scale values must be {}",
+                                         role,
+                                         allow_empty_channel
+                                           ? "nonnegative and not NaN"
+                                           : "finite and positive"));
     }
   }
   return {};
@@ -90,7 +97,8 @@ ImportResult import_convolution(ImportContext& importer,
     auto weight_scale =
       validate_scale(context.layer.get_weights()[1 + bias_offset],
                      static_cast<std::size_t>(convolution.output_channels),
-                     "convolution weight");
+                     "convolution weight",
+                     true);
     auto input_scale = validate_scale(
       context.layer.get_weights()[2 + bias_offset], 1, "convolution input");
     if (!weight_scale || !input_scale) {
