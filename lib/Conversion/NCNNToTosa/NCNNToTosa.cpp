@@ -620,7 +620,8 @@ Value restoreNCNNLayout(OpBuilder& builder,
                         Location location,
                         Value input,
                         RankedTensorType sourceType) {
-  if (sourceType.getRank() == 3) {
+  auto inputType = cast<RankedTensorType>(input.getType());
+  if (sourceType.getRank() == 3 && inputType.getRank() == 4) {
     return convertNHWCToCHW(builder, location, input, sourceType);
   }
   return input;
@@ -630,7 +631,8 @@ Value convertNCNNLayout(OpBuilder& builder,
                         Location location,
                         Value input,
                         RankedTensorType sourceType) {
-  if (sourceType.getRank() == 3) {
+  auto inputType = cast<RankedTensorType>(input.getType());
+  if (sourceType.getRank() == 3 && inputType.getRank() == 3) {
     return convertCHWToNHWC(builder, location, input);
   }
   return input;
@@ -3579,6 +3581,287 @@ class ConvertMultiHeadAttention final
   }
 };
 
+class ConvertSDPA final : public OpConversionPattern<SDPAOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    SDPAOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    Location location = operation.getLoc();
+    MLIRContext* context = rewriter.getContext();
+    auto queryType = cast<RankedTensorType>(operation.getQuery().getType());
+    auto keyType = cast<RankedTensorType>(operation.getKey().getType());
+    auto valueType = cast<RankedTensorType>(operation.getValue().getType());
+    Value query =
+      restoreNCNNLayout(rewriter, location, adaptor.getQuery(), queryType);
+    Value key =
+      restoreNCNNLayout(rewriter, location, adaptor.getKey(), keyType);
+    Value value =
+      restoreNCNNLayout(rewriter, location, adaptor.getValue(), valueType);
+
+    SmallVector<Value> optional(adaptor.getOptionalInputs().begin(),
+                                adaptor.getOptionalInputs().end());
+    unsigned optionalIndex = 0;
+    Value mask;
+    if (operation.getHasMask()) {
+      mask = optional[optionalIndex++];
+    }
+    Value totalKey = key;
+    Value totalValue = value;
+    if (operation.getKvCache()) {
+      auto pastKeyType = cast<RankedTensorType>(
+        operation.getOptionalInputs()[optionalIndex].getType());
+      auto pastValueType = cast<RankedTensorType>(
+        operation.getOptionalInputs()[optionalIndex + 1].getType());
+      Value pastKey = restoreNCNNLayout(
+        rewriter, location, optional[optionalIndex], pastKeyType);
+      Value pastValue = restoreNCNNLayout(
+        rewriter, location, optional[optionalIndex + 1], pastValueType);
+      auto updatedKeyType =
+        cast<RankedTensorType>(operation.getCacheResults()[0].getType());
+      auto updatedValueType =
+        cast<RankedTensorType>(operation.getCacheResults()[1].getType());
+      totalKey = rewriter.create<tensor::ConcatOp>(
+        location, updatedKeyType, 1, ValueRange{pastKey, key});
+      totalValue = rewriter.create<tensor::ConcatOp>(
+        location, updatedValueType, 1, ValueRange{pastValue, value});
+    }
+
+    Value querySequence = rewriter.create<tensor::DimOp>(location, query, 1);
+    Value keySequence = rewriter.create<tensor::DimOp>(location, totalKey, 1);
+    Value one = rewriter.create<arith::ConstantIndexOp>(location, 1);
+    auto createEmpty = [&](RankedTensorType type, ValueRange dimensions) {
+      SmallVector<Value> dynamicSizes;
+      for (auto [extent, dimension] :
+           llvm::zip_equal(type.getShape(), dimensions)) {
+        if (ShapedType::isDynamic(extent)) {
+          dynamicSizes.push_back(dimension);
+        }
+      }
+      return rewriter.create<tensor::EmptyOp>(location, type, dynamicSizes);
+    };
+
+    const int64_t queryHeads = queryType.getShape()[0];
+    const int64_t headsPerGroup = queryHeads / keyType.getShape()[0];
+    auto scoresType = RankedTensorType::get(
+      {queryHeads,
+       queryType.getShape()[1],
+       cast<RankedTensorType>(totalKey.getType()).getShape()[1]},
+      rewriter.getF32Type());
+    Value zero = rewriter.create<arith::ConstantOp>(
+      location, rewriter.getF32FloatAttr(0.0));
+    Value scoresEmpty =
+      createEmpty(scoresType, ValueRange{one, querySequence, keySequence});
+    Value initializedScores =
+      rewriter.create<linalg::FillOp>(location, zero, scoresEmpty).getResult(0);
+    AffineExpr head = rewriter.getAffineDimExpr(0);
+    AffineExpr queryIndex = rewriter.getAffineDimExpr(1);
+    AffineExpr keyIndex = rewriter.getAffineDimExpr(2);
+    AffineExpr feature = rewriter.getAffineDimExpr(3);
+    AffineMap queryMap =
+      AffineMap::get(4, 0, {head, queryIndex, feature}, context);
+    AffineMap keyMap = AffineMap::get(
+      4, 0, {head.floorDiv(headsPerGroup), keyIndex, feature}, context);
+    AffineMap scoresMap =
+      AffineMap::get(4, 0, {head, queryIndex, keyIndex}, context);
+    SmallVector<utils::IteratorType> contractionIterators(
+      3, utils::IteratorType::parallel);
+    contractionIterators.push_back(utils::IteratorType::reduction);
+    Value scores =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          ValueRange{query, totalKey},
+          ValueRange{initializedScores},
+          ArrayRef<AffineMap>{queryMap, keyMap, scoresMap},
+          contractionIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value product = nested.create<arith::MulFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value result = nested.create<arith::AddFOp>(
+              nestedLocation, product, arguments[2]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    AffineMap scoresIdentity = rewriter.getMultiDimIdentityMap(3);
+    SmallVector<Value> adjustedInputs{scores};
+    SmallVector<AffineMap> adjustedMaps{scoresIdentity};
+    if (mask) {
+      adjustedInputs.push_back(mask);
+      adjustedMaps.push_back(
+        AffineMap::get(3, 0, {queryIndex, keyIndex}, context));
+    }
+    adjustedMaps.push_back(scoresIdentity);
+    SmallVector<utils::IteratorType> parallelIterators(
+      3, utils::IteratorType::parallel);
+    Value adjustedEmpty =
+      createEmpty(scoresType, ValueRange{one, querySequence, keySequence});
+    const double scale = operation.getScale().convertToDouble();
+    scores =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          adjustedInputs,
+          ValueRange{adjustedEmpty},
+          adjustedMaps,
+          parallelIterators,
+          [scale, hasMask = static_cast<bool>(mask)](
+            OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value factor = nested.create<arith::ConstantOp>(
+              nestedLocation, nested.getF32FloatAttr(scale));
+            Value result = nested.create<arith::MulFOp>(
+              nestedLocation, arguments[0], factor);
+            if (hasMask) {
+              result = nested.create<arith::AddFOp>(
+                nestedLocation, result, arguments[1]);
+            }
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    auto reducedType = RankedTensorType::get(
+      {queryHeads, queryType.getShape()[1]}, rewriter.getF32Type());
+    AffineMap reducedMap = AffineMap::get(3, 0, {head, queryIndex}, context);
+    SmallVector<utils::IteratorType> reductionIterators = {
+      utils::IteratorType::parallel,
+      utils::IteratorType::parallel,
+      utils::IteratorType::reduction};
+    Value reducedEmpty =
+      createEmpty(reducedType, ValueRange{one, querySequence});
+    Value negativeInfinity = rewriter.create<arith::ConstantOp>(
+      location,
+      rewriter.getF32FloatAttr(-std::numeric_limits<float>::infinity()));
+    Value initializedMaximum =
+      rewriter.create<linalg::FillOp>(location, negativeInfinity, reducedEmpty)
+        .getResult(0);
+    Value maximum =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          reducedType,
+          ValueRange{scores},
+          ValueRange{initializedMaximum},
+          ArrayRef<AffineMap>{scoresIdentity, reducedMap},
+          reductionIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value result = nested.create<arith::MaximumFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value exponentEmpty =
+      createEmpty(scoresType, ValueRange{one, querySequence, keySequence});
+    Value exponent =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          ValueRange{scores, maximum},
+          ValueRange{exponentEmpty},
+          ArrayRef<AffineMap>{scoresIdentity, reducedMap, scoresIdentity},
+          parallelIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value shifted = nested.create<arith::SubFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value result = nested.create<math::ExpOp>(nestedLocation, shifted);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value sumEmpty = createEmpty(reducedType, ValueRange{one, querySequence});
+    Value initializedSum =
+      rewriter.create<linalg::FillOp>(location, zero, sumEmpty).getResult(0);
+    Value sum =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          reducedType,
+          ValueRange{exponent},
+          ValueRange{initializedSum},
+          ArrayRef<AffineMap>{scoresIdentity, reducedMap},
+          reductionIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value result = nested.create<arith::AddFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value probabilitiesEmpty =
+      createEmpty(scoresType, ValueRange{one, querySequence, keySequence});
+    Value probabilities =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          ValueRange{exponent, sum},
+          ValueRange{probabilitiesEmpty},
+          ArrayRef<AffineMap>{scoresIdentity, reducedMap, scoresIdentity},
+          parallelIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value result = nested.create<arith::DivFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    auto outputType = cast<RankedTensorType>(operation.getContext().getType());
+    Value contextEmpty =
+      createEmpty(outputType, ValueRange{one, querySequence, one});
+    Value initializedContext =
+      rewriter.create<linalg::FillOp>(location, zero, contextEmpty)
+        .getResult(0);
+    AffineExpr outputFeature = rewriter.getAffineDimExpr(2);
+    AffineExpr reduction = rewriter.getAffineDimExpr(3);
+    AffineMap probabilityMap =
+      AffineMap::get(4, 0, {head, queryIndex, reduction}, context);
+    AffineMap valueMap = AffineMap::get(
+      4, 0, {head.floorDiv(headsPerGroup), reduction, outputFeature}, context);
+    AffineMap outputMap =
+      AffineMap::get(4, 0, {head, queryIndex, outputFeature}, context);
+    Value result =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          outputType,
+          ValueRange{probabilities, totalValue},
+          ValueRange{initializedContext},
+          ArrayRef<AffineMap>{probabilityMap, valueMap, outputMap},
+          contractionIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value product = nested.create<arith::MulFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value result = nested.create<arith::AddFOp>(
+              nestedLocation, product, arguments[2]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    SmallVector<Value> replacements;
+    replacements.push_back(
+      convertNCNNLayout(rewriter, location, result, outputType));
+    if (operation.getKvCache()) {
+      SmallVector<Value> caches{totalKey, totalValue};
+      for (auto [cache, cacheResult] :
+           llvm::zip_equal(caches, operation.getCacheResults())) {
+        replacements.push_back(
+          convertNCNNLayout(rewriter,
+                            location,
+                            cache,
+                            cast<RankedTensorType>(cacheResult.getType())));
+      }
+    }
+    rewriter.replaceOp(operation, replacements);
+    return success();
+  }
+};
+
 class ConvertGELU final : public OpConversionPattern<GELUOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
@@ -4637,6 +4920,7 @@ class ConvertNCNNToTosaPass final
                  ConvertLayerNorm,
                  ConvertEmbed,
                  ConvertMultiHeadAttention,
+                 ConvertSDPA,
                  ConvertGELU,
                  ConvertBatchNorm,
                  ConvertPermute,
@@ -4695,6 +4979,7 @@ class ConvertNCNNToTosaPass final
                         LayerNormOp,
                         EmbedOp,
                         MultiHeadAttentionOp,
+                        SDPAOp,
                         GELUOp,
                         BatchNormOp,
                         PermuteOp,

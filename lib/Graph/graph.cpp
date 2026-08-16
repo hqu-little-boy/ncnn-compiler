@@ -638,6 +638,30 @@ decode_multi_head_attention_params(const ParamDict& params) {
                                   .int8_scale_term = *int8_scale_term};
 }
 
+std::expected<SDPAParams, std::string> decode_sdpa_params(
+  const ParamDict& params) {
+  auto attentionMask = decode_int_param(params, 5, 0, "attn_mask");
+  auto scale = decode_float_param(params, 6, 0.0F, "scale");
+  auto kvCache = decode_int_param(params, 7, 0, "kv_cache");
+  auto int8ScaleTerm = decode_int_param(params, 18, 0, "int8_scale_term");
+  if (!attentionMask || !scale || !kvCache || !int8ScaleTerm) {
+    return std::unexpected(!attentionMask ? attentionMask.error()
+                           : !scale       ? scale.error()
+                           : !kvCache     ? kvCache.error()
+                                          : int8ScaleTerm.error());
+  }
+  if ((*attentionMask != 0 && *attentionMask != 1) ||
+      (*kvCache != 0 && *kvCache != 1)) {
+    return std::unexpected("SDPA attn_mask and kv_cache must be 0 or 1");
+  }
+  if (*int8ScaleTerm != 0) {
+    return std::unexpected("quantized SDPA is unsupported");
+  }
+  return SDPAParams{.has_attention_mask = *attentionMask == 1,
+                    .scale = *scale,
+                    .kv_cache = *kvCache == 1};
+}
+
 std::expected<GemmParams, std::string> decode_gemm_params(
   const ParamDict& params) {
   GemmParams result;
@@ -1302,6 +1326,58 @@ std::expected<Tensor, std::string> load_weight(
   return tensor;
 }
 
+std::expected<Tensor, std::string> promote_float16_to_float32(
+  const Tensor& source) {
+  if (source.get_dtype() != DataType::Float16) {
+    return source;
+  }
+  std::vector<std::byte> data(source.element_count() * sizeof(float));
+  std::span<const std::byte> input = source.get_data();
+  for (std::size_t index = 0; index < source.element_count(); ++index) {
+    const std::uint16_t half =
+      static_cast<std::uint16_t>(input[index * 2]) |
+      (static_cast<std::uint16_t>(input[(index * 2) + 1]) << 8);
+    const std::uint32_t sign =
+      static_cast<std::uint32_t>(half & UINT16_C(0x8000)) << 16;
+    std::uint32_t exponent = (half >> 10) & UINT16_C(0x1f);
+    std::uint32_t significand = half & UINT16_C(0x03ff);
+    std::uint32_t bits;
+    if (exponent == 0) {
+      if (significand == 0) {
+        bits = sign;
+      } else {
+        int unbiasedExponent = -14;
+        while ((significand & UINT32_C(0x0400)) == 0) {
+          significand <<= 1;
+          --unbiasedExponent;
+        }
+        significand &= UINT32_C(0x03ff);
+        bits = sign |
+               (static_cast<std::uint32_t>(unbiasedExponent + 127) << 23) |
+               (significand << 13);
+      }
+    } else if (exponent == UINT32_C(0x1f)) {
+      bits = sign | UINT32_C(0x7f800000) | (significand << 13);
+    } else {
+      bits = sign | ((exponent + UINT32_C(112)) << 23) | (significand << 13);
+    }
+    for (unsigned byte = 0; byte < sizeof(float); ++byte) {
+      data[(index * sizeof(float)) + byte] =
+        static_cast<std::byte>(bits >> (byte * 8));
+    }
+  }
+  Tensor result;
+  auto contents =
+    result.set_contents(std::vector<std::int64_t>(source.get_shape().begin(),
+                                                  source.get_shape().end()),
+                        DataType::Float32,
+                        std::move(data));
+  if (!contents) {
+    return std::unexpected(contents.error());
+  }
+  return result;
+}
+
 std::expected<void, std::string> load_convolution_weights(Layer& layer,
                                                           BinCursor& cursor) {
   auto decoded = decode_convolution_params(layer.get_params());
@@ -1802,7 +1878,11 @@ std::expected<void, std::string> load_gemm_weights(Layer& layer,
     if (!bias) {
       return std::unexpected(std::format("Gemm C: {}", bias.error()));
     }
-    layer.add_weight(std::move(*bias));
+    auto promoted = promote_float16_to_float32(*bias);
+    if (!promoted) {
+      return std::unexpected(std::format("Gemm C: {}", promoted.error()));
+    }
+    layer.add_weight(std::move(*promoted));
   }
   if (params->int8_scale_term != 0) {
     auto scale = load_weight(cursor, 1, 1, {1});

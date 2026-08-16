@@ -11,6 +11,7 @@
 #include <numeric>
 #include <random>
 #include <set>
+#include <utility>
 
 #include "net.h"
 
@@ -370,6 +371,133 @@ int CompiledModel::run_three_inputs_three_outputs(
                                           first_output.data(),
                                           second_output.data(),
                                           third_output.data());
+}
+
+int CompiledModel::run_formula_decoder(
+  std::span<const float> memory,
+  std::span<const float> embedding,
+  std::span<const float> mask,
+  std::span<const std::int64_t> mask_shape,
+  std::span<const float> cache_k0,
+  std::span<const std::int64_t> cache_k0_shape,
+  std::span<const float> cache_v0,
+  std::span<const std::int64_t> cache_v0_shape,
+  std::span<const float> cache_k1,
+  std::span<const std::int64_t> cache_k1_shape,
+  std::span<const float> cache_v1,
+  std::span<const std::int64_t> cache_v1_shape,
+  std::span<float> output_cache_k0,
+  std::span<float> output_cache_v0,
+  std::span<float> output_cache_k1,
+  std::span<float> output_cache_v1,
+  std::span<float> logits) const {
+  const auto valid_cache = [](std::span<const float> cache,
+                              std::span<const std::int64_t> shape) {
+    return shape.size() == 3 && shape[0] == 16 && shape[1] > 0 &&
+           shape[2] == 24 &&
+           std::cmp_less_equal(
+             shape[1], std::numeric_limits<std::size_t>::max() / (16U * 24U)) &&
+           cache.size() == static_cast<std::size_t>(shape[1]) * 16U * 24U;
+  };
+  if (symbol_ == nullptr || memory.size() != 144U * 2048U ||
+      embedding.size() != 384 || mask_shape.size() != 2 || mask_shape[0] != 1 ||
+      mask_shape[1] <= 0 ||
+      mask.size() != static_cast<std::size_t>(mask_shape[1]) ||
+      !valid_cache(cache_k0, cache_k0_shape) ||
+      !valid_cache(cache_v0, cache_v0_shape) ||
+      !valid_cache(cache_k1, cache_k1_shape) ||
+      !valid_cache(cache_v1, cache_v1_shape) || logits.size() < 50000 ||
+      output_cache_k0.empty() || output_cache_v0.empty() ||
+      output_cache_k1.empty() || output_cache_v1.empty()) {
+    return -1;
+  }
+  using Function = int (*)(const float*,
+                           const float*,
+                           const float*,
+                           const std::int64_t*,
+                           const float*,
+                           const std::int64_t*,
+                           const float*,
+                           const std::int64_t*,
+                           const float*,
+                           const std::int64_t*,
+                           const float*,
+                           const std::int64_t*,
+                           float*,
+                           float*,
+                           float*,
+                           float*,
+                           float*,
+                           std::uint64_t,
+                           std::uint64_t,
+                           std::uint64_t,
+                           std::uint64_t);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(memory.data(),
+                                          embedding.data(),
+                                          mask.data(),
+                                          mask_shape.data(),
+                                          cache_k0.data(),
+                                          cache_k0_shape.data(),
+                                          cache_v0.data(),
+                                          cache_v0_shape.data(),
+                                          cache_k1.data(),
+                                          cache_k1_shape.data(),
+                                          cache_v1.data(),
+                                          cache_v1_shape.data(),
+                                          output_cache_k0.data(),
+                                          output_cache_v0.data(),
+                                          output_cache_k1.data(),
+                                          output_cache_v1.data(),
+                                          logits.data(),
+                                          output_cache_k0.size(),
+                                          output_cache_v0.size(),
+                                          output_cache_k1.size(),
+                                          output_cache_v1.size());
+}
+
+int CompiledModel::infer_formula_decoder(
+  std::span<const std::int64_t> mask_shape,
+  std::span<const std::int64_t> cache_k0_shape,
+  std::span<const std::int64_t> cache_v0_shape,
+  std::span<const std::int64_t> cache_k1_shape,
+  std::span<const std::int64_t> cache_v1_shape,
+  std::span<std::int64_t> output_cache_k0_shape,
+  std::span<std::int64_t> output_cache_v0_shape,
+  std::span<std::int64_t> output_cache_k1_shape,
+  std::span<std::int64_t> output_cache_v1_shape) const {
+  const auto valid_cache_shape = [](std::span<const std::int64_t> shape) {
+    return shape.size() == 3 && shape[0] == 16 && shape[1] > 0 &&
+           shape[2] == 24;
+  };
+  if (symbol_ == nullptr || mask_shape.size() != 2 || mask_shape[0] != 1 ||
+      !valid_cache_shape(cache_k0_shape) ||
+      !valid_cache_shape(cache_v0_shape) ||
+      !valid_cache_shape(cache_k1_shape) ||
+      !valid_cache_shape(cache_v1_shape) || output_cache_k0_shape.size() != 3 ||
+      output_cache_v0_shape.size() != 3 || output_cache_k1_shape.size() != 3 ||
+      output_cache_v1_shape.size() != 3) {
+    return -1;
+  }
+  using Function = int (*)(const std::int64_t*,
+                           const std::int64_t*,
+                           const std::int64_t*,
+                           const std::int64_t*,
+                           const std::int64_t*,
+                           std::int64_t*,
+                           std::int64_t*,
+                           std::int64_t*,
+                           std::int64_t*);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(mask_shape.data(),
+                                          cache_k0_shape.data(),
+                                          cache_v0_shape.data(),
+                                          cache_k1_shape.data(),
+                                          cache_v1_shape.data(),
+                                          output_cache_k0_shape.data(),
+                                          output_cache_v0_shape.data(),
+                                          output_cache_k1_shape.data(),
+                                          output_cache_v1_shape.data());
 }
 
 std::vector<float> make_random_input(std::size_t size,

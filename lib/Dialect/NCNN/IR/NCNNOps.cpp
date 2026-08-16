@@ -1034,6 +1034,111 @@ FailureOr<RankedTensorType> computeMultiHeadAttentionResult(
   return input;
 }
 
+FailureOr<SmallVector<RankedTensorType, 3>> computeSDPAResults(
+  std::optional<Location> location,
+  RankedTensorType query,
+  RankedTensorType key,
+  RankedTensorType value,
+  ValueRange optionalInputs,
+  double scale,
+  bool hasMask,
+  bool kvCache) {
+  auto fail =
+    [&](const Twine& message) -> FailureOr<SmallVector<RankedTensorType, 3>> {
+    return emitOptionalError(location, message);
+  };
+  for (auto [type, name] : {std::pair(query, "query"),
+                            std::pair(key, "key"),
+                            std::pair(value, "value")}) {
+    if (!type || !type.getElementType().isF32() || type.getRank() != 3) {
+      return fail(Twine("SDPA ") + name +
+                  " must be FP32 [heads,sequence,feature]");
+    }
+    if (type.isDynamicDim(0) || type.getShape()[0] <= 0 ||
+        type.isDynamicDim(2) || type.getShape()[2] <= 0 ||
+        (!type.isDynamicDim(1) && type.getShape()[1] <= 0)) {
+      return fail(Twine("SDPA ") + name +
+                  " requires static positive heads/features and a positive or "
+                  "dynamic sequence");
+    }
+  }
+  auto compatible = [](int64_t left, int64_t right) {
+    return ShapedType::isDynamic(left) || ShapedType::isDynamic(right) ||
+           left == right;
+  };
+  if (query.getShape()[2] != key.getShape()[2] ||
+      key.getShape()[0] != value.getShape()[0] ||
+      !compatible(key.getShape()[1], value.getShape()[1]) ||
+      query.getShape()[0] % key.getShape()[0] != 0) {
+    return fail(
+      "SDPA requires matching query/key features, matching key/value "
+      "heads and sequences, and divisible grouped heads");
+  }
+  if (!std::isfinite(scale) || scale <= 0.0) {
+    return fail("SDPA scale must be finite and positive");
+  }
+  const std::size_t expectedOptionalInputs =
+    static_cast<std::size_t>(hasMask) + (kvCache ? 2U : 0U);
+  if (optionalInputs.size() != expectedOptionalInputs) {
+    return fail("SDPA optional operands do not match has_mask and kv_cache");
+  }
+
+  int64_t totalKeySequence = key.getShape()[1];
+  const auto optionalIndex = static_cast<std::size_t>(hasMask);
+  if (kvCache) {
+    auto pastKey =
+      dyn_cast<RankedTensorType>(optionalInputs[optionalIndex].getType());
+    auto pastValue =
+      dyn_cast<RankedTensorType>(optionalInputs[optionalIndex + 1].getType());
+    if (!pastKey || !pastValue || !pastKey.getElementType().isF32() ||
+        !pastValue.getElementType().isF32() || pastKey.getRank() != 3 ||
+        pastValue.getRank() != 3 ||
+        pastKey.getShape()[0] != key.getShape()[0] ||
+        pastValue.getShape()[0] != value.getShape()[0] ||
+        pastKey.getShape()[2] != key.getShape()[2] ||
+        pastValue.getShape()[2] != value.getShape()[2] ||
+        !compatible(pastKey.getShape()[1], pastValue.getShape()[1]) ||
+        (!pastKey.isDynamicDim(1) && pastKey.getShape()[1] < 0) ||
+        (!pastValue.isDynamicDim(1) && pastValue.getShape()[1] < 0)) {
+      return fail(
+        "SDPA past key/value cache shapes must match current key/value");
+    }
+    if (key.isDynamicDim(1) || pastKey.isDynamicDim(1)) {
+      totalKeySequence = ShapedType::kDynamic;
+    } else {
+      auto total = checkedAdd(key.getShape()[1], pastKey.getShape()[1]);
+      if (failed(total)) {
+        return fail("SDPA total key sequence overflows");
+      }
+      totalKeySequence = *total;
+    }
+  }
+  if (hasMask) {
+    auto mask = dyn_cast<RankedTensorType>(optionalInputs.front().getType());
+    if (!mask || !mask.getElementType().isF32() || mask.getRank() != 2 ||
+        (!mask.isDynamicDim(0) && mask.getShape()[0] <= 0) ||
+        (!mask.isDynamicDim(1) && mask.getShape()[1] <= 0) ||
+        !compatible(mask.getShape()[0], query.getShape()[1]) ||
+        !compatible(mask.getShape()[1], totalKeySequence)) {
+      return fail("SDPA additive mask must be FP32 [query_seq,total_key_seq]");
+    }
+  }
+
+  SmallVector<RankedTensorType, 3> results;
+  results.push_back(RankedTensorType::get(
+    {query.getShape()[0], query.getShape()[1], value.getShape()[2]},
+    query.getElementType()));
+  if (kvCache) {
+    results.push_back(RankedTensorType::get(
+      {key.getShape()[0], totalKeySequence, key.getShape()[2]},
+      key.getElementType()));
+    results.push_back(RankedTensorType::get(
+      {value.getShape()[0], totalKeySequence, value.getShape()[2]},
+      value.getElementType()));
+  }
+  return results;
+}
+
 FailureOr<RankedTensorType> computeBinaryResult(
   std::optional<Location> location,
   ValueRange inputs,
@@ -1961,6 +2066,54 @@ LogicalResult MultiHeadAttentionOp::inferReturnTypeComponents(
   }
   inferredReturnShapes.emplace_back(result->getShape(),
                                     result->getElementType());
+  return success();
+}
+
+LogicalResult SDPAOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  SDPAOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto results =
+    computeSDPAResults(location,
+                       dyn_cast<RankedTensorType>(adaptor.getQuery().getType()),
+                       dyn_cast<RankedTensorType>(adaptor.getKey().getType()),
+                       dyn_cast<RankedTensorType>(adaptor.getValue().getType()),
+                       adaptor.getOptionalInputs(),
+                       adaptor.getScale().convertToDouble(),
+                       adaptor.getHasMask(),
+                       adaptor.getKvCache());
+  if (failed(results)) {
+    return failure();
+  }
+  for (RankedTensorType result : *results) {
+    inferredReturnShapes.emplace_back(result.getShape(),
+                                      result.getElementType());
+  }
+  return success();
+}
+
+LogicalResult SDPAOp::verify() {
+  auto expected =
+    computeSDPAResults(getLoc(),
+                       dyn_cast<RankedTensorType>(getQuery().getType()),
+                       dyn_cast<RankedTensorType>(getKey().getType()),
+                       dyn_cast<RankedTensorType>(getValue().getType()),
+                       getOptionalInputs(),
+                       getScale().convertToDouble(),
+                       getHasMask(),
+                       getKvCache());
+  if (failed(expected)) {
+    return failure();
+  }
+  if (getNumResults() != expected->size()) {
+    return emitOpError("result count does not match kv_cache");
+  }
+  for (auto [actual, inferred] : llvm::zip(getResultTypes(), *expected)) {
+    if (actual != inferred) {
+      return emitOpError("result types do not match inferred SDPA types");
+    }
+  }
   return success();
 }
 

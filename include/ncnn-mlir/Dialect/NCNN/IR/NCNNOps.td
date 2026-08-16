@@ -249,6 +249,26 @@ def NCNN_MultiHeadAttentionOp
   let results = (outs NCNN_RankedTensor:$output);
 }
 
+def NCNN_SDPAOp : NCNN_LayerOp<"sdpa", [InferTensorTypeAdaptor]> {
+  let summary = "FP32 scaled dot-product attention with grouped heads and cache.";
+  let description = [{
+    Query, current key, and current value use `[heads,sequence,feature]`.
+    `optional_inputs` is ordered as additive mask when `has_mask`, followed by
+    past key and past value when `kv_cache`. `cache_results` contains updated
+    key and value exactly when `kv_cache` is enabled.
+  }];
+  let arguments = (ins NCNN_RankedTensor:$query,
+    NCNN_RankedTensor:$key,
+    NCNN_RankedTensor:$value,
+    Variadic<NCNN_RankedTensor>:$optional_inputs,
+    F32Attr:$scale,
+    BoolAttr:$has_mask,
+    BoolAttr:$kv_cache);
+  let results = (outs NCNN_RankedTensor:$context,
+    Variadic<NCNN_RankedTensor>:$cache_results);
+  let hasVerifier = 1;
+}
+
 def NCNN_DetectionOutputOp
   : NCNN_LayerOp<"detection_output", [InferTensorTypeAdaptor]> {
   let summary = "Decode SSD boxes, apply per-class NMS, and emit detections.";

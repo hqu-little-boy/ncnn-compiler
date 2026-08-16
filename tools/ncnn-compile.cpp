@@ -216,6 +216,14 @@ struct Argument {
 };
 
 struct Manifest {
+  struct InputDimensionRelation {
+    std::uint32_t lhs_input;
+    std::uint32_t lhs_dimension;
+    std::uint32_t rhs_input;
+    std::uint32_t rhs_dimension;
+    std::int64_t offset;
+  };
+
   struct PrecisionPolicy {
     std::string storage;
     std::string complex_math;
@@ -236,6 +244,7 @@ struct Manifest {
   std::string function;
   std::vector<Argument> inputs;
   std::vector<Argument> outputs;
+  std::vector<InputDimensionRelation> input_dimension_relations;
   std::optional<PrecisionPolicy> precision_policy;
   std::optional<Target> target;
 };
@@ -499,6 +508,7 @@ int run(const std::vector<std::string>& command,
   Manifest manifest{.function = std::string(*function),
                     .inputs = {},
                     .outputs = {},
+                    .input_dimension_relations = {},
                     .precision_policy = std::nullopt,
                     .target = std::nullopt};
   if (auto* policy = object->getObject("precision_policy")) {
@@ -655,6 +665,40 @@ int run(const std::vector<std::string>& command,
   if (!parse_arguments("inputs", manifest.inputs) ||
       !parse_arguments("outputs", manifest.outputs)) {
     return std::unexpected("ABI manifest has invalid inputs or outputs");
+  }
+  if (auto* relations = object->getArray("input_dimension_relations")) {
+    for (llvm::json::Value& value : *relations) {
+      auto* relation = value.getAsObject();
+      if (relation == nullptr) {
+        return std::unexpected(
+          "ABI manifest has an invalid input dimension relation");
+      }
+      auto lhs_input = relation->getInteger("lhs_input");
+      auto lhs_dimension = relation->getInteger("lhs_dimension");
+      auto rhs_input = relation->getInteger("rhs_input");
+      auto rhs_dimension = relation->getInteger("rhs_dimension");
+      auto offset = relation->getInteger("offset");
+      if (!lhs_input || !lhs_dimension || !rhs_input || !rhs_dimension ||
+          !offset || !std::in_range<std::uint32_t>(*lhs_input) ||
+          !std::in_range<std::uint32_t>(*lhs_dimension) ||
+          !std::in_range<std::uint32_t>(*rhs_input) ||
+          !std::in_range<std::uint32_t>(*rhs_dimension) ||
+          std::cmp_greater_equal(*lhs_input, manifest.inputs.size()) ||
+          std::cmp_greater_equal(*rhs_input, manifest.inputs.size()) ||
+          std::cmp_greater_equal(*lhs_dimension,
+                                 manifest.inputs[*lhs_input].shape.size()) ||
+          std::cmp_greater_equal(*rhs_dimension,
+                                 manifest.inputs[*rhs_input].shape.size())) {
+        return std::unexpected(
+          "ABI manifest has an invalid input dimension relation");
+      }
+      manifest.input_dimension_relations.push_back(
+        {.lhs_input = static_cast<std::uint32_t>(*lhs_input),
+         .lhs_dimension = static_cast<std::uint32_t>(*lhs_dimension),
+         .rhs_input = static_cast<std::uint32_t>(*rhs_input),
+         .rhs_dimension = static_cast<std::uint32_t>(*rhs_dimension),
+         .offset = *offset});
+    }
   }
   for (const Argument& output : manifest.outputs) {
     if (output.shape_source_input >= 0 &&
@@ -820,6 +864,20 @@ int run(const std::vector<std::string>& command,
   object["function"] = manifest.function;
   object["inputs"] = arguments(manifest.inputs);
   object["outputs"] = arguments(manifest.outputs);
+  if (!manifest.input_dimension_relations.empty()) {
+    llvm::json::Array relations;
+    for (const Manifest::InputDimensionRelation& relation :
+         manifest.input_dimension_relations) {
+      llvm::json::Object relationObject;
+      relationObject["lhs_input"] = relation.lhs_input;
+      relationObject["lhs_dimension"] = relation.lhs_dimension;
+      relationObject["rhs_input"] = relation.rhs_input;
+      relationObject["rhs_dimension"] = relation.rhs_dimension;
+      relationObject["offset"] = relation.offset;
+      relations.push_back(std::move(relationObject));
+    }
+    object["input_dimension_relations"] = std::move(relations);
+  }
   if (manifest.precision_policy) {
     llvm::json::Object policy;
     policy["storage"] = manifest.precision_policy->storage;
@@ -919,6 +977,36 @@ std::string macro_name(const Manifest& manifest,
       return name;
     }(),
     manifest.outputs.size());
+  std::string functionMacro = manifest.function;
+  std::ranges::transform(
+    functionMacro, functionMacro.begin(), [](unsigned char character) {
+      return static_cast<char>(std::toupper(character));
+    });
+  if (!manifest.input_dimension_relations.empty()) {
+    contents += std::format("#define {}_INPUT_DIM_RELATION_COUNT {}\n",
+                            functionMacro,
+                            manifest.input_dimension_relations.size());
+    for (auto [index, relation] :
+         llvm::enumerate(manifest.input_dimension_relations)) {
+      const std::string prefix =
+        std::format("{}_INPUT_DIM_RELATION{}", functionMacro, index + 1);
+      contents += std::format(
+        "#define {}_LHS_INPUT {}\n#define {}_LHS_DIMENSION {}\n"
+        "#define {}_RHS_INPUT {}\n#define {}_RHS_DIMENSION {}\n"
+        "#define {}_OFFSET INT64_C({})\n",
+        prefix,
+        relation.lhs_input,
+        prefix,
+        relation.lhs_dimension,
+        prefix,
+        relation.rhs_input,
+        prefix,
+        relation.rhs_dimension,
+        prefix,
+        relation.offset);
+    }
+    contents += "\n";
+  }
   std::set<std::string> macros;
   for (const Argument* argument : [&] {
          std::vector<const Argument*> result;

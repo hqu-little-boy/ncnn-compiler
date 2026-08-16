@@ -181,6 +181,12 @@ struct MultiHeadAttentionParams {
   std::int64_t int8_scale_term = 0;
 };
 
+struct SDPAParams {
+  bool has_attention_mask = false;
+  float scale = 0.0F;
+  bool kv_cache = false;
+};
+
 struct GemmParams {
   float alpha = 1.0F;
   float beta = 1.0F;
@@ -252,6 +258,9 @@ decode_layer_norm_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<MultiHeadAttentionParams, std::string>
 decode_multi_head_attention_params(const ParamDict& params);
+
+[[nodiscard]] std::expected<SDPAParams, std::string> decode_sdpa_params(
+  const ParamDict& params);
 
 [[nodiscard]] std::expected<GemmParams, std::string> decode_gemm_params(
   const ParamDict& params);

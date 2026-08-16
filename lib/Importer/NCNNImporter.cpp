@@ -62,11 +62,7 @@ namespace {
 using ImportHandler = ImportResult (*)(ImportContext&, const LayerContext&);
 
 std::optional<std::int64_t> infer_input_channels(
-  const ncnn_graph::Graph& source, const ncnn_graph::Layer& input) {
-  if (input.get_outputs().empty()) {
-    return std::nullopt;
-  }
-  const std::string_view output = input.get_outputs().front();
+  const ncnn_graph::Graph& source, std::string_view output) {
   for (const ncnn_graph::Layer& layer : source.get_layers()) {
     if (std::ranges::find(layer.get_inputs(), output) ==
           layer.get_inputs().end() ||
@@ -96,10 +92,13 @@ void infer_input_shapes(const ncnn_graph::Graph& source,
     if (!omitted) {
       continue;
     }
-    const std::int64_t channels = infer_input_channels(source, layer)
-                                    .value_or(ncnn_importer::kDynamicExtent);
-    options.input_shapes.push_back(
-      {channels, ncnn_importer::kDynamicExtent, ncnn_importer::kDynamicExtent});
+    for (std::string_view output : layer.get_outputs()) {
+      const std::int64_t channels = infer_input_channels(source, output)
+                                      .value_or(ncnn_importer::kDynamicExtent);
+      options.input_shapes.push_back({channels,
+                                      ncnn_importer::kDynamicExtent,
+                                      ncnn_importer::kDynamicExtent});
+    }
   }
 }
 
@@ -126,6 +125,7 @@ std::span<const ImportEntry> importers() noexcept {
     ImportEntry{.type = "Eltwise", .handler = import_eltwise},
     ImportEntry{.type = "MultiHeadAttention",
                 .handler = import_multi_head_attention},
+    ImportEntry{.type = "SDPA", .handler = import_sdpa},
     ImportEntry{.type = "DetectionOutput", .handler = import_detection_output},
     ImportEntry{.type = "HardSigmoid", .handler = import_hard_sigmoid},
     ImportEntry{.type = "HardSwish", .handler = import_hard_swish},
@@ -370,23 +370,27 @@ ImportContext::run(const ncnn_graph::Graph& source) {
       }
     }
   }
-  const std::size_t input_count = source.layer_count_of("Input");
-  const std::size_t omitted_input_count = std::ranges::count_if(
-    source.get_layers(), [](const ncnn_graph::Layer& layer) {
-      if (layer.get_type() != "Input") {
-        return false;
+  std::size_t input_count = 0;
+  std::size_t omitted_input_count = 0;
+  for (const ncnn_graph::Layer& layer : source.get_layers()) {
+    if (layer.get_type() != "Input") {
+      continue;
+    }
+    input_count += layer.get_outputs().size();
+    bool omitted = true;
+    for (int id : {0, 1, 2, 11}) {
+      const ncnn_graph::ParamValue* value = find_param(layer.get_params(), id);
+      if (value != nullptr &&
+          (value->get_kind() != ncnn_graph::ParamValue::Kind::Int ||
+           *value->get_int() != 0)) {
+        omitted = false;
+        break;
       }
-      for (int id : {0, 1, 2, 11}) {
-        const ncnn_graph::ParamValue* value =
-          find_param(layer.get_params(), id);
-        if (value != nullptr &&
-            (value->get_kind() != ncnn_graph::ParamValue::Kind::Int ||
-             *value->get_int() != 0)) {
-          return false;
-        }
-      }
-      return true;
-    });
+    }
+    if (omitted) {
+      omitted_input_count += layer.get_outputs().size();
+    }
+  }
   if (options_.dynamic_rank) {
     return std::unexpected(
       ImportError(0,
@@ -399,7 +403,7 @@ ImportContext::run(const ncnn_graph::Graph& source) {
       ImportError(0,
                   "Input",
                   "input-shape",
-                  "input shape override requires exactly one Input layer"));
+                  "input shape override requires exactly one Input output"));
   }
   if (options_.input_shape && !options_.input_shapes.empty()) {
     return std::unexpected(ImportError(0,
@@ -417,7 +421,7 @@ ImportContext::run(const ncnn_graph::Graph& source) {
       "Input",
       "input-shape",
       std::format("input shape override count {} matches neither {} Input "
-                  "layers nor {} Inputs with omitted dimensions",
+                  "outputs nor {} outputs with omitted dimensions",
                   options_.input_shapes.size(),
                   input_count,
                   omitted_input_count)));
@@ -696,14 +700,21 @@ std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError> import_graph(
   mlir::MLIRContext& context,
   const ImportOptions& options) {
   if (options.dynamic_rank) {
-    if (graph.layer_count_of("Input") != 1 || options.input_shape ||
+    std::size_t inputCount = 0;
+    for (const ncnn_graph::Layer& layer : graph.get_layers()) {
+      if (layer.get_type() == "Input") {
+        inputCount += layer.get_outputs().size();
+      }
+    }
+    if (inputCount != 1 || options.input_shape ||
         !options.input_shapes.empty() || options.rank_specialization ||
         !options.input_dim_constraints.empty()) {
       return std::unexpected(ImportError(
         0,
         "Input",
         "input-shape",
-        "dynamic rank requires exactly one Input and no fixed shape override"));
+        "dynamic rank requires exactly one Input output and no fixed shape "
+        "override"));
     }
     for (const ncnn_graph::Layer& layer : graph.get_layers()) {
       if (layer.get_type() != "Input" && layer.get_type() != "ReLU") {

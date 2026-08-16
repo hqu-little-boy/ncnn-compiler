@@ -141,8 +141,11 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
         function->setAttr(name, value);
       }
     }
-    if (Attribute constraints = model->getAttr("ncnn.shape_constraints")) {
-      function->setAttr("ncnn.shape_constraints", constraints);
+    for (StringRef name :
+         {"ncnn.shape_constraints", "ncnn.input_dim_relations"}) {
+      if (Attribute value = model->getAttr(name)) {
+        function->setAttr(name, value);
+      }
     }
     if (Attribute rank = model->getAttr("ncnn.rank_variant")) {
       function->setAttr("ncnn.rank_variant", rank);
@@ -178,6 +181,71 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
     }
     for (Operation& operation : model.getBody().front()) {
       if (operation.getNumOperands() == 0 || operation.getNumResults() == 0) {
+        continue;
+      }
+      if (auto sdpa = dyn_cast<SDPAOp>(operation)) {
+        auto query = shapeTransforms.find(sdpa.getQuery());
+        auto key = shapeTransforms.find(sdpa.getKey());
+        auto value = shapeTransforms.find(sdpa.getValue());
+        if (query != shapeTransforms.end() && value != shapeTransforms.end()) {
+          shapeTransforms[sdpa.getContext()] = {
+            .dimensions = {query->second.dimensions[0],
+                           query->second.dimensions[1],
+                           value->second.dimensions[2]}};
+        }
+        if (sdpa.getKvCache()) {
+          const unsigned cacheInput = sdpa.getHasMask() ? 1 : 0;
+          auto pastKey =
+            shapeTransforms.find(sdpa.getOptionalInputs()[cacheInput]);
+          auto pastValue =
+            shapeTransforms.find(sdpa.getOptionalInputs()[cacheInput + 1]);
+          if (pastKey == shapeTransforms.end() ||
+              pastValue == shapeTransforms.end()) {
+            continue;
+          }
+          auto dimension = [&](
+                             Value tensor,
+                             DenseMap<Value, ShapeTransform>::iterator found,
+                             unsigned index) -> std::optional<ShapeDimension> {
+            auto type = cast<RankedTensorType>(tensor.getType());
+            if (!type.isDynamicDim(index)) {
+              return ShapeDimension{
+                .expression = ShapeExpr::constant(type.getShape()[index]),
+                .v1 = std::nullopt};
+            }
+            if (found == shapeTransforms.end()) {
+              return std::nullopt;
+            }
+            return found->second.dimensions[index];
+          };
+          auto sumSequence = [](const ShapeDimension& past,
+                                const ShapeDimension& current) {
+            return ShapeDimension{
+              .expression = ShapeExpr::binary(
+                ShapeExprOpcode::Add, past.expression, current.expression),
+              .v1 = std::nullopt};
+          };
+          auto keyHead = dimension(sdpa.getKey(), key, 0);
+          auto keySequence = dimension(sdpa.getKey(), key, 1);
+          auto keyFeature = dimension(sdpa.getKey(), key, 2);
+          auto valueHead = dimension(sdpa.getValue(), value, 0);
+          auto valueSequence = dimension(sdpa.getValue(), value, 1);
+          auto valueFeature = dimension(sdpa.getValue(), value, 2);
+          if (!keyHead || !keySequence || !keyFeature || !valueHead ||
+              !valueSequence || !valueFeature) {
+            continue;
+          }
+          shapeTransforms[sdpa.getCacheResults()[0]] = {
+            .dimensions = {
+              *keyHead,
+              sumSequence(pastKey->second.dimensions[1], *keySequence),
+              *keyFeature}};
+          shapeTransforms[sdpa.getCacheResults()[1]] = {
+            .dimensions = {
+              *valueHead,
+              sumSequence(pastValue->second.dimensions[1], *valueSequence),
+              *valueFeature}};
+        }
         continue;
       }
       for (Value result : operation.getResults()) {

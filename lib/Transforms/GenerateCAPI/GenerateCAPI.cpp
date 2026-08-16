@@ -39,6 +39,14 @@ struct ArgumentInfo {
   uint32_t dataDependentDimMask;
 };
 
+struct InputDimRelation {
+  unsigned lhsInput;
+  unsigned lhsDim;
+  unsigned rhsInput;
+  unsigned rhsDim;
+  int64_t offset;
+};
+
 std::optional<StringRef> abiElementType(Type type) {
   if (type.isF16()) {
     return "f16";
@@ -85,6 +93,8 @@ constexpr StringLiteral kShapeCarrierIndicesAttr =
   "ncnn.c_api.shape_carrier_indices";
 constexpr StringLiteral kInputShapeConstraintsAttr =
   "ncnn.c_api.input_shape_constraints";
+constexpr StringLiteral kInputDimRelationsAttr =
+  "ncnn.c_api.input_dim_relations";
 constexpr StringLiteral kRankVariantNamesAttr = "ncnn.c_api.rank_variant_names";
 constexpr StringLiteral kRankVariantTypesAttr = "ncnn.c_api.rank_variant_types";
 
@@ -326,6 +336,25 @@ class GenerateCAPIPass final
           return function.emitOpError("has invalid input shape constraints");
         }
         constraintsByInput[constraint.getInput()].push_back(constraint);
+      }
+    }
+    auto relationAttrs =
+      function->getAttrOfType<ArrayAttr>("ncnn.input_dim_relations");
+    if (relationAttrs) {
+      for (Attribute attribute : relationAttrs) {
+        auto values = dyn_cast<DenseI64ArrayAttr>(attribute);
+        if (!values || values.size() != 5) {
+          return function.emitOpError("has invalid input dimension relations");
+        }
+        ArrayRef<int64_t> relation = values.asArrayRef();
+        if (relation[0] < 0 || relation[1] < 0 || relation[2] < 0 ||
+            relation[3] < 0 ||
+            std::cmp_greater_equal(relation[0], inputs.size()) ||
+            std::cmp_greater_equal(relation[2], inputs.size()) ||
+            relation[1] >= inputs[relation[0]].type.getRank() ||
+            relation[3] >= inputs[relation[2]].type.getRank()) {
+          return function.emitOpError("has invalid input dimension relations");
+        }
       }
     }
     for (const ArgumentInfo& output : outputs) {
@@ -578,6 +607,7 @@ class GenerateCAPIPass final
     function->removeAttr("llvm.emit_c_interface");
     function->removeAttr("ncnn.entry_point");
     function->removeAttr("ncnn.shape_constraints");
+    function->removeAttr("ncnn.input_dim_relations");
     Builder builder(function.getContext());
     getOperation()->setAttr(kExportNameAttr, builder.getStringAttr(exportName));
     getOperation()->setAttr(kInternalNameAttr,
@@ -597,6 +627,10 @@ class GenerateCAPIPass final
     getOperation()->setAttr(kInputShapeConstraintsAttr,
                             shapeConstraints
                               ? static_cast<Attribute>(shapeConstraints)
+                              : builder.getArrayAttr({}));
+    getOperation()->setAttr(kInputDimRelationsAttr,
+                            relationAttrs
+                              ? static_cast<Attribute>(relationAttrs)
                               : builder.getArrayAttr({}));
     return success();
   }
@@ -626,6 +660,22 @@ class GenerateCAPIPass final
     manifest["function"] = exportName;
     manifest["inputs"] = std::move(inputArray);
     manifest["outputs"] = std::move(outputArray);
+    if (auto relations =
+          function->getAttrOfType<ArrayAttr>("ncnn.input_dim_relations")) {
+      llvm::json::Array serializedRelations;
+      for (Attribute attribute : relations) {
+        ArrayRef<int64_t> relation =
+          cast<DenseI64ArrayAttr>(attribute).asArrayRef();
+        llvm::json::Object object;
+        object["lhs_input"] = relation[0];
+        object["lhs_dimension"] = relation[1];
+        object["rhs_input"] = relation[2];
+        object["rhs_dimension"] = relation[3];
+        object["offset"] = relation[4];
+        serializedRelations.push_back(std::move(object));
+      }
+      manifest["input_dimension_relations"] = std::move(serializedRelations);
+    }
     auto precision = function->getAttrOfType<StringAttr>("ncnn.precision");
     if (precision &&
         (precision.getValue() == "fp16" || precision.getValue() == "bf16")) {
@@ -700,6 +750,11 @@ class FinalizeCAPIPass final
       kShapeCarrierIndicesAttr);
     auto inputShapeConstraints =
       getOperation()->getAttrOfType<ArrayAttr>(kInputShapeConstraintsAttr);
+    auto inputDimRelationAttrs =
+      getOperation()->getAttrOfType<ArrayAttr>(kInputDimRelationsAttr);
+    if (!inputDimRelationAttrs) {
+      inputDimRelationAttrs = ArrayAttr::get(getOperation().getContext(), {});
+    }
     auto internal =
       internalName ? getOperation().lookupSymbol<LLVM::LLVMFuncOp>(internalName)
                    : LLVM::LLVMFuncOp();
@@ -888,6 +943,35 @@ class FinalizeCAPIPass final
       }
       constraintsByInput[constraint.getInput()].push_back(constraint);
     }
+    SmallVector<InputDimRelation> inputDimRelations;
+    inputDimRelations.reserve(inputDimRelationAttrs.size());
+    for (Attribute attribute : inputDimRelationAttrs) {
+      auto values = dyn_cast<DenseI64ArrayAttr>(attribute);
+      if (!values || values.size() != 5) {
+        getOperation().emitError(
+          "has invalid prepared input dimension relation metadata");
+        signalPassFailure();
+        return;
+      }
+      ArrayRef<int64_t> relation = values.asArrayRef();
+      if (relation[0] < 0 || relation[1] < 0 || relation[2] < 0 ||
+          relation[3] < 0 ||
+          std::cmp_greater_equal(relation[0], inputIndices.size()) ||
+          std::cmp_greater_equal(relation[2], inputIndices.size()) ||
+          relation[1] >= argumentTypes[inputIndices[relation[0]]].getRank() ||
+          relation[3] >= argumentTypes[inputIndices[relation[2]]].getRank()) {
+        getOperation().emitError(
+          "has invalid prepared input dimension relation metadata");
+        signalPassFailure();
+        return;
+      }
+      inputDimRelations.push_back(
+        {.lhsInput = static_cast<unsigned>(relation[0]),
+         .lhsDim = static_cast<unsigned>(relation[1]),
+         .rhsInput = static_cast<unsigned>(relation[2]),
+         .rhsDim = static_cast<unsigned>(relation[3]),
+         .offset = relation[4]});
+    }
     SmallVector<unsigned> wrapperOrder;
     for (unsigned index = 0; index < argumentTypes.size(); ++index) {
       if (!outputs.contains(index)) {
@@ -963,6 +1047,7 @@ class FinalizeCAPIPass final
     Block* shapeValidBlock = &wrapper.getBody().emplaceBlock();
     Block* constraintValidBlock = &wrapper.getBody().emplaceBlock();
     Block* arithmeticValidBlock = &wrapper.getBody().emplaceBlock();
+    Block* relationValidBlock = &wrapper.getBody().emplaceBlock();
     Block* outputShapeValidBlock = &wrapper.getBody().emplaceBlock();
 
     builder.setInsertionPointToStart(entry);
@@ -1009,6 +1094,7 @@ class FinalizeCAPIPass final
     Value invalidOutputShape;
     Value invalidConstraint;
     Value arithmeticInvalid;
+    Value invalidRelation;
     auto i64Type = builder.getI64Type();
     auto overflowResultType = LLVM::LLVMStructType::getLiteral(
       getOperation().getContext(), {i64Type, builder.getI1Type()});
@@ -1219,6 +1305,40 @@ class FinalizeCAPIPass final
           internal.getLoc(), builder.getI64IntegerAttr(elementBytes)));
       arithmeticInvalid = mergeFlag(arithmeticInvalid, inputBytes.second);
     }
+    auto loadWrapperInputDimension = [&](unsigned inputIndex,
+                                         unsigned dimension) -> Value {
+      unsigned functionIndex = inputIndices[inputIndex];
+      MemRefType type = argumentTypes[functionIndex];
+      if (!type.isDynamicDim(dimension)) {
+        return builder.create<LLVM::ConstantOp>(
+          internal.getLoc(),
+          builder.getI64IntegerAttr(type.getShape()[dimension]));
+      }
+      Value shape = entry->getArgument(wrapperShapeIndices[functionIndex]);
+      Value address = builder.create<LLVM::GEPOp>(
+        internal.getLoc(),
+        pointerType,
+        i64Type,
+        shape,
+        ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimension)});
+      return builder.create<LLVM::LoadOp>(internal.getLoc(), i64Type, address);
+    };
+    for (const InputDimRelation& relation : inputDimRelations) {
+      Value lhs = loadWrapperInputDimension(relation.lhsInput, relation.lhsDim);
+      Value rhs = loadWrapperInputDimension(relation.rhsInput, relation.rhsDim);
+      Value offset = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getI64IntegerAttr(relation.offset));
+      Value sum = builder.create<LLVM::SAddWithOverflowOp>(
+        internal.getLoc(), overflowResultType, rhs, offset);
+      Value expected = builder.create<LLVM::ExtractValueOp>(
+        internal.getLoc(), sum, ArrayRef<int64_t>{0});
+      Value overflow = builder.create<LLVM::ExtractValueOp>(
+        internal.getLoc(), sum, ArrayRef<int64_t>{1});
+      arithmeticInvalid = mergeFlag(arithmeticInvalid, overflow);
+      Value mismatch = builder.create<LLVM::ICmpOp>(
+        internal.getLoc(), LLVM::ICmpPredicate::ne, lhs, expected);
+      invalidRelation = mergeFlag(invalidRelation, mismatch);
+    }
     Value capacityInvalid;
     for (auto [outputIndex, functionIndex] :
          llvm::enumerate(outputArgumentIndices)) {
@@ -1319,6 +1439,10 @@ class FinalizeCAPIPass final
       arithmeticInvalid = builder.create<LLVM::ConstantOp>(
         internal.getLoc(), builder.getBoolAttr(false));
     }
+    if (!invalidRelation) {
+      invalidRelation = builder.create<LLVM::ConstantOp>(
+        internal.getLoc(), builder.getBoolAttr(false));
+    }
     if (!invalidOutputShape) {
       invalidOutputShape = builder.create<LLVM::ConstantOp>(
         internal.getLoc(), builder.getBoolAttr(false));
@@ -1344,6 +1468,13 @@ class FinalizeCAPIPass final
                                    arithmeticValidBlock,
                                    ValueRange{});
     builder.setInsertionPointToStart(arithmeticValidBlock);
+    builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                   invalidRelation,
+                                   shapeErrorBlock,
+                                   ValueRange{},
+                                   relationValidBlock,
+                                   ValueRange{});
+    builder.setInsertionPointToStart(relationValidBlock);
     builder.create<LLVM::CondBrOp>(internal.getLoc(),
                                    invalidOutputShape,
                                    shapeErrorBlock,
@@ -1501,6 +1632,7 @@ class FinalizeCAPIPass final
       Block* shapeValid = &shapeFunction.getBody().emplaceBlock();
       Block* shapeConstraintValid = &shapeFunction.getBody().emplaceBlock();
       Block* shapeArithmeticValid = &shapeFunction.getBody().emplaceBlock();
+      Block* shapeRelationValid = &shapeFunction.getBody().emplaceBlock();
       Block* shapeReturn = &shapeFunction.getBody().emplaceBlock();
       builder.setInsertionPointToStart(shapeEntry);
       Value shapeNullPointer =
@@ -1541,6 +1673,7 @@ class FinalizeCAPIPass final
       Value outputShapeInvalid;
       Value shapeConstraintInvalid;
       Value shapeArithmeticInvalid;
+      Value shapeRelationInvalid;
       for (auto [inputIndex, functionIndex] : llvm::enumerate(inputIndices)) {
         if (!argumentTypes[functionIndex].hasStaticShape()) {
           Value inputShape = shapeEntry->getArgument(shapeArgumentIndex++);
@@ -1621,6 +1754,40 @@ class FinalizeCAPIPass final
           shapeArithmeticInvalid =
             mergeFlag(shapeArithmeticInvalid, inputBytes.second);
         }
+      }
+      auto loadShapeInputDimension = [&](unsigned inputIndex,
+                                         unsigned dimension) -> Value {
+        unsigned functionIndex = inputIndices[inputIndex];
+        MemRefType type = argumentTypes[functionIndex];
+        if (!type.isDynamicDim(dimension)) {
+          return builder.create<LLVM::ConstantOp>(
+            internal.getLoc(),
+            builder.getI64IntegerAttr(type.getShape()[dimension]));
+        }
+        Value address = builder.create<LLVM::GEPOp>(
+          internal.getLoc(),
+          pointerType,
+          i64Type,
+          shapeInputs[inputIndex],
+          ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(dimension)});
+        return builder.create<LLVM::LoadOp>(
+          internal.getLoc(), i64Type, address);
+      };
+      for (const InputDimRelation& relation : inputDimRelations) {
+        Value lhs = loadShapeInputDimension(relation.lhsInput, relation.lhsDim);
+        Value rhs = loadShapeInputDimension(relation.rhsInput, relation.rhsDim);
+        Value offset = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getI64IntegerAttr(relation.offset));
+        Value sum = builder.create<LLVM::SAddWithOverflowOp>(
+          internal.getLoc(), overflowResultType, rhs, offset);
+        Value expected = builder.create<LLVM::ExtractValueOp>(
+          internal.getLoc(), sum, ArrayRef<int64_t>{0});
+        Value overflow = builder.create<LLVM::ExtractValueOp>(
+          internal.getLoc(), sum, ArrayRef<int64_t>{1});
+        shapeArithmeticInvalid = mergeFlag(shapeArithmeticInvalid, overflow);
+        Value mismatch = builder.create<LLVM::ICmpOp>(
+          internal.getLoc(), LLVM::ICmpPredicate::ne, lhs, expected);
+        shapeRelationInvalid = mergeFlag(shapeRelationInvalid, mismatch);
       }
       for (auto [outputIndex, functionIndex] :
            llvm::enumerate(outputArgumentIndices)) {
@@ -1710,6 +1877,10 @@ class FinalizeCAPIPass final
         shapeArithmeticInvalid = builder.create<LLVM::ConstantOp>(
           internal.getLoc(), builder.getBoolAttr(false));
       }
+      if (!shapeRelationInvalid) {
+        shapeRelationInvalid = builder.create<LLVM::ConstantOp>(
+          internal.getLoc(), builder.getBoolAttr(false));
+      }
       if (!outputShapeInvalid) {
         outputShapeInvalid = builder.create<LLVM::ConstantOp>(
           internal.getLoc(), builder.getBoolAttr(false));
@@ -1736,6 +1907,13 @@ class FinalizeCAPIPass final
                                      ValueRange{});
       builder.setInsertionPointToStart(shapeArithmeticValid);
       builder.create<LLVM::CondBrOp>(internal.getLoc(),
+                                     shapeRelationInvalid,
+                                     shapeInvalidError,
+                                     ValueRange{},
+                                     shapeRelationValid,
+                                     ValueRange{});
+      builder.setInsertionPointToStart(shapeRelationValid);
+      builder.create<LLVM::CondBrOp>(internal.getLoc(),
                                      outputShapeInvalid,
                                      shapeInvalidError,
                                      ValueRange{},
@@ -1756,6 +1934,7 @@ class FinalizeCAPIPass final
     getOperation()->removeAttr(kOutputShapeVersionsAttr);
     getOperation()->removeAttr(kShapeCarrierIndicesAttr);
     getOperation()->removeAttr(kInputShapeConstraintsAttr);
+    // Keep relation metadata visible in the generated artifact IR.
   }
 
  private:

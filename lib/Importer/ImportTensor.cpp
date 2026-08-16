@@ -346,17 +346,19 @@ ImportResult import_permute(ImportContext& importer,
   auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
   if (!inputType ||
       !((inputType.getRank() == 2 && (*order == 0 || *order == 1)) ||
-        (inputType.getRank() == 3 && *order == 4))) {
+        (inputType.getRank() == 3 && (*order == 2 || *order == 4)))) {
     return std::unexpected(make_error(
-      context, "Permute supports rank-2 order 0/1 and rank-3 order 4 only"));
+      context, "Permute supports rank-2 order 0/1 and rank-3 order 2/4 only"));
   }
   const std::array<int64_t, 2> identity{0, 1};
   const std::array<int64_t, 2> transpose{1, 0};
+  const std::array<int64_t, 3> chwToHcw{1, 0, 2};
   const std::array<int64_t, 3> hcw{2, 0, 1};
   std::span<const int64_t> permutation =
-    inputType.getRank() == 3 ? std::span<const int64_t>(hcw)
-    : *order == 0            ? std::span<const int64_t>(identity)
-                             : std::span<const int64_t>(transpose);
+    inputType.getRank() == 3 && *order == 2 ? std::span<const int64_t>(chwToHcw)
+    : inputType.getRank() == 3              ? std::span<const int64_t>(hcw)
+    : *order == 0                           ? std::span<const int64_t>(identity)
+                  : std::span<const int64_t>(transpose);
   auto& builder = importer.builder();
   mlir::ncnn::PermuteOp::Properties properties;
   properties.permutation = builder.getDenseI64ArrayAttr(permutation);

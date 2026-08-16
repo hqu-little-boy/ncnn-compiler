@@ -1,3 +1,5 @@
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -5,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <ranges>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -505,6 +508,84 @@ TEST_F(NcnnImporterTest, PreservesStaticAndDynamicInputsInSourceOrder) {
     shape_is(result_type_by_name(imported->get(), "first"), {3, 4, 5}));
   EXPECT_TRUE(shape_is(result_type_by_name(imported->get(), "second"),
                        {1, mlir::ShapedType::kDynamic, 8}));
+}
+
+TEST_F(NcnnImporterTest, ExpandsMultiOutputInputForCachedSDPA) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(
+    make_layer("Input",
+               "decoder_inputs",
+               {},
+               {"query", "key", "value", "mask", "past_key", "past_value"}));
+  auto sdpa =
+    make_layer("SDPA",
+               "attention",
+               {"query", "key", "value", "mask", "past_key", "past_value"},
+               {"context", "present_key", "present_value"});
+  ncnn_graph::ParamDict params;
+  params.set_value(5, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(7, ncnn_graph::ParamValue::make_int(1));
+  sdpa.set_params(std::move(params));
+  graph.add_layer(std::move(sdpa));
+  graph.set_input_blob_names(
+    {"query", "key", "value", "mask", "past_key", "past_value"});
+  graph.set_output_blob_names({"context", "present_key", "present_value"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions options;
+  options.input_shapes = {
+    {8, -1, 48}, {2, 1, 48}, {2, 1, 64}, {-1, -1}, {2, -1, 48}, {2, -1, 64}};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::InputOp>(imported->get()), 6);
+  EXPECT_EQ(count_ops<mlir::ncnn::SDPAOp>(imported->get()), 1);
+  std::set<std::string> layerNames;
+  imported->get().walk([&](mlir::ncnn::InputOp input) {
+    layerNames.insert(input.getLayerName().str());
+  });
+  EXPECT_EQ(layerNames.size(), 6U);
+  auto models = imported->get().getOps<mlir::ncnn::ModelOp>();
+  ASSERT_NE(models.begin(), models.end());
+  auto relations =
+    (*models.begin())
+      ->getAttrOfType<mlir::ArrayAttr>("ncnn.input_dim_relations");
+  ASSERT_TRUE(relations);
+  ASSERT_EQ(relations.size(), 2U);
+  EXPECT_TRUE(std::ranges::equal(
+    mlir::cast<mlir::DenseI64ArrayAttr>(relations[0]).asArrayRef(),
+    std::array<std::int64_t, 5>{3, 1, 4, 1, 1}));
+  EXPECT_TRUE(std::ranges::equal(
+    mlir::cast<mlir::DenseI64ArrayAttr>(relations[1]).asArrayRef(),
+    std::array<std::int64_t, 5>{4, 1, 5, 1, 0}));
+  imported->get().walk([&](mlir::ncnn::SDPAOp op) {
+    ASSERT_EQ(op.getNumResults(), 3U);
+    EXPECT_TRUE(
+      shape_is(mlir::cast<mlir::RankedTensorType>(op.getContext().getType()),
+               {8, mlir::ShapedType::kDynamic, 64}));
+    EXPECT_TRUE(shape_is(
+      mlir::cast<mlir::RankedTensorType>(op.getCacheResults()[0].getType()),
+      {2, mlir::ShapedType::kDynamic, 48}));
+    EXPECT_TRUE(shape_is(
+      mlir::cast<mlir::RankedTensorType>(op.getCacheResults()[1].getType()),
+      {2, mlir::ShapedType::kDynamic, 64}));
+    EXPECT_FLOAT_EQ(op.getScale().convertToFloat(), 1.0F / std::sqrt(48.0F));
+  });
+}
+
+TEST_F(NcnnImporterTest, ImportsThreeToOneSDPA) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "inputs", {}, {"query", "key", "value"}));
+  graph.add_layer(
+    make_layer("SDPA", "attention", {"query", "key", "value"}, {"context"}));
+  graph.set_input_blob_names({"query", "key", "value"});
+  graph.set_output_blob_names({"context"});
+  graph.set_weights_loaded(true);
+  ncnn_importer::ImportOptions options;
+  options.input_shapes = {{4, -1, 32}, {2, 5, 32}, {2, 5, 24}};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_TRUE(shape_is(output_type(imported->get()),
+                       {4, mlir::ShapedType::kDynamic, 24}));
 }
 
 TEST_F(NcnnImporterTest, ImportsReshapeShapeExpressionReferences) {
@@ -1087,6 +1168,102 @@ TEST_F(NcnnImporterTest, ImportsQuantizedGemmWithSignedConstantB) {
   EXPECT_TRUE(shape_is(output_type(imported->get()), {2, 3}));
 }
 
+TEST_F(NcnnImporterTest, ImportsConstantGemmWithDynamicM) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "input", {}, {"matrix"}));
+  auto gemm = make_layer("Gemm", "projection", {"matrix"}, {"output"});
+  ncnn_graph::ParamDict params;
+  params.set_value(3, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(5, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(6, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(8, ncnn_graph::ParamValue::make_int(16));
+  params.set_value(9, ncnn_graph::ParamValue::make_int(384));
+  params.set_value(10, ncnn_graph::ParamValue::make_int(-1));
+  gemm.set_params(std::move(params));
+  gemm.add_weight(make_float_tensor({16, 384}, 0.0F));
+  graph.add_layer(std::move(gemm));
+  graph.set_input_blob_names({"matrix"});
+  graph.set_output_blob_names({"output"});
+  graph.set_weights_loaded(true);
+  ncnn_importer::ImportOptions options;
+  options.input_shape = {-1, 384};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_TRUE(
+    shape_is(output_type(imported->get()), {mlir::ShapedType::kDynamic, 16}));
+}
+
+TEST_F(NcnnImporterTest, ImportsFp16StorageGemmWithRowBias) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "input", {}, {"matrix"}));
+  auto gemm = make_layer("Gemm", "projection", {"matrix"}, {"output"});
+  ncnn_graph::ParamDict params;
+  params.set_value(3, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(5, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(6, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(8, ncnn_graph::ParamValue::make_int(3));
+  params.set_value(9, ncnn_graph::ParamValue::make_int(4));
+  params.set_value(10, ncnn_graph::ParamValue::make_int(4));
+  gemm.set_params(std::move(params));
+  gemm.add_weight(make_tensor({3, 4}, ncnn_graph::DataType::Float16));
+  gemm.add_weight(make_float_tensor({3}, 0.0F));
+  graph.add_layer(std::move(gemm));
+  graph.set_input_blob_names({"matrix"});
+  graph.set_output_blob_names({"output"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions options;
+  options.input_shape = {-1, 4};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::GemmOp>(imported->get()), 1);
+  EXPECT_TRUE(
+    shape_is(output_type(imported->get()), {mlir::ShapedType::kDynamic, 3}));
+  imported->get().walk([](mlir::ncnn::ConstOp constant) {
+    EXPECT_TRUE(constant.getOutput().getType().getElementType().isF32());
+  });
+}
+
+TEST_F(NcnnImporterTest, RejectsFp16GemmBiasAndQuantizationScale) {
+  auto make_gemm_graph = [](bool quantized, bool fp16_bias, bool fp16_scale) {
+    ncnn_graph::Graph graph;
+    graph.add_layer(make_layer("Input", "input", {}, {"matrix"}));
+    auto gemm = make_layer("Gemm", "projection", {"matrix"}, {"output"});
+    ncnn_graph::ParamDict params;
+    params.set_value(3, ncnn_graph::ParamValue::make_int(1));
+    params.set_value(5, ncnn_graph::ParamValue::make_int(1));
+    params.set_value(6, ncnn_graph::ParamValue::make_int(1));
+    params.set_value(8, ncnn_graph::ParamValue::make_int(3));
+    params.set_value(9, ncnn_graph::ParamValue::make_int(4));
+    params.set_value(10, ncnn_graph::ParamValue::make_int(4));
+    params.set_value(18, ncnn_graph::ParamValue::make_int(quantized ? 2 : 0));
+    gemm.set_params(std::move(params));
+    gemm.add_weight(make_tensor(
+      {3, 4},
+      quantized ? ncnn_graph::DataType::Int8 : ncnn_graph::DataType::Float16));
+    gemm.add_weight(make_tensor({3},
+                                fp16_bias ? ncnn_graph::DataType::Float16
+                                          : ncnn_graph::DataType::Float32));
+    if (quantized) {
+      gemm.add_weight(make_tensor({1},
+                                  fp16_scale ? ncnn_graph::DataType::Float16
+                                             : ncnn_graph::DataType::Float32));
+    }
+    graph.add_layer(std::move(gemm));
+    graph.set_input_blob_names({"matrix"});
+    graph.set_output_blob_names({"output"});
+    graph.set_weights_loaded(true);
+    return graph;
+  };
+
+  ncnn_importer::ImportOptions options;
+  options.input_shape = {-1, 4};
+  auto fp16_bias = import(make_gemm_graph(false, true, false), options);
+  EXPECT_FALSE(fp16_bias.has_value());
+  auto fp16_scale = import(make_gemm_graph(true, false, true), options);
+  EXPECT_FALSE(fp16_scale.has_value());
+}
+
 TEST_F(NcnnImporterTest, ImportsPPOCRV5AttentionOperators) {
   ncnn_graph::Graph graph;
   auto input = make_layer("Input", "input", {}, {"data"});
@@ -1173,7 +1350,7 @@ TEST_F(NcnnImporterTest, ImportsRankTwoLayerNormWithoutAffineSize) {
   EXPECT_TRUE(shape_is(output_type(imported->get()), {3, 4}));
 }
 
-TEST_F(NcnnImporterTest, ImportsRankThreePermuteOrderFour) {
+TEST_F(NcnnImporterTest, ImportsRankThreePermuteOrdersTwoAndFour) {
   ncnn_graph::Graph graph;
   auto input = make_layer("Input", "input", {}, {"data"});
   ncnn_graph::ParamDict inputParams;
@@ -1184,7 +1361,7 @@ TEST_F(NcnnImporterTest, ImportsRankThreePermuteOrderFour) {
   graph.add_layer(std::move(input));
   auto permute = make_layer("Permute", "permute", {"data"}, {"out"});
   ncnn_graph::ParamDict params;
-  params.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  params.set_value(0, ncnn_graph::ParamValue::make_int(2));
   permute.set_params(std::move(params));
   graph.add_layer(std::move(permute));
   graph.set_input_blob_names({"data"});
@@ -1192,6 +1369,16 @@ TEST_F(NcnnImporterTest, ImportsRankThreePermuteOrderFour) {
   graph.set_weights_loaded(true);
 
   auto imported = import(graph);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_TRUE(shape_is(output_type(imported->get()), {3, 2, 4}));
+
+  auto layers = std::vector<ncnn_graph::Layer>(graph.get_layers().begin(),
+                                               graph.get_layers().end());
+  params = ncnn_graph::ParamDict{};
+  params.set_value(0, ncnn_graph::ParamValue::make_int(4));
+  layers[1].set_params(std::move(params));
+  graph.set_layers(std::move(layers));
+  imported = import(graph);
   ASSERT_TRUE(imported) << imported.error().to_string();
   EXPECT_TRUE(shape_is(output_type(imported->get()), {4, 2, 3}));
 }

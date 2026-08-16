@@ -2,10 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <numeric>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -26,6 +29,93 @@ std::string read_text(const std::filesystem::path& path) {
   std::ifstream stream(path);
   return {std::istreambuf_iterator<char>(stream),
           std::istreambuf_iterator<char>()};
+}
+
+constexpr std::size_t kFormulaMemoryElements = 144 * 2048;
+constexpr std::size_t kFormulaEmbeddingElements = 384;
+constexpr std::size_t kFormulaCacheStride = 16 * 24;
+constexpr std::size_t kFormulaClasses = 50000;
+constexpr std::array<std::string_view, 5> kFormulaDecoderOutputs{
+  "out_cache_k0", "out_cache_v0", "out_cache_k1", "out_cache_v1", "out0"};
+
+struct FormulaDecoderResult {
+  std::array<std::vector<float>, 4> caches;
+  std::vector<float> logits;
+};
+
+FormulaDecoderResult make_decoder_result(std::size_t sequence_length) {
+  FormulaDecoderResult result;
+  for (auto& cache : result.caches) {
+    cache.resize(sequence_length * kFormulaCacheStride);
+  }
+  result.logits.resize(kFormulaClasses);
+  return result;
+}
+
+std::expected<std::vector<std::vector<float>>, std::string>
+run_formula_decoder_reference(std::span<const float> memory,
+                              std::span<const float> embedding,
+                              std::span<const float> mask,
+                              const std::array<std::vector<float>, 4>& caches,
+                              int cache_length) {
+  const std::array inputs{
+    ReferenceInput("in0", TensorShape(2048, 144), memory),
+    ReferenceInput("in1", TensorShape(384, 1), embedding),
+    ReferenceInput("in2", TensorShape(cache_length + 1, 1), mask),
+    ReferenceInput("cache_k0", TensorShape(24, cache_length, 16), caches[0]),
+    ReferenceInput("cache_v0", TensorShape(24, cache_length, 16), caches[1]),
+    ReferenceInput("cache_k1", TensorShape(24, cache_length, 16), caches[2]),
+    ReferenceInput("cache_v1", TensorShape(24, cache_length, 16), caches[3]),
+  };
+  return run_ncnn_reference(PP_FORMULANET_PLUS_S_DECODER_PARAM_PATH,
+                            PP_FORMULANET_PLUS_S_DECODER_BIN_PATH,
+                            inputs,
+                            kFormulaDecoderOutputs);
+}
+
+int run_formula_decoder_compiled(
+  const CompiledModel& compiled,
+  std::span<const float> memory,
+  std::span<const float> embedding,
+  std::span<const float> mask,
+  const std::array<std::vector<float>, 4>& caches,
+  int cache_length,
+  FormulaDecoderResult& result) {
+  const std::array<std::int64_t, 2> mask_shape{1, cache_length + 1};
+  const std::array<std::int64_t, 3> cache_shape{16, cache_length, 24};
+  return compiled.run_formula_decoder(memory,
+                                      embedding,
+                                      mask,
+                                      mask_shape,
+                                      caches[0],
+                                      cache_shape,
+                                      caches[1],
+                                      cache_shape,
+                                      caches[2],
+                                      cache_shape,
+                                      caches[3],
+                                      cache_shape,
+                                      result.caches[0],
+                                      result.caches[1],
+                                      result.caches[2],
+                                      result.caches[3],
+                                      result.logits);
+}
+
+std::string without_whitespace(std::string text) {
+  std::erase_if(text,
+                [](unsigned char value) { return std::isspace(value) != 0; });
+  return text;
+}
+
+std::size_t count_substring(std::string_view text, std::string_view needle) {
+  std::size_t count = 0;
+  for (std::size_t offset = 0;
+       (offset = text.find(needle, offset)) != std::string_view::npos;
+       offset += needle.size()) {
+    ++count;
+  }
+  return count;
 }
 
 TEST(NumericalModel, PPLCNetDocOriMatchesNcnn) {
@@ -813,6 +903,347 @@ TEST(NumericalModel, PPFormulaNetArtifactsRemainStaticSpecialization) {
   EXPECT_NE(linalg_ir.find("tensor<1x384x384xf32>"), std::string::npos);
   EXPECT_NE(linalg_ir.find("tensor<144x2048xf32>"), std::string::npos);
   EXPECT_EQ(linalg_ir.find("?"), std::string::npos);
+}
+
+TEST(NumericalModel, PPFormulaNetPlusSDecoderSingleStepMatchesNcnn) {
+  const std::vector<float> memory =
+    make_random_input(kFormulaMemoryElements, 0x4445434FU, -0.01F, 0.01F);
+  const std::vector<float> embedding =
+    make_random_input(kFormulaEmbeddingElements, 0x454D4244U, -0.05F, 0.05F);
+  const std::vector<float> mask{-8.0F, 0.0F};
+  std::array<std::vector<float>, 4> caches;
+  for (std::size_t index = 0; index < caches.size(); ++index) {
+    caches[index] = make_random_input(
+      kFormulaCacheStride, 0x43414348U + index, -0.01F, 0.01F);
+  }
+
+  CompiledModel infer(PP_FORMULANET_PLUS_S_DECODER_LIBRARY_PATH,
+                      "pp_formulanet_plus_s_decoder_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+  const std::array<std::int64_t, 2> mask_shape{1, 2};
+  const std::array<std::int64_t, 3> cache_shape{16, 1, 24};
+  std::array<std::array<std::int64_t, 3>, 4> inferred{};
+  ASSERT_EQ(infer.infer_formula_decoder(mask_shape,
+                                        cache_shape,
+                                        cache_shape,
+                                        cache_shape,
+                                        cache_shape,
+                                        inferred[0],
+                                        inferred[1],
+                                        inferred[2],
+                                        inferred[3]),
+            0);
+  for (const auto& shape : inferred) {
+    EXPECT_EQ(shape, (std::array<std::int64_t, 3>{16, 2, 24}));
+  }
+
+  CompiledModel compiled(PP_FORMULANET_PLUS_S_DECODER_LIBRARY_PATH,
+                         "pp_formulanet_plus_s_decoder");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  FormulaDecoderResult actual = make_decoder_result(2);
+  ASSERT_EQ(run_formula_decoder_compiled(
+              compiled, memory, embedding, mask, caches, 1, actual),
+            0);
+
+  const std::vector<float> mismatched_mask(3, 0.0F);
+  const std::array<std::int64_t, 2> mismatched_mask_shape{1, 3};
+  FormulaDecoderResult rejected = make_decoder_result(2);
+  for (auto& cache : rejected.caches) {
+    std::ranges::fill(cache, 123.0F);
+  }
+  std::ranges::fill(rejected.logits, 123.0F);
+  EXPECT_EQ(compiled.run_formula_decoder(memory,
+                                         embedding,
+                                         mismatched_mask,
+                                         mismatched_mask_shape,
+                                         caches[0],
+                                         cache_shape,
+                                         caches[1],
+                                         cache_shape,
+                                         caches[2],
+                                         cache_shape,
+                                         caches[3],
+                                         cache_shape,
+                                         rejected.caches[0],
+                                         rejected.caches[1],
+                                         rejected.caches[2],
+                                         rejected.caches[3],
+                                         rejected.logits),
+            2);
+  for (const auto& cache : rejected.caches) {
+    EXPECT_TRUE(
+      std::ranges::all_of(cache, [](float value) { return value == 123.0F; }));
+  }
+  EXPECT_TRUE(std::ranges::all_of(rejected.logits,
+                                  [](float value) { return value == 123.0F; }));
+  EXPECT_EQ(infer.infer_formula_decoder(mismatched_mask_shape,
+                                        cache_shape,
+                                        cache_shape,
+                                        cache_shape,
+                                        cache_shape,
+                                        inferred[0],
+                                        inferred[1],
+                                        inferred[2],
+                                        inferred[3]),
+            2);
+
+  const std::array<std::int64_t, 3> mismatched_cache_shape{16, 2, 24};
+  const std::vector<float> mismatched_cache(2U * kFormulaCacheStride, 0.0F);
+  EXPECT_EQ(compiled.run_formula_decoder(memory,
+                                         embedding,
+                                         mask,
+                                         mask_shape,
+                                         caches[0],
+                                         cache_shape,
+                                         mismatched_cache,
+                                         mismatched_cache_shape,
+                                         caches[2],
+                                         cache_shape,
+                                         caches[3],
+                                         cache_shape,
+                                         rejected.caches[0],
+                                         rejected.caches[1],
+                                         rejected.caches[2],
+                                         rejected.caches[3],
+                                         rejected.logits),
+            2);
+  for (const auto& cache : rejected.caches) {
+    EXPECT_TRUE(
+      std::ranges::all_of(cache, [](float value) { return value == 123.0F; }));
+  }
+  EXPECT_EQ(infer.infer_formula_decoder(mask_shape,
+                                        cache_shape,
+                                        mismatched_cache_shape,
+                                        cache_shape,
+                                        cache_shape,
+                                        inferred[0],
+                                        inferred[1],
+                                        inferred[2],
+                                        inferred[3]),
+            2);
+
+  FormulaDecoderResult short_output = make_decoder_result(2);
+  short_output.caches[0].pop_back();
+  EXPECT_EQ(run_formula_decoder_compiled(
+              compiled, memory, embedding, mask, caches, 1, short_output),
+            5);
+
+  const auto expected =
+    run_formula_decoder_reference(memory, embedding, mask, caches, 1);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), 5U);
+  for (std::size_t index = 0; index < 4; ++index) {
+    ASSERT_EQ((*expected)[index].size(), 2U * kFormulaCacheStride);
+  }
+  ASSERT_EQ((*expected)[4].size(), kFormulaClasses);
+  for (std::size_t index = 0; index < 4; ++index) {
+    EXPECT_TRUE(
+      compare_values(actual.caches[index], (*expected)[index], 2.0e-3F))
+      << kFormulaDecoderOutputs[index];
+  }
+  EXPECT_TRUE(compare_values(actual.logits, (*expected)[4], 2.0e-3F));
+  EXPECT_TRUE(std::ranges::all_of(
+    actual.logits, [](float value) { return std::isfinite(value); }));
+
+  FormulaDecoderResult repeated = make_decoder_result(2);
+  ASSERT_EQ(run_formula_decoder_compiled(
+              compiled, memory, embedding, mask, caches, 1, repeated),
+            0);
+  EXPECT_EQ(repeated.caches, actual.caches);
+  EXPECT_EQ(repeated.logits, actual.logits);
+}
+
+TEST(NumericalModel, PPFormulaNetPlusSM11M17M18ContinuousDecodeMatchesNcnn) {
+  const TensorShape image_shape(384, 384, 1);
+  const std::vector<float> image =
+    make_random_input(384U * 384U, 0x4D313131U, -0.01F, 0.01F);
+  const ReferenceModel encoder_reference(
+    PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH,
+    PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH,
+    "in0",
+    "out0",
+    image_shape);
+  const auto reference_memory = run_ncnn_reference(encoder_reference, image);
+  ASSERT_TRUE(reference_memory.has_value()) << reference_memory.error();
+
+  CompiledModel encoder(PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH,
+                        "pp_formulanet_plus_s_encoder");
+  CompiledModel embed(PP_FORMULANET_PLUS_S_EMBED_LIBRARY_PATH,
+                      "pp_formulanet_plus_s_embed");
+  CompiledModel decoder(PP_FORMULANET_PLUS_S_DECODER_LIBRARY_PATH,
+                        "pp_formulanet_plus_s_decoder");
+  CompiledModel infer(PP_FORMULANET_PLUS_S_DECODER_LIBRARY_PATH,
+                      "pp_formulanet_plus_s_decoder_infer_output_shapes");
+  ASSERT_TRUE(encoder.valid()) << encoder.error();
+  ASSERT_TRUE(embed.valid()) << embed.error();
+  ASSERT_TRUE(decoder.valid()) << decoder.error();
+  ASSERT_TRUE(infer.valid()) << infer.error();
+
+  std::vector<float> compiled_memory(kFormulaMemoryElements);
+  ASSERT_EQ(encoder.run(image, compiled_memory), 0);
+  ASSERT_TRUE(compare_values(compiled_memory, *reference_memory, 1.0e-4F));
+
+  std::array<std::vector<float>, 4> compiled_caches;
+  std::array<std::vector<float>, 4> reference_caches;
+  for (std::size_t index = 0; index < compiled_caches.size(); ++index) {
+    compiled_caches[index].assign(kFormulaCacheStride, 0.0F);
+    reference_caches[index].assign(kFormulaCacheStride, 0.0F);
+  }
+
+  std::int32_t token = 1;
+  constexpr std::array<std::string_view, 1> kEmbedOutputs{"out0"};
+  for (int step = 0; step < 2; ++step) {
+    const int cache_length = step + 1;
+    const std::array<std::int32_t, 1> token_input{token};
+    const std::array<std::int32_t, 1> position_input{step};
+    const std::array embed_inputs{
+      ReferenceInput("in0", TensorShape(1), token_input),
+      ReferenceInput("in1", TensorShape(1), position_input),
+    };
+    const auto reference_embedding =
+      run_ncnn_reference(PP_FORMULANET_PLUS_S_EMBED_PARAM_PATH,
+                         PP_FORMULANET_PLUS_S_EMBED_BIN_PATH,
+                         embed_inputs,
+                         kEmbedOutputs);
+    ASSERT_TRUE(reference_embedding.has_value()) << reference_embedding.error();
+    std::vector<float> compiled_embedding(kFormulaEmbeddingElements);
+    ASSERT_EQ(embed.run_two_integer_inputs(
+                token_input, position_input, compiled_embedding),
+              0);
+    ASSERT_TRUE(
+      compare_values(compiled_embedding, (*reference_embedding)[0], 1.0e-4F));
+
+    const std::vector<float> mask(cache_length + 1, 0.0F);
+    const auto expected =
+      run_formula_decoder_reference(*reference_memory,
+                                    (*reference_embedding)[0],
+                                    mask,
+                                    reference_caches,
+                                    cache_length);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+
+    const std::array<std::int64_t, 2> mask_shape{1, cache_length + 1};
+    const std::array<std::int64_t, 3> cache_shape{16, cache_length, 24};
+    std::array<std::array<std::int64_t, 3>, 4> inferred{};
+    ASSERT_EQ(infer.infer_formula_decoder(mask_shape,
+                                          cache_shape,
+                                          cache_shape,
+                                          cache_shape,
+                                          cache_shape,
+                                          inferred[0],
+                                          inferred[1],
+                                          inferred[2],
+                                          inferred[3]),
+              0);
+    for (const auto& shape : inferred) {
+      EXPECT_EQ(shape, (std::array<std::int64_t, 3>{16, cache_length + 1, 24}));
+    }
+
+    FormulaDecoderResult actual = make_decoder_result(cache_length + 1);
+    ASSERT_EQ(run_formula_decoder_compiled(decoder,
+                                           compiled_memory,
+                                           compiled_embedding,
+                                           mask,
+                                           compiled_caches,
+                                           cache_length,
+                                           actual),
+              0);
+    // Encoder, embedding, and recurrent cache differences accumulate here.
+    constexpr float kContinuousTolerance = 5.0e-3F;
+    for (std::size_t index = 0; index < 4; ++index) {
+      ASSERT_TRUE(compare_values(
+        actual.caches[index], (*expected)[index], kContinuousTolerance))
+        << "step " << step << ' ' << kFormulaDecoderOutputs[index];
+      compiled_caches[index] = std::move(actual.caches[index]);
+      reference_caches[index] = (*expected)[index];
+    }
+    EXPECT_TRUE(
+      compare_values(actual.logits, (*expected)[4], kContinuousTolerance))
+      << "step " << step;
+    token = static_cast<std::int32_t>(std::ranges::max_element((*expected)[4]) -
+                                      (*expected)[4].begin());
+  }
+}
+
+TEST(NumericalModel, PPFormulaNetPlusSDecoderArtifactsDescribeDynamicCacheAbi) {
+  EXPECT_GT(
+    std::filesystem::file_size(PP_FORMULANET_PLUS_S_DECODER_LIBRARY_PATH), 0U);
+  const std::string manifest =
+    without_whitespace(read_text(PP_FORMULANET_PLUS_S_DECODER_MANIFEST_PATH));
+  EXPECT_EQ(count_substring(manifest, "\"name\":\"input"), 7U);
+  EXPECT_EQ(count_substring(manifest, "\"name\":\"output"), 5U);
+  EXPECT_EQ(count_substring(manifest, "\"dynamic_dim_mask\":2"), 9U);
+  EXPECT_EQ(count_substring(manifest, "\"shape_program_version\":2"), 4U);
+  EXPECT_EQ(count_substring(manifest, "\"lhs_input\":"), 4U);
+  EXPECT_NE(manifest.find("\"input_dimension_relations\":"), std::string::npos);
+  constexpr std::array<std::array<int, 3>, 4> kRelations{
+    std::array{2, 3, 1},
+    std::array{3, 4, 0},
+    std::array{2, 5, 1},
+    std::array{5, 6, 0},
+  };
+  for (const auto& [lhs, rhs, offset] : kRelations) {
+    const std::string relation = std::format(
+      "{{\"lhs_dimension\":1,\"lhs_input\":{},\"offset\":{},"
+      "\"rhs_dimension\":1,\"rhs_input\":{}}}",
+      lhs,
+      offset,
+      rhs);
+    EXPECT_NE(manifest.find(relation), std::string::npos) << relation;
+  }
+  for (int input = 3; input <= 6; ++input) {
+    const std::string program =
+      std::format("\"shape_program\":[[0,16],[2,1,{},1,0,1],[0,24]]", input);
+    EXPECT_NE(manifest.find(program), std::string::npos) << program;
+  }
+
+  const std::string header =
+    read_text(PP_FORMULANET_PLUS_S_DECODER_HEADER_PATH);
+  for (int input = 3; input <= 7; ++input) {
+    EXPECT_NE(header.find(std::format(
+                "PP_FORMULANET_PLUS_S_DECODER_INPUT{}_DYNAMIC_DIM_MASK "
+                "UINT32_C(0x2)",
+                input)),
+              std::string::npos);
+  }
+  for (int output = 1; output <= 4; ++output) {
+    EXPECT_NE(header.find(std::format(
+                "PP_FORMULANET_PLUS_S_DECODER_OUTPUT{}_DYNAMIC_DIM_MASK "
+                "UINT32_C(0x2)",
+                output)),
+              std::string::npos);
+  }
+  EXPECT_NE(header.find("pp_formulanet_plus_s_decoder_infer_output_shapes"),
+            std::string::npos);
+  EXPECT_NE(
+    header.find("PP_FORMULANET_PLUS_S_DECODER_INPUT_DIM_RELATION_COUNT 4"),
+    std::string::npos);
+  for (int input = 3; input <= 7; ++input) {
+    EXPECT_NE(header.find(std::format("input{}_shape", input)),
+              std::string::npos);
+  }
+  EXPECT_NE(header.find("uint64_t output1_capacity"), std::string::npos);
+  EXPECT_NE(header.find("uint64_t output4_capacity"), std::string::npos);
+
+  const std::string ncnn_ir =
+    read_text(PP_FORMULANET_PLUS_S_DECODER_NCNN_IR_PATH);
+  EXPECT_NE(ncnn_ir.find("ncnn.sdpa"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("ncnn.input_dim_relations"), std::string::npos);
+  const std::string tosa_ir =
+    read_text(PP_FORMULANET_PLUS_S_DECODER_TOSA_IR_PATH);
+  EXPECT_EQ(tosa_ir.find("ncnn.sdpa"), std::string::npos);
+  const std::string linalg_ir =
+    read_text(PP_FORMULANET_PLUS_S_DECODER_LINALG_IR_PATH);
+  for (const std::string_view operation : {"ncnn.binary",
+                                           "ncnn.gelu",
+                                           "ncnn.gemm",
+                                           "ncnn.layer_norm",
+                                           "ncnn.permute",
+                                           "ncnn.reshape",
+                                           "ncnn.sdpa",
+                                           "ncnn.split"}) {
+    EXPECT_EQ(linalg_ir.find(operation), std::string::npos) << operation;
+  }
 }
 
 TEST(NumericalModel, PPFormulaNetPlusSEncoderFp16StorageMatchesNcnn) {

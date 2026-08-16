@@ -127,6 +127,33 @@ class CompiledModel final {
                                      std::span<float> first_output,
                                      std::span<float> second_output,
                                      std::span<float> third_output) const;
+  int run_formula_decoder(std::span<const float> memory,
+                          std::span<const float> embedding,
+                          std::span<const float> mask,
+                          std::span<const std::int64_t> mask_shape,
+                          std::span<const float> cache_k0,
+                          std::span<const std::int64_t> cache_k0_shape,
+                          std::span<const float> cache_v0,
+                          std::span<const std::int64_t> cache_v0_shape,
+                          std::span<const float> cache_k1,
+                          std::span<const std::int64_t> cache_k1_shape,
+                          std::span<const float> cache_v1,
+                          std::span<const std::int64_t> cache_v1_shape,
+                          std::span<float> output_cache_k0,
+                          std::span<float> output_cache_v0,
+                          std::span<float> output_cache_k1,
+                          std::span<float> output_cache_v1,
+                          std::span<float> logits) const;
+  int infer_formula_decoder(
+    std::span<const std::int64_t> mask_shape,
+    std::span<const std::int64_t> cache_k0_shape,
+    std::span<const std::int64_t> cache_v0_shape,
+    std::span<const std::int64_t> cache_k1_shape,
+    std::span<const std::int64_t> cache_v1_shape,
+    std::span<std::int64_t> output_cache_k0_shape,
+    std::span<std::int64_t> output_cache_v0_shape,
+    std::span<std::int64_t> output_cache_k1_shape,
+    std::span<std::int64_t> output_cache_v1_shape) const;
 
  private:
   void* handle_;

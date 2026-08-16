@@ -172,6 +172,7 @@ ImportResult import_eltwise(ImportContext& importer,
                             const LayerContext& context);
 ImportResult import_multi_head_attention(ImportContext& importer,
                                          const LayerContext& context);
+ImportResult import_sdpa(ImportContext& importer, const LayerContext& context);
 ImportResult import_detection_output(ImportContext& importer,
                                      const LayerContext& context);
 ImportResult import_hard_sigmoid(ImportContext& importer,

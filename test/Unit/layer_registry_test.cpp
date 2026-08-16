@@ -43,6 +43,7 @@ TEST(LayerRegistryTest, DescriptorsMatchRuntimeRegistries) {
   EXPECT_TRUE(ncnn_graph::has_weight_loader("Dequantize"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("Requantize"));
   EXPECT_FALSE(ncnn_graph::has_weight_loader("Cast"));
+  EXPECT_FALSE(ncnn_graph::has_weight_loader("SDPA"));
   EXPECT_FALSE(ncnn_graph::has_weight_loader("TanH"));
   EXPECT_FALSE(ncnn_graph::has_weight_loader("Eltwise"));
 }

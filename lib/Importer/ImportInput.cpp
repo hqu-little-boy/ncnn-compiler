@@ -1,6 +1,7 @@
 #include "ImporterInternal.hpp"
 
 #include <cstdint>
+#include <format>
 
 #include "llvm/ADT/SmallVector.h"
 
@@ -8,9 +9,10 @@ namespace ncnn_importer::detail {
 
 ImportResult import_input(ImportContext& importer,
                           const LayerContext& context) {
-  auto arity = expect_source_arity(context.layer, 0, 1);
-  if (!arity) {
-    return std::unexpected(make_error(context, arity.error()));
+  if (!context.layer.get_inputs().empty() ||
+      context.layer.get_outputs().empty()) {
+    return std::unexpected(
+      make_error(context, "Input requires no inputs and at least one output"));
   }
   constexpr int kAllowed[] = {0, 1, 2, 11};
   auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
@@ -30,46 +32,13 @@ ImportResult import_input(ImportContext& importer,
   }
   const bool dimensions_omitted =
     *width == 0 && *height == 0 && *channels == 0 && *depth == 0;
-  auto shape_override = importer.next_input_shape(dimensions_omitted);
   auto valid_extent = [](std::int64_t extent) {
     return extent > 0 || extent == ncnn_importer::kDynamicExtent;
   };
-  if (dimensions_omitted && shape_override) {
-    const auto& shape = *shape_override;
-    if ((shape.empty() || shape.size() > 4) ||
-        !std::ranges::all_of(shape, valid_extent)) {
-      return std::unexpected(
-        make_error(context,
-                   "input shape override must have rank 1..4 with positive or "
-                   "dynamic extents"));
-    }
-    if (shape.size() != 3) {
-      auto& builder = importer.builder();
-      llvm::SmallVector<std::int64_t> dimensions(shape.begin(), shape.end());
-      std::ranges::replace(
-        dimensions, ncnn_importer::kDynamicExtent, mlir::ShapedType::kDynamic);
-      mlir::Type elementType =
-        importer.input_uses_integer_storage(context.layer.get_outputs()[0])
-          ? static_cast<mlir::Type>(builder.getI32Type())
-          : static_cast<mlir::Type>(builder.getF32Type());
-      auto type = mlir::RankedTensorType::get(dimensions, elementType);
-      auto input = builder.create<mlir::ncnn::InputOp>(
-        builder.getUnknownLoc(),
-        type,
-        builder.getStringAttr(context.layer.get_name()),
-        builder.getStringAttr(context.layer.get_outputs()[0]));
-      importer.tag_source(input.getOperation(), context);
-      return importer.bind_blob(context,
-                                std::string(context.layer.get_outputs()[0]),
-                                input.getOutput());
-    }
-    *channels = shape[0];
-    *height = shape[1];
-    *width = shape[2];
-  }
-  if ((!valid_extent(*width) || !valid_extent(*height) ||
-       !valid_extent(*channels)) ||
-      *depth != 0) {
+  if (!dimensions_omitted &&
+      ((!valid_extent(*width) || !valid_extent(*height) ||
+        !valid_extent(*channels)) ||
+       *depth != 0)) {
     return std::unexpected(make_error(
       context,
       "Input requires positive w/h/c and unsupported depth must be 0"));
@@ -79,27 +48,53 @@ ImportResult import_input(ImportContext& importer,
     return std::unexpected(make_error(context, feature_mask.error()));
   }
 
-  auto& builder = importer.builder();
   auto mlir_extent = [](std::int64_t extent) {
     return extent == ncnn_importer::kDynamicExtent ? mlir::ShapedType::kDynamic
                                                    : extent;
   };
-  mlir::Type elementType =
-    importer.input_uses_integer_storage(context.layer.get_outputs()[0])
-      ? static_cast<mlir::Type>(builder.getI32Type())
-      : static_cast<mlir::Type>(builder.getF32Type());
-  auto type = mlir::RankedTensorType::get(
-    llvm::SmallVector<std::int64_t>{
-      mlir_extent(*channels), mlir_extent(*height), mlir_extent(*width)},
-    elementType);
-  auto input = builder.create<mlir::ncnn::InputOp>(
-    builder.getUnknownLoc(),
-    type,
-    builder.getStringAttr(context.layer.get_name()),
-    builder.getStringAttr(context.layer.get_outputs()[0]));
-  importer.tag_source(input.getOperation(), context);
-  return importer.bind_blob(
-    context, std::string(context.layer.get_outputs()[0]), input.getOutput());
+  auto& builder = importer.builder();
+  const bool multipleOutputs = context.layer.get_outputs().size() > 1;
+  for (std::string_view output : context.layer.get_outputs()) {
+    auto shapeOverride = importer.next_input_shape(dimensions_omitted);
+    llvm::SmallVector<std::int64_t> dimensions;
+    if (dimensions_omitted && shapeOverride) {
+      if ((shapeOverride->empty() || shapeOverride->size() > 4) ||
+          !std::ranges::all_of(*shapeOverride, valid_extent)) {
+        return std::unexpected(make_error(
+          context,
+          "input shape override must have rank 1..4 with positive or dynamic "
+          "extents"));
+      }
+      dimensions.assign(shapeOverride->begin(), shapeOverride->end());
+    } else if (dimensions_omitted) {
+      return std::unexpected(make_error(
+        context, "Input dimensions are omitted without an override"));
+    } else {
+      dimensions = {
+        mlir_extent(*channels), mlir_extent(*height), mlir_extent(*width)};
+    }
+    std::ranges::replace(
+      dimensions, ncnn_importer::kDynamicExtent, mlir::ShapedType::kDynamic);
+    mlir::Type elementType = importer.input_uses_integer_storage(output)
+                               ? static_cast<mlir::Type>(builder.getI32Type())
+                               : static_cast<mlir::Type>(builder.getF32Type());
+    auto type = mlir::RankedTensorType::get(dimensions, elementType);
+    const std::string layerName =
+      multipleOutputs ? std::format("{}.{}", context.layer.get_name(), output)
+                      : std::string(context.layer.get_name());
+    auto input =
+      builder.create<mlir::ncnn::InputOp>(builder.getUnknownLoc(),
+                                          type,
+                                          builder.getStringAttr(layerName),
+                                          builder.getStringAttr(output));
+    importer.tag_source(input.getOperation(), context);
+    auto bound =
+      importer.bind_blob(context, std::string(output), input.getOutput());
+    if (!bound) {
+      return bound;
+    }
+  }
+  return {};
 }
 
 }  // namespace ncnn_importer::detail

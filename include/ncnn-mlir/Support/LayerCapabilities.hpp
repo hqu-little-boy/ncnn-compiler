@@ -71,6 +71,8 @@ inline constexpr std::array kLayerDescriptors{
   LayerDescriptor{
     .source_type = "MultiHeadAttention",
     .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "SDPA",
+                  .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "ReLU",
                   .capabilities = LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},

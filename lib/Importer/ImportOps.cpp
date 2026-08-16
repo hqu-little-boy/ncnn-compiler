@@ -526,11 +526,14 @@ ImportResult import_gemm(ImportContext& importer, const LayerContext& context) {
       params->output_elempack == 0 && params->output_elemtype == 0 &&
       params->output_transpose == 0 && params->int8_scale_term == 0) {
     auto arity = expect_source_arity(context.layer, 1, 1);
+    const auto dtype = context.layer.get_weights().empty()
+                         ? ncnn_graph::DataType::Unknown
+                         : context.layer.get_weights()[0].get_dtype();
     if (!arity || context.layer.get_weights().size() != 1 ||
-        context.layer.get_weights()[0].get_dtype() !=
-          ncnn_graph::DataType::Float32) {
+        (dtype != ncnn_graph::DataType::Float16 &&
+         dtype != ncnn_graph::DataType::Float32)) {
       return std::unexpected(make_error(
-        context, "constant Gemm without C requires one FP32 B tensor"));
+        context, "constant Gemm without C requires one FP16 or FP32 B tensor"));
     }
     auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
     if (!input) {
@@ -544,15 +547,16 @@ ImportResult import_gemm(ImportContext& importer, const LayerContext& context) {
     auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
     auto weightType = mlir::dyn_cast<mlir::RankedTensorType>(weight->getType());
     if (!inputType || !weightType || inputType.getRank() != 2 ||
-        weightType.getRank() != 2 || !inputType.hasStaticShape() ||
+        weightType.getRank() != 2 || inputType.isDynamicDim(1) ||
         !weightType.hasStaticShape()) {
       return std::unexpected(make_error(
         context,
-        std::format("constant Gemm requires static rank-2 input and weight; "
-                    "got ranks {} and {} (static {} and {})",
+        std::format("constant Gemm requires rank-2 input with static K and "
+                    "static rank-2 weight; got ranks {} and {} (static K {} "
+                    "and weight {})",
                     inputType ? inputType.getRank() : -1,
                     weightType ? weightType.getRank() : -1,
-                    inputType && inputType.hasStaticShape(),
+                    inputType && !inputType.isDynamicDim(1),
                     weightType && weightType.hasStaticShape())));
     }
     if (inputType.getShape()[1] != weightType.getShape()[1]) {
@@ -621,10 +625,13 @@ ImportResult import_gemm(ImportContext& importer, const LayerContext& context) {
   const bool quantized = params->int8_scale_term != 0;
   for (std::size_t index = 0; index < context.layer.get_weights().size();
        ++index) {
-    const auto expected = index == 0 && quantized
-                            ? ncnn_graph::DataType::Int8
-                            : ncnn_graph::DataType::Float32;
-    if (context.layer.get_weights()[index].get_dtype() != expected) {
+    const auto dtype = context.layer.get_weights()[index].get_dtype();
+    const bool validDtype =
+      index == 0 ? quantized ? dtype == ncnn_graph::DataType::Int8
+                             : dtype == ncnn_graph::DataType::Float16 ||
+                                 dtype == ncnn_graph::DataType::Float32
+                 : dtype == ncnn_graph::DataType::Float32;
+    if (!validDtype) {
       return std::unexpected(
         make_error(context, "Gemm weight, bias, or scale has invalid dtype"));
     }

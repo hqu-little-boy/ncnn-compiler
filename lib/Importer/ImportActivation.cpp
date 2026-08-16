@@ -1,8 +1,61 @@
 #include "ImporterInternal.hpp"
 
 #include <array>
+#include <cmath>
 
 namespace ncnn_importer::detail {
+
+namespace {
+
+std::optional<unsigned> resolved_input_index(mlir::Value value) {
+  while (auto split = value.getDefiningOp<mlir::ncnn::SplitOp>()) {
+    value = split.getInput();
+  }
+  auto input = value.getDefiningOp<mlir::ncnn::InputOp>();
+  if (!input) {
+    return std::nullopt;
+  }
+  auto model = input->getParentOfType<mlir::ncnn::ModelOp>();
+  unsigned index = 0;
+  for (mlir::ncnn::InputOp candidate : model.getOps<mlir::ncnn::InputOp>()) {
+    if (candidate == input) {
+      return index;
+    }
+    ++index;
+  }
+  return std::nullopt;
+}
+
+void add_input_dim_relation(mlir::Value lhs,
+                            unsigned lhs_dim,
+                            mlir::Value rhs,
+                            unsigned rhs_dim,
+                            std::int64_t offset) {
+  auto lhs_index = resolved_input_index(lhs);
+  auto rhs_index = resolved_input_index(rhs);
+  if (!lhs_index || !rhs_index) {
+    return;
+  }
+  auto model = lhs.getDefiningOp()->getParentOfType<mlir::ncnn::ModelOp>();
+  mlir::Builder builder(model.getContext());
+  llvm::SmallVector<mlir::Attribute> relations;
+  if (auto existing =
+        model->getAttrOfType<mlir::ArrayAttr>("ncnn.input_dim_relations")) {
+    relations.append(existing.begin(), existing.end());
+  }
+  auto relation =
+    builder.getDenseI64ArrayAttr({static_cast<std::int64_t>(*lhs_index),
+                                  static_cast<std::int64_t>(lhs_dim),
+                                  static_cast<std::int64_t>(*rhs_index),
+                                  static_cast<std::int64_t>(rhs_dim),
+                                  offset});
+  if (!llvm::is_contained(relations, relation)) {
+    relations.push_back(relation);
+    model->setAttr("ncnn.input_dim_relations", builder.getArrayAttr(relations));
+  }
+}
+
+}  // namespace
 
 ImportResult import_embed(ImportContext& importer,
                           const LayerContext& context) {
@@ -276,6 +329,88 @@ ImportResult import_multi_head_attention(ImportContext& importer,
   importer.tag_source(op, context);
   return importer.bind_blob(
     context, context.layer.get_outputs()[0], op.getOutput());
+}
+
+ImportResult import_sdpa(ImportContext& importer, const LayerContext& context) {
+  constexpr int kAllowed[] = {5, 6, 7, 18};
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto params = ncnn_graph::decode_sdpa_params(context.layer.get_params());
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!allowed || !params || !mask || !context.layer.get_weights().empty()) {
+    return std::unexpected(make_error(context,
+                                      !allowed  ? allowed.error()
+                                      : !params ? params.error()
+                                      : !mask   ? mask.error()
+                                              : "SDPA must not have weights"));
+  }
+  const bool cacheForm = params->has_attention_mask && params->kv_cache;
+  const std::size_t expectedInputs = cacheForm ? 6U : 3U;
+  const std::size_t expectedOutputs = cacheForm ? 3U : 1U;
+  if ((!cacheForm && (params->has_attention_mask || params->kv_cache)) ||
+      context.layer.get_inputs().size() != expectedInputs ||
+      context.layer.get_outputs().size() != expectedOutputs) {
+    return std::unexpected(make_error(
+      context,
+      "SDPA decoder supports exactly unmasked 3-to-1 or masked-cache 6-to-3"));
+  }
+
+  llvm::SmallVector<mlir::Value> operands;
+  operands.reserve(context.layer.get_inputs().size());
+  for (std::string_view name : context.layer.get_inputs()) {
+    auto value = importer.find_blob(context, name);
+    if (!value) {
+      return std::unexpected(value.error());
+    }
+    operands.push_back(*value);
+  }
+  auto queryType =
+    mlir::dyn_cast<mlir::RankedTensorType>(operands[0].getType());
+  if (!queryType || queryType.getRank() != 3 || queryType.isDynamicDim(2) ||
+      queryType.getShape()[2] <= 0) {
+    return std::unexpected(make_error(
+      context, "SDPA query feature width must be statically positive"));
+  }
+  const float scale =
+    params->scale == 0.0F
+      ? 1.0F / std::sqrt(static_cast<float>(queryType.getShape()[2]))
+      : params->scale;
+  auto& builder = importer.builder();
+  mlir::ncnn::SDPAOp::Properties properties;
+  properties.scale = builder.getF32FloatAttr(scale);
+  properties.has_mask = builder.getBoolAttr(params->has_attention_mask);
+  properties.kv_cache = builder.getBoolAttr(params->kv_cache);
+  llvm::SmallVector<mlir::Type> resultTypes;
+  if (mlir::failed(importer.infer_tensor_results<mlir::ncnn::SDPAOp>(
+        builder.getUnknownLoc(), operands, properties, resultTypes))) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto op =
+    builder.create<mlir::ncnn::SDPAOp>(builder.getUnknownLoc(),
+                                       resultTypes,
+                                       operands[0],
+                                       operands[1],
+                                       operands[2],
+                                       mlir::ValueRange(operands).drop_front(3),
+                                       properties.scale,
+                                       properties.has_mask,
+                                       properties.kv_cache);
+  importer.tag_source(op, context);
+  if (cacheForm) {
+    auto keyType = mlir::cast<mlir::RankedTensorType>(operands[1].getType());
+    if (!keyType.isDynamicDim(1)) {
+      add_input_dim_relation(
+        operands[3], 1, operands[4], 1, keyType.getShape()[1]);
+    }
+    add_input_dim_relation(operands[4], 1, operands[5], 1, 0);
+  }
+  for (auto [name, result] :
+       llvm::zip(context.layer.get_outputs(), op.getResults())) {
+    auto bound = importer.bind_blob(context, name, result);
+    if (!bound) {
+      return bound;
+    }
+  }
+  return {};
 }
 
 ImportResult import_relu(ImportContext& importer, const LayerContext& context) {

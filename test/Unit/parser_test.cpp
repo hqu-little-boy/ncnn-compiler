@@ -179,6 +179,27 @@ TEST(ParserTest, DecodesLayerNormAndMultiHeadAttentionParameters) {
   EXPECT_FALSE(ncnn_graph::decode_layer_norm_params(layer_norm));
 }
 
+TEST(ParserTest, DecodesSDPAParametersAndRejectsInt8) {
+  ncnn_graph::ParamDict params;
+  auto defaults = ncnn_graph::decode_sdpa_params(params);
+  ASSERT_TRUE(defaults) << defaults.error();
+  EXPECT_FALSE(defaults->has_attention_mask);
+  EXPECT_FLOAT_EQ(defaults->scale, 0.0F);
+  EXPECT_FALSE(defaults->kv_cache);
+
+  params.set_value(5, ncnn_graph::ParamValue::make_int(1));
+  params.set_value(6, ncnn_graph::ParamValue::make_float(0.125F));
+  params.set_value(7, ncnn_graph::ParamValue::make_int(1));
+  auto decoded = ncnn_graph::decode_sdpa_params(params);
+  ASSERT_TRUE(decoded) << decoded.error();
+  EXPECT_TRUE(decoded->has_attention_mask);
+  EXPECT_FLOAT_EQ(decoded->scale, 0.125F);
+  EXPECT_TRUE(decoded->kv_cache);
+
+  params.set_value(18, ncnn_graph::ParamValue::make_int(1));
+  EXPECT_FALSE(ncnn_graph::decode_sdpa_params(params));
+}
+
 TEST(ParserTest, DecodesAsymmetricDepthwiseSpatialParameters) {
   ncnn_graph::ParamDict params;
   params.set_value(0, ncnn_graph::ParamValue::make_int(4));

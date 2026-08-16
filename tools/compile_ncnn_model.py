@@ -201,6 +201,20 @@ def write_header(path, manifest):
             f"{', '.join(shape_parameters)});"
         )
     sizes = []
+    relations = manifest.get("input_dimension_relations", [])
+    sizes.append(
+        f"#define {function.upper()}_INPUT_DIM_RELATION_COUNT {len(relations)}"
+    )
+    for index, relation in enumerate(relations, 1):
+        prefix = f"{function.upper()}_INPUT_DIM_RELATION{index}"
+        sizes.extend([
+            f"#define {prefix}_LHS_INPUT {relation['lhs_input']}",
+            f"#define {prefix}_LHS_DIMENSION {relation['lhs_dimension']}",
+            f"#define {prefix}_RHS_INPUT {relation['rhs_input']}",
+            f"#define {prefix}_RHS_DIMENSION {relation['rhs_dimension']}",
+            f"#define {prefix}_OFFSET INT64_C({relation['offset']})",
+        ])
+    sizes.append("")
     for argument in manifest["inputs"] + manifest["outputs"]:
         if argument.get("dynamic_rank"):
             sizes.extend([

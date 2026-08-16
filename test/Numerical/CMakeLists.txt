@@ -945,6 +945,23 @@ ncnn_add_compiled_fixture(
     ""
     INPUT_SHAPE=1 INPUT_SHAPE=1 EMIT_IR)
 ncnn_add_compiled_fixture(
+    pp_formulanet_plus_s_decoder
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_decoder.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_decoder.bin
+    144x2048
+    INPUT_SHAPE=1x384
+    INPUT_SHAPE=1x?
+    INPUT_SHAPE=16x?x24
+    INPUT_SHAPE=16x?x24
+    INPUT_SHAPE=16x?x24
+    INPUT_SHAPE=16x?x24
+    2:1:min=1,multiple=1
+    3:1:min=1,multiple=1
+    4:1:min=1,multiple=1
+    5:1:min=1,multiple=1
+    6:1:min=1,multiple=1
+    EMIT_IR)
+ncnn_add_compiled_fixture(
     convolution_mixed_fp16
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
     ${convolution_bin}
@@ -1236,10 +1253,12 @@ add_dependencies(compile_pp_formulanet_plus_s_encoder
                   compile_pp_structrurev2_slanet_plus_slahead)
 add_dependencies(compile_pp_formulanet_plus_s_embed
                  compile_pp_formulanet_plus_s_encoder)
+add_dependencies(compile_pp_formulanet_plus_s_decoder
+                 compile_pp_formulanet_plus_s_embed)
 add_dependencies(compile_pp_structrurev2_slanet_plus_slahead
                  compile_pp_structrurev2_slanet_plus_cnn)
 add_dependencies(compile_pp_ocrv5_server_rec
-                 compile_pp_formulanet_plus_s_embed)
+                 compile_pp_formulanet_plus_s_decoder)
 add_dependencies(compile_pp_ocrv5_server_rec_dynamic
                  compile_pp_ocrv5_server_rec)
 add_dependencies(compile_pp_ocrv6_medium_rec
@@ -1517,7 +1536,15 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_FORMULANET_PLUS_S_EMBED_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_embed/pp_formulanet_plus_s_embed.h"
     PP_FORMULANET_PLUS_S_EMBED_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_embed/model.ncnn.mlir"
     PP_FORMULANET_PLUS_S_EMBED_TOSA_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_embed/model.tosa.mlir"
-    PP_FORMULANET_PLUS_S_EMBED_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_embed/model.linalg.mlir")
+    PP_FORMULANET_PLUS_S_EMBED_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_embed/model.linalg.mlir"
+    PP_FORMULANET_PLUS_S_DECODER_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_decoder.param"
+    PP_FORMULANET_PLUS_S_DECODER_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_decoder.bin"
+    PP_FORMULANET_PLUS_S_DECODER_LIBRARY_PATH="${pp_formulanet_plus_s_decoder_LIBRARY}"
+    PP_FORMULANET_PLUS_S_DECODER_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/pp_formulanet_plus_s_decoder.json"
+    PP_FORMULANET_PLUS_S_DECODER_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/pp_formulanet_plus_s_decoder.h"
+    PP_FORMULANET_PLUS_S_DECODER_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/model.ncnn.mlir"
+    PP_FORMULANET_PLUS_S_DECODER_TOSA_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/model.tosa.mlir"
+    PP_FORMULANET_PLUS_S_DECODER_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/model.linalg.mlir")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
@@ -1549,6 +1576,7 @@ add_dependencies(numerical_tests compile_pp_structrurev2_slanet_plus_cnn)
 add_dependencies(numerical_tests compile_pp_structrurev2_slanet_plus_slahead)
 add_dependencies(numerical_tests compile_pp_formulanet_plus_s_encoder)
 add_dependencies(numerical_tests compile_pp_formulanet_plus_s_embed)
+add_dependencies(numerical_tests compile_pp_formulanet_plus_s_decoder)
 add_dependencies(numerical_tests
     compile_convolution_mixed_fp16
     compile_convolution_arithmetic_fp16
