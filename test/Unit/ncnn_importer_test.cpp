@@ -588,6 +588,65 @@ TEST_F(NcnnImporterTest, ImportsThreeToOneSDPA) {
                        {4, mlir::ShapedType::kDynamic, 24}));
 }
 
+TEST_F(NcnnImporterTest, ImportsDynamicBilinearGridSample) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "image", {}, {"image"}));
+  graph.add_layer(make_layer("Input", "grid", {}, {"grid"}));
+  auto resize =
+    make_layer("Interp", "resize_grid", {"grid", "image"}, {"resized_grid"});
+  ncnn_graph::ParamDict resizeParams;
+  resizeParams.set_value(0, ncnn_graph::ParamValue::make_int(2));
+  resizeParams.set_value(5, ncnn_graph::ParamValue::make_int(1));
+  resizeParams.set_value(6, ncnn_graph::ParamValue::make_int(1));
+  resizeParams.set_value(9, ncnn_graph::ParamValue::make_string("1w,1h"));
+  resize.set_params(std::move(resizeParams));
+  graph.add_layer(std::move(resize));
+  auto sample =
+    make_layer("GridSample", "sample", {"image", "resized_grid"}, {"output"});
+  ncnn_graph::ParamDict sampleParams;
+  sampleParams.set_value(0, ncnn_graph::ParamValue::make_int(1));
+  sampleParams.set_value(1, ncnn_graph::ParamValue::make_int(1));
+  sampleParams.set_value(2, ncnn_graph::ParamValue::make_int(1));
+  sampleParams.set_value(3, ncnn_graph::ParamValue::make_int(1));
+  sample.set_params(std::move(sampleParams));
+  graph.add_layer(std::move(sample));
+  graph.set_input_blob_names({"image", "grid"});
+  graph.set_output_blob_names({"output"});
+  graph.set_weights_loaded(true);
+
+  ncnn_importer::ImportOptions options;
+  options.input_shapes = {{3, -1, -1}, {2, 5, 7}};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::InterpOp>(imported->get()), 1);
+  EXPECT_EQ(count_ops<mlir::ncnn::GridSampleOp>(imported->get()), 1);
+  EXPECT_TRUE(
+    shape_is(output_type(imported->get()),
+             {3, mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic}));
+}
+
+TEST_F(NcnnImporterTest, NormalizesScalarPReLUToLeakyRelu) {
+  ncnn_graph::Graph graph;
+  graph.add_layer(make_layer("Input", "input", {}, {"input"}));
+  auto prelu = make_layer("PReLU", "prelu", {"input"}, {"output"});
+  ncnn_graph::ParamDict params;
+  params.set_value(0, ncnn_graph::ParamValue::make_int(1));
+  prelu.set_params(std::move(params));
+  prelu.add_weight(make_float_tensor({1}, 0.125F));
+  graph.add_layer(std::move(prelu));
+  graph.set_input_blob_names({"input"});
+  graph.set_output_blob_names({"output"});
+  graph.set_weights_loaded(true);
+  ncnn_importer::ImportOptions options;
+  options.input_shape = {2, 3, 4};
+  auto imported = import(graph, options);
+  ASSERT_TRUE(imported) << imported.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::ReluOp>(imported->get()), 1);
+  imported->get().walk([](mlir::ncnn::ReluOp relu) {
+    EXPECT_FLOAT_EQ(relu.getNegativeSlope().convertToFloat(), 0.125F);
+  });
+}
+
 TEST_F(NcnnImporterTest, ImportsReshapeShapeExpressionReferences) {
   ncnn_graph::Graph graph;
   graph.add_layer(make_layer("Input", "data", {}, {"data_blob"}));

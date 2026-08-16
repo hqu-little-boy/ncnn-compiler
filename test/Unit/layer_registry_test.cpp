@@ -33,6 +33,7 @@ TEST(LayerRegistryTest, DescriptorsMatchRuntimeRegistries) {
   EXPECT_TRUE(ncnn_graph::has_weight_loader("ConvolutionDepthWise"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("InnerProduct"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("BatchNorm"));
+  EXPECT_TRUE(ncnn_graph::has_weight_loader("PReLU"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("LayerNorm"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("MultiHeadAttention"));
   EXPECT_TRUE(ncnn_graph::has_weight_loader("Gemm"));

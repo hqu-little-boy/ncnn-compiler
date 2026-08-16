@@ -1694,6 +1694,20 @@ std::expected<void, std::string> load_batch_norm_weights(Layer& layer,
   return {};
 }
 
+std::expected<void, std::string> load_prelu_weights(Layer& layer,
+                                                    BinCursor& cursor) {
+  const std::int64_t count = layer.get_param_int(0);
+  if (count <= 0) {
+    return std::unexpected("PReLU num_slope must be positive");
+  }
+  auto slope = load_weight(cursor, count, 1, {count});
+  if (!slope) {
+    return std::unexpected(std::format("PReLU slope: {}", slope.error()));
+  }
+  layer.add_weight(std::move(*slope));
+  return {};
+}
+
 std::expected<void, std::string> load_layer_norm_weights(Layer& layer,
                                                          BinCursor& cursor) {
   auto params = decode_layer_norm_params(layer.get_params());
@@ -2010,6 +2024,7 @@ std::span<const WeightLoaderEntry> weight_loaders() noexcept {
     WeightLoaderEntry{.type = "InnerProduct",
                       .loader = load_inner_product_weights},
     WeightLoaderEntry{.type = "BatchNorm", .loader = load_batch_norm_weights},
+    WeightLoaderEntry{.type = "PReLU", .loader = load_prelu_weights},
     WeightLoaderEntry{.type = "Gemm", .loader = load_gemm_weights},
     WeightLoaderEntry{.type = "MemoryData", .loader = load_memory_data_weights},
     WeightLoaderEntry{.type = "Quantize", .loader = load_quantize_weights},

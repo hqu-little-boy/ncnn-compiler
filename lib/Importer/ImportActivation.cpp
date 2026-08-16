@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstring>
 
 namespace ncnn_importer::detail {
 
@@ -441,6 +442,45 @@ ImportResult import_relu(ImportContext& importer, const LayerContext& context) {
   importer.tag_source(relu.getOperation(), context);
   return importer.bind_blob(
     context, std::string(context.layer.get_outputs()[0]), relu.getResult());
+}
+
+ImportResult import_prelu(ImportContext& importer,
+                          const LayerContext& context) {
+  auto arity = expect_source_arity(context.layer, 1, 1);
+  constexpr int kAllowed[] = {0};
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto count = get_int(context.layer.get_params(), 0, 0, "num_slope");
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!arity || !allowed || !count || !mask || *count != 1 ||
+      context.layer.get_weights().size() != 1) {
+    return std::unexpected(
+      make_error(context, "PReLU supports exactly one FP32 scalar slope"));
+  }
+  const ncnn_graph::Tensor& weight = context.layer.get_weights().front();
+  if (weight.get_dtype() != ncnn_graph::DataType::Float32 ||
+      weight.get_shape().size() != 1 || weight.get_shape()[0] != 1 ||
+      weight.get_data().size() != sizeof(float)) {
+    return std::unexpected(
+      make_error(context, "PReLU supports exactly one FP32 scalar slope"));
+  }
+  float slope;
+  std::memcpy(&slope, weight.get_data().data(), sizeof(slope));
+  if (!std::isfinite(slope)) {
+    return std::unexpected(make_error(context, "PReLU slope must be finite"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto& builder = importer.builder();
+  auto relu =
+    builder.create<mlir::ncnn::ReluOp>(builder.getUnknownLoc(),
+                                       input->getType(),
+                                       *input,
+                                       builder.getF32FloatAttr(slope));
+  importer.tag_source(relu.getOperation(), context);
+  return importer.bind_blob(
+    context, context.layer.get_outputs()[0], relu.getOutput());
 }
 
 ImportResult import_gelu(ImportContext& importer, const LayerContext& context) {

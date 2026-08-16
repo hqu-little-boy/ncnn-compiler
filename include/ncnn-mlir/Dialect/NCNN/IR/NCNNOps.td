@@ -175,18 +175,35 @@ def NCNN_PaddingOp : NCNN_LayerOp<"padding", [InferTensorTypeAdaptor]> {
     I64Attr:$bottom,
     I64Attr:$left,
     I64Attr:$right,
-    F32Attr:$value);
+    F32Attr:$value,
+    DefaultValuedAttr<I64Attr, "0">:$padding_type);
   let results = (outs NCNN_RankedTensor:$output);
 }
 
 def NCNN_InterpOp : NCNN_LayerOp<"interp", [InferTensorTypeAdaptor]> {
-  let summary = "Nearest-neighbor resize of a CHW tensor.";
+  let summary = "Nearest or bilinear resize of a CHW tensor.";
   let arguments = (ins NCNN_RankedTensor:$input,
+    Optional<NCNN_RankedTensor>:$size_reference,
     I64Attr:$height_scale,
     I64Attr:$width_scale,
     DefaultValuedAttr<I64Attr, "0">:$output_h,
-    DefaultValuedAttr<I64Attr, "0">:$output_w);
+    DefaultValuedAttr<I64Attr, "0">:$output_w,
+    DefaultValuedAttr<I64Attr, "1">:$resize_type,
+    DefaultValuedAttr<BoolAttr, "false">:$align_corner);
   let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_GridSampleOp
+  : NCNN_LayerOp<"grid_sample", [InferTensorTypeAdaptor]> {
+  let summary = "Two-dimensional sampling of a CHW tensor by a coordinate grid.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$grid,
+    I64Attr:$sample_type,
+    I64Attr:$padding_mode,
+    BoolAttr:$align_corner,
+    BoolAttr:$permute_fusion);
+  let results = (outs NCNN_RankedTensor:$output);
+  let hasVerifier = 1;
 }
 
 def NCNN_SigmoidOp : NCNN_LayerOp<"sigmoid", [SameOperandsAndResultType]> {

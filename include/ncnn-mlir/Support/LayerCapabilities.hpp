@@ -49,6 +49,8 @@ inline constexpr std::array kLayerDescriptors{
                   .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "Interp",
                   .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "GridSample",
+                  .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "DetectionOutput",
                   .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "Sigmoid",
@@ -75,6 +77,10 @@ inline constexpr std::array kLayerDescriptors{
                   .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "ReLU",
                   .capabilities = LayerCapability::NeedsNormalization |
+                                  LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "PReLU",
+                  .capabilities = LayerCapability::HasWeights |
+                                  LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "Pooling",
                   .capabilities = LayerCapability::NeedsNormalization |

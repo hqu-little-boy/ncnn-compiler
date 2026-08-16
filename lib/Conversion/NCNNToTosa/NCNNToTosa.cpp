@@ -1815,6 +1815,80 @@ class ConvertPadding final : public ConversionPattern {
       return operation->emitOpError("requires 'value' float attribute");
     }
     auto inputType = cast<RankedTensorType>(operands.front().getType());
+    FailureOr<int64_t> paddingType =
+      getRequiredIntegerAttr(operation, "padding_type");
+    if (failed(paddingType)) {
+      return failure();
+    }
+    if (*paddingType == 2) {
+      if (!sourceInput.hasStaticShape() ||
+          pad[0] >= sourceInput.getShape()[1] ||
+          pad[1] >= sourceInput.getShape()[1] ||
+          pad[2] >= sourceInput.getShape()[2] ||
+          pad[3] >= sourceInput.getShape()[2]) {
+        return operation->emitOpError(
+          "reflection padding requires static extents larger than padding");
+      }
+      auto outputType = getNHWCType(sourceOutput);
+      Value empty = rewriter.create<tensor::EmptyOp>(
+        operation->getLoc(), outputType, ValueRange{});
+      AffineMap identity = rewriter.getMultiDimIdentityMap(4);
+      SmallVector<utils::IteratorType> iterators(4,
+                                                 utils::IteratorType::parallel);
+      auto result = rewriter.create<linalg::GenericOp>(
+        operation->getLoc(),
+        outputType,
+        ValueRange{},
+        ValueRange{empty},
+        ArrayRef<AffineMap>{identity},
+        iterators,
+        [&](OpBuilder& nested, Location location, ValueRange) {
+          Value batch = nested.create<linalg::IndexOp>(location, 0);
+          Value outputY = nested.create<linalg::IndexOp>(location, 1);
+          Value outputX = nested.create<linalg::IndexOp>(location, 2);
+          Value channel = nested.create<linalg::IndexOp>(location, 3);
+          auto reflect = [&](
+                           Value output, int64_t before, int64_t inputExtent) {
+            Value beforeValue = createIndexConstant(nested, location, before);
+            Value extentValue =
+              createIndexConstant(nested, location, inputExtent);
+            Value coordinate =
+              nested.create<arith::SubIOp>(location, output, beforeValue);
+            Value zero = createIndexConstant(nested, location, 0);
+            Value negative = nested.create<arith::CmpIOp>(
+              location, arith::CmpIPredicate::slt, coordinate, zero);
+            Value reflectedBefore =
+              nested.create<arith::SubIOp>(location, zero, coordinate);
+            Value upper = nested.create<arith::SubIOp>(
+              location,
+              nested.create<arith::MulIOp>(
+                location,
+                extentValue,
+                createIndexConstant(nested, location, 2)),
+              createIndexConstant(nested, location, 2));
+            Value beyond = nested.create<arith::CmpIOp>(
+              location, arith::CmpIPredicate::sge, coordinate, extentValue);
+            Value reflectedAfter =
+              nested.create<arith::SubIOp>(location, upper, coordinate);
+            coordinate = nested.create<arith::SelectOp>(
+              location, negative, reflectedBefore, coordinate);
+            return Value(nested.create<arith::SelectOp>(
+              location, beyond, reflectedAfter, coordinate));
+          };
+          Value inputY = reflect(outputY, pad[0], sourceInput.getShape()[1]);
+          Value inputX = reflect(outputX, pad[2], sourceInput.getShape()[2]);
+          Value sample = nested.create<tensor::ExtractOp>(
+            location,
+            operands.front(),
+            ValueRange{batch, inputY, inputX, channel});
+          nested.create<linalg::YieldOp>(location, sample);
+        });
+      rewriter.replaceOp(operation, result.getResults());
+      return success();
+    }
+    if (*paddingType != 0) {
+      return operation->emitOpError("unsupported padding type");
+    }
     Value padding = createShape(rewriter,
                                 operation->getLoc(),
                                 {0, 0, pad[0], pad[1], pad[2], pad[3], 0, 0});
@@ -1842,10 +1916,12 @@ class ConvertInterp final : public ConversionPattern {
     Operation* operation,
     ArrayRef<Value> operands,
     ConversionPatternRewriter& rewriter) const final {
-    if (operands.size() != 1 || operation->getNumResults() != 1 ||
+    if ((operands.size() != 1 && operands.size() != 2) ||
+        operation->getNumResults() != 1 ||
         !isRankedF32Tensor(operation->getOperand(0).getType()) ||
         !isRankedF32Tensor(operation->getResult(0).getType())) {
-      return operation->emitOpError("supports one ranked CHW f32 tensor only");
+      return operation->emitOpError(
+        "supports ranked CHW f32 input and optional size reference only");
     }
     auto sourceInput =
       cast<RankedTensorType>(operation->getOperand(0).getType());
@@ -1864,21 +1940,34 @@ class ConvertInterp final : public ConversionPattern {
       getRequiredIntegerAttr(operation, "output_h");
     FailureOr<int64_t> explicitW =
       getRequiredIntegerAttr(operation, "output_w");
+    FailureOr<int64_t> resizeType =
+      getRequiredIntegerAttr(operation, "resize_type");
+    auto alignCorner = operation->getAttrOfType<BoolAttr>("align_corner");
     if (failed(scaleH) || failed(scaleW) || failed(explicitH) ||
-        failed(explicitW)) {
+        failed(explicitW) || failed(resizeType) || !alignCorner) {
       return failure();
     }
     if (*scaleH <= 0 || *scaleW <= 0 || *explicitH < 0 || *explicitW < 0) {
       return operation->emitOpError(
         "resize scales must be positive and output dimensions non-negative");
     }
+    auto referenceType =
+      operands.size() == 2
+        ? dyn_cast<RankedTensorType>(operation->getOperand(1).getType())
+        : RankedTensorType{};
+    if (operands.size() == 2 &&
+        (!referenceType || referenceType.getRank() != 3)) {
+      return operation->emitOpError("size reference must be a CHW tensor");
+    }
     int64_t expectedH =
-      *explicitH != 0
+      referenceType ? referenceType.getShape()[1]
+      : *explicitH != 0
         ? *explicitH
         : (sourceInput.isDynamicDim(1) ? ShapedType::kDynamic
                                        : sourceInput.getShape()[1] * *scaleH);
     int64_t expectedW =
-      *explicitW != 0
+      referenceType ? referenceType.getShape()[2]
+      : *explicitW != 0
         ? *explicitW
         : (sourceInput.isDynamicDim(2) ? ShapedType::kDynamic
                                        : sourceInput.getShape()[2] * *scaleW);
@@ -1889,6 +1978,161 @@ class ConvertInterp final : public ConversionPattern {
     }
 
     auto outputType = getNHWCType(sourceOutput);
+    if (*resizeType == 2) {
+      Value input = operands.front();
+      Value inputH =
+        rewriter.create<tensor::DimOp>(operation->getLoc(), input, 1);
+      Value inputW =
+        rewriter.create<tensor::DimOp>(operation->getLoc(), input, 2);
+      Value outputH =
+        referenceType
+          ? rewriter.create<tensor::DimOp>(operation->getLoc(), operands[1], 1)
+        : *explicitH != 0
+          ? createIndexConstant(rewriter, operation->getLoc(), *explicitH)
+          : rewriter.create<arith::MulIOp>(
+              operation->getLoc(),
+              inputH,
+              createIndexConstant(rewriter, operation->getLoc(), *scaleH));
+      Value outputW =
+        referenceType
+          ? rewriter.create<tensor::DimOp>(operation->getLoc(), operands[1], 2)
+        : *explicitW != 0
+          ? createIndexConstant(rewriter, operation->getLoc(), *explicitW)
+          : rewriter.create<arith::MulIOp>(
+              operation->getLoc(),
+              inputW,
+              createIndexConstant(rewriter, operation->getLoc(), *scaleW));
+      SmallVector<Value> dynamicSizes;
+      if (outputType.isDynamicDim(1)) {
+        dynamicSizes.push_back(outputH);
+      }
+      if (outputType.isDynamicDim(2)) {
+        dynamicSizes.push_back(outputW);
+      }
+      Value empty = rewriter.create<tensor::EmptyOp>(
+        operation->getLoc(), outputType, dynamicSizes);
+      AffineMap identity = rewriter.getMultiDimIdentityMap(4);
+      SmallVector<utils::IteratorType> iterators(4,
+                                                 utils::IteratorType::parallel);
+      auto result = rewriter.create<linalg::GenericOp>(
+        operation->getLoc(),
+        outputType,
+        ValueRange{},
+        ValueRange{empty},
+        ArrayRef<AffineMap>{identity},
+        iterators,
+        [&](OpBuilder& nested, Location location, ValueRange) {
+          Value batch = nested.create<linalg::IndexOp>(location, 0);
+          Value outputY = nested.create<linalg::IndexOp>(location, 1);
+          Value outputX = nested.create<linalg::IndexOp>(location, 2);
+          Value channel = nested.create<linalg::IndexOp>(location, 3);
+          auto coordinate = [&](Value outputIndex,
+                                Value inputSize,
+                                Value outputSize) {
+            Type f32 = nested.getF32Type();
+            Type i64 = nested.getI64Type();
+            Value zeroF = nested.create<arith::ConstantOp>(
+              location, nested.getF32FloatAttr(0.0F));
+            Value oneF = nested.create<arith::ConstantOp>(
+              location, nested.getF32FloatAttr(1.0F));
+            Value halfF = nested.create<arith::ConstantOp>(
+              location, nested.getF32FloatAttr(0.5F));
+            Value inputI64 =
+              nested.create<arith::IndexCastOp>(location, i64, inputSize);
+            Value outputI64 =
+              nested.create<arith::IndexCastOp>(location, i64, outputSize);
+            Value indexI64 =
+              nested.create<arith::IndexCastOp>(location, i64, outputIndex);
+            Value inputF =
+              nested.create<arith::SIToFPOp>(location, f32, inputI64);
+            Value outputF =
+              nested.create<arith::SIToFPOp>(location, f32, outputI64);
+            Value indexF =
+              nested.create<arith::SIToFPOp>(location, f32, indexI64);
+            Value inputMaximum =
+              nested.create<arith::SubFOp>(location, inputF, oneF);
+            Value source;
+            if (alignCorner.getValue()) {
+              Value outputMaximum =
+                nested.create<arith::SubFOp>(location, outputF, oneF);
+              source = nested.create<arith::DivFOp>(
+                location,
+                nested.create<arith::MulFOp>(location, indexF, inputMaximum),
+                outputMaximum);
+            } else {
+              source = nested.create<arith::SubFOp>(
+                location,
+                nested.create<arith::DivFOp>(
+                  location,
+                  nested.create<arith::MulFOp>(
+                    location,
+                    nested.create<arith::AddFOp>(location, indexF, halfF),
+                    inputF),
+                  outputF),
+                halfF);
+            }
+            source = nested.create<arith::MaximumFOp>(location, source, zeroF);
+            source =
+              nested.create<arith::MinimumFOp>(location, source, inputMaximum);
+            Value floor = nested.create<math::FloorOp>(location, source);
+            Value baseI64 =
+              nested.create<arith::FPToSIOp>(location, i64, floor);
+            Value upper = nested.create<arith::SubIOp>(
+              location,
+              inputI64,
+              nested.create<arith::ConstantIntOp>(location, 2, 64));
+            baseI64 = nested.create<arith::MinSIOp>(location, baseI64, upper);
+            Value base = nested.create<arith::IndexCastOp>(
+              location, nested.getIndexType(), baseI64);
+            Value baseF =
+              nested.create<arith::SIToFPOp>(location, f32, baseI64);
+            Value fraction =
+              nested.create<arith::SubFOp>(location, source, baseF);
+            return std::pair<Value, Value>{base, fraction};
+          };
+          auto [sourceY, fractionY] = coordinate(outputY, inputH, outputH);
+          auto [sourceX, fractionX] = coordinate(outputX, inputW, outputW);
+          Value one = nested.create<arith::ConstantOp>(
+            location, nested.getF32FloatAttr(1.0F));
+          Value nextY = nested.create<arith::AddIOp>(
+            location, sourceY, createIndexConstant(nested, location, 1));
+          Value nextX = nested.create<arith::AddIOp>(
+            location, sourceX, createIndexConstant(nested, location, 1));
+          auto extract = [&](Value y, Value x) {
+            return nested.create<tensor::ExtractOp>(
+              location, input, ValueRange{batch, y, x, channel});
+          };
+          Value top = nested.create<arith::AddFOp>(
+            location,
+            nested.create<arith::MulFOp>(
+              location,
+              extract(sourceY, sourceX),
+              nested.create<arith::SubFOp>(location, one, fractionX)),
+            nested.create<arith::MulFOp>(
+              location, extract(sourceY, nextX), fractionX));
+          Value bottom = nested.create<arith::AddFOp>(
+            location,
+            nested.create<arith::MulFOp>(
+              location,
+              extract(nextY, sourceX),
+              nested.create<arith::SubFOp>(location, one, fractionX)),
+            nested.create<arith::MulFOp>(
+              location, extract(nextY, nextX), fractionX));
+          Value value = nested.create<arith::AddFOp>(
+            location,
+            nested.create<arith::MulFOp>(
+              location,
+              top,
+              nested.create<arith::SubFOp>(location, one, fractionY)),
+            nested.create<arith::MulFOp>(location, bottom, fractionY));
+          nested.create<linalg::YieldOp>(location, value);
+        });
+      rewriter.replaceOp(operation, result.getResults());
+      return success();
+    }
+    if (*resizeType != 1 || alignCorner.getValue()) {
+      return operation->emitOpError("unsupported resize mode or alignment");
+    }
     if (!sourceInput.hasStaticShape() || *explicitH != 0 || *explicitW != 0) {
       Value input = operands.front();
       Value inputH =
@@ -1981,6 +2225,169 @@ class ConvertInterp final : public ConversionPattern {
                                                        offset,
                                                        border,
                                                        "NEAREST_NEIGHBOR"));
+    return success();
+  }
+};
+
+class ConvertGridSample final : public OpConversionPattern<GridSampleOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    GridSampleOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    if (operation.getSampleType() != 1 || operation.getPaddingMode() != 1 ||
+        !operation.getPermuteFusion()) {
+      return operation.emitOpError(
+        "supports bilinear zero padding with permute fusion only");
+    }
+    Value input = adaptor.getInput();
+    Value grid = adaptor.getGrid();
+    auto sourceOutput = cast<RankedTensorType>(operation.getOutput().getType());
+    auto outputType = getNHWCType(sourceOutput);
+    Value inputH = rewriter.create<tensor::DimOp>(operation.getLoc(), input, 1);
+    Value inputW = rewriter.create<tensor::DimOp>(operation.getLoc(), input, 2);
+    Value outputH = rewriter.create<tensor::DimOp>(operation.getLoc(), grid, 1);
+    Value outputW = rewriter.create<tensor::DimOp>(operation.getLoc(), grid, 2);
+    SmallVector<Value> dynamicSizes;
+    if (outputType.isDynamicDim(1)) {
+      dynamicSizes.push_back(outputH);
+    }
+    if (outputType.isDynamicDim(2)) {
+      dynamicSizes.push_back(outputW);
+    }
+    Value empty = rewriter.create<tensor::EmptyOp>(
+      operation.getLoc(), outputType, dynamicSizes);
+    AffineMap identity = rewriter.getMultiDimIdentityMap(4);
+    SmallVector<utils::IteratorType> iterators(4,
+                                               utils::IteratorType::parallel);
+    auto result = rewriter.create<linalg::GenericOp>(
+      operation.getLoc(),
+      outputType,
+      ValueRange{},
+      ValueRange{empty},
+      ArrayRef<AffineMap>{identity},
+      iterators,
+      [&](OpBuilder& nested, Location location, ValueRange) {
+        Type f32 = nested.getF32Type();
+        Type i64 = nested.getI64Type();
+        Value batch = nested.create<linalg::IndexOp>(location, 0);
+        Value outputY = nested.create<linalg::IndexOp>(location, 1);
+        Value outputX = nested.create<linalg::IndexOp>(location, 2);
+        Value channel = nested.create<linalg::IndexOp>(location, 3);
+        Value zeroIndex = createIndexConstant(nested, location, 0);
+        Value oneIndex = createIndexConstant(nested, location, 1);
+        Value gridX = nested.create<tensor::ExtractOp>(
+          location, grid, ValueRange{batch, outputY, outputX, zeroIndex});
+        Value gridY = nested.create<tensor::ExtractOp>(
+          location, grid, ValueRange{batch, outputY, outputX, oneIndex});
+        auto coordinate = [&](Value normalized, Value inputSize) {
+          Value oneF = nested.create<arith::ConstantOp>(
+            location, nested.getF32FloatAttr(1.0F));
+          Value halfF = nested.create<arith::ConstantOp>(
+            location, nested.getF32FloatAttr(0.5F));
+          Value inputI64 =
+            nested.create<arith::IndexCastOp>(location, i64, inputSize);
+          Value inputF =
+            nested.create<arith::SIToFPOp>(location, f32, inputI64);
+          Value rebased =
+            nested.create<arith::AddFOp>(location, normalized, oneF);
+          Value source;
+          if (operation.getAlignCorner()) {
+            source = nested.create<arith::MulFOp>(
+              location,
+              nested.create<arith::MulFOp>(location, rebased, halfF),
+              nested.create<arith::SubFOp>(location, inputF, oneF));
+          } else {
+            source = nested.create<arith::MulFOp>(
+              location,
+              nested.create<arith::SubFOp>(
+                location,
+                nested.create<arith::MulFOp>(location, rebased, inputF),
+                oneF),
+              halfF);
+          }
+          Value floor = nested.create<math::FloorOp>(location, source);
+          Value lower = nested.create<arith::FPToSIOp>(location, i64, floor);
+          Value fraction =
+            nested.create<arith::SubFOp>(location, source, floor);
+          return std::pair<Value, Value>{lower, fraction};
+        };
+        auto [sourceY, fractionY] = coordinate(gridY, inputH);
+        auto [sourceX, fractionX] = coordinate(gridX, inputW);
+        Value oneI64 = nested.create<arith::ConstantIntOp>(location, 1, 64);
+        Value nextY = nested.create<arith::AddIOp>(location, sourceY, oneI64);
+        Value nextX = nested.create<arith::AddIOp>(location, sourceX, oneI64);
+        Value inputHI64 =
+          nested.create<arith::IndexCastOp>(location, i64, inputH);
+        Value inputWI64 =
+          nested.create<arith::IndexCastOp>(location, i64, inputW);
+        Value zeroI64 = nested.create<arith::ConstantIntOp>(location, 0, 64);
+        Value oneF = nested.create<arith::ConstantOp>(
+          location, nested.getF32FloatAttr(1.0F));
+        Value zeroF = nested.create<arith::ConstantOp>(
+          location, nested.getF32FloatAttr(0.0F));
+        auto extract = [&](Value y, Value x) {
+          Value validYLow = nested.create<arith::CmpIOp>(
+            location, arith::CmpIPredicate::sge, y, zeroI64);
+          Value validYHigh = nested.create<arith::CmpIOp>(
+            location, arith::CmpIPredicate::slt, y, inputHI64);
+          Value validXLow = nested.create<arith::CmpIOp>(
+            location, arith::CmpIPredicate::sge, x, zeroI64);
+          Value validXHigh = nested.create<arith::CmpIOp>(
+            location, arith::CmpIPredicate::slt, x, inputWI64);
+          Value valid = nested.create<arith::AndIOp>(
+            location,
+            nested.create<arith::AndIOp>(location, validYLow, validYHigh),
+            nested.create<arith::AndIOp>(location, validXLow, validXHigh));
+          Value maximumY =
+            nested.create<arith::SubIOp>(location, inputHI64, oneI64);
+          Value maximumX =
+            nested.create<arith::SubIOp>(location, inputWI64, oneI64);
+          Value boundedY = nested.create<arith::MaxSIOp>(
+            location,
+            nested.create<arith::MinSIOp>(location, y, maximumY),
+            zeroI64);
+          Value boundedX = nested.create<arith::MaxSIOp>(
+            location,
+            nested.create<arith::MinSIOp>(location, x, maximumX),
+            zeroI64);
+          Value yIndex = nested.create<arith::IndexCastOp>(
+            location, nested.getIndexType(), boundedY);
+          Value xIndex = nested.create<arith::IndexCastOp>(
+            location, nested.getIndexType(), boundedX);
+          Value sample = nested.create<tensor::ExtractOp>(
+            location, input, ValueRange{batch, yIndex, xIndex, channel});
+          return Value(
+            nested.create<arith::SelectOp>(location, valid, sample, zeroF));
+        };
+        Value top = nested.create<arith::AddFOp>(
+          location,
+          nested.create<arith::MulFOp>(
+            location,
+            extract(sourceY, sourceX),
+            nested.create<arith::SubFOp>(location, oneF, fractionX)),
+          nested.create<arith::MulFOp>(
+            location, extract(sourceY, nextX), fractionX));
+        Value bottom = nested.create<arith::AddFOp>(
+          location,
+          nested.create<arith::MulFOp>(
+            location,
+            extract(nextY, sourceX),
+            nested.create<arith::SubFOp>(location, oneF, fractionX)),
+          nested.create<arith::MulFOp>(
+            location, extract(nextY, nextX), fractionX));
+        Value value = nested.create<arith::AddFOp>(
+          location,
+          nested.create<arith::MulFOp>(
+            location,
+            top,
+            nested.create<arith::SubFOp>(location, oneF, fractionY)),
+          nested.create<arith::MulFOp>(location, bottom, fractionY));
+        nested.create<linalg::YieldOp>(location, value);
+      });
+    rewriter.replaceOp(operation, result.getResults());
     return success();
   }
 };
@@ -4921,6 +5328,7 @@ class ConvertNCNNToTosaPass final
                  ConvertEmbed,
                  ConvertMultiHeadAttention,
                  ConvertSDPA,
+                 ConvertGridSample,
                  ConvertGELU,
                  ConvertBatchNorm,
                  ConvertPermute,
@@ -4980,6 +5388,7 @@ class ConvertNCNNToTosaPass final
                         EmbedOp,
                         MultiHeadAttentionOp,
                         SDPAOp,
+                        GridSampleOp,
                         GELUOp,
                         BatchNormOp,
                         PermuteOp,

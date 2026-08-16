@@ -30,7 +30,7 @@ ImportResult validate_layer(const LayerContext& context,
 
 ImportResult import_padding(ImportContext& importer,
                             const LayerContext& context) {
-  constexpr int kAllowed[] = {0, 1, 2, 3, 4, 5, 6};
+  constexpr int kAllowed[] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
   auto valid = validate_layer(context, kAllowed);
   if (!valid) {
     return valid;
@@ -41,10 +41,21 @@ ImportResult import_padding(ImportContext& importer,
   auto left = get_int(params, 2, 0, "left");
   auto right = get_int(params, 3, 0, "right");
   auto type = get_int(params, 4, 0, "type");
-  auto value = get_float(params, 5, 0.0F, "value");
+  auto value = [&]() -> std::expected<float, std::string> {
+    const auto* entry = find_param(params, 5);
+    if (entry != nullptr &&
+        entry->get_kind() == ncnn_graph::ParamValue::Kind::Int &&
+        entry->get_int() == 0) {
+      return 0.0F;
+    }
+    return get_float(params, 5, 0.0F, "value");
+  }();
   auto perChannel = get_int(params, 6, 0, "per_channel_pad_data_size");
+  auto front = get_int(params, 7, 0, "front");
+  auto behind = get_int(params, 8, 0, "behind");
   if (!top || !bottom || !left || !right || !type || !value || !perChannel ||
-      *type != 0 || *perChannel != 0) {
+      !front || !behind || (*type != 0 && *type != 2) || *perChannel != 0 ||
+      *front != 0 || *behind != 0) {
     return std::unexpected(make_error(
       context,
       "Padding only supports constant spatial padding without per-channel "
@@ -53,6 +64,17 @@ ImportResult import_padding(ImportContext& importer,
   auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
   if (!input) {
     return std::unexpected(input.error());
+  }
+  bool normalizedRank4Reflection = false;
+  if (*type == 2) {
+    auto expand = input->getDefiningOp<mlir::ncnn::ExpandDimsOp>();
+    if (!expand || expand.getAxes().size() != 1 || expand.getAxes()[0] != 1) {
+      return std::unexpected(make_error(
+        context,
+        "reflection Padding requires ExpandDims axis 1 normalization"));
+    }
+    *input = expand.getInput();
+    normalizedRank4Reflection = true;
   }
   auto& builder = importer.builder();
   auto i64 = [&builder](int64_t value) {
@@ -64,6 +86,7 @@ ImportResult import_padding(ImportContext& importer,
   properties.left = i64(*left);
   properties.right = i64(*right);
   properties.value = builder.getF32FloatAttr(*value);
+  properties.padding_type = builder.getI64IntegerAttr(*type);
   auto result = importer.infer_single_tensor_result<mlir::ncnn::PaddingOp>(
     builder.getUnknownLoc(), *input, properties);
   if (mlir::failed(result)) {
@@ -77,7 +100,12 @@ ImportResult import_padding(ImportContext& importer,
                                           properties.bottom,
                                           properties.left,
                                           properties.right,
-                                          properties.value);
+                                          properties.value,
+                                          properties.padding_type);
+  if (normalizedRank4Reflection) {
+    operation->setAttr("ncnn.normalized_rank4_reflection",
+                       builder.getUnitAttr());
+  }
   importer.tag_source(operation, context);
   return importer.bind_blob(
     context, context.layer.get_outputs()[0], operation.getOutput());
@@ -85,31 +113,56 @@ ImportResult import_padding(ImportContext& importer,
 
 ImportResult import_interp(ImportContext& importer,
                            const LayerContext& context) {
-  constexpr int kAllowed[] = {0, 1, 2, 3, 4, 6};
-  auto valid = validate_layer(context, kAllowed);
-  if (!valid) {
-    return valid;
-  }
+  constexpr int kAllowed[] = {0, 1, 2, 3, 4, 5, 6, 9};
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto mask = validate_feature_mask(context.layer.get_params());
   const auto& params = context.layer.get_params();
   auto resizeType = get_int(params, 0, 0, "resize_type");
   auto heightScale = get_float(params, 1, 1.0F, "height_scale");
   auto widthScale = get_float(params, 2, 1.0F, "width_scale");
   auto outputH = get_int(params, 3, 0, "output_h");
   auto outputW = get_int(params, 4, 0, "output_w");
+  auto dynamicTarget = get_int(params, 5, 0, "dynamic_target_size");
   auto alignCorner = get_int(params, 6, 0, "align_corner");
-  if (!resizeType || !heightScale || !widthScale || !outputH || !outputW ||
-      !alignCorner || *resizeType != 1 || *alignCorner != 0 ||
+  auto arity = expect_source_arity(
+    context.layer, dynamicTarget && *dynamicTarget == 1 ? 2 : 1, 1);
+  if (!allowed || !mask || !resizeType || !heightScale || !widthScale ||
+      !outputH || !outputW || !dynamicTarget || !alignCorner || !arity ||
+      (*resizeType != 1 && *resizeType != 2) ||
+      (*resizeType == 1 && *alignCorner != 0) ||
+      (*alignCorner != 0 && *alignCorner != 1) ||
+      (*dynamicTarget != 0 && *dynamicTarget != 1) ||
       !std::isfinite(*heightScale) || !std::isfinite(*widthScale) ||
       *heightScale < 1.0F || *widthScale < 1.0F ||
       std::trunc(*heightScale) != *heightScale ||
       std::trunc(*widthScale) != *widthScale) {
     return std::unexpected(make_error(
       context,
-      "Interp only supports nearest resize by positive integer scale"));
+      "Interp supports nearest or bilinear resize with valid integer scale, "
+      "alignment, and optional dynamic target only"));
+  }
+  if (*dynamicTarget == 1) {
+    auto expression = params.get_string(9);
+    if (!expression || expression->get() != "1w,1h" || *outputH != 0 ||
+        *outputW != 0) {
+      return std::unexpected(make_error(
+        context, "Interp dynamic target requires size expression '1w,1h'"));
+    }
+  } else if (params.has(9)) {
+    return std::unexpected(
+      make_error(context, "Interp size expression requires dynamic target"));
   }
   auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
   if (!input) {
     return std::unexpected(input.error());
+  }
+  mlir::Value sizeReference;
+  if (*dynamicTarget == 1) {
+    auto reference = importer.find_blob(context, context.layer.get_inputs()[1]);
+    if (!reference) {
+      return std::unexpected(reference.error());
+    }
+    sizeReference = *reference;
   }
   auto inputType = mlir::dyn_cast<mlir::RankedTensorType>(input->getType());
   const auto heightFactor = static_cast<int64_t>(*heightScale);
@@ -124,18 +177,78 @@ ImportResult import_interp(ImportContext& importer,
   properties.width_scale = builder.getI64IntegerAttr(widthFactor);
   properties.output_h = builder.getI64IntegerAttr(*outputH);
   properties.output_w = builder.getI64IntegerAttr(*outputW);
+  properties.resize_type = builder.getI64IntegerAttr(*resizeType);
+  properties.align_corner = builder.getBoolAttr(*alignCorner != 0);
+  llvm::SmallVector<mlir::Value> operands{*input};
+  if (sizeReference) {
+    operands.push_back(sizeReference);
+  }
   auto result = importer.infer_single_tensor_result<mlir::ncnn::InterpOp>(
-    builder.getUnknownLoc(), *input, properties);
+    builder.getUnknownLoc(), operands, properties);
   if (mlir::failed(result)) {
     return std::unexpected(make_error(context, importer.captured_diagnostic()));
   }
-  auto operation = builder.create<mlir::ncnn::InterpOp>(builder.getUnknownLoc(),
-                                                        *result,
-                                                        *input,
-                                                        properties.height_scale,
-                                                        properties.width_scale,
-                                                        properties.output_h,
-                                                        properties.output_w);
+  auto operation =
+    builder.create<mlir::ncnn::InterpOp>(builder.getUnknownLoc(),
+                                         *result,
+                                         *input,
+                                         sizeReference,
+                                         properties.height_scale,
+                                         properties.width_scale,
+                                         properties.output_h,
+                                         properties.output_w,
+                                         properties.resize_type,
+                                         properties.align_corner);
+  importer.tag_source(operation, context);
+  return importer.bind_blob(
+    context, context.layer.get_outputs()[0], operation.getOutput());
+}
+
+ImportResult import_grid_sample(ImportContext& importer,
+                                const LayerContext& context) {
+  constexpr int kAllowed[] = {0, 1, 2, 3};
+  auto arity = expect_source_arity(context.layer, 2, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto mask = validate_feature_mask(context.layer.get_params());
+  const auto& params = context.layer.get_params();
+  auto sampleType = get_int(params, 0, 1, "sample_type");
+  auto paddingMode = get_int(params, 1, 1, "padding_mode");
+  auto alignCorner = get_int(params, 2, 0, "align_corner");
+  auto permuteFusion = get_int(params, 3, 0, "permute_fusion");
+  if (!arity || !allowed || !mask || !sampleType || !paddingMode ||
+      !alignCorner || !permuteFusion || *sampleType != 1 || *paddingMode != 1 ||
+      (*alignCorner != 0 && *alignCorner != 1) || *permuteFusion != 1 ||
+      !context.layer.get_weights().empty()) {
+    return std::unexpected(make_error(
+      context,
+      "GridSample supports 2D bilinear zero padding with permute fusion"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  auto grid = importer.find_blob(context, context.layer.get_inputs()[1]);
+  if (!input || !grid) {
+    return std::unexpected(!input ? input.error() : grid.error());
+  }
+  auto& builder = importer.builder();
+  mlir::ncnn::GridSampleOp::Properties properties;
+  properties.sample_type = builder.getI64IntegerAttr(*sampleType);
+  properties.padding_mode = builder.getI64IntegerAttr(*paddingMode);
+  properties.align_corner = builder.getBoolAttr(*alignCorner != 0);
+  properties.permute_fusion = builder.getBoolAttr(true);
+  llvm::SmallVector<mlir::Value> operands{*input, *grid};
+  auto result = importer.infer_single_tensor_result<mlir::ncnn::GridSampleOp>(
+    builder.getUnknownLoc(), operands, properties);
+  if (mlir::failed(result)) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto operation =
+    builder.create<mlir::ncnn::GridSampleOp>(builder.getUnknownLoc(),
+                                             *result,
+                                             *input,
+                                             *grid,
+                                             properties.sample_type,
+                                             properties.padding_mode,
+                                             properties.align_corner,
+                                             properties.permute_fusion);
   importer.tag_source(operation, context);
   return importer.bind_blob(
     context, context.layer.get_outputs()[0], operation.getOutput());

@@ -1364,5 +1364,122 @@ TEST(NumericalDynamicModel, PPOCRv6MediumRecArtifactsDescribeDynamicAbi) {
   EXPECT_NE(linalg_ir.find("tensor.expand_shape"), std::string::npos);
 }
 
+TEST(NumericalDynamicModel, PPUVDocMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(PP_UVDOC_DYNAMIC_LIBRARY_PATH, "pp_uvdoc_dynamic");
+  CompiledModel infer(PP_UVDOC_DYNAMIC_LIBRARY_PATH,
+                      "pp_uvdoc_dynamic_infer_output_shapes");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  ASSERT_TRUE(infer.valid()) << infer.error();
+
+  constexpr std::array<DetectionCase, 2> cases{{
+    DetectionCase{.height = 12, .width = 16},
+    DetectionCase{.height = 19, .width = 23},
+  }};
+  for (std::size_t index = 0; index < cases.size(); ++index) {
+    const DetectionCase shape = cases[index];
+    const auto runtime_shape = input_shape(shape);
+    std::array<std::int64_t, 3> output_shape{};
+    ASSERT_EQ(infer.infer_dynamic(runtime_shape, output_shape), kSuccess);
+    EXPECT_EQ(output_shape,
+              (std::array<std::int64_t, 3>{3, shape.height, shape.width}));
+
+    const std::vector<float> input = make_random_input(
+      element_count(shape), 0x5556444FU + index, -0.25F, 0.25F);
+    const ReferenceModel reference(
+      PP_UVDOC_DYNAMIC_PARAM_PATH,
+      PP_UVDOC_DYNAMIC_BIN_PATH,
+      "in0",
+      "out0",
+      TensorShape(
+        static_cast<int>(shape.width), static_cast<int>(shape.height), 3));
+    const auto expected = run_ncnn_reference(reference, input);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    ASSERT_EQ(expected->size(), element_count(shape));
+    std::vector<float> actual(expected->size());
+    ASSERT_EQ(compiled.run_dynamic(input, runtime_shape, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 3.0e-3F))
+      << shape.height << 'x' << shape.width;
+    EXPECT_TRUE(std::ranges::all_of(
+      actual, [](float value) { return std::isfinite(value); }));
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPUVDocSupportsAlternatingShapes) {
+  CompiledModel compiled(PP_UVDOC_DYNAMIC_LIBRARY_PATH, "pp_uvdoc_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  const DetectionCase first{.height = 10, .width = 14};
+  const DetectionCase second{.height = 17, .width = 11};
+  const std::vector<float> first_input =
+    make_random_input(element_count(first), 0x55564131U, -0.2F, 0.2F);
+  const std::vector<float> second_input =
+    make_random_input(element_count(second), 0x55564132U, -0.2F, 0.2F);
+  std::vector<float> first_output(element_count(first));
+  std::vector<float> second_output(element_count(second));
+  std::vector<float> repeated_output(element_count(first));
+  ASSERT_EQ(
+    compiled.run_dynamic(
+      first_input, input_shape(first), first_output, first_output.size()),
+    kSuccess);
+  ASSERT_EQ(
+    compiled.run_dynamic(
+      second_input, input_shape(second), second_output, second_output.size()),
+    kSuccess);
+  ASSERT_EQ(
+    compiled.run_dynamic(
+      first_input, input_shape(first), repeated_output, repeated_output.size()),
+    kSuccess);
+  EXPECT_EQ(repeated_output, first_output);
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPUVDocRejectsInvalidShapesAndCapacity) {
+  CompiledModel compiled(PP_UVDOC_DYNAMIC_LIBRARY_PATH, "pp_uvdoc_dynamic");
+  CompiledModel infer(PP_UVDOC_DYNAMIC_LIBRARY_PATH,
+                      "pp_uvdoc_dynamic_infer_output_shapes");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  ASSERT_TRUE(infer.valid()) << infer.error();
+  const DetectionCase valid{.height = 8, .width = 9};
+  const std::vector<float> input(element_count(valid), 0.0F);
+  std::vector<float> output(element_count(valid));
+  const std::array<std::int64_t, 3> invalid_shape{3, 1, 9};
+  std::array<std::int64_t, 3> output_shape{};
+  EXPECT_EQ(infer.infer_dynamic(invalid_shape, output_shape),
+            kConstraintViolation);
+  EXPECT_EQ(compiled.run_dynamic(input, invalid_shape, output, output.size()),
+            kConstraintViolation);
+  output.pop_back();
+  EXPECT_EQ(
+    compiled.run_dynamic(input, input_shape(valid), output, output.size()),
+    kOutputCapacityInsufficient);
+}
+
+TEST(NumericalDynamicModel, PPUVDocArtifactsDescribeDynamicAbi) {
+  EXPECT_GT(std::filesystem::file_size(PP_UVDOC_DYNAMIC_LIBRARY_PATH), 0U);
+  const std::string manifest = read_text(PP_UVDOC_DYNAMIC_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_uvdoc_dynamic"), std::string::npos);
+  EXPECT_NE(manifest.find("\"minimum\": 2"), std::string::npos);
+  EXPECT_NE(manifest.find("\"shape_source_input\": 0"), std::string::npos);
+  const std::string header = read_text(PP_UVDOC_DYNAMIC_HEADER_PATH);
+  for (const std::string_view required : {
+         "#define PP_UVDOC_DYNAMIC_INPUT1_DYNAMIC_DIM_MASK UINT32_C(0x6)",
+         "#define PP_UVDOC_DYNAMIC_OUTPUT1_DYNAMIC_DIM_MASK UINT32_C(0x6)",
+         "pp_uvdoc_dynamic_infer_output_shapes",
+         "uint64_t output1_capacity",
+       }) {
+    EXPECT_NE(header.find(required), std::string::npos) << required;
+  }
+  const std::string ncnn_ir = read_text(PP_UVDOC_DYNAMIC_NCNN_IR_PATH);
+  EXPECT_NE(ncnn_ir.find("ncnn.grid_sample"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("padding_type = 2"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("negative_slope"), std::string::npos);
+  const std::string linalg_ir = read_text(PP_UVDOC_DYNAMIC_LINALG_IR_PATH);
+  EXPECT_EQ(linalg_ir.find("ncnn.grid_sample"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.interp"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.padding"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("math.floor"), std::string::npos);
+}
+
 }  // namespace
 }  // namespace ncnn_compiler::test

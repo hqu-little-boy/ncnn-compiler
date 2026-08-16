@@ -284,6 +284,12 @@ ImportResult import_squeeze(ImportContext& importer,
   if (!input) {
     return std::unexpected(input.error());
   }
+  if (auto padding = input->getDefiningOp<mlir::ncnn::PaddingOp>();
+      padding && padding->hasAttr("ncnn.normalized_rank4_reflection") &&
+      axes->size() == 1 && (*axes)[0] == 1) {
+    return importer.bind_blob(
+      context, context.layer.get_outputs()[0], padding.getOutput());
+  }
   auto& builder = importer.builder();
   mlir::ncnn::SqueezeOp::Properties properties;
   properties.axes = builder.getDenseI64ArrayAttr(*axes);

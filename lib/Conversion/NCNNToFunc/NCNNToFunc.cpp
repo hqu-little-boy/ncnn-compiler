@@ -409,6 +409,32 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
           shapeTransforms[result] = {.dimensions = std::move(dimensions)};
           continue;
         }
+        if (auto interp = dyn_cast<InterpOp>(operation);
+            interp && interp.getSizeReference()) {
+          auto reference = shapeTransforms.find(interp.getSizeReference());
+          if (reference != shapeTransforms.end() &&
+              reference->second.dimensions.size() == 3) {
+            ShapeTransform dimensions = reference->second;
+            dimensions.dimensions[0] = {
+              .expression = ShapeExpr::constant(resultType.getShape()[0]),
+              .v1 = std::nullopt};
+            shapeTransforms[result] = std::move(dimensions);
+          }
+          continue;
+        }
+        if (auto gridSample = dyn_cast<GridSampleOp>(operation)) {
+          auto input = shapeTransforms.find(gridSample.getInput());
+          auto grid = shapeTransforms.find(gridSample.getGrid());
+          if (input != shapeTransforms.end() && grid != shapeTransforms.end() &&
+              input->second.dimensions.size() == 3 &&
+              grid->second.dimensions.size() == 3) {
+            shapeTransforms[result] = {
+              .dimensions = {input->second.dimensions[0],
+                             grid->second.dimensions[1],
+                             grid->second.dimensions[2]}};
+          }
+          continue;
+        }
         source = shapeTransforms.find(operation.getOperand(0));
         if (source == shapeTransforms.end()) {
           continue;

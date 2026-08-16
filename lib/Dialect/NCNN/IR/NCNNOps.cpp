@@ -367,16 +367,34 @@ FailureOr<RankedTensorType> computePaddingResult(
 FailureOr<RankedTensorType> computeInterpResult(
   std::optional<Location> location,
   RankedTensorType input,
+  RankedTensorType sizeReference,
   int64_t heightScale,
   int64_t widthScale,
   int64_t outputH,
-  int64_t outputW) {
+  int64_t outputW,
+  int64_t resizeType,
+  bool alignCorner) {
   if (!input || !input.getElementType().isF32() || input.getRank() != 3 ||
-      heightScale <= 0 || widthScale <= 0 || outputH < 0 || outputW < 0) {
+      heightScale <= 0 || widthScale <= 0 || outputH < 0 || outputW < 0 ||
+      (resizeType != 1 && resizeType != 2) ||
+      (resizeType == 1 && alignCorner)) {
     return emitOptionalError(
       location,
-      "Interp requires an FP32 CHW input, positive scales, and non-negative "
-      "output dimensions");
+      "Interp requires FP32 CHW input, nearest or bilinear mode, valid "
+      "alignment, positive scales, and non-negative output dimensions");
+  }
+  if (sizeReference) {
+    if (!sizeReference.getElementType().isF32() ||
+        sizeReference.getRank() != 3 || outputH != 0 || outputW != 0) {
+      return emitOptionalError(
+        location,
+        "Interp size reference must be an FP32 CHW tensor without explicit "
+        "output dimensions");
+    }
+    return RankedTensorType::get({input.getShape()[0],
+                                  sizeReference.getShape()[1],
+                                  sizeReference.getShape()[2]},
+                                 input.getElementType());
   }
   auto scaleDimension = [&](unsigned dimension,
                             int64_t scale) -> FailureOr<int64_t> {
@@ -393,6 +411,27 @@ FailureOr<RankedTensorType> computeInterpResult(
   }
   return RankedTensorType::get({input.getShape()[0], *height, *width},
                                input.getElementType());
+}
+
+FailureOr<RankedTensorType> computeGridSampleResult(
+  std::optional<Location> location,
+  RankedTensorType input,
+  RankedTensorType grid,
+  int64_t sampleType,
+  int64_t paddingMode,
+  bool permuteFusion) {
+  if (!input || !grid || !input.getElementType().isF32() ||
+      !grid.getElementType().isF32() || input.getRank() != 3 ||
+      grid.getRank() != 3 || sampleType != 1 || paddingMode != 1 ||
+      !permuteFusion || grid.getShape()[0] != 2) {
+    return emitOptionalError(
+      location,
+      "GridSample supports FP32 CHW input, [2,H,W] grid, bilinear zero "
+      "padding, and permute fusion only");
+  }
+  return RankedTensorType::get(
+    {input.getShape()[0], grid.getShape()[1], grid.getShape()[2]},
+    input.getElementType());
 }
 
 FailureOr<RankedTensorType> computeDetectionOutputResult(
@@ -1818,15 +1857,56 @@ LogicalResult InterpOp::inferReturnTypeComponents(
   auto result = computeInterpResult(
     location,
     dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    adaptor.getSizeReference()
+      ? dyn_cast<RankedTensorType>(adaptor.getSizeReference().getType())
+      : RankedTensorType{},
     adaptor.getHeightScale(),
     adaptor.getWidthScale(),
     adaptor.getOutputH(),
-    adaptor.getOutputW());
+    adaptor.getOutputW(),
+    adaptor.getResizeType(),
+    adaptor.getAlignCorner());
   if (failed(result)) {
     return failure();
   }
   inferredReturnShapes.emplace_back(result->getShape(),
                                     result->getElementType());
+  return success();
+}
+
+LogicalResult GridSampleOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  GridSampleOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeGridSampleResult(
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    dyn_cast<RankedTensorType>(adaptor.getGrid().getType()),
+    adaptor.getSampleType(),
+    adaptor.getPaddingMode(),
+    adaptor.getPermuteFusion());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult GridSampleOp::verify() {
+  auto expected = computeGridSampleResult(getLoc(),
+                                          getInput().getType(),
+                                          getGrid().getType(),
+                                          getSampleType(),
+                                          getPaddingMode(),
+                                          getPermuteFusion());
+  if (failed(expected)) {
+    return failure();
+  }
+  if (getOutput().getType() != *expected) {
+    return emitOpError("result type does not match input and grid");
+  }
   return success();
 }
 

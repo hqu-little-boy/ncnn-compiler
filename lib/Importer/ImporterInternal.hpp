@@ -159,6 +159,8 @@ ImportResult import_padding(ImportContext& importer,
                             const LayerContext& context);
 ImportResult import_interp(ImportContext& importer,
                            const LayerContext& context);
+ImportResult import_grid_sample(ImportContext& importer,
+                                const LayerContext& context);
 ImportResult import_sigmoid(ImportContext& importer,
                             const LayerContext& context);
 ImportResult import_tanh(ImportContext& importer, const LayerContext& context);
@@ -193,6 +195,7 @@ ImportResult import_reduction(ImportContext& importer,
 ImportResult import_pooling(ImportContext& importer,
                             const LayerContext& context);
 ImportResult import_relu(ImportContext& importer, const LayerContext& context);
+ImportResult import_prelu(ImportContext& importer, const LayerContext& context);
 ImportResult import_dropout(ImportContext& importer,
                             const LayerContext& context);
 ImportResult import_softmax(ImportContext& importer,

@@ -962,6 +962,14 @@ ncnn_add_compiled_fixture(
     6:1:min=1,multiple=1
     EMIT_IR)
 ncnn_add_compiled_fixture(
+    pp_uvdoc_dynamic
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-UVDoc.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-UVDoc.bin
+    3x?x?
+    0:1:min=2,multiple=1
+    0:2:min=2,multiple=1
+    EMIT_IR)
+ncnn_add_compiled_fixture(
     convolution_mixed_fp16
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
     ${convolution_bin}
@@ -1738,7 +1746,14 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
     PP_OCRV5_MOBILE_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_mobile_det_dynamic_LIBRARY}"
     PP_OCRV5_SERVER_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
     PP_OCRV5_SERVER_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
-    PP_OCRV5_SERVER_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_server_det_dynamic_LIBRARY}")
+    PP_OCRV5_SERVER_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_server_det_dynamic_LIBRARY}"
+    PP_UVDOC_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-UVDoc.param"
+    PP_UVDOC_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-UVDoc.bin"
+    PP_UVDOC_DYNAMIC_LIBRARY_PATH="${pp_uvdoc_dynamic_LIBRARY}"
+    PP_UVDOC_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_uvdoc_dynamic/pp_uvdoc_dynamic.json"
+    PP_UVDOC_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_uvdoc_dynamic/pp_uvdoc_dynamic.h"
+    PP_UVDOC_DYNAMIC_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_uvdoc_dynamic/model.ncnn.mlir"
+    PP_UVDOC_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_uvdoc_dynamic/model.linalg.mlir")
 add_dependencies(numerical_dynamic_tests
     compile_pp_ocrv5_mobile_det_dynamic
     compile_pp_ocrv6_tiny_det_dynamic
@@ -1751,7 +1766,8 @@ add_dependencies(numerical_dynamic_tests
     compile_pp_ocrv5_mobile_rec_dynamic
     compile_pp_ocrv5_server_rec_dynamic
     compile_pp_ocrv6_medium_rec_dynamic
-    compile_pp_ocrv5_server_det_dynamic)
+    compile_pp_ocrv5_server_det_dynamic
+    compile_pp_uvdoc_dynamic)
 
 set(numerical_test_timeout 900)
 set(numerical_dynamic_test_timeout 3600)
