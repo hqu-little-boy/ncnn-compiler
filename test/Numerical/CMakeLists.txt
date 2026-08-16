@@ -792,6 +792,29 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.bin
     3x224x224)
 ncnn_add_compiled_fixture(
+    pp_lcnet_x1_0_doc_ori_int8_dynamic
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.bin
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1
+    EMIT_IR)
+set(pp_lcnet_doc_ori_int8_backbone_bin
+    ${CMAKE_CURRENT_BINARY_DIR}/fixtures/pp_lcnet_doc_ori_int8_backbone.bin)
+execute_process(
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_int8_bins.py
+            ${pp_lcnet_doc_ori_int8_backbone_bin}
+            pp_lcnet_doc_ori_int8_backbone
+            ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.bin
+    COMMAND_ERROR_IS_FATAL ANY)
+ncnn_add_compiled_fixture(
+    pp_lcnet_x1_0_doc_ori_int8_backbone_dynamic
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pp_lcnet_doc_ori_int8_backbone.param
+    ${pp_lcnet_doc_ori_int8_backbone_bin}
+    3x?x?
+    0:1:min=1,multiple=1
+    0:2:min=1,multiple=1)
+ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_textline_ori
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin
@@ -1471,6 +1494,7 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_LCNET_DOC_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
     PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
     PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}"
+    PP_LCNET_DOC_ORI_INT8_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_int8_LIBRARY}"
     PP_LCNET_TEXTLINE_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param"
     PP_LCNET_TEXTLINE_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin"
     PP_LCNET_TEXTLINE_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_LIBRARY}"
@@ -1705,6 +1729,15 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
     PP_LCNET_DOC_ORI_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_dynamic/pp_lcnet_x1_0_doc_ori_dynamic.json"
     PP_LCNET_DOC_ORI_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_dynamic/pp_lcnet_x1_0_doc_ori_dynamic.h"
     PP_LCNET_DOC_ORI_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_dynamic/model.linalg.mlir"
+    PP_LCNET_DOC_ORI_INT8_STATIC_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_int8_LIBRARY}"
+    PP_LCNET_DOC_ORI_INT8_DYNAMIC_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_int8_dynamic_LIBRARY}"
+    PP_LCNET_DOC_ORI_INT8_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_int8_dynamic/pp_lcnet_x1_0_doc_ori_int8_dynamic.json"
+    PP_LCNET_DOC_ORI_INT8_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_int8_dynamic/pp_lcnet_x1_0_doc_ori_int8_dynamic.h"
+    PP_LCNET_DOC_ORI_INT8_DYNAMIC_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_int8_dynamic/model.ncnn.mlir"
+    PP_LCNET_DOC_ORI_INT8_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_doc_ori_int8_dynamic/model.linalg.mlir"
+    PP_LCNET_DOC_ORI_INT8_BACKBONE_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pp_lcnet_doc_ori_int8_backbone.param"
+    PP_LCNET_DOC_ORI_INT8_BACKBONE_BIN_PATH="${pp_lcnet_doc_ori_int8_backbone_bin}"
+    PP_LCNET_DOC_ORI_INT8_BACKBONE_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_int8_backbone_dynamic_LIBRARY}"
     PP_LCNET_TEXTLINE_ORI_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param"
     PP_LCNET_TEXTLINE_ORI_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin"
     PP_LCNET_TEXTLINE_ORI_DYNAMIC_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_dynamic_LIBRARY}"
@@ -1760,6 +1793,8 @@ add_dependencies(numerical_dynamic_tests
     compile_pp_ocrv6_small_det_dynamic
     compile_pp_ocrv6_medium_det_dynamic
     compile_pp_lcnet_x1_0_doc_ori_dynamic
+    compile_pp_lcnet_x1_0_doc_ori_int8_dynamic
+    compile_pp_lcnet_x1_0_doc_ori_int8_backbone_dynamic
     compile_pp_lcnet_x1_0_textline_ori_dynamic
     compile_chineseocr_lite_anglenet_dynamic
     compile_pp_ocrv6_tiny_rec_dynamic

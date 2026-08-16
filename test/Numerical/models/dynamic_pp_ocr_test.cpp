@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <numeric>
 #include <span>
 #include <string>
 #include <vector>
@@ -665,6 +666,134 @@ INSTANTIATE_TEST_SUITE_P(
   [](const ::testing::TestParamInfo<DynamicLCNetModel>& info) {
     return info.param.test_name;
   });
+
+TEST(NumericalDynamicModel, PPLCNetDocOriInt8BackboneMatchesNcnnAcrossShapes) {
+  CompiledModel compiled(PP_LCNET_DOC_ORI_INT8_BACKBONE_LIBRARY_PATH,
+                         "pp_lcnet_x1_0_doc_ori_int8_backbone_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const DetectionCase& shape : std::array<DetectionCase, 3>{
+         DetectionCase{.height = 160, .width = 160},
+         DetectionCase{.height = 224, .width = 224},
+         DetectionCase{.height = 256, .width = 192},
+       }) {
+    const auto dimensions = input_shape(shape);
+    const std::vector<float> input = make_random_input(
+      element_count(shape),
+      static_cast<std::uint32_t>(0x49384242U + shape.height + shape.width),
+      -1.0F,
+      1.0F);
+    const ReferenceModel reference(
+      PP_LCNET_DOC_ORI_INT8_BACKBONE_PARAM_PATH,
+      PP_LCNET_DOC_ORI_INT8_BACKBONE_BIN_PATH,
+      "in0",
+      "out0",
+      TensorShape(
+        static_cast<int>(shape.width), static_cast<int>(shape.height), 3));
+    const auto expected =
+      run_ncnn_reference(reference, input, ReferenceInferenceMode::Int8);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    ASSERT_EQ(expected->size(), 256U);
+
+    std::vector<float> actual(256);
+    ASSERT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, actual),
+              kSuccess);
+    EXPECT_TRUE(compare_values(actual, *expected, 2.5e-1F))
+      << shape.height << 'x' << shape.width;
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel,
+     PPLCNetDocOriInt8StaticAndDynamicExecutionsAreConsistent) {
+  CompiledModel static_compiled(PP_LCNET_DOC_ORI_INT8_STATIC_LIBRARY_PATH,
+                                "pp_lcnet_x1_0_doc_ori_int8");
+  CompiledModel dynamic_compiled(PP_LCNET_DOC_ORI_INT8_DYNAMIC_LIBRARY_PATH,
+                                 "pp_lcnet_x1_0_doc_ori_int8_dynamic");
+  ASSERT_TRUE(static_compiled.valid()) << static_compiled.error();
+  ASSERT_TRUE(dynamic_compiled.valid()) << dynamic_compiled.error();
+
+  const DetectionCase standard{.height = 224, .width = 224};
+  const std::vector<float> input =
+    make_random_input(element_count(standard), 0x49384655U, -1.0F, 1.0F);
+  std::vector<float> static_output(4);
+  std::vector<float> dynamic_output(4);
+  ASSERT_EQ(static_compiled.run(input, static_output), kSuccess);
+  ASSERT_EQ(dynamic_compiled.run_dynamic_fixed_output(
+              input, input_shape(standard), dynamic_output),
+            kSuccess);
+  EXPECT_TRUE(compare_values(dynamic_output, static_output, 1.0e-5F));
+
+  for (const DetectionCase& shape : std::array<DetectionCase, 3>{
+         DetectionCase{.height = 192, .width = 224},
+         DetectionCase{.height = 256, .width = 192},
+         DetectionCase{.height = 192, .width = 224},
+       }) {
+    const std::vector<float> dynamic_input(element_count(shape), 0.001F);
+    std::vector<float> output(4);
+    ASSERT_EQ(dynamic_compiled.run_dynamic_fixed_output(
+                dynamic_input, input_shape(shape), output),
+              kSuccess);
+    EXPECT_TRUE(std::ranges::all_of(output, [](float value) {
+      return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+    }));
+    EXPECT_NEAR(
+      std::accumulate(output.begin(), output.end(), 0.0F), 1.0F, 1.0e-5F);
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPLCNetDocOriInt8RejectsInvalidShapes) {
+  CompiledModel compiled(PP_LCNET_DOC_ORI_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_lcnet_x1_0_doc_ori_int8_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  const std::array<std::int64_t, 3> normal_shape{3, 80, 160};
+  const std::vector<float> input(3 * 80 * 160, 0.0F);
+  std::vector<float> output(4);
+  ASSERT_EQ(compiled.run_dynamic_fixed_output(input, normal_shape, output),
+            kSuccess);
+  for (const auto dimensions : std::array<std::array<std::int64_t, 3>, 3>{
+         {{3, 0, 160}, {3, 80, 0}, {1, 80, 160}}}) {
+    EXPECT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, output),
+              kInvalidShape);
+  }
+  const std::array<std::int64_t, 3> overflow_shape = {
+    3,
+    std::numeric_limits<std::int64_t>::max(),
+    std::numeric_limits<std::int64_t>::max(),
+  };
+  EXPECT_EQ(compiled.run_dynamic_fixed_output(input, overflow_shape, output),
+            kShapeArithmeticOverflow);
+}
+
+TEST(NumericalDynamicModel, PPLCNetDocOriInt8ArtifactsDescribeQuantizedAbi) {
+  EXPECT_GT(
+    std::filesystem::file_size(PP_LCNET_DOC_ORI_INT8_DYNAMIC_LIBRARY_PATH), 0U);
+  const std::string manifest =
+    read_text(PP_LCNET_DOC_ORI_INT8_DYNAMIC_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_lcnet_x1_0_doc_ori_int8_dynamic"),
+            std::string::npos);
+  EXPECT_NE(manifest.find("\"dynamic_dim_mask\": 6"), std::string::npos);
+  const std::string header =
+    read_text(PP_LCNET_DOC_ORI_INT8_DYNAMIC_HEADER_PATH);
+  EXPECT_NE(
+    header.find("PP_LCNET_X1_0_DOC_ORI_INT8_DYNAMIC_INPUT1_DYNAMIC_DIM_MASK "
+                "UINT32_C(0x6)"),
+    std::string::npos);
+  EXPECT_NE(
+    header.find("PP_LCNET_X1_0_DOC_ORI_INT8_DYNAMIC_OUTPUT1_DIM0 INT64_C(4)"),
+    std::string::npos);
+  const std::string ncnn_ir =
+    read_text(PP_LCNET_DOC_ORI_INT8_DYNAMIC_NCNN_IR_PATH);
+  EXPECT_NE(ncnn_ir.find("int8_scale_term = 1"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("int8_scale_term = 102"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("xi8>"), std::string::npos);
+  const std::string linalg_ir =
+    read_text(PP_LCNET_DOC_ORI_INT8_DYNAMIC_LINALG_IR_PATH);
+  EXPECT_NE(linalg_ir.find("arith.fptosi"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("arith.sitofp"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.convolution"), std::string::npos);
+}
 
 TEST(NumericalDynamicModel, ChineseOCRLiteAngleNetMatchesNcnnAcrossShapes) {
   CompiledModel compiled(CHINESEOCR_LITE_ANGLENET_DYNAMIC_LIBRARY_PATH,
