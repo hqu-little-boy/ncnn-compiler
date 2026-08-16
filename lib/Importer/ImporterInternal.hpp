@@ -9,6 +9,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -63,6 +64,7 @@ class ImportContext {
   mlir::ncnn::ShapeMode shape_mode(bool has_dynamic_input) const noexcept;
   std::optional<ncnn_importer::InputShape> next_input_shape(
     bool dimensions_omitted) noexcept;
+  bool input_uses_integer_storage(std::string_view blob_name) const noexcept;
   std::expected<mlir::Value, ImportError> find_blob(const LayerContext& context,
                                                     std::string_view name);
   ImportResult bind_blob(const LayerContext& context,
@@ -140,6 +142,7 @@ class ImportContext {
   mlir::OwningOpRef<mlir::ModuleOp> module_;
   mlir::ncnn::ModelOp model_;
   llvm::StringMap<mlir::Value> blobs_;
+  llvm::StringSet<> integer_input_blobs_;
   std::string captured_diag_;
   std::size_t imported_input_count_ = 0;
   bool sparse_input_shapes_ = false;
@@ -164,6 +167,9 @@ ImportResult import_memory_data(ImportContext& importer,
 ImportResult import_swish(ImportContext& importer, const LayerContext& context);
 ImportResult import_layer_norm(ImportContext& importer,
                                const LayerContext& context);
+ImportResult import_embed(ImportContext& importer, const LayerContext& context);
+ImportResult import_eltwise(ImportContext& importer,
+                            const LayerContext& context);
 ImportResult import_multi_head_attention(ImportContext& importer,
                                          const LayerContext& context);
 ImportResult import_detection_output(ImportContext& importer,

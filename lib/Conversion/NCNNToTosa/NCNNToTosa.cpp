@@ -3001,6 +3001,56 @@ class ConvertLayerNorm final : public OpConversionPattern<LayerNormOp> {
   }
 };
 
+class ConvertEmbed final : public OpConversionPattern<EmbedOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    EmbedOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    auto outputType = cast<RankedTensorType>(operation.getOutput().getType());
+    const int64_t words = outputType.getShape()[0];
+    const int64_t inputDim = operation.getInputDim();
+    const int64_t numOutput = operation.getNumOutput();
+    auto inputType = cast<RankedTensorType>(adaptor.getInput().getType());
+    Value indices =
+      rewriter.create<tosa::ClampOp>(operation.getLoc(),
+                                     inputType,
+                                     adaptor.getInput(),
+                                     rewriter.getI32IntegerAttr(0),
+                                     rewriter.getI32IntegerAttr(inputDim - 1));
+    indices =
+      reshapeValue(rewriter,
+                   operation.getLoc(),
+                   indices,
+                   RankedTensorType::get({1, words}, rewriter.getI32Type()));
+    Value values =
+      reshapeValue(rewriter,
+                   operation.getLoc(),
+                   adaptor.getWeight(),
+                   RankedTensorType::get({1, inputDim, numOutput},
+                                         outputType.getElementType()));
+    auto gatheredType =
+      RankedTensorType::get({1, words, numOutput}, outputType.getElementType());
+    Value result = rewriter.create<tosa::GatherOp>(
+      operation.getLoc(), gatheredType, values, indices);
+    if (!adaptor.getBias().empty()) {
+      Value bias = reshapeValue(
+        rewriter,
+        operation.getLoc(),
+        adaptor.getBias().front(),
+        RankedTensorType::get({1, 1, numOutput}, outputType.getElementType()));
+      result = rewriter.create<tosa::AddOp>(
+        operation.getLoc(), gatheredType, result, bias);
+    }
+    rewriter.replaceOp(
+      operation,
+      reshapeValue(rewriter, operation.getLoc(), result, outputType));
+    return success();
+  }
+};
+
 class ConvertMultiHeadAttention final
   : public OpConversionPattern<MultiHeadAttentionOp> {
  public:
@@ -4585,6 +4635,7 @@ class ConvertNCNNToTosaPass final
                  ConvertSwish,
                  ConvertTanH,
                  ConvertLayerNorm,
+                 ConvertEmbed,
                  ConvertMultiHeadAttention,
                  ConvertGELU,
                  ConvertBatchNorm,
@@ -4642,6 +4693,7 @@ class ConvertNCNNToTosaPass final
                         SwishOp,
                         TanHOp,
                         LayerNormOp,
+                        EmbedOp,
                         MultiHeadAttentionOp,
                         GELUOp,
                         BatchNormOp,

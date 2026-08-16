@@ -64,6 +64,11 @@ inline constexpr std::array kLayerDescriptors{
     .source_type = "LayerNorm",
     .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
   LayerDescriptor{
+    .source_type = "Embed",
+    .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "Eltwise",
+                  .capabilities = LayerCapability::Lowerable},
+  LayerDescriptor{
     .source_type = "MultiHeadAttention",
     .capabilities = LayerCapability::HasWeights | LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "ReLU",

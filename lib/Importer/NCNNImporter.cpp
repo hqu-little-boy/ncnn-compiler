@@ -122,6 +122,8 @@ std::span<const ImportEntry> importers() noexcept {
     ImportEntry{.type = "MemoryData", .handler = import_memory_data},
     ImportEntry{.type = "Swish", .handler = import_swish},
     ImportEntry{.type = "LayerNorm", .handler = import_layer_norm},
+    ImportEntry{.type = "Embed", .handler = import_embed},
+    ImportEntry{.type = "Eltwise", .handler = import_eltwise},
     ImportEntry{.type = "MultiHeadAttention",
                 .handler = import_multi_head_attention},
     ImportEntry{.type = "DetectionOutput", .handler = import_detection_output},
@@ -353,6 +355,7 @@ ImportContext::ImportContext(mlir::MLIRContext& context, ImportOptions options)
     module_(mlir::ModuleOp::create(builder_.getUnknownLoc())),
     model_(),
     blobs_(),
+    integer_input_blobs_(),
     captured_diag_(),
     imported_input_count_(0) {
   builder_.setInsertionPointToEnd(module_->getBody());
@@ -360,6 +363,13 @@ ImportContext::ImportContext(mlir::MLIRContext& context, ImportOptions options)
 
 std::expected<mlir::OwningOpRef<mlir::ModuleOp>, ImportError>
 ImportContext::run(const ncnn_graph::Graph& source) {
+  for (const ncnn_graph::Layer& layer : source.get_layers()) {
+    if (layer.get_type() == "Embed") {
+      for (std::string_view input : layer.get_inputs()) {
+        integer_input_blobs_.insert(input);
+      }
+    }
+  }
   const std::size_t input_count = source.layer_count_of("Input");
   const std::size_t omitted_input_count = std::ranges::count_if(
     source.get_layers(), [](const ncnn_graph::Layer& layer) {
@@ -459,6 +469,11 @@ std::optional<ncnn_importer::InputShape> ImportContext::next_input_shape(
     return std::nullopt;
   }
   return options_.input_shapes[imported_input_count_++];
+}
+
+bool ImportContext::input_uses_integer_storage(
+  std::string_view blob_name) const noexcept {
+  return integer_input_blobs_.contains(blob_name);
 }
 
 std::expected<mlir::Value, ImportError> ImportContext::find_blob(

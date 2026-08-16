@@ -555,6 +555,30 @@ std::expected<LayerNormParams, std::string> decode_layer_norm_params(
     .affine_size = *affine_size, .epsilon = *epsilon, .affine = *affine == 1};
 }
 
+std::expected<EmbedParams, std::string> decode_embed_params(
+  const ParamDict& params) {
+  auto outputChannels = decode_int_param(params, 0, 0, "num_output");
+  auto inputDim = decode_int_param(params, 1, 0, "input_dim");
+  auto bias = decode_int_param(params, 2, 0, "bias_term");
+  auto weightCount = decode_int_param(params, 3, 0, "weight_data_size");
+  auto int8Scale = decode_int_param(params, 18, 0, "int8_scale_term");
+  if (!outputChannels || !inputDim || !bias || !weightCount || !int8Scale) {
+    return std::unexpected("invalid Embed parameter type");
+  }
+  if (*outputChannels <= 0 || *inputDim <= 0 || (*bias != 0 && *bias != 1) ||
+      *weightCount <= 0 ||
+      *inputDim > std::numeric_limits<std::int64_t>::max() / *outputChannels ||
+      *inputDim * *outputChannels != *weightCount) {
+    return std::unexpected(
+      "Embed requires positive dimensions and input_dim * num_output weights");
+  }
+  return EmbedParams{.output_channels = *outputChannels,
+                     .input_dim = *inputDim,
+                     .has_bias = *bias == 1,
+                     .weight_count = *weightCount,
+                     .int8_scale_term = *int8Scale};
+}
+
 std::expected<MultiHeadAttentionParams, std::string>
 decode_multi_head_attention_params(const ParamDict& params) {
   auto embed_dim = decode_int_param(params, 0, 0, "embed_dim");
@@ -1615,6 +1639,34 @@ std::expected<void, std::string> load_layer_norm_weights(Layer& layer,
   return {};
 }
 
+std::expected<void, std::string> load_embed_weights(Layer& layer,
+                                                    BinCursor& cursor) {
+  auto params = decode_embed_params(layer.get_params());
+  if (!params) {
+    return std::unexpected(params.error());
+  }
+  if (params->int8_scale_term != 0) {
+    return std::unexpected("quantized Embed weights are unsupported");
+  }
+  auto weight = load_weight(cursor,
+                            params->weight_count,
+                            0,
+                            {params->input_dim, params->output_channels});
+  if (!weight) {
+    return std::unexpected(std::format("Embed weight: {}", weight.error()));
+  }
+  layer.add_weight(std::move(*weight));
+  if (params->has_bias) {
+    auto bias = load_weight(
+      cursor, params->output_channels, 1, {params->output_channels});
+    if (!bias) {
+      return std::unexpected(std::format("Embed bias: {}", bias.error()));
+    }
+    layer.add_weight(std::move(*bias));
+  }
+  return {};
+}
+
 std::expected<void, std::string> load_multi_head_attention_weights(
   Layer& layer, BinCursor& cursor) {
   auto params = decode_multi_head_attention_params(layer.get_params());
@@ -1890,6 +1942,7 @@ std::span<const WeightLoaderEntry> weight_loaders() noexcept {
 std::span<const WeightLoaderEntry> graph_only_weight_loaders() noexcept {
   static constexpr std::array kWeightLoaders{
     WeightLoaderEntry{.type = "LayerNorm", .loader = load_layer_norm_weights},
+    WeightLoaderEntry{.type = "Embed", .loader = load_embed_weights},
     WeightLoaderEntry{.type = "MultiHeadAttention",
                       .loader = load_multi_head_attention_weights},
   };

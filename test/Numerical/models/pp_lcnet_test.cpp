@@ -717,6 +717,72 @@ TEST(NumericalModel, PPFormulaNetPlusSEncoderMatchesNcnn) {
   EXPECT_EQ(repeated, actual);
 }
 
+TEST(NumericalModel, PPFormulaNetPlusSEmbedMatchesNcnnAndClampsIndices) {
+  CompiledModel compiled(PP_FORMULANET_PLUS_S_EMBED_LIBRARY_PATH,
+                         "pp_formulanet_plus_s_embed");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  constexpr std::array<std::pair<std::int32_t, std::int32_t>, 5> kCases{{
+    {1, 0},
+    {0, 0},
+    {49999, 1028},
+    {-7, -3},
+    {50017, 2048},
+  }};
+  constexpr std::array<std::string_view, 1> kOutputs{"out0"};
+  for (const auto& [tokenIndex, positionIndex] : kCases) {
+    const std::array<std::int32_t, 1> token{tokenIndex};
+    const std::array<std::int32_t, 1> position{positionIndex};
+    const std::array inputs{
+      ReferenceInput(
+        "in0", TensorShape(1), std::span<const std::int32_t>(token)),
+      ReferenceInput(
+        "in1", TensorShape(1), std::span<const std::int32_t>(position)),
+    };
+    const auto expected =
+      run_ncnn_reference(PP_FORMULANET_PLUS_S_EMBED_PARAM_PATH,
+                         PP_FORMULANET_PLUS_S_EMBED_BIN_PATH,
+                         inputs,
+                         kOutputs);
+    ASSERT_TRUE(expected.has_value()) << expected.error();
+    ASSERT_EQ((*expected)[0].size(), 384U);
+
+    std::vector<float> actual(384);
+    ASSERT_EQ(compiled.run_two_integer_inputs(token, position, actual), 0);
+    EXPECT_TRUE(compare_values(actual, (*expected)[0], 1.0e-4F))
+      << "token=" << tokenIndex << ", position=" << positionIndex;
+    EXPECT_TRUE(std::ranges::all_of(
+      actual, [](float value) { return std::isfinite(value); }));
+    std::vector<float> repeated(384);
+    ASSERT_EQ(compiled.run_two_integer_inputs(token, position, repeated), 0);
+    EXPECT_EQ(repeated, actual);
+  }
+}
+
+TEST(NumericalModel, PPFormulaNetPlusSEmbedArtifactsUseStaticIntegerAbi) {
+  const std::string manifest =
+    read_text(PP_FORMULANET_PLUS_S_EMBED_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_formulanet_plus_s_embed"), std::string::npos);
+  EXPECT_EQ(std::ranges::count(manifest, '?'), 0);
+  EXPECT_EQ(manifest.find("-1"), std::string::npos);
+  EXPECT_NE(manifest.find("\"element_type\": \"i32\""),
+            manifest.rfind("\"element_type\": \"i32\""));
+  EXPECT_NE(manifest.find("\"element_type\": \"f32\""), std::string::npos);
+
+  const std::string header = read_text(PP_FORMULANET_PLUS_S_EMBED_HEADER_PATH);
+  for (const std::string_view required : {
+         "#define PP_FORMULANET_PLUS_S_EMBED_INPUT1_DIM0 INT64_C(1)",
+         "#define PP_FORMULANET_PLUS_S_EMBED_INPUT2_DIM0 INT64_C(1)",
+         "#define PP_FORMULANET_PLUS_S_EMBED_OUTPUT1_DIM0 INT64_C(1)",
+         "#define PP_FORMULANET_PLUS_S_EMBED_OUTPUT1_DIM1 INT64_C(384)",
+         "int pp_formulanet_plus_s_embed(const int32_t *input1, const int32_t "
+         "*input2, float *output1);",
+       }) {
+    EXPECT_NE(header.find(required), std::string::npos) << required;
+  }
+  EXPECT_EQ(header.find("input1_shape"), std::string::npos);
+  EXPECT_EQ(header.find("_infer_output_shapes"), std::string::npos);
+}
+
 TEST(NumericalModel, PPFormulaNetArtifactsRemainStaticSpecialization) {
   const std::string manifest =
     read_text(PP_FORMULANET_PLUS_S_ENCODER_MANIFEST_PATH);

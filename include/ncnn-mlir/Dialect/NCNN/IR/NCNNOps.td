@@ -207,14 +207,23 @@ def NCNN_SwishOp : NCNN_LayerOp<"swish", [SameOperandsAndResultType]> {
   let hasVerifier = 1;
 }
 
-def NCNN_LayerNormOp
-  : NCNN_LayerOp<"layer_norm", [InferTensorTypeAdaptor]> {
+def NCNN_LayerNormOp : NCNN_LayerOp<"layer_norm", [InferTensorTypeAdaptor]> {
   let summary = "Layer normalization over the last source dimension.";
   let arguments = (ins NCNN_RankedTensor:$input,
     Variadic<NCNN_RankedTensor>:$affine_parameters,
     I64Attr:$affine_size,
     F32Attr:$epsilon,
     BoolAttr:$affine);
+  let results = (outs NCNN_RankedTensor:$output);
+}
+
+def NCNN_EmbedOp : NCNN_LayerOp<"embed", [InferTensorTypeAdaptor]> {
+  let summary = "Embedding-table lookup with ncnn index clamping.";
+  let arguments = (ins NCNN_RankedTensor:$input,
+    NCNN_RankedTensor:$weight,
+    Variadic<NCNN_RankedTensor>:$bias,
+    I64Attr:$input_dim,
+    I64Attr:$num_output);
   let results = (outs NCNN_RankedTensor:$output);
 }
 
@@ -356,8 +365,7 @@ def NCNN_QuantizeOp : NCNN_LayerOp<"quantize", [InferTensorTypeAdaptor]> {
   let results = (outs NCNN_RankedTensor:$output);
 }
 
-def NCNN_DequantizeOp
-  : NCNN_LayerOp<"dequantize", [InferTensorTypeAdaptor]> {
+def NCNN_DequantizeOp : NCNN_LayerOp<"dequantize", [InferTensorTypeAdaptor]> {
   let summary = "ncnn INT32 accumulator dequantization with optional bias.";
   let arguments = (ins NCNN_RankedTensor:$input,
     NCNN_RankedTensor:$scale,
@@ -365,8 +373,7 @@ def NCNN_DequantizeOp
   let results = (outs NCNN_RankedTensor:$output);
 }
 
-def NCNN_RequantizeOp
-  : NCNN_LayerOp<"requantize", [InferTensorTypeAdaptor]> {
+def NCNN_RequantizeOp : NCNN_LayerOp<"requantize", [InferTensorTypeAdaptor]> {
   let summary = "ncnn INT32 accumulator requantization to signed INT8.";
   let arguments = (ins NCNN_RankedTensor:$input,
     NCNN_RankedTensor:$input_scale,
@@ -379,18 +386,16 @@ def NCNN_RequantizeOp
 
 def NCNN_CastOp : NCNN_LayerOp<"cast", [InferTensorTypeAdaptor]> {
   let summary = "Explicit ncnn storage cast.";
-  let arguments = (ins NCNN_RankedTensor:$input,
-    I64Attr:$type_from,
-    I64Attr:$type_to);
+  let arguments =
+    (ins NCNN_RankedTensor:$input, I64Attr:$type_from, I64Attr:$type_to);
   let results = (outs NCNN_RankedTensor:$output);
 }
 
 def NCNN_ZeroPointCastOp
   : NCNN_LayerOp<"zero_point_cast", [InferTensorTypeAdaptor]> {
   let summary = "Explicit saturating rebias between unsigned and signed INT8.";
-  let arguments = (ins NCNN_RankedTensor:$input,
-    I64Attr:$zero_point,
-    BoolAttr:$to_unsigned);
+  let arguments =
+    (ins NCNN_RankedTensor:$input, I64Attr:$zero_point, BoolAttr:$to_unsigned);
   let results = (outs NCNN_RankedTensor:$output);
 }
 

@@ -63,15 +63,20 @@ class ReferenceInput final {
   explicit ReferenceInput(std::string_view blob_name,
                           TensorShape shape,
                           std::span<const float> values);
+  explicit ReferenceInput(std::string_view blob_name,
+                          TensorShape shape,
+                          std::span<const std::int32_t> values);
 
   [[nodiscard]] std::string_view get_blob_name() const noexcept;
   [[nodiscard]] const TensorShape& get_shape() const noexcept;
-  [[nodiscard]] std::span<const float> get_values() const noexcept;
+  [[nodiscard]] std::span<const std::byte> get_bytes() const noexcept;
+  [[nodiscard]] std::size_t get_value_count() const noexcept;
 
  private:
   std::string_view blob_name_;
   TensorShape shape_;
-  std::span<const float> values_;
+  std::span<const std::byte> bytes_;
+  std::size_t value_count_;
 };
 
 class CompiledModel final {
@@ -108,6 +113,9 @@ class CompiledModel final {
   int run_two_inputs(std::span<const float> first_input,
                      std::span<const float> second_input,
                      std::span<float> output) const;
+  int run_two_integer_inputs(std::span<const std::int32_t> first_input,
+                             std::span<const std::int32_t> second_input,
+                             std::span<float> output) const;
   int run_three_inputs_two_outputs(std::span<const float> first_input,
                                    std::span<const float> second_input,
                                    std::span<const float> third_input,

@@ -48,7 +48,11 @@ ImportResult import_input(ImportContext& importer,
       llvm::SmallVector<std::int64_t> dimensions(shape.begin(), shape.end());
       std::ranges::replace(
         dimensions, ncnn_importer::kDynamicExtent, mlir::ShapedType::kDynamic);
-      auto type = mlir::RankedTensorType::get(dimensions, builder.getF32Type());
+      mlir::Type elementType =
+        importer.input_uses_integer_storage(context.layer.get_outputs()[0])
+          ? static_cast<mlir::Type>(builder.getI32Type())
+          : static_cast<mlir::Type>(builder.getF32Type());
+      auto type = mlir::RankedTensorType::get(dimensions, elementType);
       auto input = builder.create<mlir::ncnn::InputOp>(
         builder.getUnknownLoc(),
         type,
@@ -80,10 +84,14 @@ ImportResult import_input(ImportContext& importer,
     return extent == ncnn_importer::kDynamicExtent ? mlir::ShapedType::kDynamic
                                                    : extent;
   };
+  mlir::Type elementType =
+    importer.input_uses_integer_storage(context.layer.get_outputs()[0])
+      ? static_cast<mlir::Type>(builder.getI32Type())
+      : static_cast<mlir::Type>(builder.getF32Type());
   auto type = mlir::RankedTensorType::get(
     llvm::SmallVector<std::int64_t>{
       mlir_extent(*channels), mlir_extent(*height), mlir_extent(*width)},
-    builder.getF32Type());
+    elementType);
   auto input = builder.create<mlir::ncnn::InputOp>(
     builder.getUnknownLoc(),
     type,

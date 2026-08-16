@@ -364,6 +364,79 @@ ImportResult import_binary_op(ImportContext& importer,
     context, std::string(context.layer.get_outputs()[0]), op.getResult());
 }
 
+ImportResult import_eltwise(ImportContext& importer,
+                            const LayerContext& context) {
+  constexpr int kAllowed[] = {0, 1};
+  auto arity = expect_source_arity(context.layer, 2, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto operation = get_int(context.layer.get_params(), 0, 1, "op_type");
+  auto mask = validate_feature_mask(context.layer.get_params());
+  const ncnn_graph::ParamValue* coefficientValue =
+    find_param(context.layer.get_params(), 1);
+  auto coefficients =
+    coefficientValue == nullptr
+      ? std::optional<std::span<const float>>(std::span<const float>())
+      : coefficientValue->get_float_array();
+  if (!arity || !allowed || !operation || !mask || *operation != 1 ||
+      !coefficients || (!coefficients->empty() && coefficients->size() != 2) ||
+      !context.layer.get_weights().empty()) {
+    return std::unexpected(
+      make_error(context,
+                 "Eltwise supports unweighted or coefficient-weighted SUM of "
+                 "two inputs only"));
+  }
+  llvm::SmallVector<mlir::Value> inputs;
+  for (std::string_view name : context.layer.get_inputs()) {
+    auto input = importer.find_blob(context, name);
+    if (!input) {
+      return std::unexpected(input.error());
+    }
+    inputs.push_back(*input);
+  }
+  auto& builder = importer.builder();
+  auto createBinary =
+    [&](mlir::ValueRange values,
+        float scalar,
+        bool withScalar,
+        std::int64_t opType) -> std::expected<mlir::Value, ImportError> {
+    mlir::ncnn::BinaryOp::Properties properties;
+    properties.scalar = builder.getF32FloatAttr(scalar);
+    properties.with_scalar = builder.getBoolAttr(withScalar);
+    properties.op_type = builder.getI64IntegerAttr(opType);
+    auto type = importer.infer_single_tensor_result<mlir::ncnn::BinaryOp>(
+      builder.getUnknownLoc(), values, properties);
+    if (mlir::failed(type)) {
+      return std::unexpected(
+        make_error(context, importer.captured_diagnostic()));
+    }
+    auto binary = builder.create<mlir::ncnn::BinaryOp>(builder.getUnknownLoc(),
+                                                       *type,
+                                                       values,
+                                                       properties.scalar,
+                                                       properties.with_scalar,
+                                                       properties.op_type);
+    importer.tag_source(binary, context);
+    return binary.getOutput();
+  };
+  if (!coefficients->empty()) {
+    for (std::size_t index = 0; index < inputs.size(); ++index) {
+      if ((*coefficients)[index] != 1.0F) {
+        auto scaled =
+          createBinary(inputs[index], (*coefficients)[index], true, 2);
+        if (!scaled) {
+          return std::unexpected(scaled.error());
+        }
+        inputs[index] = *scaled;
+      }
+    }
+  }
+  auto sum = createBinary(inputs, 0.0F, false, 0);
+  if (!sum) {
+    return std::unexpected(sum.error());
+  }
+  return importer.bind_blob(context, context.layer.get_outputs()[0], *sum);
+}
+
 ImportResult import_gemm(ImportContext& importer, const LayerContext& context) {
   constexpr int kAllowed[] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 18, 20, 21, 22};

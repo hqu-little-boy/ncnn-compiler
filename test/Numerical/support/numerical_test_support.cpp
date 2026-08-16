@@ -128,7 +128,18 @@ const TensorShape& ReferenceModel::get_input_shape() const noexcept {
 ReferenceInput::ReferenceInput(std::string_view blob_name,
                                TensorShape shape,
                                std::span<const float> values)
-  : blob_name_(blob_name), shape_(shape), values_(values) {}
+  : blob_name_(blob_name),
+    shape_(shape),
+    bytes_(std::as_bytes(values)),
+    value_count_(values.size()) {}
+
+ReferenceInput::ReferenceInput(std::string_view blob_name,
+                               TensorShape shape,
+                               std::span<const std::int32_t> values)
+  : blob_name_(blob_name),
+    shape_(shape),
+    bytes_(std::as_bytes(values)),
+    value_count_(values.size()) {}
 
 std::string_view ReferenceInput::get_blob_name() const noexcept {
   return blob_name_;
@@ -138,8 +149,12 @@ const TensorShape& ReferenceInput::get_shape() const noexcept {
   return shape_;
 }
 
-std::span<const float> ReferenceInput::get_values() const noexcept {
-  return values_;
+std::span<const std::byte> ReferenceInput::get_bytes() const noexcept {
+  return bytes_;
+}
+
+std::size_t ReferenceInput::get_value_count() const noexcept {
+  return value_count_;
 }
 
 CompiledModel::CompiledModel(std::string_view library_path,
@@ -285,6 +300,19 @@ int CompiledModel::run_two_inputs(std::span<const float> first_input,
     first_input.data(), second_input.data(), output.data());
 }
 
+int CompiledModel::run_two_integer_inputs(
+  std::span<const std::int32_t> first_input,
+  std::span<const std::int32_t> second_input,
+  std::span<float> output) const {
+  if (symbol_ == nullptr) {
+    return -1;
+  }
+  using Function = int (*)(const std::int32_t*, const std::int32_t*, float*);
+  static_assert(sizeof(Function) == sizeof(symbol_));
+  return std::bit_cast<Function>(symbol_)(
+    first_input.data(), second_input.data(), output.data());
+}
+
 int CompiledModel::run_three_inputs_two_outputs(
   std::span<const float> first_input,
   std::span<const float> second_input,
@@ -417,7 +445,8 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
                                          input.get_blob_name(),
                                          input_bytes.error()));
     }
-    if (input.get_values().size() != *input_elements) {
+    if (input.get_value_count() != *input_elements ||
+        input.get_bytes().size() != *input_elements * sizeof(float)) {
       return std::unexpected(std::format(
         "reference input blob '{}': value count does not match its shape",
         input.get_blob_name()));
@@ -442,11 +471,6 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
       return std::unexpected(std::format(
         "ncnn failed to allocate input blob '{}'", input.get_blob_name()));
     }
-    const std::size_t channel_elements =
-      input.get_shape().get_channels() == 0
-        ? 0
-        : *input_elements /
-            static_cast<std::size_t>(input.get_shape().get_channels());
     const std::size_t channel_bytes =
       input.get_shape().get_channels() == 0
         ? 0
@@ -454,13 +478,13 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
             static_cast<std::size_t>(input.get_shape().get_channels());
     if (input.get_shape().get_rank() < 3) {
       std::memcpy(
-        input_mats.back().data, input.get_values().data(), *input_bytes);
+        input_mats.back().data, input.get_bytes().data(), *input_bytes);
     } else {
       for (int channel = 0; channel < input.get_shape().get_channels();
            ++channel) {
         std::memcpy(input_mats.back().channel(channel),
-                    input.get_values().data() +
-                      (static_cast<std::size_t>(channel) * channel_elements),
+                    input.get_bytes().data() +
+                      (static_cast<std::size_t>(channel) * channel_bytes),
                     channel_bytes);
       }
     }

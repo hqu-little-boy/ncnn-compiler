@@ -4,6 +4,67 @@
 
 namespace ncnn_importer::detail {
 
+ImportResult import_embed(ImportContext& importer,
+                          const LayerContext& context) {
+  constexpr int kAllowed[] = {0, 1, 2, 3, 18};
+  auto arity = expect_source_arity(context.layer, 1, 1);
+  auto allowed = validate_param_ids(context.layer.get_params(), kAllowed);
+  auto params = ncnn_graph::decode_embed_params(context.layer.get_params());
+  auto mask = validate_feature_mask(context.layer.get_params());
+  if (!arity || !allowed || !params || !mask) {
+    return std::unexpected(make_error(context,
+                                      !arity     ? arity.error()
+                                      : !allowed ? allowed.error()
+                                      : !params  ? params.error()
+                                                 : mask.error()));
+  }
+  const std::size_t expectedWeights = params->has_bias ? 2U : 1U;
+  if (params->int8_scale_term != 0 ||
+      context.layer.get_weights().size() != expectedWeights) {
+    return std::unexpected(make_error(
+      context, "Embed supports unquantized table and optional bias only"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto weight =
+    importer.make_constant(context, context.layer.get_weights()[0], 0);
+  if (!weight) {
+    return std::unexpected(weight.error());
+  }
+  llvm::SmallVector<mlir::Value> bias;
+  if (params->has_bias) {
+    auto value =
+      importer.make_constant(context, context.layer.get_weights()[1], 1);
+    if (!value) {
+      return std::unexpected(value.error());
+    }
+    bias.push_back(*value);
+  }
+  auto& builder = importer.builder();
+  mlir::ncnn::EmbedOp::Properties properties;
+  properties.input_dim = builder.getI64IntegerAttr(params->input_dim);
+  properties.num_output = builder.getI64IntegerAttr(params->output_channels);
+  llvm::SmallVector<mlir::Value> operands{*input, *weight};
+  operands.append(bias);
+  auto type = importer.infer_single_tensor_result<mlir::ncnn::EmbedOp>(
+    builder.getUnknownLoc(), operands, properties);
+  if (mlir::failed(type)) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto op = builder.create<mlir::ncnn::EmbedOp>(builder.getUnknownLoc(),
+                                                *type,
+                                                *input,
+                                                *weight,
+                                                bias,
+                                                properties.input_dim,
+                                                properties.num_output);
+  importer.tag_source(op, context);
+  return importer.bind_blob(
+    context, context.layer.get_outputs()[0], op.getOutput());
+}
+
 ImportResult import_tanh(ImportContext& importer, const LayerContext& context) {
   constexpr std::array<int, 0> kAllowed{};
   auto arity = expect_source_arity(context.layer, 1, 1);

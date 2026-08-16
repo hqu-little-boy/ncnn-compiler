@@ -945,6 +945,38 @@ FailureOr<RankedTensorType> computeLayerNormResult(
   return input;
 }
 
+FailureOr<RankedTensorType> computeEmbedResult(std::optional<Location> location,
+                                               RankedTensorType input,
+                                               RankedTensorType weight,
+                                               ValueRange bias,
+                                               int64_t inputDim,
+                                               int64_t numOutput) {
+  if (!input || !input.getElementType().isSignlessInteger(32) ||
+      input.getRank() != 1 || !input.hasStaticShape() ||
+      input.getShape()[0] <= 0) {
+    return emitOptionalError(
+      location, "Embed input must be a static positive rank-1 i32 tensor");
+  }
+  if (!weight || !weight.getElementType().isF32() || weight.getRank() != 2 ||
+      weight.getShape() != ArrayRef<int64_t>({inputDim, numOutput}) ||
+      inputDim <= 0 || numOutput <= 0) {
+    return emitOptionalError(location,
+                             "Embed weight must be f32 [input_dim,num_output]");
+  }
+  if (bias.size() > 1) {
+    return emitOptionalError(location, "Embed accepts at most one bias");
+  }
+  if (!bias.empty()) {
+    auto type = dyn_cast<RankedTensorType>(bias.front().getType());
+    if (!type || !type.getElementType().isF32() || type.getRank() != 1 ||
+        type.getShape()[0] != numOutput) {
+      return emitOptionalError(location, "Embed bias must be f32 [num_output]");
+    }
+  }
+  return RankedTensorType::get({input.getShape()[0], numOutput},
+                               weight.getElementType());
+}
+
 FailureOr<RankedTensorType> computeMultiHeadAttentionResult(
   std::optional<Location> location, MultiHeadAttentionOp::Adaptor adaptor) {
   auto input = dyn_cast<RankedTensorType>(adaptor.getInput().getType());
@@ -1890,6 +1922,26 @@ LogicalResult LayerNormOp::inferReturnTypeComponents(
     adaptor.getAffineSize(),
     adaptor.getAffine(),
     adaptor.getEpsilon().convertToDouble());
+  if (failed(result)) {
+    return failure();
+  }
+  inferredReturnShapes.emplace_back(result->getShape(),
+                                    result->getElementType());
+  return success();
+}
+
+LogicalResult EmbedOp::inferReturnTypeComponents(
+  MLIRContext*,
+  std::optional<Location> location,
+  EmbedOp::Adaptor adaptor,
+  SmallVectorImpl<ShapedTypeComponents>& inferredReturnShapes) {
+  auto result = computeEmbedResult(
+    location,
+    dyn_cast<RankedTensorType>(adaptor.getInput().getType()),
+    dyn_cast<RankedTensorType>(adaptor.getWeight().getType()),
+    adaptor.getBias(),
+    adaptor.getInputDim(),
+    adaptor.getNumOutput());
   if (failed(result)) {
     return failure();
   }

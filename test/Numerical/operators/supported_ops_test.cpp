@@ -1520,7 +1520,8 @@ TEST(NumericalSupport, TensorShapeRejectsNegativeAndOverflowingSizes) {
 }
 
 TEST(NumericalSupport, ReferenceInputErrorIncludesBlobName) {
-  const ReferenceInput input("bad_input", TensorShape(-1, 2, 3), {});
+  const ReferenceInput input(
+    "bad_input", TensorShape(-1, 2, 3), std::span<const float>());
   constexpr std::array<std::string_view, 1> kOutputs{"output"};
   const auto result = run_ncnn_reference(fixture_path("relu"),
                                          NUMERICAL_EMPTY_BIN_PATH,

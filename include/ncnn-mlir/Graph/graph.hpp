@@ -160,6 +160,14 @@ struct LayerNormParams {
   bool affine = true;
 };
 
+struct EmbedParams {
+  std::int64_t output_channels = 0;
+  std::int64_t input_dim = 0;
+  bool has_bias = false;
+  std::int64_t weight_count = 0;
+  std::int64_t int8_scale_term = 0;
+};
+
 struct MultiHeadAttentionParams {
   std::int64_t embed_dim = 0;
   std::int64_t num_heads = 1;
@@ -238,6 +246,9 @@ decode_batch_norm_params(const ParamDict& params);
 
 [[nodiscard]] std::expected<LayerNormParams, std::string>
 decode_layer_norm_params(const ParamDict& params);
+
+[[nodiscard]] std::expected<EmbedParams, std::string> decode_embed_params(
+  const ParamDict& params);
 
 [[nodiscard]] std::expected<MultiHeadAttentionParams, std::string>
 decode_multi_head_attention_params(const ParamDict& params);
