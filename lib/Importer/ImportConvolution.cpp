@@ -15,7 +15,8 @@ std::expected<void, std::string> validate_scale(
   const ncnn_graph::Tensor& tensor,
   std::size_t expected_size,
   std::string_view role,
-  bool allow_empty_channel = false) {
+  bool allow_empty_channel = false,
+  bool allow_positive_infinity = false) {
   if (tensor.get_dtype() != ncnn_graph::DataType::Float32 ||
       tensor.get_shape().size() != 1 ||
       tensor.get_shape()[0] !=
@@ -27,15 +28,19 @@ std::expected<void, std::string> validate_scale(
   for (std::size_t offset = 0; offset < data.size(); offset += sizeof(float)) {
     float value;
     std::memcpy(&value, data.data() + offset, sizeof(value));
-    const bool invalid = allow_empty_channel
-                           ? std::isnan(value) || value < 0.0F
-                           : !std::isfinite(value) || value <= 0.0F;
+    const bool invalid =
+      allow_empty_channel
+        ? std::isnan(value) || value < 0.0F
+        : (allow_positive_infinity ? std::isnan(value) || value <= 0.0F
+                                   : !std::isfinite(value) || value <= 0.0F);
     if (invalid) {
-      return std::unexpected(std::format("{} scale values must be {}",
-                                         role,
-                                         allow_empty_channel
-                                           ? "nonnegative and not NaN"
-                                           : "finite and positive"));
+      return std::unexpected(
+        std::format("{} scale value {} must be {}",
+                    role,
+                    value,
+                    allow_empty_channel       ? "nonnegative and not NaN"
+                    : allow_positive_infinity ? "positive or positive infinity"
+                                              : "finite and positive"));
     }
   }
   return {};
@@ -99,15 +104,23 @@ ImportResult import_convolution(ImportContext& importer,
                      static_cast<std::size_t>(convolution.output_channels),
                      "convolution weight",
                      true);
-    auto input_scale = validate_scale(
-      context.layer.get_weights()[2 + bias_offset], 1, "convolution input");
+    auto input_scale =
+      validate_scale(context.layer.get_weights()[2 + bias_offset],
+                     1,
+                     "convolution input",
+                     false,
+                     true);
     if (!weight_scale || !input_scale) {
       return std::unexpected(make_error(
         context, !weight_scale ? weight_scale.error() : input_scale.error()));
     }
     if (convolution.int8_scale_term > 100) {
-      auto output_scale = validate_scale(
-        context.layer.get_weights()[3 + bias_offset], 1, "convolution output");
+      auto output_scale =
+        validate_scale(context.layer.get_weights()[3 + bias_offset],
+                       1,
+                       "convolution output",
+                       false,
+                       true);
       if (!output_scale) {
         return std::unexpected(make_error(context, output_scale.error()));
       }

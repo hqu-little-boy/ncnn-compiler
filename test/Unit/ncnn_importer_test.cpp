@@ -981,6 +981,32 @@ TEST_F(NcnnImporterTest, ImportsInt8Quantization) {
   EXPECT_TRUE(import(infinite_weight_scale))
     << "infinite weight scale preserves ncnn's empty-channel semantics";
 
+  auto infinite_output_scale = make_int8_graph();
+  std::vector<ncnn_graph::Layer> infinite_output_scale_layers(
+    infinite_output_scale.get_layers().begin(),
+    infinite_output_scale.get_layers().end());
+  infinite_output_scale_layers[1].set_weights(
+    {make_tensor({1, 1, 1, 1}, ncnn_graph::DataType::Int8),
+     make_float_tensor({1}, 2.0F),
+     make_float_tensor({1}, 4.0F),
+     make_float_tensor({1}, std::numeric_limits<float>::infinity())});
+  infinite_output_scale.set_layers(std::move(infinite_output_scale_layers));
+  EXPECT_TRUE(import(infinite_output_scale))
+    << "positive infinity output scale preserves ncnn quantization semantics";
+
+  auto infinite_input_scale = make_int8_graph();
+  std::vector<ncnn_graph::Layer> infinite_input_scale_layers(
+    infinite_input_scale.get_layers().begin(),
+    infinite_input_scale.get_layers().end());
+  infinite_input_scale_layers[1].set_weights(
+    {make_tensor({1, 1, 1, 1}, ncnn_graph::DataType::Int8),
+     make_float_tensor({1}, 2.0F),
+     make_float_tensor({1}, std::numeric_limits<float>::infinity()),
+     make_float_tensor({1}, 8.0F)});
+  infinite_input_scale.set_layers(std::move(infinite_input_scale_layers));
+  EXPECT_TRUE(import(infinite_input_scale))
+    << "positive infinity input scale preserves ncnn quantization semantics";
+
   auto zero_input_scale = make_int8_graph();
   std::vector<ncnn_graph::Layer> zero_input_scale_layers(
     zero_input_scale.get_layers().begin(), zero_input_scale.get_layers().end());

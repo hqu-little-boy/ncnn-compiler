@@ -416,6 +416,37 @@ Value dequantizeAccumulator(OpBuilder& builder,
     builder.create<tosa::EqualOp>(location, conditionType, weightScale, zero);
   reciprocal = builder.create<tosa::SelectOp>(
     location, weightScaleType, zeroWeightScale, zero, reciprocal);
+  auto outputType = accumulatorType.clone(builder.getF32Type());
+  Value converted = convertI32ToF32(builder, location, accumulator);
+  if (!outputType.hasStaticShape()) {
+    Value empty = builder.create<tensor::EmptyOp>(
+      location,
+      outputType.getShape(),
+      outputType.getElementType(),
+      getDynamicSizeValues(builder, location, converted, outputType));
+    AffineMap identity = builder.getMultiDimIdentityMap(outputType.getRank());
+    AffineExpr scaleIndex = weightScaleType.getShape()[0] == 1
+                              ? builder.getAffineConstantExpr(0)
+                              : builder.getAffineDimExpr(channelDimension);
+    AffineMap scaleMap =
+      AffineMap::get(outputType.getRank(), 0, scaleIndex, builder.getContext());
+    SmallVector<utils::IteratorType> iterators(outputType.getRank(),
+                                               utils::IteratorType::parallel);
+    return builder
+      .create<linalg::GenericOp>(
+        location,
+        outputType,
+        ValueRange{converted, reciprocal},
+        ValueRange{empty},
+        ArrayRef<AffineMap>{identity, scaleMap, identity},
+        iterators,
+        [](OpBuilder& nested, Location nestedLocation, ValueRange values) {
+          Value result = nested.create<arith::MulFOp>(
+            nestedLocation, values.front(), values[1]);
+          nested.create<linalg::YieldOp>(nestedLocation, result);
+        })
+      .getResult(0);
+  }
   SmallVector<int64_t> scaleShape(accumulatorType.getRank(), 1);
   scaleShape[channelDimension] = weightScaleType.getShape()[0];
   Value broadcastScale =
@@ -423,8 +454,6 @@ Value dequantizeAccumulator(OpBuilder& builder,
                  location,
                  reciprocal,
                  RankedTensorType::get(scaleShape, builder.getF32Type()));
-  auto outputType = accumulatorType.clone(builder.getF32Type());
-  Value converted = convertI32ToF32(builder, location, accumulator);
   return {builder.create<tosa::MulOp>(
     location, outputType, converted, broadcastScale, shift)};
 }
