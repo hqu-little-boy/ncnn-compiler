@@ -831,7 +831,8 @@ ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_textline_ori_int8
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori_int8.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori_int8.bin
-    3x80x160)
+    3x80x160
+    EMIT_BACKEND)
 ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_textline_ori_int8_dynamic
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori_int8.param
@@ -1527,6 +1528,8 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_LCNET_TEXTLINE_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin"
     PP_LCNET_TEXTLINE_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_LIBRARY}"
     PP_LCNET_TEXTLINE_ORI_INT8_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_int8_LIBRARY}"
+    PP_LCNET_TEXTLINE_ORI_INT8_LLVM_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_textline_ori_int8/model.ll"
+    PP_LCNET_TEXTLINE_ORI_INT8_ASSEMBLY_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_lcnet_x1_0_textline_ori_int8/model.s"
     CHINESEOCR_LITE_ANGLENET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param"
     CHINESEOCR_LITE_ANGLENET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin"
     CHINESEOCR_LITE_ANGLENET_LIBRARY_PATH="${chineseocr_lite_anglenet_LIBRARY}"

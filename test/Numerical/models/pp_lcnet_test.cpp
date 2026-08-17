@@ -205,6 +205,20 @@ TEST(NumericalModel, PPLCNetTextlineOriInt8ProducesStableSoftmax) {
     std::accumulate(actual.begin(), actual.end(), 0.0F), 1.0F, 1.0e-5F);
 }
 
+TEST(NumericalModel, PPLCNetTextlineOriInt8PreservesIntegerTargetCode) {
+  const std::string llvm_ir =
+    read_text(PP_LCNET_TEXTLINE_ORI_INT8_LLVM_IR_PATH);
+  EXPECT_GE(count_substring(llvm_ir, "sext i8"), 20U);
+  EXPECT_GE(count_substring(llvm_ir, "mul i32"), 20U);
+  EXPECT_GE(count_substring(llvm_ir, "fptosi float"), 20U);
+  EXPECT_GE(count_substring(llvm_ir, "sitofp i32"), 20U);
+
+  const std::string assembly =
+    read_text(PP_LCNET_TEXTLINE_ORI_INT8_ASSEMBLY_PATH);
+  EXPECT_GE(count_substring(assembly, "movsbl"), 20U);
+  EXPECT_GE(count_substring(assembly, "imull"), 20U);
+}
+
 TEST(NumericalModel, ChineseOCRLiteAngleNetMatchesNcnn) {
   const TensorShape inputShape(192, 32, 3);
   const auto inputElements = inputShape.element_count();

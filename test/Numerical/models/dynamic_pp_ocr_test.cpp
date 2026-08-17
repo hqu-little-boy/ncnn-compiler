@@ -854,10 +854,11 @@ TEST(NumericalDynamicModel,
             kSuccess);
   EXPECT_TRUE(compare_values(dynamic_output, static_output, 1.0e-5F));
 
-  for (const DetectionCase& shape : std::array<DetectionCase, 3>{
-         DetectionCase{.height = 64, .width = 160},
+  for (const DetectionCase& shape : std::array<DetectionCase, 4>{
+         DetectionCase{.height = 1, .width = 1},
+         DetectionCase{.height = 79, .width = 159},
          DetectionCase{.height = 96, .width = 192},
-         DetectionCase{.height = 64, .width = 160},
+         DetectionCase{.height = 1, .width = 1},
        }) {
     const std::vector<float> dynamic_input(element_count(shape), 0.001F);
     std::vector<float> output(2);
