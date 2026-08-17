@@ -583,6 +583,27 @@ TEST(NumericalModel, PPOCRv6SmallDetMatchesNcnn) {
   EXPECT_EQ(repeated, actual);
 }
 
+TEST(NumericalModel, PPOCRv6SmallDetInt8ProducesStableOutput) {
+  const TensorShape inputShape(32, 32, 3);
+  constexpr std::size_t kOutputElements = 32 * 32;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x49385344U, -0.01F, 0.01F);
+  CompiledModel compiled(PP_OCRV6_SMALL_DET_INT8_LIBRARY_PATH,
+                         "pp_ocrv6_small_det_int8");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kOutputElements);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(std::ranges::all_of(actual, [](float value) {
+    return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+  }));
+
+  std::vector<float> repeated(kOutputElements);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+}
+
 TEST(NumericalModel, PPOCRv6MediumDetMatchesNcnn) {
   const TensorShape inputShape(640, 640, 3);
   constexpr std::size_t kOutputElements = 640 * 640;

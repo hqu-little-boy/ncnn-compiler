@@ -460,6 +460,150 @@ TEST(NumericalDynamicModel,
   EXPECT_EQ(linalg_ir.find("ncnn.convolution"), std::string::npos);
 }
 
+TEST(NumericalDynamicModel,
+     PPOCRv6SmallDetInt8StaticAndDynamicExecutionsAreConsistent) {
+  CompiledModel static_compiled(PP_OCRV6_SMALL_DET_INT8_STATIC_LIBRARY_PATH,
+                                "pp_ocrv6_small_det_int8");
+  CompiledModel compiled(PP_OCRV6_SMALL_DET_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv6_small_det_int8_dynamic");
+  CompiledModel infer(PP_OCRV6_SMALL_DET_INT8_DYNAMIC_LIBRARY_PATH,
+                      "pp_ocrv6_small_det_int8_dynamic_infer_output_shapes");
+  ASSERT_TRUE(static_compiled.valid()) << static_compiled.error();
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  ASSERT_TRUE(infer.valid()) << infer.error();
+
+  for (const DetectionCase& shape : std::array<DetectionCase, 3>{
+         DetectionCase{.height = 32, .width = 32},
+         DetectionCase{.height = 64, .width = 96},
+         DetectionCase{.height = 96, .width = 64},
+       }) {
+    const auto dimensions = input_shape(shape);
+    std::array<std::int64_t, 3> inferred_shape{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred_shape), kSuccess);
+    EXPECT_EQ(inferred_shape, expected_output_shape(shape));
+
+    const std::vector<float> input = make_random_input(
+      element_count(shape),
+      0x49385344U +
+        static_cast<std::uint32_t>((shape.height * 131) + shape.width),
+      -0.01F,
+      0.01F);
+    std::vector<float> actual(static_cast<std::size_t>(shape.height) *
+                              static_cast<std::size_t>(shape.width));
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    EXPECT_TRUE(std::ranges::all_of(actual, [](float value) {
+      return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+    }));
+
+    if (shape.height == 32 && shape.width == 32) {
+      std::vector<float> static_output(actual.size());
+      ASSERT_EQ(static_compiled.run(input, static_output), kSuccess);
+      EXPECT_TRUE(compare_values(actual, static_output, 1.0e-5F));
+    }
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv6SmallDetInt8SupportsAlternatingShapes) {
+  CompiledModel compiled(PP_OCRV6_SMALL_DET_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv6_small_det_int8_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const DetectionCase& shape : std::array<DetectionCase, 4>{
+         DetectionCase{.height = 64, .width = 96},
+         DetectionCase{.height = 96, .width = 64},
+         DetectionCase{.height = 32, .width = 32},
+         DetectionCase{.height = 64, .width = 96},
+       }) {
+    const auto dimensions = input_shape(shape);
+    const std::vector<float> input(element_count(shape), 0.001F);
+    std::vector<float> output(static_cast<std::size_t>(shape.height) *
+                              static_cast<std::size_t>(shape.width));
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, output.size()),
+              kSuccess);
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel,
+     PPOCRv6SmallDetInt8RejectsInvalidShapesAndCapacity) {
+  CompiledModel compiled(PP_OCRV6_SMALL_DET_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv6_small_det_int8_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  const std::array<std::int64_t, 3> normal_shape = {3, 32, 32};
+  const std::vector<float> input(3 * 32 * 32, 0.0F);
+  std::vector<float> output(32 * 32, 0.0F);
+  ASSERT_EQ(compiled.run_dynamic(input, normal_shape, output, output.size()),
+            kSuccess);
+
+  for (const auto dimensions :
+       std::array<std::array<std::int64_t, 3>, 6>{{{3, 31, 32},
+                                                   {3, 32, 31},
+                                                   {3, 33, 32},
+                                                   {3, 320, 321},
+                                                   {3, 0, 320},
+                                                   {1, 32, 32}}}) {
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, 1),
+              dimensions[1] == 0 || dimensions[0] != 3 ? kInvalidShape
+                                                       : kConstraintViolation);
+  }
+  std::vector<float> short_output((32 * 32) - 1);
+  EXPECT_EQ(compiled.run_dynamic(
+              input, normal_shape, short_output, short_output.size()),
+            kOutputCapacityInsufficient);
+  const std::array<std::int64_t, 3> overflow_shape = {
+    3,
+    std::numeric_limits<std::int64_t>::max() - 31,
+    std::numeric_limits<std::int64_t>::max() - 31,
+  };
+  EXPECT_EQ(compiled.run_dynamic(input, overflow_shape, output, 1),
+            kShapeArithmeticOverflow);
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel,
+     PPOCRv6SmallDetInt8ArtifactsDescribeQuantizedDynamicAbi) {
+  EXPECT_GT(
+    std::filesystem::file_size(PP_OCRV6_SMALL_DET_INT8_DYNAMIC_LIBRARY_PATH),
+    0U);
+  const std::string manifest =
+    read_text(PP_OCRV6_SMALL_DET_INT8_DYNAMIC_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_ocrv6_small_det_int8_dynamic"),
+            std::string::npos);
+  EXPECT_NE(manifest.find("\"minimum\": 32"), std::string::npos);
+  EXPECT_NE(manifest.find("\"multiple_of\": 32"), std::string::npos);
+  EXPECT_NE(manifest.find("\"shape_program\""), std::string::npos);
+
+  const std::string header =
+    read_text(PP_OCRV6_SMALL_DET_INT8_DYNAMIC_HEADER_PATH);
+  EXPECT_NE(
+    header.find("PP_OCRV6_SMALL_DET_INT8_DYNAMIC_INPUT1_DYNAMIC_DIM_MASK "
+                "UINT32_C(0x6)"),
+    std::string::npos);
+  EXPECT_NE(
+    header.find("PP_OCRV6_SMALL_DET_INT8_DYNAMIC_OUTPUT1_DYNAMIC_DIM_MASK "
+                "UINT32_C(0x6)"),
+    std::string::npos);
+  EXPECT_NE(header.find("pp_ocrv6_small_det_int8_dynamic_infer_output_shapes"),
+            std::string::npos);
+
+  const std::string ncnn_ir =
+    read_text(PP_OCRV6_SMALL_DET_INT8_DYNAMIC_NCNN_IR_PATH);
+  EXPECT_NE(ncnn_ir.find("int8_scale_term = 101"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("int8_scale_term = 102"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("tensor<96x1x7x7xi8>"), std::string::npos);
+  const std::string linalg_ir =
+    read_text(PP_OCRV6_SMALL_DET_INT8_DYNAMIC_LINALG_IR_PATH);
+  EXPECT_NE(linalg_ir.find("linalg.conv_2d_nhwc_hwcf"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("linalg.depthwise_conv_2d_nhwc_hwcm"),
+            std::string::npos);
+  EXPECT_NE(linalg_ir.find("arith.fptosi"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("arith.sitofp"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.convolution"), std::string::npos);
+}
+
 TEST(NumericalDynamicModel, PPOCRv5MobileDetMatchesNcnnAcrossShapes) {
   CompiledModel compiled(PP_OCRV5_MOBILE_DET_DYNAMIC_LIBRARY_PATH,
                          "pp_ocrv5_mobile_det_dynamic");
