@@ -548,6 +548,67 @@ SmallVector<Value> getDynamicSizeValues(OpBuilder& builder,
   return sizes;
 }
 
+Value getConvolutionOutputExtent(OpBuilder& builder,
+                                 Location location,
+                                 Value input,
+                                 int64_t dimension,
+                                 int64_t leadingPadding,
+                                 int64_t trailingPadding,
+                                 int64_t kernel,
+                                 int64_t stride,
+                                 int64_t dilation) {
+  Value inputExtent = builder.create<tensor::DimOp>(location, input, dimension);
+  const int64_t effectiveKernel = ((kernel - 1) * dilation) + 1;
+  Value padded = builder.create<arith::AddIOp>(
+    location,
+    inputExtent,
+    createIndexConstant(builder, location, leadingPadding + trailingPadding));
+  Value numerator = builder.create<arith::SubIOp>(
+    location, padded, createIndexConstant(builder, location, effectiveKernel));
+  Value quotient = builder.create<arith::DivUIOp>(
+    location, numerator, createIndexConstant(builder, location, stride));
+  return builder.create<arith::AddIOp>(
+    location, quotient, createIndexConstant(builder, location, 1));
+}
+
+Value initializeDynamicConvolutionOutput(OpBuilder& builder,
+                                         Location location,
+                                         RankedTensorType outputType,
+                                         Value input,
+                                         ArrayRef<int64_t> padding,
+                                         ArrayRef<int64_t> kernel,
+                                         ArrayRef<int64_t> stride,
+                                         ArrayRef<int64_t> dilation) {
+  SmallVector<Value> dynamicSizes;
+  if (outputType.isDynamicDim(1)) {
+    dynamicSizes.push_back(getConvolutionOutputExtent(builder,
+                                                      location,
+                                                      input,
+                                                      1,
+                                                      padding[0],
+                                                      padding[1],
+                                                      kernel[0],
+                                                      stride[0],
+                                                      dilation[0]));
+  }
+  if (outputType.isDynamicDim(2)) {
+    dynamicSizes.push_back(getConvolutionOutputExtent(builder,
+                                                      location,
+                                                      input,
+                                                      2,
+                                                      padding[2],
+                                                      padding[3],
+                                                      kernel[1],
+                                                      stride[1],
+                                                      dilation[1]));
+  }
+  Value empty = builder.create<tensor::EmptyOp>(
+    location, outputType.getShape(), outputType.getElementType(), dynamicSizes);
+  Value zero = builder.create<arith::ConstantOp>(
+    location, builder.getZeroAttr(outputType.getElementType()));
+  return builder.create<linalg::FillOp>(location, zero, empty).getResult(0);
+}
+
 RankedTensorType getBroadcastScalarType(RankedTensorType type) {
   SmallVector<int64_t> shape(type.getRank(), 1);
   return RankedTensorType::get(shape, type.getElementType());
@@ -926,6 +987,57 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
                               padding[3]);
       }
       auto accumulatorType = outputType.clone(rewriter.getI32Type());
+      Value accumulator;
+      if (dynamicSpatial) {
+        auto paddedInputType =
+          RankedTensorType::get({inputShape[0],
+                                 ShapedType::isDynamic(inputShape[1])
+                                   ? ShapedType::kDynamic
+                                   : inputShape[1] + padding[0] + padding[1],
+                                 ShapedType::isDynamic(inputShape[2])
+                                   ? ShapedType::kDynamic
+                                   : inputShape[2] + padding[2] + padding[3],
+                                 inputShape[3]},
+                                rewriter.getI8Type());
+        Value paddingShape = createShape(
+          rewriter,
+          location,
+          {0, 0, padding[0], padding[1], padding[2], padding[3], 0, 0});
+        Value zero = createIntegerZero(
+          rewriter, location, RankedTensorType::get({1}, rewriter.getI8Type()));
+        Value paddedInput = rewriter.create<tosa::PadOp>(
+          location, paddedInputType, quantizedInput, paddingShape, zero);
+        auto hwcfType = getHWCFType(quantizedWeightType);
+        Value linalgWeight = rewriter.create<tosa::TransposeOp>(
+          location, hwcfType, quantizedWeight, ArrayRef<int32_t>{2, 3, 1, 0});
+        Value initialized = initializeDynamicConvolutionOutput(
+          rewriter,
+          location,
+          accumulatorType,
+          quantizedInput,
+          padding,
+          {static_cast<int64_t>(operation.getKernelH()),
+           static_cast<int64_t>(operation.getKernelW())},
+          {static_cast<int64_t>(operation.getStrideH()),
+           static_cast<int64_t>(operation.getStrideW())},
+          {static_cast<int64_t>(operation.getDilationH()),
+           static_cast<int64_t>(operation.getDilationW())});
+        accumulator =
+          rewriter
+            .create<linalg::Conv2DNhwcHwcfOp>(
+              location,
+              TypeRange{accumulatorType},
+              ValueRange{paddedInput, linalgWeight},
+              ValueRange{initialized},
+              createI64PairAttr(rewriter,
+                                {static_cast<int64_t>(operation.getStrideH()),
+                                 static_cast<int64_t>(operation.getStrideW())}),
+              createI64PairAttr(
+                rewriter,
+                {static_cast<int64_t>(operation.getDilationH()),
+                 static_cast<int64_t>(operation.getDilationW())}))
+            .getResult(0);
+      }
       if (!dynamicSpatial) {
         int64_t effectiveH =
           ((operation.getKernelH() - 1) * operation.getDilationH()) + 1;
@@ -943,20 +1055,22 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
           {1, paddedHeight, paddedWidth, sourceOutput.getShape()[0]},
           rewriter.getI32Type());
       }
-      Value accumulator = rewriter.create<tosa::Conv2DOp>(
-        location,
-        accumulatorType,
-        quantizedInput,
-        weight,
-        contractionBias,
-        inputZero,
-        weightZero,
-        padding,
-        ArrayRef<int64_t>{static_cast<int64_t>(operation.getStrideH()),
-                          static_cast<int64_t>(operation.getStrideW())},
-        ArrayRef<int64_t>{static_cast<int64_t>(operation.getDilationH()),
-                          static_cast<int64_t>(operation.getDilationW())},
-        rewriter.getI32Type());
+      if (!dynamicSpatial) {
+        accumulator = rewriter.create<tosa::Conv2DOp>(
+          location,
+          accumulatorType,
+          quantizedInput,
+          weight,
+          contractionBias,
+          inputZero,
+          weightZero,
+          padding,
+          ArrayRef<int64_t>{static_cast<int64_t>(operation.getStrideH()),
+                            static_cast<int64_t>(operation.getStrideW())},
+          ArrayRef<int64_t>{static_cast<int64_t>(operation.getDilationH()),
+                            static_cast<int64_t>(operation.getDilationW())},
+          rewriter.getI32Type());
+      }
       Value result = dequantizeAccumulator(
         rewriter, location, accumulator, weightScale, inputScale, 3);
       if (operation.getHasBias()) {
@@ -2921,6 +3035,58 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
     auto outputType = getNHWCType(sourceOutput);
     if (quantized) {
       auto accumulatorType = outputType.clone(rewriter.getI32Type());
+      Value accumulator;
+      if (dynamicSpatial) {
+        auto paddedInputType =
+          RankedTensorType::get({inputType.getShape()[0],
+                                 inputType.isDynamicDim(1)
+                                   ? ShapedType::kDynamic
+                                   : inputType.getShape()[1] + pad[0] + pad[1],
+                                 inputType.isDynamicDim(2)
+                                   ? ShapedType::kDynamic
+                                   : inputType.getShape()[2] + pad[2] + pad[3],
+                                 inputType.getShape()[3]},
+                                rewriter.getI8Type());
+        Value paddingShape =
+          createShape(rewriter,
+                      operation->getLoc(),
+                      {0, 0, pad[0], pad[1], pad[2], pad[3], 0, 0});
+        Value zero =
+          createIntegerZero(rewriter,
+                            operation->getLoc(),
+                            RankedTensorType::get({1}, rewriter.getI8Type()));
+        Value paddedInput = rewriter.create<tosa::PadOp>(
+          operation->getLoc(), paddedInputType, input, paddingShape, zero);
+        auto expandedAccumulatorType =
+          RankedTensorType::get({accumulatorType.getShape()[0],
+                                 accumulatorType.getShape()[1],
+                                 accumulatorType.getShape()[2],
+                                 channels,
+                                 multiplier},
+                                rewriter.getI32Type());
+        Value initialized = initializeDynamicConvolutionOutput(
+          rewriter,
+          operation->getLoc(),
+          expandedAccumulatorType,
+          input,
+          pad,
+          {weightType.getShape()[2], weightType.getShape()[3]},
+          *stride,
+          *dilation);
+        Value expanded = rewriter
+                           .create<linalg::DepthwiseConv2DNhwcHwcmOp>(
+                             operation->getLoc(),
+                             TypeRange{expandedAccumulatorType},
+                             ValueRange{paddedInput, weight},
+                             ValueRange{initialized},
+                             createI64PairAttr(rewriter, *stride),
+                             createI64PairAttr(rewriter, *dilation))
+                           .getResult(0);
+        SmallVector<ReassociationIndices> reassociation = {
+          {0}, {1}, {2}, {3, 4}};
+        accumulator = rewriter.create<tensor::CollapseShapeOp>(
+          operation->getLoc(), accumulatorType, expanded, reassociation);
+      }
       if (!dynamicSpatial) {
         int64_t effectiveH =
           ((weightType.getShape()[2] - 1) * (*dilation)[0]) + 1;
@@ -2945,18 +3111,20 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
         rewriter,
         operation->getLoc(),
         RankedTensorType::get({outputs}, rewriter.getI32Type()));
-      Value accumulator =
-        rewriter.create<tosa::DepthwiseConv2DOp>(operation->getLoc(),
-                                                 accumulatorType,
-                                                 input,
-                                                 weight,
-                                                 contractionBias,
-                                                 zero,
-                                                 zero,
-                                                 pad,
-                                                 *stride,
-                                                 *dilation,
-                                                 rewriter.getI32Type());
+      if (!dynamicSpatial) {
+        accumulator =
+          rewriter.create<tosa::DepthwiseConv2DOp>(operation->getLoc(),
+                                                   accumulatorType,
+                                                   input,
+                                                   weight,
+                                                   contractionBias,
+                                                   zero,
+                                                   zero,
+                                                   pad,
+                                                   *stride,
+                                                   *dilation,
+                                                   rewriter.getI32Type());
+      }
       Value result = dequantizeAccumulator(
         rewriter, operation->getLoc(), accumulator, weightScale, inputScale, 3);
       if (hasBias) {

@@ -882,6 +882,18 @@ ncnn_add_compiled_fixture(
     0:2:min=5,multiple=1
     EMIT_IR)
 ncnn_add_compiled_fixture(
+    pp_ocrv6_tiny_rec_int8
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.bin
+    3x48x320)
+ncnn_add_compiled_fixture(
+    pp_ocrv6_tiny_rec_int8_dynamic
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.bin
+    3x48x?
+    0:2:min=5,multiple=1
+    EMIT_IR)
+ncnn_add_compiled_fixture(
     pp_ocrv5_mobile_rec
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.bin
@@ -1284,8 +1296,12 @@ add_dependencies(compile_pp_ocrv6_tiny_rec
                  compile_chineseocr_lite_anglenet_dynamic)
 add_dependencies(compile_pp_ocrv6_tiny_rec_dynamic
                  compile_pp_ocrv6_tiny_rec)
+add_dependencies(compile_pp_ocrv6_tiny_rec_int8
+                  compile_pp_ocrv6_tiny_rec_dynamic)
+add_dependencies(compile_pp_ocrv6_tiny_rec_int8_dynamic
+                 compile_pp_ocrv6_tiny_rec_int8)
 add_dependencies(compile_pp_ocrv5_mobile_rec
-                 compile_pp_ocrv6_tiny_rec_dynamic)
+                 compile_pp_ocrv6_tiny_rec_int8_dynamic)
 add_dependencies(compile_pp_ocrv5_mobile_rec_dynamic
                  compile_pp_ocrv5_mobile_rec)
 add_dependencies(compile_pp_ocrv6_tiny_det
@@ -1536,6 +1552,7 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_TINY_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param"
     PP_OCRV6_TINY_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin"
     PP_OCRV6_TINY_REC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_LIBRARY}"
+    PP_OCRV6_TINY_REC_INT8_LIBRARY_PATH="${pp_ocrv6_tiny_rec_int8_LIBRARY}"
     PP_OCRV5_MOBILE_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.param"
     PP_OCRV5_MOBILE_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.bin"
     PP_OCRV5_MOBILE_REC_LIBRARY_PATH="${pp_ocrv5_mobile_rec_LIBRARY}"
@@ -1629,6 +1646,7 @@ add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_textline_ori_int8)
 add_dependencies(numerical_tests compile_chineseocr_lite_anglenet)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_rec)
+add_dependencies(numerical_tests compile_pp_ocrv6_tiny_rec_int8)
 add_dependencies(numerical_tests compile_pp_ocrv5_mobile_rec)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_rec)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_rec)
@@ -1798,6 +1816,12 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
     PP_OCRV6_TINY_REC_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_rec_dynamic/pp_ocrv6_tiny_rec_dynamic.json"
     PP_OCRV6_TINY_REC_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_rec_dynamic/pp_ocrv6_tiny_rec_dynamic.h"
     PP_OCRV6_TINY_REC_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_rec_dynamic/model.linalg.mlir"
+    PP_OCRV6_TINY_REC_INT8_STATIC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_int8_LIBRARY}"
+    PP_OCRV6_TINY_REC_INT8_DYNAMIC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_int8_dynamic_LIBRARY}"
+    PP_OCRV6_TINY_REC_INT8_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_rec_int8_dynamic/pp_ocrv6_tiny_rec_int8_dynamic.json"
+    PP_OCRV6_TINY_REC_INT8_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_rec_int8_dynamic/pp_ocrv6_tiny_rec_int8_dynamic.h"
+    PP_OCRV6_TINY_REC_INT8_DYNAMIC_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_rec_int8_dynamic/model.ncnn.mlir"
+    PP_OCRV6_TINY_REC_INT8_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_rec_int8_dynamic/model.linalg.mlir"
     PP_OCRV5_MOBILE_REC_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.param"
     PP_OCRV5_MOBILE_REC_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.bin"
     PP_OCRV5_MOBILE_REC_DYNAMIC_LIBRARY_PATH="${pp_ocrv5_mobile_rec_dynamic_LIBRARY}"
@@ -1842,6 +1866,7 @@ add_dependencies(numerical_dynamic_tests
     compile_pp_lcnet_x1_0_textline_ori_int8_backbone_dynamic
     compile_chineseocr_lite_anglenet_dynamic
     compile_pp_ocrv6_tiny_rec_dynamic
+    compile_pp_ocrv6_tiny_rec_int8_dynamic
     compile_pp_ocrv5_mobile_rec_dynamic
     compile_pp_ocrv5_server_rec_dynamic
     compile_pp_ocrv6_medium_rec_dynamic

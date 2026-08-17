@@ -280,6 +280,36 @@ TEST(NumericalModel, PPOCRv6TinyRecMatchesNcnn) {
   }
 }
 
+TEST(NumericalModel, PPOCRv6TinyRecInt8ProducesStableSoftmax) {
+  const TensorShape inputShape(320, 48, 3);
+  constexpr std::size_t kSequenceLength = 40;
+  constexpr std::size_t kClasses = 6906;
+  const auto inputElements = inputShape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x36544938U, -1.0F, 1.0F);
+  CompiledModel compiled(PP_OCRV6_TINY_REC_INT8_LIBRARY_PATH,
+                         "pp_ocrv6_tiny_rec_int8");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kSequenceLength * kClasses);
+  std::vector<float> repeated(actual.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+  for (std::size_t index = 0; index < kSequenceLength; ++index) {
+    const std::size_t offset = index * kClasses;
+    const auto row = std::span<const float>(actual).subspan(offset, kClasses);
+    EXPECT_TRUE(std::ranges::all_of(row,
+                                    [](float value) {
+                                      return std::isfinite(value) &&
+                                             value >= 0.0F && value <= 1.0F;
+                                    }))
+      << "row " << index;
+    EXPECT_NEAR(std::accumulate(row.begin(), row.end(), 0.0F), 1.0F, 2.0e-4F)
+      << "row " << index;
+  }
+}
+
 TEST(NumericalModel, PPOCRv5MobileRecMatchesNcnn) {
   const TensorShape inputShape(320, 48, 3);
   constexpr std::size_t kSequenceLength = 40;

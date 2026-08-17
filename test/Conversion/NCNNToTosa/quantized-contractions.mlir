@@ -83,3 +83,37 @@ func.func @quantized_inner_product_dynamic(%input: tensor<?x4xf32>) -> tensor<?x
 // LOWERING: tosa.add
 // LOWERING: tensor.collapse_shape
 // LOWERING-NOT: ncnn.inner_product
+
+func.func @quantized_convolution_dynamic(%input: tensor<2x?x?xf32>) -> tensor<3x?x?xf32> {
+  %weight = arith.constant dense<1> : tensor<3x2x3x3xi8>
+  %weight_scale = arith.constant dense<[2.0, 4.0, 8.0]> : tensor<3xf32>
+  %input_scale = arith.constant dense<2.0> : tensor<1xf32>
+  %0 = ncnn.convolution %input, %weight, %weight_scale, %input_scale {dilation_h = 1 : i64, dilation_w = 1 : i64, has_bias = false, int8_scale_term = 2 : i64, kernel_h = 3 : i64, kernel_w = 3 : i64, pad_bottom = 1 : i64, pad_left = 1 : i64, pad_right = 1 : i64, pad_top = 1 : i64, stride_h = 2 : i64, stride_w = 2 : i64} : (tensor<2x?x?xf32>, tensor<3x2x3x3xi8>, tensor<3xf32>, tensor<1xf32>) -> tensor<3x?x?xf32>
+  return %0 : tensor<3x?x?xf32>
+}
+
+// LOWERING-LABEL: func.func @quantized_convolution_dynamic
+// LOWERING: tosa.pad
+// LOWERING: arith.divui
+// LOWERING: linalg.fill
+// LOWERING: linalg.conv_2d_nhwc_hwcf
+// LOWERING: arith.sitofp
+// LOWERING-NOT: tosa.conv2d
+// LOWERING-NOT: ncnn.convolution
+
+func.func @quantized_depthwise_dynamic(%input: tensor<2x?x?xf32>) -> tensor<2x?x?xf32> {
+  %weight = arith.constant dense<1> : tensor<2x1x3x3xi8>
+  %weight_scale = arith.constant dense<2.0> : tensor<1xf32>
+  %input_scale = arith.constant dense<2.0> : tensor<1xf32>
+  %0 = ncnn.convolution_depthwise %input, %weight, %weight_scale, %input_scale {dilation_h = 1 : i64, dilation_w = 1 : i64, group = 2 : i64, has_bias = false, int8_scale_term = 2 : i64, kernel_h = 3 : i64, kernel_w = 3 : i64, pad_bottom = 1 : i64, pad_left = 1 : i64, pad_right = 1 : i64, pad_top = 1 : i64, stride_h = 2 : i64, stride_w = 2 : i64} : (tensor<2x?x?xf32>, tensor<2x1x3x3xi8>, tensor<1xf32>, tensor<1xf32>) -> tensor<2x?x?xf32>
+  return %0 : tensor<2x?x?xf32>
+}
+
+// LOWERING-LABEL: func.func @quantized_depthwise_dynamic
+// LOWERING: tosa.pad
+// LOWERING: arith.divui
+// LOWERING: linalg.depthwise_conv_2d_nhwc_hwcm
+// LOWERING: tensor.collapse_shape
+// LOWERING: arith.sitofp
+// LOWERING-NOT: tosa.depthwise_conv2d
+// LOWERING-NOT: ncnn.convolution_depthwise
