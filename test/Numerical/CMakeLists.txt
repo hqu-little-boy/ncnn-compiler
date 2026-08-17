@@ -945,6 +945,19 @@ ncnn_add_compiled_fixture(
     0:1:min=32,multiple=32
     0:2:min=32,multiple=32)
 ncnn_add_compiled_fixture(
+    pp_ocrv6_tiny_det_int8
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det_int8.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det_int8.bin
+    3x32x32)
+ncnn_add_compiled_fixture(
+    pp_ocrv6_tiny_det_int8_dynamic
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det_int8.param
+    ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det_int8.bin
+    3x?x?
+    0:1:min=32,multiple=32
+    0:2:min=32,multiple=32
+    EMIT_IR)
+ncnn_add_compiled_fixture(
     pp_ocrv6_small_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.bin
@@ -1307,8 +1320,12 @@ add_dependencies(compile_pp_ocrv5_mobile_rec_dynamic
 add_dependencies(compile_pp_ocrv6_tiny_det
                   compile_pp_ocrv5_mobile_rec_dynamic)
 add_dependencies(compile_pp_ocrv6_tiny_det_dynamic compile_pp_ocrv6_tiny_det)
-add_dependencies(compile_pp_ocrv6_small_det
+add_dependencies(compile_pp_ocrv6_tiny_det_int8
                  compile_pp_ocrv6_tiny_det_dynamic)
+add_dependencies(compile_pp_ocrv6_tiny_det_int8_dynamic
+                 compile_pp_ocrv6_tiny_det_int8)
+add_dependencies(compile_pp_ocrv6_small_det
+                 compile_pp_ocrv6_tiny_det_int8_dynamic)
 add_dependencies(compile_pp_ocrv6_small_det_dynamic
                  compile_pp_ocrv6_small_det)
 add_dependencies(compile_pp_ocrv6_medium_det
@@ -1574,6 +1591,7 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_TINY_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param"
     PP_OCRV6_TINY_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin"
     PP_OCRV6_TINY_DET_LIBRARY_PATH="${pp_ocrv6_tiny_det_LIBRARY}"
+    PP_OCRV6_TINY_DET_INT8_LIBRARY_PATH="${pp_ocrv6_tiny_det_int8_LIBRARY}"
     PP_OCRV6_TINY_DET_FP16_LIBRARY_PATH="${pp_ocrv6_tiny_det_fp16_LIBRARY}"
     PP_OCRV6_SMALL_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.param"
     PP_OCRV6_SMALL_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.bin"
@@ -1651,6 +1669,7 @@ add_dependencies(numerical_tests compile_pp_ocrv5_mobile_rec)
 add_dependencies(numerical_tests compile_pp_ocrv5_server_rec)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_rec)
 add_dependencies(numerical_tests compile_pp_ocrv6_tiny_det)
+add_dependencies(numerical_tests compile_pp_ocrv6_tiny_det_int8)
 add_dependencies(numerical_tests compile_pp_ocrv6_small_det)
 add_dependencies(numerical_tests compile_pp_ocrv6_medium_det)
 add_dependencies(numerical_tests compile_pp_ocrv5_mobile_det_static)
@@ -1768,6 +1787,12 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
     PP_OCRV6_TINY_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param"
     PP_OCRV6_TINY_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin"
     PP_OCRV6_TINY_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv6_tiny_det_dynamic_LIBRARY}"
+    PP_OCRV6_TINY_DET_INT8_STATIC_LIBRARY_PATH="${pp_ocrv6_tiny_det_int8_LIBRARY}"
+    PP_OCRV6_TINY_DET_INT8_DYNAMIC_LIBRARY_PATH="${pp_ocrv6_tiny_det_int8_dynamic_LIBRARY}"
+    PP_OCRV6_TINY_DET_INT8_DYNAMIC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_det_int8_dynamic/pp_ocrv6_tiny_det_int8_dynamic.json"
+    PP_OCRV6_TINY_DET_INT8_DYNAMIC_HEADER_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_det_int8_dynamic/pp_ocrv6_tiny_det_int8_dynamic.h"
+    PP_OCRV6_TINY_DET_INT8_DYNAMIC_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_det_int8_dynamic/model.ncnn.mlir"
+    PP_OCRV6_TINY_DET_INT8_DYNAMIC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_tiny_det_int8_dynamic/model.linalg.mlir"
     PP_OCRV6_SMALL_DET_DYNAMIC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.param"
     PP_OCRV6_SMALL_DET_DYNAMIC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.bin"
     PP_OCRV6_SMALL_DET_DYNAMIC_LIBRARY_PATH="${pp_ocrv6_small_det_dynamic_LIBRARY}"
@@ -1856,6 +1881,7 @@ target_compile_definitions(numerical_dynamic_tests PRIVATE
 add_dependencies(numerical_dynamic_tests
     compile_pp_ocrv5_mobile_det_dynamic
     compile_pp_ocrv6_tiny_det_dynamic
+    compile_pp_ocrv6_tiny_det_int8_dynamic
     compile_pp_ocrv6_small_det_dynamic
     compile_pp_ocrv6_medium_det_dynamic
     compile_pp_lcnet_x1_0_doc_ori_dynamic
