@@ -1433,12 +1433,36 @@ TEST_F(NcnnImporterTest, ImportsPPOCRV5AttentionOperators) {
   graph.set_output_blob_names({"out"});
   graph.set_weights_loaded(true);
 
+  auto quantized_graph = graph;
+  std::vector<ncnn_graph::Layer> quantized_layers(
+    quantized_graph.get_layers().begin(), quantized_graph.get_layers().end());
+  ncnn_graph::ParamDict quantized_params = quantized_layers[2].get_params();
+  quantized_params.set_value(18, ncnn_graph::ParamValue::make_int(2));
+  quantized_layers[2].set_params(std::move(quantized_params));
+  std::vector<ncnn_graph::Tensor> quantized_weights;
+  for (int projection = 0; projection < 4; ++projection) {
+    quantized_weights.push_back(
+      make_tensor({4, 4}, ncnn_graph::DataType::Int8));
+    quantized_weights.push_back(make_float_tensor({4}, 0.0F));
+  }
+  quantized_weights.push_back(make_float_tensor({4}, 2.0F));
+  quantized_weights.push_back(make_float_tensor({4}, 2.0F));
+  quantized_weights.push_back(make_float_tensor({4}, 2.0F));
+  quantized_weights.push_back(make_float_tensor({1}, 2.0F));
+  quantized_layers[2].set_weights(std::move(quantized_weights));
+  quantized_graph.set_layers(std::move(quantized_layers));
+
   auto imported = import(graph);
   ASSERT_TRUE(imported) << imported.error().to_string();
   EXPECT_EQ(count_ops<mlir::ncnn::MultiHeadAttentionOp>(imported->get()), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::LayerNormOp>(imported->get()), 1);
   EXPECT_EQ(count_ops<mlir::ncnn::SwishOp>(imported->get()), 1);
   EXPECT_TRUE(shape_is(output_type(imported->get()), {3, 4}));
+
+  auto quantized = import(quantized_graph);
+  ASSERT_TRUE(quantized) << quantized.error().to_string();
+  EXPECT_EQ(count_ops<mlir::ncnn::MultiHeadAttentionOp>(quantized->get()), 1);
+  EXPECT_TRUE(shape_is(output_type(quantized->get()), {3, 4}));
 }
 
 TEST_F(NcnnImporterTest, ImportsRankTwoLayerNormWithoutAffineSize) {

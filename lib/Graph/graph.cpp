@@ -1763,9 +1763,10 @@ std::expected<void, std::string> load_multi_head_attention_weights(
   if (!params) {
     return std::unexpected(params.error());
   }
-  if (params->int8_scale_term != 0) {
+  if (params->int8_scale_term != 0 && params->int8_scale_term != 1 &&
+      params->int8_scale_term != 2) {
     return std::unexpected(
-      "quantized MultiHeadAttention weights are unsupported");
+      "MultiHeadAttention int8_scale_term must be 0, 1, or 2");
   }
 
   auto embed_dim = positive_size(params->embed_dim, "MHA embed_dim");
@@ -1835,6 +1836,21 @@ std::expected<void, std::string> load_multi_head_attention_weights(
         "MultiHeadAttention {} bias: {}", projection.name, bias.error()));
     }
     layer.add_weight(std::move(*bias));
+  }
+  if (params->int8_scale_term != 0) {
+    for (const auto& [name, count] :
+         std::array<std::pair<std::string_view, std::int64_t>, 4>{
+           {{"q", params->embed_dim},
+            {"k", params->embed_dim},
+            {"v", params->embed_dim},
+            {"out", 1}}}) {
+      auto scale = load_weight(cursor, count, 1, {count});
+      if (!scale) {
+        return std::unexpected(std::format(
+          "MultiHeadAttention {} int8 scale: {}", name, scale.error()));
+      }
+      layer.add_weight(std::move(*scale));
+    }
   }
   return {};
 }

@@ -1920,6 +1920,147 @@ TEST(NumericalDynamicModel, PPOCRv5MobileRecArtifactsDescribeDynamicAbi) {
   EXPECT_NE(linalgIr.find("tensor.expand_shape"), std::string::npos);
 }
 
+TEST(NumericalDynamicModel, PPOCRv5MobileRecInt8InfersSequenceAcrossWidths) {
+  CompiledModel infer(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_LIBRARY_PATH,
+                      "pp_ocrv5_mobile_rec_int8_dynamic_infer_output_shapes");
+  ASSERT_TRUE(infer.valid()) << infer.error();
+
+  for (const std::int64_t width :
+       std::array<std::int64_t, 9>{5, 8, 12, 13, 20, 21, 64, 319, 320}) {
+    const std::array<std::int64_t, 3> dimensions = {3, 48, width};
+    std::array<std::int64_t, 2> inferred{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess)
+      << "width " << width;
+    EXPECT_EQ(
+      inferred,
+      (std::array<std::int64_t, 2>{recognition_sequence_length(width),
+                                   static_cast<std::int64_t>(kRecClasses)}))
+      << "width " << width;
+  }
+}
+
+TEST(NumericalDynamicModel,
+     PPOCRv5MobileRecInt8StaticAndDynamicExecutionsAreConsistent) {
+  CompiledModel static_compiled(PP_OCRV5_MOBILE_REC_INT8_STATIC_LIBRARY_PATH,
+                                "pp_ocrv5_mobile_rec_int8");
+  CompiledModel compiled(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_rec_int8_dynamic");
+  ASSERT_TRUE(static_compiled.valid()) << static_compiled.error();
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const std::int64_t width : std::array<std::int64_t, 3>{5, 64, 320}) {
+    const std::array<std::int64_t, 3> dimensions = {3, 48, width};
+    const std::vector<float> input =
+      make_random_input(recognition_input_elements(width),
+                        static_cast<std::uint32_t>(0x354D4938U + width),
+                        -1.0F,
+                        1.0F);
+    std::vector<float> actual(recognition_output_elements(width));
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess)
+      << "width " << width;
+    for (std::int64_t row = 0; row < recognition_sequence_length(width);
+         ++row) {
+      const std::size_t offset = static_cast<std::size_t>(row) * kRecClasses;
+      const auto values =
+        std::span<const float>(actual).subspan(offset, kRecClasses);
+      EXPECT_TRUE(std::ranges::all_of(values,
+                                      [](float value) {
+                                        return std::isfinite(value) &&
+                                               value >= 0.0F && value <= 1.0F;
+                                      }))
+        << "width " << width << ", row " << row;
+      EXPECT_NEAR(
+        std::accumulate(values.begin(), values.end(), 0.0F), 1.0F, 3.0e-4F)
+        << "width " << width << ", row " << row;
+    }
+    if (width == 320) {
+      std::vector<float> static_output(actual.size());
+      ASSERT_EQ(static_compiled.run(input, static_output), kSuccess);
+      EXPECT_TRUE(compare_values(actual, static_output, 1.0e-5F));
+    }
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv5MobileRecInt8SupportsAlternatingWidths) {
+  CompiledModel compiled(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_rec_int8_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  for (const std::int64_t width : std::array<std::int64_t, 4>{320, 5, 64, 13}) {
+    const std::array<std::int64_t, 3> dimensions = {3, 48, width};
+    const std::vector<float> input(recognition_input_elements(width), 0.001F);
+    std::vector<float> output(recognition_output_elements(width));
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, output.size()),
+              kSuccess)
+      << "width " << width;
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel,
+     PPOCRv5MobileRecInt8RejectsInvalidShapesAndCapacity) {
+  CompiledModel compiled(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_rec_int8_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+
+  const std::array<std::int64_t, 3> normal_shape = {3, 48, 5};
+  const std::vector<float> input(recognition_input_elements(5), 0.0F);
+  std::vector<float> output(recognition_output_elements(5));
+  ASSERT_EQ(compiled.run_dynamic(input, normal_shape, output, output.size()),
+            kSuccess);
+
+  for (const auto dimensions : std::array<std::array<std::int64_t, 3>, 4>{
+         {{3, 48, 0}, {3, 48, 4}, {3, 47, 5}, {1, 48, 5}}}) {
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, output.size()),
+              dimensions[2] == 4 ? kConstraintViolation : kInvalidShape);
+  }
+  std::vector<float> short_output(recognition_output_elements(5) - 1);
+  EXPECT_EQ(compiled.run_dynamic(
+              input, normal_shape, short_output, short_output.size()),
+            kOutputCapacityInsufficient);
+  const std::array<std::int64_t, 3> overflow_shape = {
+    3, 48, std::numeric_limits<std::int64_t>::max()};
+  EXPECT_EQ(compiled.run_dynamic(input, overflow_shape, output, output.size()),
+            kShapeArithmeticOverflow);
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel,
+     PPOCRv5MobileRecInt8ArtifactsDescribeQuantizedDynamicAbi) {
+  EXPECT_GT(
+    std::filesystem::file_size(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_LIBRARY_PATH),
+    0U);
+  const std::string manifest =
+    read_text(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_ocrv5_mobile_rec_int8_dynamic"),
+            std::string::npos);
+  EXPECT_NE(manifest.find("18385"), std::string::npos);
+  EXPECT_NE(manifest.find("\"minimum\": 5"), std::string::npos);
+  EXPECT_NE(manifest.find("\"shape_program\""), std::string::npos);
+
+  const std::string header =
+    read_text(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_HEADER_PATH);
+  for (const std::string_view required : {
+         "#define PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_INPUT1_DYNAMIC_DIM_MASK "
+         "UINT32_C(0x4)",
+         "#define PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_OUTPUT1_DIM1 INT64_C(18385)",
+         "pp_ocrv5_mobile_rec_int8_dynamic_infer_output_shapes",
+       }) {
+    EXPECT_NE(header.find(required), std::string::npos) << required;
+  }
+  const std::string ncnn_ir =
+    read_text(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_NCNN_IR_PATH);
+  EXPECT_NE(ncnn_ir.find("int8_scale_term = 102"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  const std::string linalg_ir =
+    read_text(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_LINALG_IR_PATH);
+  EXPECT_NE(linalg_ir.find("linalg.batch_matmul"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("arith.fptosi"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+}
+
 TEST(NumericalDynamicModel, PPOCRv5ServerRecInfersSequenceAcrossWidths) {
   CompiledModel infer(PP_OCRV5_SERVER_REC_DYNAMIC_LIBRARY_PATH,
                       "pp_ocrv5_server_rec_dynamic_infer_output_shapes");

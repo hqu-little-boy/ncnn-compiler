@@ -8,6 +8,52 @@ namespace ncnn_importer::detail {
 
 namespace {
 
+std::expected<ncnn_graph::Tensor, std::string> dequantize_attention_weight(
+  const ncnn_graph::Tensor& weight,
+  const ncnn_graph::Tensor& scales,
+  bool scalar_scale) {
+  if (weight.get_dtype() != ncnn_graph::DataType::Int8 ||
+      scales.get_dtype() != ncnn_graph::DataType::Float32 ||
+      scales.get_shape().size() != 1 ||
+      (scalar_scale ? scales.element_count() != 1
+                    : scales.element_count() !=
+                        static_cast<std::size_t>(weight.get_shape()[0]))) {
+    return std::unexpected(
+      "quantized MultiHeadAttention weights have invalid "
+      "scale tensors");
+  }
+  const std::size_t row_size = weight.get_shape().back();
+  std::vector<float> scale_values(scales.element_count());
+  for (std::size_t index = 0; index < scale_values.size(); ++index) {
+    std::memcpy(&scale_values[index],
+                scales.get_data().data() + (index * sizeof(float)),
+                sizeof(float));
+    if (!std::isfinite(scale_values[index]) || scale_values[index] <= 0.0F) {
+      return std::unexpected(
+        "quantized MultiHeadAttention scales must be finite and positive");
+    }
+  }
+  std::vector<std::byte> data(weight.element_count() * sizeof(float));
+  for (std::size_t index = 0; index < weight.element_count(); ++index) {
+    const auto scale = scale_values[scalar_scale ? 0 : index / row_size];
+    std::int8_t value;
+    std::memcpy(&value, weight.get_data().data() + index, sizeof(value));
+    const float dequantized = static_cast<float>(value) / scale;
+    std::memcpy(
+      data.data() + (index * sizeof(float)), &dequantized, sizeof(dequantized));
+  }
+  ncnn_graph::Tensor result;
+  auto status =
+    result.set_contents(std::vector<std::int64_t>(weight.get_shape().begin(),
+                                                  weight.get_shape().end()),
+                        ncnn_graph::DataType::Float32,
+                        std::move(data));
+  if (!status) {
+    return std::unexpected(status.error());
+  }
+  return result;
+}
+
 std::optional<unsigned> resolved_input_index(mlir::Value value) {
   while (auto split = value.getDefiningOp<mlir::ncnn::SplitOp>()) {
     value = split.getInput();
@@ -266,14 +312,18 @@ ImportResult import_multi_head_attention(ImportContext& importer,
                                       : !params  ? params.error()
                                                  : mask.error()));
   }
+  const bool quantized = params->int8_scale_term != 0;
+  const std::size_t expected_weights = quantized ? 12 : 8;
   if (params->has_attention_mask || params->kv_cache ||
-      params->int8_scale_term != 0 || params->query_dim != params->key_dim ||
+      (params->int8_scale_term != 0 && params->int8_scale_term != 1 &&
+       params->int8_scale_term != 2) ||
+      params->query_dim != params->key_dim ||
       params->query_dim != params->value_dim ||
-      context.layer.get_weights().size() != 8) {
+      context.layer.get_weights().size() != expected_weights) {
     return std::unexpected(make_error(
       context,
-      "MultiHeadAttention supports unmasked, unquantized one-input self "
-      "attention with matching qdim/kdim/vdim and eight weights only"));
+      "MultiHeadAttention supports unmasked one-input self attention with "
+      "matching qdim/kdim/vdim and supported weight tensors only"));
   }
   auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
   if (!input) {
@@ -281,13 +331,20 @@ ImportResult import_multi_head_attention(ImportContext& importer,
   }
   llvm::SmallVector<mlir::Value> operands{*input};
   for (std::size_t index = 0; index < 8; ++index) {
-    if (context.layer.get_weights()[index].get_dtype() !=
-        ncnn_graph::DataType::Float32) {
+    const auto& source = context.layer.get_weights()[index];
+    ncnn_graph::Tensor weight = source;
+    if (quantized && index % 2 == 0) {
+      auto dequantized = dequantize_attention_weight(
+        source, context.layer.get_weights()[8 + (index / 2)], index == 6);
+      if (!dequantized) {
+        return std::unexpected(make_error(context, dequantized.error()));
+      }
+      weight = std::move(*dequantized);
+    } else if (weight.get_dtype() != ncnn_graph::DataType::Float32) {
       return std::unexpected(
-        make_error(context, "MultiHeadAttention weights must be FP32"));
+        make_error(context, "MultiHeadAttention bias must be FP32"));
     }
-    auto value = importer.make_constant(
-      context, context.layer.get_weights()[index], index);
+    auto value = importer.make_constant(context, weight, index);
     if (!value) {
       return std::unexpected(value.error());
     }
