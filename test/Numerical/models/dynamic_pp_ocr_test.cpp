@@ -2344,6 +2344,118 @@ TEST(NumericalDynamicModel, PPOCRv6MediumRecArtifactsDescribeDynamicAbi) {
   EXPECT_NE(linalg_ir.find("tensor.expand_shape"), std::string::npos);
 }
 
+TEST(NumericalDynamicModel,
+     PPOCRv6SmallRecInt8InfersAndMatchesStaticExecution) {
+  CompiledModel static_compiled(PP_OCRV6_SMALL_REC_INT8_STATIC_LIBRARY_PATH,
+                                "pp_ocrv6_small_rec_int8");
+  CompiledModel compiled(PP_OCRV6_SMALL_REC_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv6_small_rec_int8_dynamic");
+  CompiledModel infer(PP_OCRV6_SMALL_REC_INT8_DYNAMIC_LIBRARY_PATH,
+                      "pp_ocrv6_small_rec_int8_dynamic_infer_output_shapes");
+  ASSERT_TRUE(static_compiled.valid()) << static_compiled.error();
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  ASSERT_TRUE(infer.valid()) << infer.error();
+
+  for (const std::int64_t width : std::array<std::int64_t, 4>{5, 13, 64, 320}) {
+    const std::array<std::int64_t, 3> dimensions = {3, 48, width};
+    std::array<std::int64_t, 2> inferred{};
+    ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
+    EXPECT_EQ(inferred,
+              (std::array<std::int64_t, 2>{
+                recognition_sequence_length(width),
+                static_cast<std::int64_t>(kMediumRecClasses)}));
+
+    const std::vector<float> input =
+      make_random_input(recognition_input_elements(width),
+                        static_cast<std::uint32_t>(0x36530000U + width),
+                        -1.0F,
+                        1.0F);
+    std::vector<float> actual(medium_recognition_output_elements(width));
+    ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
+              kSuccess);
+    for (std::int64_t row = 0; row < recognition_sequence_length(width);
+         ++row) {
+      const std::size_t offset =
+        static_cast<std::size_t>(row) * kMediumRecClasses;
+      const auto values =
+        std::span<const float>(actual).subspan(offset, kMediumRecClasses);
+      EXPECT_TRUE(std::ranges::all_of(values, [](float value) {
+        return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+      }));
+      EXPECT_NEAR(
+        std::accumulate(values.begin(), values.end(), 0.0), 1.0, 2.0e-4);
+    }
+    if (width == 320) {
+      std::vector<float> static_output(actual.size());
+      ASSERT_EQ(static_compiled.run(input, static_output), kSuccess);
+      EXPECT_TRUE(compare_values(actual, static_output, 1.0e-5F));
+    }
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv6SmallRecInt8SupportsAlternatingWidths) {
+  CompiledModel compiled(PP_OCRV6_SMALL_REC_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv6_small_rec_int8_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  for (const std::int64_t width : std::array<std::int64_t, 4>{320, 5, 64, 13}) {
+    const std::array<std::int64_t, 3> dimensions = {3, 48, width};
+    const std::vector<float> input(recognition_input_elements(width), 0.001F);
+    std::vector<float> output(medium_recognition_output_elements(width));
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, output.size()),
+              kSuccess);
+  }
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel,
+     PPOCRv6SmallRecInt8RejectsInvalidShapesAndCapacity) {
+  CompiledModel compiled(PP_OCRV6_SMALL_REC_INT8_DYNAMIC_LIBRARY_PATH,
+                         "pp_ocrv6_small_rec_int8_dynamic");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  const std::array<std::int64_t, 3> normal_shape = {3, 48, 5};
+  const std::vector<float> input(recognition_input_elements(5), 0.0F);
+  std::vector<float> output(medium_recognition_output_elements(5));
+  ASSERT_EQ(compiled.run_dynamic(input, normal_shape, output, output.size()),
+            kSuccess);
+  for (const auto dimensions : std::array<std::array<std::int64_t, 3>, 4>{
+         {{3, 48, 0}, {3, 48, 4}, {3, 47, 5}, {1, 48, 5}}}) {
+    const int expected_status =
+      dimensions[2] == 4 ? kConstraintViolation : kInvalidShape;
+    EXPECT_EQ(compiled.run_dynamic(input, dimensions, output, output.size()),
+              expected_status);
+  }
+  std::vector<float> short_output(output.size() - 1);
+  EXPECT_EQ(compiled.run_dynamic(
+              input, normal_shape, short_output, short_output.size()),
+            kOutputCapacityInsufficient);
+  record_peak_rss();
+}
+
+TEST(NumericalDynamicModel, PPOCRv6SmallRecInt8ArtifactsDescribeDynamicAbi) {
+  EXPECT_GT(
+    std::filesystem::file_size(PP_OCRV6_SMALL_REC_INT8_DYNAMIC_LIBRARY_PATH),
+    0U);
+  const std::string manifest =
+    read_text(PP_OCRV6_SMALL_REC_INT8_DYNAMIC_MANIFEST_PATH);
+  EXPECT_NE(manifest.find("pp_ocrv6_small_rec_int8_dynamic"),
+            std::string::npos);
+  EXPECT_NE(manifest.find("18710"), std::string::npos);
+  EXPECT_NE(manifest.find("\"minimum\": 5"), std::string::npos);
+  const std::string header =
+    read_text(PP_OCRV6_SMALL_REC_INT8_DYNAMIC_HEADER_PATH);
+  EXPECT_NE(
+    header.find("PP_OCRV6_SMALL_REC_INT8_DYNAMIC_INPUT1_DIM2 NCNN_DYNAMIC_DIM"),
+    std::string::npos);
+  EXPECT_NE(
+    header.find("PP_OCRV6_SMALL_REC_INT8_DYNAMIC_OUTPUT1_DIM1 INT64_C(18710)"),
+    std::string::npos);
+  const std::string linalg_ir =
+    read_text(PP_OCRV6_SMALL_REC_INT8_DYNAMIC_LINALG_IR_PATH);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_NE(linalg_ir.find("math.exp"), std::string::npos);
+}
+
 TEST(NumericalDynamicModel, PPUVDocMatchesNcnnAcrossShapes) {
   CompiledModel compiled(PP_UVDOC_DYNAMIC_LIBRARY_PATH, "pp_uvdoc_dynamic");
   CompiledModel infer(PP_UVDOC_DYNAMIC_LIBRARY_PATH,

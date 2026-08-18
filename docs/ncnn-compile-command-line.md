@@ -231,7 +231,7 @@ Importer 还会为可追溯到模型输入的动态 `Slice` 轴自动推导 mini
 | 模型族 | 输入 override 与约束 | 输出 ABI |
 |---|---|---|
 | PP-LCNet doc/textline、AngleNet | `3x?x?`，H/W `min=1,multiple=1` | 固定分类向量；无 shape inference、无 output capacity |
-| PP-OCRv5 mobile rec、PP-OCRv6 tiny rec | `3x48x?`，W `min=5,multiple=1` | shape-only 动态序列；先 inference，再传 data capacity |
+| PP-OCRv5 mobile/server rec、PP-OCRv6 tiny/medium rec、PP-OCRv6 small rec INT8 | `3x48x?`，W `min=5,multiple=1` | shape-only 动态序列；先 inference，再传 data capacity |
 | PP-OCRv5 mobile/server det、PP-OCRv6 tiny/small/medium det | `3x?x?`，H/W `min=32,multiple=32` | shape-only 动态概率图 `[1,H,W]` |
 
 PP-LCNet 文档方向模型示例：
@@ -259,7 +259,8 @@ OCR 识别模型把高度固定为 48，仅动态化宽度；检测模型则对 
 ```
 
 识别输出 sequence extent 为 `(W + 3) / 8`；PP-OCRv6 tiny rec 类别数为 6906，
-PP-OCRv5 mobile rec 类别数为 18385。PP-LCNet doc/textline 的固定输出分别为 4 和 2，
+PP-OCRv5 mobile/server rec 类别数为 18385，PP-OCRv6 small/medium rec 类别数为 18710。
+PP-LCNet doc/textline 的固定输出分别为 4 和 2，
 AngleNet 固定输出为 2。
 
 ## 3. 优化和调试信息

@@ -14,7 +14,7 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 编译为具有稳定 C ABI 的 Linux 共享库（`.so`）。技术栈为 LLVM/MLIR 21、C++23，当前以
 **SqueezeNet v1.1** 以及静态 FP32 的 `PP-LCNet_x1_0_doc_ori`、
 `PP-LCNet_x1_0_textline_ori`、`Chineseocr_Lite_AngleNet`、
-`PP-OCRv6_tiny_rec`、`PP-OCRv6_medium_rec`、`PP-OCRv6_tiny_det`、`PP-OCRv6_small_det`、
+`PP-OCRv6_tiny_rec`、`PP-OCRv6_small_rec_int8`、`PP-OCRv6_medium_rec`、`PP-OCRv6_tiny_det`、`PP-OCRv6_small_det`、
 `PP-OCRv6_medium_det`、`PP-OCRv5_mobile_det`、`PP-OCRv5_server_det`、
 `PP-OCRv5_mobile_rec`、`PP-OCRv5_server_rec`、
 `PP-StructrureV2_SLANet_plus_cnn`、`PP-FormulaNet_plus_S_encoder` 作为端到端验证目标。
@@ -371,9 +371,10 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
   - 全有限输出、softmax 求和误差 ≤1e-5（PP-OCRv6 tiny rec 的 6906 类输出为 ≤2e-5，
     PP-OCRv5 mobile/server rec 的 18385 类与 PP-OCRv6 medium rec 的 18710 类输出为 ≤2e-4）、
     top-1 匹配、top-5 集合匹配；除上述独立预算外最大绝对误差 ≤1e-4
-- `models/dynamic_pp_ocr_test.cpp`：十二个 fixed-rank 动态产物：PP-LCNet doc/textline、AngleNet、
-  PP-OCRv5 mobile/server rec、PP-OCRv6 tiny/medium rec、PP-OCRv5 mobile/server det 和 PP-OCRv6
-  tiny/small/medium det。覆盖多尺寸与交替尺寸、upstream ncnn 对齐、minimum/multiple 约束、
+- `models/dynamic_pp_ocr_test.cpp`：十三个 fixed-rank 动态产物：PP-LCNet doc/textline、AngleNet、
+  PP-OCRv5 mobile/server rec、PP-OCRv6 tiny/medium rec、PP-OCRv6 small rec INT8、
+  PP-OCRv5 mobile/server det 和 PP-OCRv6 tiny/small/medium det。覆盖多尺寸与交替尺寸、
+  upstream ncnn 对齐或低精度静态/动态一致性、minimum/multiple 约束、
   零维/错误通道/shape 算术溢出、输出容量，以及 header/manifest/Linalg IR 审计。
 
 ### 7.4 运行时测试
