@@ -1,9 +1,9 @@
 # ncnn-mlir-opt：基于 MlirOptMain 的 mlir-opt 克隆。
 # 注册全部上游方言/扩展/pass（故支持所有标准 mlir-opt 选项与 pass）+ ncnn 方言。
 # 链接全部 dialect/conversion/extension 库，registerAll* 引用的符号才齐全。
-get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
-get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
-get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
+# Keep the executable on the monolithic shared MLIR/LLVM libraries.  Linking
+# component archives together with MLIRMlirOptMain pulls in a second copy of
+# MLIR's global registries and can crash during dialect/pattern construction.
 
 add_executable(ncnn-mlir-opt ncnn-mlir-opt.cpp)
 add_dependencies(ncnn-mlir-opt NCNNPassesIncGen)
@@ -27,9 +27,7 @@ target_link_libraries(ncnn-mlir-opt PRIVATE
     VerifyModelShapeContracts
     VerifyNoNCNNOps
     VerifyNoTosaOps
-    ${dialect_libs}
-    ${conversion_libs}
-    ${extension_libs}
     MLIRMlirOptMain
-    MLIRPass)
+    MLIR
+    LLVM)
 install(TARGETS ncnn-mlir-opt RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
