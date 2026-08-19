@@ -421,6 +421,50 @@ TEST(NumericalModel, PPOCRv6MediumRecInt8ProducesStableSoftmax) {
   }
 }
 
+TEST(NumericalModel, PPOCRv6SmallRecProducesStableSoftmax) {
+  const TensorShape input_shape(320, 48, 3);
+  constexpr std::size_t kSequenceLength = 40;
+  constexpr std::size_t kClasses = 18710;
+  const auto input_elements = input_shape.element_count();
+  ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
+  const std::vector<float> input =
+    make_random_input(*input_elements, 0x36534D45U, -1.0F, 1.0F);
+  const ReferenceModel reference(PP_OCRV6_SMALL_REC_PARAM_PATH,
+                                 PP_OCRV6_SMALL_REC_BIN_PATH,
+                                 "in0",
+                                 "out0",
+                                 input_shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  CompiledModel compiled(PP_OCRV6_SMALL_REC_LIBRARY_PATH, "pp_ocrv6_small_rec");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kSequenceLength * kClasses);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F));
+  std::vector<float> repeated(actual.size());
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+}
+
+TEST(NumericalModel, PPOCRv5MobileDetInt8ProducesStableOutput) {
+  const TensorShape input_shape(32, 32, 3);
+  const auto input_elements = input_shape.element_count();
+  ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
+  const std::vector<float> input =
+    make_random_input(*input_elements, 0x35444938U, -0.01F, 0.01F);
+  CompiledModel compiled(PP_OCRV5_MOBILE_DET_INT8_LIBRARY_PATH,
+                         "pp_ocrv5_mobile_det_int8");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(32 * 32);
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  EXPECT_TRUE(std::ranges::all_of(actual, [](float value) {
+    return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+  }));
+  std::vector<float> repeated(actual.size());
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+}
+
 TEST(NumericalModel, PPOCRv5ServerRecMatchesNcnn) {
   const TensorShape input_shape(320, 48, 3);
   constexpr std::size_t kSequenceLength = 40;

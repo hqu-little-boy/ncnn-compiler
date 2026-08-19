@@ -231,8 +231,8 @@ Importer 还会为可追溯到模型输入的动态 `Slice` 轴自动推导 mini
 | 模型族 | 输入 override 与约束 | 输出 ABI |
 |---|---|---|
 | PP-LCNet doc/textline、AngleNet | `3x?x?`，H/W `min=1,multiple=1` | 固定分类向量；无 shape inference、无 output capacity |
-| PP-OCRv5 mobile/server rec、PP-OCRv6 tiny/medium rec、PP-OCRv6 small/medium rec INT8 | `3x48x?`，W `min=5,multiple=1` | shape-only 动态序列；先 inference，再传 data capacity |
-| PP-OCRv5 mobile/server det、PP-OCRv6 tiny/small/medium det | `3x?x?`，H/W `min=32,multiple=32` | shape-only 动态概率图 `[1,H,W]` |
+| PP-OCRv5 mobile/server rec、PP-OCRv6 tiny/small/medium rec、PP-OCRv6 small/medium rec INT8 | `3x48x?`，W `min=5,multiple=1` | shape-only 动态序列；先 inference，再传 data capacity |
+| PP-OCRv5 mobile/server det、PP-OCRv5 mobile det INT8、PP-OCRv6 tiny/small/medium det | `3x?x?`，H/W `min=32,multiple=32` | shape-only 动态概率图 `[1,H,W]` |
 
 PP-LCNet 文档方向模型示例：
 
