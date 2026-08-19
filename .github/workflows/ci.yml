@@ -32,6 +32,10 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get install -y cmake libgtest-dev
 
+      - name: Download LiteOCR models
+        working-directory: ${{ github.workspace }}
+        run: wget -r -np -nH https://mirrors.sdu.edu.cn/ncnn_modelzoo/liteocr/
+
       - name: Build
         run: |
           cmake -S compiler -B build \
