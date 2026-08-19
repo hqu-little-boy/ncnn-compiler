@@ -395,6 +395,32 @@ TEST(NumericalModel, PPOCRv5MobileRecInt8ProducesStableSoftmax) {
   }
 }
 
+TEST(NumericalModel, PPOCRv6MediumRecInt8ProducesStableSoftmax) {
+  const TensorShape input_shape(320, 48, 3);
+  constexpr std::size_t kSequenceLength = 40;
+  constexpr std::size_t kClasses = 18710;
+  const auto input_elements = input_shape.element_count();
+  ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
+  const std::vector<float> input =
+    make_random_input(*input_elements, 0x364D4938U, -1.0F, 1.0F);
+  CompiledModel compiled(PP_OCRV6_MEDIUM_REC_INT8_LIBRARY_PATH,
+                         "pp_ocrv6_medium_rec_int8");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(kSequenceLength * kClasses);
+  std::vector<float> repeated(actual.size());
+  ASSERT_EQ(compiled.run(input, actual), 0);
+  ASSERT_EQ(compiled.run(input, repeated), 0);
+  EXPECT_EQ(repeated, actual);
+  for (std::size_t index = 0; index < kSequenceLength; ++index) {
+    const auto row =
+      std::span<const float>(actual).subspan(index * kClasses, kClasses);
+    EXPECT_TRUE(std::ranges::all_of(row, [](float value) {
+      return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+    }));
+    EXPECT_NEAR(std::accumulate(row.begin(), row.end(), 0.0F), 1.0F, 2.0e-4F);
+  }
+}
+
 TEST(NumericalModel, PPOCRv5ServerRecMatchesNcnn) {
   const TensorShape input_shape(320, 48, 3);
   constexpr std::size_t kSequenceLength = 40;
