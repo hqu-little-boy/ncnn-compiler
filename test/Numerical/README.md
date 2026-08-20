@@ -8,8 +8,11 @@
 该测试工程使用 GTest，将编译器生成的裸指针动态库与 upstream ncnn 的优化 FP32 CPU 路径
 结果进行比较。ncnn 按构建平台和当前 CPU 自动选择 runtime dispatch、SIMD、packing、
 线程、Winograd、SGEMM 等优化；关闭 Vulkan 和 FP16/BF16/INT8 降精度路径，确保比较双方都
-使用 FP32 CPU 计算。固定种子输入采用 `[-0.01, 0.01]` 范围，避免随机大幅值在深层网络中
-放大不同累加顺序的舍入差异。
+使用 FP32 CPU 计算。默认固定种子随机输入来自标准正态分布，不人为设置有限范围；这使输入
+在浮点数的有效域内覆盖不同数量级。只有需要验证定义域或边界行为的用例才使用显式范围。通用比较器使用
+`abs(actual - expected) <= atol + rtol * abs(expected)`，默认 `atol=1e-6`，避免通过缩小输入
+或只设置较大的绝对误差预算来掩盖随数值尺度增长的问题。精确搬运路径使用 `rtol=0`，低精度
+和量化路径可显式设置独立的 `atol`。
 
 ## 运行前必须重建 generated fixture
 
@@ -56,5 +59,5 @@ BinaryOp 的双向广播，以及 Concat/Softmax 的 rank-3 正负 axis。
 residual gate 拒绝。
 
 SqueezeNet 第一版验收要求：所有输出 finite、softmax sum 误差不超过 `1e-5`、top-1
-一致、top-5 集合一致、最大绝对误差不超过 `1e-4`。Release 构建用于验证真实优化
+一致、top-5 集合一致、相对误差不超过 `1e-4`（近零绝对误差不超过 `1e-6`）。Release 构建用于验证真实优化
 产物；ASan/LSan 构建用于检查测试进程。

@@ -122,7 +122,7 @@ TEST(NumericalModel, PPLCNetDocOriMatchesNcnn) {
   const auto input_elements = kInputShape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x4C434E45U, -1.0F, 1.0F);
+    make_random_input(*input_elements, 0x4C434E45U);
   const auto expected = run_ncnn_reference(kReference, input);
   ASSERT_TRUE(expected.has_value()) << expected.error();
   ASSERT_EQ(expected->size(), kOutputElements);
@@ -142,7 +142,7 @@ TEST(NumericalModel, PPLCNetDocOriInt8ProducesStableSoftmax) {
   const auto input_elements = kInputShape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x4C434938U, -1.0F, 1.0F);
+    make_random_input(*input_elements, 0x4C434938U);
   CompiledModel compiled(PP_LCNET_DOC_ORI_INT8_LIBRARY_PATH,
                          "pp_lcnet_x1_0_doc_ori_int8");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
@@ -163,7 +163,7 @@ TEST(NumericalModel, PPLCNetTextlineOriMatchesNcnn) {
   const auto input_elements = input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x54455854U, -1.0F, 1.0F);
+    make_random_input(*input_elements, 0x54455854U);
   const ReferenceModel reference(PP_LCNET_TEXTLINE_ORI_PARAM_PATH,
                                  PP_LCNET_TEXTLINE_ORI_BIN_PATH,
                                  "in0",
@@ -189,7 +189,7 @@ TEST(NumericalModel, PPLCNetTextlineOriInt8ProducesStableSoftmax) {
   const auto input_elements = input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x544C4938U, -1.0F, 1.0F);
+    make_random_input(*input_elements, 0x544C4938U);
   CompiledModel compiled(PP_LCNET_TEXTLINE_ORI_INT8_LIBRARY_PATH,
                          "pp_lcnet_x1_0_textline_ori_int8");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
@@ -224,7 +224,7 @@ TEST(NumericalModel, ChineseOCRLiteAngleNetMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x414E474CU, -1.0F, 1.0F);
+    make_random_input(*inputElements, 0x414E474CU);
   const ReferenceModel reference(CHINESEOCR_LITE_ANGLENET_PARAM_PATH,
                                  CHINESEOCR_LITE_ANGLENET_BIN_PATH,
                                  "in0",
@@ -252,7 +252,7 @@ TEST(NumericalModel, PPOCRv6TinyRecMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x4F435236U, -1.0F, 1.0F);
+    make_random_input(*inputElements, 0x4F435236U);
   const ReferenceModel reference(PP_OCRV6_TINY_REC_PARAM_PATH,
                                  PP_OCRV6_TINY_REC_BIN_PATH,
                                  "in0",
@@ -287,7 +287,7 @@ TEST(NumericalModel, PPOCRv6TinyRecInt8ProducesStableSoftmax) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x36544938U, -1.0F, 1.0F);
+    make_random_input(*inputElements, 0x36544938U);
   CompiledModel compiled(PP_OCRV6_TINY_REC_INT8_LIBRARY_PATH,
                          "pp_ocrv6_tiny_rec_int8");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
@@ -317,7 +317,7 @@ TEST(NumericalModel, PPOCRv5MobileRecMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x354D5245U, -1.0F, 1.0F);
+    make_random_input(*inputElements, 0x354D5245U);
   const ReferenceModel reference(PP_OCRV5_MOBILE_REC_PARAM_PATH,
                                  PP_OCRV5_MOBILE_REC_BIN_PATH,
                                  "in0",
@@ -372,7 +372,7 @@ TEST(NumericalModel, PPOCRv5MobileRecInt8ProducesStableSoftmax) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x354D4938U, -1.0F, 1.0F);
+    make_random_input(*inputElements, 0x354D4938U);
   CompiledModel compiled(PP_OCRV5_MOBILE_REC_INT8_LIBRARY_PATH,
                          "pp_ocrv5_mobile_rec_int8");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
@@ -402,7 +402,7 @@ TEST(NumericalModel, PPOCRv6MediumRecInt8ProducesStableSoftmax) {
   const auto input_elements = input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x364D4938U, -1.0F, 1.0F);
+    make_random_input(*input_elements, 0x364D4938U);
   CompiledModel compiled(PP_OCRV6_MEDIUM_REC_INT8_LIBRARY_PATH,
                          "pp_ocrv6_medium_rec_int8");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
@@ -428,7 +428,7 @@ TEST(NumericalModel, PPOCRv6SmallRecProducesStableSoftmax) {
   const auto input_elements = input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x36534D45U, -1.0F, 1.0F);
+    make_random_input(*input_elements, 0x36534D45U);
   const ReferenceModel reference(PP_OCRV6_SMALL_REC_PARAM_PATH,
                                  PP_OCRV6_SMALL_REC_BIN_PATH,
                                  "in0",
@@ -451,7 +451,7 @@ TEST(NumericalModel, PPOCRv5MobileDetInt8ProducesStableOutput) {
   const auto input_elements = input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x35444938U, -0.01F, 0.01F);
+    make_random_input(*input_elements, 0x35444938U);
   CompiledModel compiled(PP_OCRV5_MOBILE_DET_INT8_LIBRARY_PATH,
                          "pp_ocrv5_mobile_det_int8");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
@@ -472,7 +472,7 @@ TEST(NumericalModel, PPOCRv5ServerRecMatchesNcnn) {
   const auto input_elements = input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x35535245U, -1.0F, 1.0F);
+    make_random_input(*input_elements, 0x35535245U);
   const ReferenceModel reference(PP_OCRV5_SERVER_REC_PARAM_PATH,
                                  PP_OCRV5_SERVER_REC_BIN_PATH,
                                  "in0",
@@ -527,7 +527,7 @@ TEST(NumericalModel, PPOCRv6MediumRecMatchesNcnn) {
   const auto input_elements = input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x364D5245U, -1.0F, 1.0F);
+    make_random_input(*input_elements, 0x364D5245U);
   const ReferenceModel reference(PP_OCRV6_MEDIUM_REC_PARAM_PATH,
                                  PP_OCRV6_MEDIUM_REC_BIN_PATH,
                                  "in0",
@@ -581,7 +581,7 @@ TEST(NumericalModel, PPOCRv6TinyDetMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x44455436U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x44455436U);
   const ReferenceModel reference(PP_OCRV6_TINY_DET_PARAM_PATH,
                                  PP_OCRV6_TINY_DET_BIN_PATH,
                                  "in0",
@@ -611,7 +611,7 @@ TEST(NumericalModel, PPOCRv6TinyDetInt8ProducesStableOutput) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x49384454U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x49384454U);
   CompiledModel compiled(PP_OCRV6_TINY_DET_INT8_LIBRARY_PATH,
                          "pp_ocrv6_tiny_det_int8");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
@@ -632,7 +632,7 @@ TEST(NumericalModel, PPOCRv6TinyDetFp16StorageMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x46503644U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x46503644U);
   const ReferenceModel reference(PP_OCRV6_TINY_DET_PARAM_PATH,
                                  PP_OCRV6_TINY_DET_BIN_PATH,
                                  "in0",
@@ -646,7 +646,7 @@ TEST(NumericalModel, PPOCRv6TinyDetFp16StorageMatchesNcnn) {
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(kOutputElements);
   ASSERT_EQ(compiled.run(input, actual), 0);
-  EXPECT_TRUE(compare_values(actual, *expected, 2.0e-2F));
+  EXPECT_TRUE(compare_values(actual, *expected, 2.0e-2F, 2.0e-2F));
   std::vector<float> repeated(kOutputElements);
   ASSERT_EQ(compiled.run(input, repeated), 0);
   EXPECT_EQ(repeated, actual);
@@ -659,7 +659,7 @@ TEST(NumericalModel, PPOCRv6SmallDetMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x53444554U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x53444554U);
   const ReferenceModel reference(PP_OCRV6_SMALL_DET_PARAM_PATH,
                                  PP_OCRV6_SMALL_DET_BIN_PATH,
                                  "in0",
@@ -689,7 +689,7 @@ TEST(NumericalModel, PPOCRv6SmallDetInt8ProducesStableOutput) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x49385344U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x49385344U);
   CompiledModel compiled(PP_OCRV6_SMALL_DET_INT8_LIBRARY_PATH,
                          "pp_ocrv6_small_det_int8");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
@@ -710,7 +710,7 @@ TEST(NumericalModel, PPOCRv6MediumDetInt8ProducesStableOutput) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x49384D44U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x49384D44U);
   CompiledModel compiled(PP_OCRV6_MEDIUM_DET_INT8_LIBRARY_PATH,
                          "pp_ocrv6_medium_det_int8");
   ASSERT_TRUE(compiled.valid()) << compiled.error();
@@ -731,7 +731,7 @@ TEST(NumericalModel, PPOCRv6MediumDetMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x4D444554U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x4D444554U);
   const ReferenceModel reference(PP_OCRV6_MEDIUM_DET_PARAM_PATH,
                                  PP_OCRV6_MEDIUM_DET_BIN_PATH,
                                  "in0",
@@ -762,7 +762,7 @@ TEST(NumericalModel, PPOCRv5MobileDetMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x354D4445U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x354D4445U);
   const ReferenceModel reference(PP_OCRV5_MOBILE_DET_PARAM_PATH,
                                  PP_OCRV5_MOBILE_DET_BIN_PATH,
                                  "in0",
@@ -793,7 +793,7 @@ TEST(NumericalModel, PPOCRv5ServerDetMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x35534445U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x35534445U);
   const ReferenceModel reference(PP_OCRV5_SERVER_DET_PARAM_PATH,
                                  PP_OCRV5_SERVER_DET_BIN_PATH,
                                  "in0",
@@ -824,7 +824,7 @@ TEST(NumericalModel, PPStructureV2SLANetPlusCNNMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x534C414EU, -0.1F, 0.1F);
+    make_random_input(*inputElements, 0x534C414EU);
   const ReferenceModel reference(PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH,
                                  PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH,
                                  "in0",
@@ -847,11 +847,9 @@ TEST(NumericalModel, PPStructureV2SLANetPlusCNNMatchesNcnn) {
 }
 
 TEST(NumericalModel, PPStructureV2SLANetPlusSLAHeadMatchesNcnn) {
-  std::vector<float> hidden = make_random_input(256, 0x534C4844U, -0.1F, 0.1F);
-  const std::vector<float> memory =
-    make_random_input(256 * 96, 0x534C4D45U, -0.1F, 0.1F);
-  const std::vector<float> token =
-    make_random_input(50, 0x534C544BU, -0.1F, 0.1F);
+  std::vector<float> hidden = make_random_input(256, 0x534C4844U);
+  const std::vector<float> memory = make_random_input(256 * 96, 0x534C4D45U);
+  const std::vector<float> token = make_random_input(50, 0x534C544BU);
   const std::array inputs{
     ReferenceInput("in0", TensorShape(256, 1), hidden),
     ReferenceInput("in1", TensorShape(96, 256), memory),
@@ -889,7 +887,7 @@ TEST(NumericalModel, PPStructureV2SLANetCNNAndHeadDecodeMultipleSteps) {
   const auto imageElements = imageShape.element_count();
   ASSERT_TRUE(imageElements.has_value()) << imageElements.error();
   const std::vector<float> image =
-    make_random_input(*imageElements, 0x534C4443U, -0.1F, 0.1F);
+    make_random_input(*imageElements, 0x534C4443U);
   CompiledModel cnn(PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH,
                     "pp_structrurev2_slanet_plus_cnn");
   CompiledModel head(PP_STRUCTRUREV2_SLANET_PLUS_SLAHEAD_LIBRARY_PATH,
@@ -1005,7 +1003,7 @@ TEST(NumericalModel, PPStructureV2SLANetPlusCNNFp16StorageMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x534C4631U, -0.1F, 0.1F);
+    make_random_input(*inputElements, 0x534C4631U);
   const ReferenceModel reference(PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH,
                                  PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH,
                                  "in0",
@@ -1019,7 +1017,7 @@ TEST(NumericalModel, PPStructureV2SLANetPlusCNNFp16StorageMatchesNcnn) {
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(kOutputElements);
   ASSERT_EQ(compiled.run(input, actual), 0);
-  EXPECT_TRUE(compare_values(actual, *expected, 4.0e-2F));
+  EXPECT_TRUE(compare_values(actual, *expected, 4.0e-2F, 4.0e-2F));
   std::vector<float> repeated(kOutputElements);
   ASSERT_EQ(compiled.run(input, repeated), 0);
   EXPECT_EQ(repeated, actual);
@@ -1031,7 +1029,7 @@ TEST(NumericalModel, PPFormulaNetPlusSEncoderMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x464F524DU, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x464F524DU);
   const ReferenceModel reference(PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH,
                                  PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH,
                                  "in0",
@@ -1155,14 +1153,13 @@ TEST(NumericalModel, PPFormulaNetArtifactsRemainStaticSpecialization) {
 
 TEST(NumericalModel, PPFormulaNetPlusSDecoderSingleStepMatchesNcnn) {
   const std::vector<float> memory =
-    make_random_input(kFormulaMemoryElements, 0x4445434FU, -0.01F, 0.01F);
+    make_random_input(kFormulaMemoryElements, 0x4445434FU);
   const std::vector<float> embedding =
-    make_random_input(kFormulaEmbeddingElements, 0x454D4244U, -0.05F, 0.05F);
+    make_random_input(kFormulaEmbeddingElements, 0x454D4244U);
   const std::vector<float> mask{-8.0F, 0.0F};
   std::array<std::vector<float>, 4> caches;
   for (std::size_t index = 0; index < caches.size(); ++index) {
-    caches[index] = make_random_input(
-      kFormulaCacheStride, 0x43414348U + index, -0.01F, 0.01F);
+    caches[index] = make_random_input(kFormulaCacheStride, 0x43414348U + index);
   }
 
   CompiledModel infer(PP_FORMULANET_PLUS_S_DECODER_LIBRARY_PATH,
@@ -1303,8 +1300,7 @@ TEST(NumericalModel, PPFormulaNetPlusSDecoderSingleStepMatchesNcnn) {
 
 TEST(NumericalModel, PPFormulaNetPlusSM11M17M18ContinuousDecodeMatchesNcnn) {
   const TensorShape image_shape(384, 384, 1);
-  const std::vector<float> image =
-    make_random_input(384U * 384U, 0x4D313131U, -0.01F, 0.01F);
+  const std::vector<float> image = make_random_input(384U * 384U, 0x4D313131U);
   const ReferenceModel encoder_reference(
     PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH,
     PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH,
@@ -1500,7 +1496,7 @@ TEST(NumericalModel, PPFormulaNetPlusSEncoderFp16StorageMatchesNcnn) {
   const auto inputElements = inputShape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
   const std::vector<float> input =
-    make_random_input(*inputElements, 0x464D4631U, -0.01F, 0.01F);
+    make_random_input(*inputElements, 0x464D4631U);
   const ReferenceModel reference(PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH,
                                  PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH,
                                  "in0",
@@ -1514,7 +1510,7 @@ TEST(NumericalModel, PPFormulaNetPlusSEncoderFp16StorageMatchesNcnn) {
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(kOutputElements);
   ASSERT_EQ(compiled.run(input, actual), 0);
-  EXPECT_TRUE(compare_values(actual, *expected, 2.0e-2F));
+  EXPECT_TRUE(compare_values(actual, *expected, 2.0e-2F, 2.0e-2F));
   EXPECT_TRUE(std::ranges::all_of(
     actual, [](float value) { return std::isfinite(value); }));
   std::vector<float> repeated(kOutputElements);

@@ -42,8 +42,7 @@ void expect_dynamic_identity(std::string_view fixture,
     const std::size_t elements = static_cast<std::size_t>(channels) *
                                  static_cast<std::size_t>(shape.height) *
                                  static_cast<std::size_t>(shape.width);
-    const std::vector<float> input =
-      make_random_input(elements, 0xD1A000U, -2.0F, 2.0F);
+    const std::vector<float> input = make_random_input(elements, 0xD1A000U);
     std::array<std::int64_t, 3> inferred{};
     ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
     EXPECT_EQ(inferred, dimensions);
@@ -92,7 +91,7 @@ TEST(NumericalDynamicOperator, InterpMatchesNcnnAcrossShapes) {
     const std::size_t output_elements =
       4U * expected_shape[1] * expected_shape[2];
     const std::vector<float> input =
-      make_random_input(input_elements, 0x1A7E2U, -1.0F, 1.0F);
+      make_random_input(input_elements, 0x1A7E2U);
     std::array<std::int64_t, 3> inferred{};
     ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
     EXPECT_EQ(inferred, expected_shape);
@@ -140,8 +139,7 @@ TEST(NumericalDynamicOperator, BatchNormMatchesNcnnAcrossShapes) {
   for (const Case shape : kCases) {
     const std::array<std::int64_t, 3> dimensions{3, shape.height, shape.width};
     const std::size_t elements = 3U * shape.height * shape.width;
-    const std::vector<float> input =
-      make_random_input(elements, 0xBADD00U, -2.0F, 2.0F);
+    const std::vector<float> input = make_random_input(elements, 0xBADD00U);
     std::array<std::int64_t, 3> inferred{};
     ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
     EXPECT_EQ(inferred, dimensions);
@@ -170,8 +168,7 @@ TEST(NumericalDynamicOperator, AxisTransformsMatchNcnnAcrossShapes) {
   for (const Case shape : kCases) {
     const std::array<std::int64_t, 3> dimensions{1, shape.height, shape.width};
     const std::size_t elements = shape.height * shape.width;
-    const std::vector<float> input =
-      make_random_input(elements, 0xA815U, -2.0F, 2.0F);
+    const std::vector<float> input = make_random_input(elements, 0xA815U);
     const ReferenceModel squeezeReference(
       fixture_path("squeeze_dynamic"),
       NUMERICAL_EMPTY_BIN_PATH,
@@ -240,7 +237,7 @@ TEST(NumericalDynamicOperator, ReductionMatchesNcnnAcrossShapes) {
     const std::array<std::int64_t, 3> dimensions{shape.height, 4, shape.width};
     const std::array<std::int64_t, 2> expectedShape{shape.height, shape.width};
     const std::vector<float> input =
-      make_random_input(4U * shape.height * shape.width, 0x5EDU, -2.0F, 2.0F);
+      make_random_input(4U * shape.height * shape.width, 0x5EDU);
     std::array<std::int64_t, 2> inferred{};
     ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
     EXPECT_EQ(inferred, expectedShape);
@@ -265,7 +262,7 @@ TEST(NumericalDynamicOperator, ReductionMeanUsesRuntimeElementCount) {
   for (const Case shape : kCases) {
     const std::array<std::int64_t, 3> dimensions{4, shape.height, shape.width};
     const std::vector<float> input =
-      make_random_input(4U * shape.height * shape.width, 0xC0A17U, -2.0F, 2.0F);
+      make_random_input(4U * shape.height * shape.width, 0xC0A17U);
     const ReferenceModel reference(fixture_path("reduction_dynamic_mean"),
                                    NUMERICAL_EMPTY_BIN_PATH,
                                    "data",
@@ -291,7 +288,7 @@ TEST(NumericalDynamicOperator, GemmDynamicMMatchesNcnnAcrossShapes) {
     const std::array<std::int64_t, 3> dimensions{2, 1, shape.height};
     const std::array<std::int64_t, 2> expectedShape{shape.height, 4};
     const std::vector<float> input =
-      make_random_input(2U * shape.height, 0x6E44U, -2.0F, 2.0F);
+      make_random_input(2U * shape.height, 0x6E44U);
     std::array<std::int64_t, 2> inferred{};
     ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
     EXPECT_EQ(inferred, expectedShape);
@@ -320,7 +317,7 @@ TEST(NumericalDynamicOperator, FixedSliceMatchesNcnnAcrossShapes) {
     const std::array<std::int64_t, 3> expectedShape{
       2, shape.height, shape.width};
     const std::vector<float> input =
-      make_random_input(4U * shape.height * shape.width, 0x511CEU, -2.0F, 2.0F);
+      make_random_input(4U * shape.height * shape.width, 0x511CEU);
     std::array<std::int64_t, 3> leftShape{};
     std::array<std::int64_t, 3> rightShape{};
     ASSERT_EQ(
@@ -481,8 +478,7 @@ TEST(NumericalDynamicOperator, ReshapeSpecMatchesNcnnAcrossShapes) {
   for (const std::int64_t rows : {3, 7}) {
     const std::array<std::int64_t, 3> dimensions{1, rows, 6};
     const std::array<std::int64_t, 2> expectedShape{rows * 2, 3};
-    const std::vector<float> input =
-      make_random_input(rows * 6U, 0x2E5A9EU, -2.0F, 2.0F);
+    const std::vector<float> input = make_random_input(rows * 6U, 0x2E5A9EU);
     std::array<std::int64_t, 2> inferred{};
     ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
     EXPECT_EQ(inferred, expectedShape);
@@ -509,8 +505,7 @@ TEST(NumericalDynamicOperator, OrderedSliceMatchesNcnnAcrossShapes) {
   ASSERT_TRUE(infer.valid()) << infer.error();
   for (const std::int64_t rows : {8, 11}) {
     const std::array<std::int64_t, 3> dimensions{1, rows, 4};
-    const std::vector<float> input =
-      make_random_input(rows * 4U, 0x511CEDU, -2.0F, 2.0F);
+    const std::vector<float> input = make_random_input(rows * 4U, 0x511CEDU);
     std::array<std::int64_t, 2> inferred{};
     ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
     EXPECT_EQ(inferred, (std::array<std::int64_t, 2>{rows, 4}));
@@ -538,8 +533,7 @@ TEST(NumericalDynamicOperator, InnerProductDynamicMMatchesNcnnAcrossShapes) {
   for (const std::int64_t rows : {3, 7}) {
     const std::array<std::int64_t, 3> dimensions{1, rows, 4};
     const std::array<std::int64_t, 2> expectedShape{rows, 3};
-    const std::vector<float> input =
-      make_random_input(rows * 4U, 0x1AAE2U, -2.0F, 2.0F);
+    const std::vector<float> input = make_random_input(rows * 4U, 0x1AAE2U);
     std::array<std::int64_t, 2> inferred{};
     ASSERT_EQ(infer.infer_dynamic(dimensions, inferred), kSuccess);
     EXPECT_EQ(inferred, expectedShape);

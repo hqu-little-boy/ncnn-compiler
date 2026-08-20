@@ -165,6 +165,7 @@ std::vector<float> make_random_input(std::size_t size,
                                      std::uint32_t seed,
                                      float minimum,
                                      float maximum);
+std::vector<float> make_random_input(std::size_t size, std::uint32_t seed);
 [[nodiscard]] std::expected<std::vector<float>, std::string> run_ncnn_reference(
   const ReferenceModel& model,
   std::span<const float> input,
@@ -178,6 +179,10 @@ run_ncnn_reference(
   ReferenceInferenceMode mode = ReferenceInferenceMode::Float32);
 ::testing::AssertionResult compare_values(std::span<const float> actual,
                                           std::span<const float> expected,
+                                          float maximum_relative_error);
+::testing::AssertionResult compare_values(std::span<const float> actual,
+                                          std::span<const float> expected,
+                                          float maximum_relative_error,
                                           float maximum_absolute_error);
 ::testing::AssertionResult check_softmax(std::span<const float> actual,
                                          std::span<const float> expected,

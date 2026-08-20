@@ -42,12 +42,23 @@ struct ComplexPrecisionCase {
 class ComplexPrecisionTest
   : public ::testing::TestWithParam<ComplexPrecisionCase> {};
 
+TEST(NumericalSupport, CompareValuesUsesRelativeErrorWithNearZeroFallback) {
+  constexpr std::array<float, 2> expected{100.0F, 0.0F};
+  constexpr std::array<float, 2> close{100.01F, 5.0e-7F};
+  constexpr std::array<float, 2> far{100.01F, 5.0e-5F};
+
+  EXPECT_TRUE(compare_values(close, expected, 2.0e-4F));
+  EXPECT_FALSE(compare_values(far, expected, 2.0e-4F));
+  EXPECT_FALSE(compare_values(std::span<const float>(close).last(1),
+                              std::span<const float>(expected).last(1),
+                              0.0F));
+}
+
 TEST_P(ComplexPrecisionTest, MatchesFloat32ReferenceWithStorageBoundary) {
   const ComplexPrecisionCase& test = GetParam();
   const auto inputElements = test.shape.element_count();
   ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
-  const std::vector<float> input =
-    make_random_input(*inputElements, test.seed, -8.0F, 8.0F);
+  const std::vector<float> input = make_random_input(*inputElements, test.seed);
   const ReferenceModel reference(fixture_path(test.fixture),
                                  std::string(test.bin),
                                  "data",
@@ -61,7 +72,8 @@ TEST_P(ComplexPrecisionTest, MatchesFloat32ReferenceWithStorageBoundary) {
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(test.outputElements);
   ASSERT_EQ(compiled.run(input, actual), 0);
-  EXPECT_TRUE(compare_values(actual, *expected, test.tolerance));
+  EXPECT_TRUE(
+    compare_values(actual, *expected, test.tolerance, test.tolerance));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -220,7 +232,7 @@ void expect_low_precision_softmax(std::string_view library,
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(input.size());
   ASSERT_EQ(compiled.run(input, actual), 0);
-  EXPECT_TRUE(compare_values(actual, *expected, maximumError));
+  EXPECT_TRUE(compare_values(actual, *expected, maximumError, maximumError));
   constexpr std::size_t kSpatialElements = 20;
   constexpr std::size_t kChannels = 3;
   for (std::size_t spatial = 0; spatial < kSpatialElements; ++spatial) {
@@ -343,8 +355,7 @@ void expect_single_input_operator(std::string_view name,
   const auto input_elements = input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   ASSERT_TRUE(input_shape.byte_count(sizeof(float)).has_value());
-  const std::vector<float> input =
-    make_random_input(*input_elements, seed, -2.0F, 2.0F);
+  const std::vector<float> input = make_random_input(*input_elements, seed);
   std::string_view reference_name = name;
   if (name == "convolution_mixed_fp16" ||
       name == "convolution_arithmetic_fp16" ||
@@ -373,7 +384,10 @@ void expect_single_input_operator(std::string_view name,
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(output_elements);
   ASSERT_EQ(compiled.run(input, actual), 0);
-  EXPECT_TRUE(compare_values(actual, *expected, tolerance));
+  const float maximumAbsoluteError =
+    reference_name == name ? 1.0e-6F : tolerance;
+  EXPECT_TRUE(
+    compare_values(actual, *expected, tolerance, maximumAbsoluteError));
 }
 
 void expect_concat(std::string_view name,
@@ -391,9 +405,9 @@ void expect_concat(std::string_view name,
   ASSERT_LE(*first_elements,
             std::numeric_limits<std::size_t>::max() - *second_elements);
   const std::vector<float> first =
-    make_random_input(*first_elements, first_seed, -2.0F, 2.0F);
+    make_random_input(*first_elements, first_seed);
   const std::vector<float> second =
-    make_random_input(*second_elements, second_seed, -2.0F, 2.0F);
+    make_random_input(*second_elements, second_seed);
   const std::array<ReferenceInput, 2> inputs{
     ReferenceInput("first", first_shape, first),
     ReferenceInput("second", second_shape, second)};
@@ -476,8 +490,7 @@ TEST(NumericalOperator, PaddingAllFourSidesMatchNcnn) {
 
 TEST(NumericalOperator, PaddingIdentityMatchesNcnnAndInput) {
   const TensorShape shape(4, 3, 2);
-  const std::vector<float> input =
-    make_random_input(24, 0x50494445U, -2.0F, 2.0F);
+  const std::vector<float> input = make_random_input(24, 0x50494445U);
   const ReferenceModel reference(fixture_path("padding_identity"),
                                  NUMERICAL_EMPTY_BIN_PATH,
                                  "data",
@@ -526,8 +539,7 @@ TEST(NumericalOperator, InterpNearestExplicitTargetMatchesNcnn) {
 
 TEST(NumericalOperator, InterpIdentityMatchesNcnnAndInput) {
   const TensorShape shape(4, 3, 2);
-  const std::vector<float> input =
-    make_random_input(24, 0x49494445U, -2.0F, 2.0F);
+  const std::vector<float> input = make_random_input(24, 0x49494445U);
   const ReferenceModel reference(fixture_path("interp_identity"),
                                  NUMERICAL_EMPTY_BIN_PATH,
                                  "data",
@@ -976,8 +988,7 @@ TEST(NumericalOperator, BatchNormZeroVarianceMatchesNcnn) {
   const TensorShape shape(4, 1, 3);
   const auto elements = shape.element_count();
   ASSERT_TRUE(elements.has_value()) << elements.error();
-  const std::vector<float> input =
-    make_random_input(*elements, 0x424E4F52U, -2.0F, 2.0F);
+  const std::vector<float> input = make_random_input(*elements, 0x424E4F52U);
   const ReferenceModel reference(
     fixture_path("batch_norm"), BATCH_NORM_BIN_PATH, "data", "output", shape);
   const auto expected = run_ncnn_reference(reference, input);
@@ -1039,9 +1050,9 @@ TEST(NumericalOperator, BinaryMultiplyChannelBroadcastMatchesNcnn) {
   ASSERT_TRUE(first_elements.has_value()) << first_elements.error();
   ASSERT_TRUE(second_elements.has_value()) << second_elements.error();
   const std::vector<float> first =
-    make_random_input(*first_elements, 0x424D4331U, -2.0F, 2.0F);
+    make_random_input(*first_elements, 0x424D4331U);
   const std::vector<float> second =
-    make_random_input(*second_elements, 0x424D4332U, -2.0F, 2.0F);
+    make_random_input(*second_elements, 0x424D4332U);
   const std::array<ReferenceInput, 2> inputs{
     ReferenceInput("first", first_shape, first),
     ReferenceInput("second", second_shape, second)};
@@ -1066,9 +1077,9 @@ TEST(NumericalOperator, BinaryMultiplyReverseBroadcastMatchesNcnn) {
   ASSERT_TRUE(first_elements.has_value()) << first_elements.error();
   ASSERT_TRUE(second_elements.has_value()) << second_elements.error();
   const std::vector<float> first =
-    make_random_input(*first_elements, 0x42524231U, -2.0F, 2.0F);
+    make_random_input(*first_elements, 0x42524231U);
   const std::vector<float> second =
-    make_random_input(*second_elements, 0x42524232U, -2.0F, 2.0F);
+    make_random_input(*second_elements, 0x42524232U);
   const std::array<ReferenceInput, 2> inputs{
     ReferenceInput("first", first_shape, first),
     ReferenceInput("second", second_shape, second)};
@@ -1091,10 +1102,8 @@ TEST(NumericalOperator, BinaryAddMatchesNcnn) {
   const TensorShape shape(4, 3, 2);
   const auto elements = shape.element_count();
   ASSERT_TRUE(elements.has_value()) << elements.error();
-  const std::vector<float> first =
-    make_random_input(*elements, 0x42414431U, -2.0F, 2.0F);
-  const std::vector<float> second =
-    make_random_input(*elements, 0x42414432U, -2.0F, 2.0F);
+  const std::vector<float> first = make_random_input(*elements, 0x42414431U);
+  const std::vector<float> second = make_random_input(*elements, 0x42414432U);
   const std::array<ReferenceInput, 2> inputs{
     ReferenceInput("first", shape, first),
     ReferenceInput("second", shape, second)};
@@ -1346,8 +1355,7 @@ TEST(NumericalOperator, SplitMatchesNcnn) {
   const auto elements = kShape.element_count();
   ASSERT_TRUE(elements.has_value()) << elements.error();
   ASSERT_TRUE(kShape.byte_count(sizeof(float)).has_value());
-  const std::vector<float> input =
-    make_random_input(*elements, 0x53504C49U, -2.0F, 2.0F);
+  const std::vector<float> input = make_random_input(*elements, 0x53504C49U);
   const ReferenceInput reference_input("data", kShape, input);
   constexpr std::array<std::string_view, 2> kOutputs{"left", "right"};
   const auto expected = run_ncnn_reference(fixture_path("split"),
@@ -1442,8 +1450,7 @@ TEST(NumericalOperator, SliceMatchesNcnn) {
   const TensorShape shape(4, 3, 5);
   const auto elements = shape.element_count();
   ASSERT_TRUE(elements.has_value()) << elements.error();
-  const std::vector<float> input =
-    make_random_input(*elements, 0x534C4943U, -2.0F, 2.0F);
+  const std::vector<float> input = make_random_input(*elements, 0x534C4943U);
   const ReferenceInput referenceInput("data", shape, input);
   constexpr std::array<std::string_view, 2> kOutputs{"left", "right"};
   const auto expected = run_ncnn_reference(fixture_path("slice"),

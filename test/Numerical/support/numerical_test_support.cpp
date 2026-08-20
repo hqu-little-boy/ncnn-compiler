@@ -512,6 +512,15 @@ std::vector<float> make_random_input(std::size_t size,
   return input;
 }
 
+std::vector<float> make_random_input(std::size_t size, std::uint32_t seed) {
+  std::mt19937 generator(seed);
+  std::normal_distribution<float> distribution(0.0F, 1.0F);
+  std::vector<float> input(size);
+  std::ranges::generate(
+    input, [&generator, &distribution]() { return distribution(generator); });
+  return input;
+}
+
 std::expected<std::vector<float>, std::string> run_ncnn_reference(
   const ReferenceModel& model,
   std::span<const float> input,
@@ -691,31 +700,72 @@ std::expected<std::vector<std::vector<float>>, std::string> run_ncnn_reference(
 
 ::testing::AssertionResult compare_values(std::span<const float> actual,
                                           std::span<const float> expected,
+                                          float maximum_relative_error) {
+  const float maximum_absolute_error =
+    maximum_relative_error == 0.0F ? 0.0F : 1.0e-6F;
+  return compare_values(
+    actual, expected, maximum_relative_error, maximum_absolute_error);
+}
+
+::testing::AssertionResult compare_values(std::span<const float> actual,
+                                          std::span<const float> expected,
+                                          float maximum_relative_error,
                                           float maximum_absolute_error) {
   if (actual.size() != expected.size()) {
     return ::testing::AssertionFailure()
            << "output size mismatch: actual=" << actual.size()
            << " expected=" << expected.size();
   }
-  float observed_maximum = 0.0F;
-  std::size_t maximum_index = 0;
+  if (!std::isfinite(maximum_relative_error) ||
+      !std::isfinite(maximum_absolute_error) || maximum_relative_error < 0.0F ||
+      maximum_absolute_error < 0.0F) {
+    return ::testing::AssertionFailure()
+           << "invalid error tolerance: relative=" << maximum_relative_error
+           << " absolute=" << maximum_absolute_error;
+  }
+  float largest_excess = 0.0F;
+  float failure_error = 0.0F;
+  float failure_relative_error = 0.0F;
+  float failure_allowed_error = 0.0F;
+  std::size_t failure_index = 0;
   for (std::size_t index = 0; index < actual.size(); ++index) {
     if (!std::isfinite(actual[index])) {
       return ::testing::AssertionFailure()
              << "non-finite compiled output at index " << index;
     }
+    if (!std::isfinite(expected[index])) {
+      return ::testing::AssertionFailure()
+             << "non-finite reference output at index " << index;
+    }
     const float error = std::abs(actual[index] - expected[index]);
-    if (error > observed_maximum) {
-      observed_maximum = error;
-      maximum_index = index;
+    const float allowed_error =
+      maximum_absolute_error +
+      (maximum_relative_error * std::abs(expected[index]));
+    if (error > allowed_error) {
+      const float excess = allowed_error == 0.0F
+                             ? std::numeric_limits<float>::infinity()
+                             : error / allowed_error;
+      if (excess > largest_excess) {
+        largest_excess = excess;
+        failure_error = error;
+        failure_relative_error = expected[index] == 0.0F
+                                   ? std::numeric_limits<float>::infinity()
+                                   : error / std::abs(expected[index]);
+        failure_allowed_error = allowed_error;
+        failure_index = index;
+      }
     }
   }
-  if (observed_maximum > maximum_absolute_error) {
+  if (largest_excess > 0.0F) {
     return ::testing::AssertionFailure()
-           << "maximum absolute error " << observed_maximum << " at index "
-           << maximum_index << " exceeds " << maximum_absolute_error
-           << "; actual=" << actual[maximum_index]
-           << " expected=" << expected[maximum_index];
+           << "error tolerance exceeded at index " << failure_index
+           << ": absolute error=" << failure_error
+           << " relative error=" << failure_relative_error
+           << " allowed absolute error=" << failure_allowed_error
+           << " (rtol=" << maximum_relative_error
+           << ", atol=" << maximum_absolute_error << ")"
+           << "; actual=" << actual[failure_index]
+           << " expected=" << expected[failure_index];
   }
   return ::testing::AssertionSuccess();
 }

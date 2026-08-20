@@ -17,7 +17,7 @@ TEST(NumericalModel, SqueezeNetMatchesNcnn) {
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   ASSERT_TRUE(kInputShape.byte_count(sizeof(float)).has_value());
   const std::vector<float> input =
-    make_random_input(*input_elements, 0x53515545U, -0.01F, 0.01F);
+    make_random_input(*input_elements, 0x53515545U);
   const auto expected = run_ncnn_reference(kReference, input);
   ASSERT_TRUE(expected.has_value()) << expected.error();
   ASSERT_EQ(expected->size(), kOutputElements);

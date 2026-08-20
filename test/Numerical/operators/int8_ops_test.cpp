@@ -42,7 +42,7 @@ void expect_int8_fixture(std::string_view fixture,
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   std::vector<float> actual(output_elements);
   ASSERT_EQ(compiled.run(input, actual), 0);
-  EXPECT_TRUE(compare_values(actual, *expected, tolerance));
+  EXPECT_TRUE(compare_values(actual, *expected, tolerance, tolerance));
 }
 
 std::string read_text(const std::filesystem::path& path) {

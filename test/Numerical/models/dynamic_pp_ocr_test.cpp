@@ -214,9 +214,7 @@ TEST_P(PPOCRv6DynamicDetTest, MatchesNcnnAcrossShapes) {
     const std::vector<float> input = make_random_input(
       element_count(shape),
       model.seed +
-        static_cast<std::uint32_t>((shape.height * 131) + shape.width),
-      -0.01F,
-      0.01F);
+        static_cast<std::uint32_t>((shape.height * 131) + shape.width));
     std::array<std::int64_t, 3> inferred_shape{};
     ASSERT_EQ(infer.infer_dynamic(input_dimensions, inferred_shape), kSuccess);
     EXPECT_EQ(inferred_shape, output_dimensions);
@@ -343,9 +341,7 @@ TEST(NumericalDynamicModel,
     const std::vector<float> input = make_random_input(
       element_count(shape),
       0x49384454U +
-        static_cast<std::uint32_t>((shape.height * 131) + shape.width),
-      -0.01F,
-      0.01F);
+        static_cast<std::uint32_t>((shape.height * 131) + shape.width));
     std::vector<float> actual(static_cast<std::size_t>(shape.height) *
                               static_cast<std::size_t>(shape.width));
     ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
@@ -485,9 +481,7 @@ TEST(NumericalDynamicModel,
     const std::vector<float> input = make_random_input(
       element_count(shape),
       0x49385344U +
-        static_cast<std::uint32_t>((shape.height * 131) + shape.width),
-      -0.01F,
-      0.01F);
+        static_cast<std::uint32_t>((shape.height * 131) + shape.width));
     std::vector<float> actual(static_cast<std::size_t>(shape.height) *
                               static_cast<std::size_t>(shape.width));
     ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
@@ -1128,7 +1122,7 @@ TEST(NumericalDynamicModel, PPLCNetDocOriInt8BackboneMatchesNcnnAcrossShapes) {
     std::vector<float> actual(256);
     ASSERT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, actual),
               kSuccess);
-    EXPECT_TRUE(compare_values(actual, *expected, 2.5e-1F))
+    EXPECT_TRUE(compare_values(actual, *expected, 2.5e-1F, 2.5e-1F))
       << shape.height << 'x' << shape.width;
   }
   record_peak_rss();
@@ -1145,7 +1139,7 @@ TEST(NumericalDynamicModel,
 
   const DetectionCase standard{.height = 224, .width = 224};
   const std::vector<float> input =
-    make_random_input(element_count(standard), 0x49384655U, -1.0F, 1.0F);
+    make_random_input(element_count(standard), 0x49384655U);
   std::vector<float> static_output(4);
   std::vector<float> dynamic_output(4);
   ASSERT_EQ(static_compiled.run(input, static_output), kSuccess);
@@ -1257,7 +1251,7 @@ TEST(NumericalDynamicModel,
     std::vector<float> actual(256);
     ASSERT_EQ(compiled.run_dynamic_fixed_output(input, dimensions, actual),
               kSuccess);
-    EXPECT_TRUE(compare_values(actual, *expected, 6.0e-1F))
+    EXPECT_TRUE(compare_values(actual, *expected, 6.0e-1F, 6.0e-1F))
       << shape.height << 'x' << shape.width;
   }
   record_peak_rss();
@@ -1275,7 +1269,7 @@ TEST(NumericalDynamicModel,
 
   const DetectionCase standard{.height = 80, .width = 160};
   const std::vector<float> input =
-    make_random_input(element_count(standard), 0x544C4655U, -1.0F, 1.0F);
+    make_random_input(element_count(standard), 0x544C4655U);
   std::vector<float> static_output(2);
   std::vector<float> dynamic_output(2);
   ASSERT_EQ(static_compiled.run(input, static_output), kSuccess);
@@ -1373,9 +1367,7 @@ TEST(NumericalDynamicModel, ChineseOCRLiteAngleNetMatchesNcnnAcrossShapes) {
     const std::vector<float> input =
       make_random_input(element_count(shape),
                         static_cast<std::uint32_t>(
-                          0x414E0000U + (shape.height * 131) + shape.width),
-                        -1.0F,
-                        1.0F);
+                          0x414E0000U + (shape.height * 131) + shape.width));
     const ReferenceModel reference(
       CHINESEOCR_LITE_ANGLENET_DYNAMIC_PARAM_PATH,
       CHINESEOCR_LITE_ANGLENET_DYNAMIC_BIN_PATH,
@@ -1518,9 +1510,7 @@ TEST(NumericalDynamicModel, PPOCRv6TinyRecMatchesNcnnAcrossWidths) {
     const std::array<std::int64_t, 3> dimensions = {3, 48, width};
     const std::vector<float> input =
       make_random_input(recognition_input_elements(width),
-                        static_cast<std::uint32_t>(0x36540000U + width),
-                        -1.0F,
-                        1.0F);
+                        static_cast<std::uint32_t>(0x36540000U + width));
     const ReferenceModel reference(PP_OCRV6_TINY_REC_DYNAMIC_PARAM_PATH,
                                    PP_OCRV6_TINY_REC_DYNAMIC_BIN_PATH,
                                    "in0",
@@ -2750,8 +2740,8 @@ TEST(NumericalDynamicModel, PPUVDocMatchesNcnnAcrossShapes) {
     EXPECT_EQ(output_shape,
               (std::array<std::int64_t, 3>{3, shape.height, shape.width}));
 
-    const std::vector<float> input = make_random_input(
-      element_count(shape), 0x5556444FU + index, -0.25F, 0.25F);
+    const std::vector<float> input =
+      make_random_input(element_count(shape), 0x5556444FU + index);
     const ReferenceModel reference(
       PP_UVDOC_DYNAMIC_PARAM_PATH,
       PP_UVDOC_DYNAMIC_BIN_PATH,
@@ -2779,9 +2769,9 @@ TEST(NumericalDynamicModel, PPUVDocSupportsAlternatingShapes) {
   const DetectionCase first{.height = 10, .width = 14};
   const DetectionCase second{.height = 17, .width = 11};
   const std::vector<float> first_input =
-    make_random_input(element_count(first), 0x55564131U, -0.2F, 0.2F);
+    make_random_input(element_count(first), 0x55564131U);
   const std::vector<float> second_input =
-    make_random_input(element_count(second), 0x55564132U, -0.2F, 0.2F);
+    make_random_input(element_count(second), 0x55564132U);
   std::vector<float> first_output(element_count(first));
   std::vector<float> second_output(element_count(second));
   std::vector<float> repeated_output(element_count(first));
