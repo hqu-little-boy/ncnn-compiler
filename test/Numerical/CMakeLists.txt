@@ -1507,7 +1507,8 @@ add_executable(numerical_tests
     operators/supported_ops_test.cpp
     operators/int8_ops_test.cpp
     models/squeezenet_test.cpp
-    models/pp_lcnet_test.cpp)
+    models/pp_lcnet_test.cpp
+    models/liteocr_ported_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
     numerical_test_support
     GTest::gtest_main
