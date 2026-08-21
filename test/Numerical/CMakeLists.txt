@@ -781,6 +781,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.bin
     3x224x224)
 ncnn_add_compiled_fixture(
+    resnet34
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.bin
+    3x224x224)
+ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_doc_ori
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin
@@ -1513,6 +1518,7 @@ add_executable(numerical_tests
     operators/int8_ops_test.cpp
     models/squeezenet_test.cpp
     models/resnet18_test.cpp
+    models/resnet34_test.cpp
     models/pp_lcnet_test.cpp
     models/liteocr_ported_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
@@ -1681,6 +1687,9 @@ target_compile_definitions(numerical_tests PRIVATE
     RESNET18_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.param"
     RESNET18_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.bin"
     RESNET18_LIBRARY_PATH="${resnet18_LIBRARY}"
+    RESNET34_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.param"
+    RESNET34_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.bin"
+    RESNET34_LIBRARY_PATH="${resnet34_LIBRARY}"
     PP_LCNET_DOC_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
     PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
     PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}"
@@ -1786,6 +1795,7 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_FORMULANET_PLUS_S_DECODER_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/model.linalg.mlir")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_resnet18)
+add_dependencies(numerical_tests compile_resnet34)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori_int8)
