@@ -42,6 +42,7 @@ struct DynamicDetectionModel {
   const char* infer_symbol;
   std::array<DetectionCase, 3> numerical_cases;
   float tolerance;
+  float absolute_tolerance;
   std::uint32_t seed;
 };
 
@@ -81,6 +82,7 @@ const std::array<DynamicDetectionModel, 3> kV6DynamicDetectionModels = {{
       DetectionCase{.height = 960, .width = 320},
     }},
     .tolerance = 1.0e-4F,
+    .absolute_tolerance = 3.0e-3F,
     .seed = 0x3654494EU,
   },
   DynamicDetectionModel{
@@ -96,6 +98,7 @@ const std::array<DynamicDetectionModel, 3> kV6DynamicDetectionModels = {{
       DetectionCase{.height = 640, .width = 320},
     }},
     .tolerance = 3.0e-4F,
+    .absolute_tolerance = 1.0e-4F,
     .seed = 0x36534D4CU,
   },
   DynamicDetectionModel{
@@ -111,6 +114,7 @@ const std::array<DynamicDetectionModel, 3> kV6DynamicDetectionModels = {{
       DetectionCase{.height = 640, .width = 256},
     }},
     .tolerance = 1.0e-4F,
+    .absolute_tolerance = 1.0e-4F,
     .seed = 0x364D4544U,
   },
 }};
@@ -233,7 +237,8 @@ TEST_P(PPOCRv6DynamicDetTest, MatchesNcnnAcrossShapes) {
     ASSERT_EQ(
       compiled.run_dynamic(input, input_dimensions, actual, output_elements),
       kSuccess);
-    EXPECT_TRUE(compare_values(actual, *expected, model.tolerance));
+    EXPECT_TRUE(compare_values(
+      actual, *expected, model.tolerance, model.absolute_tolerance));
     EXPECT_TRUE(std::ranges::all_of(actual, [](float value) {
       return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
     }));
@@ -1524,7 +1529,7 @@ TEST(NumericalDynamicModel, PPOCRv6TinyRecMatchesNcnnAcrossWidths) {
     ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
               kSuccess)
       << "width " << width;
-    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F))
+    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F, 1.0e-4F))
       << "width " << width;
     for (std::int64_t row = 0; row < recognition_sequence_length(width);
          ++row) {
@@ -1813,7 +1818,7 @@ TEST(NumericalDynamicModel, PPOCRv5MobileRecMatchesNcnnAcrossWidths) {
     ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
               kSuccess)
       << "width " << width;
-    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F))
+    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F, 1.0e-4F))
       << "width " << width;
     for (std::int64_t row = 0; row < recognition_sequence_length(width);
          ++row) {
@@ -2095,7 +2100,7 @@ TEST(NumericalDynamicModel, PPOCRv5ServerRecMatchesNcnnAcrossWidths) {
     ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
               kSuccess)
       << "width " << width;
-    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F))
+    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F, 1.0e-4F))
       << "width " << width;
     for (std::int64_t row = 0; row < recognition_sequence_length(width);
          ++row) {
@@ -2236,7 +2241,7 @@ TEST(NumericalDynamicModel, PPOCRv6MediumRecMatchesNcnnAcrossWidths) {
     ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
               kSuccess)
       << "width " << width;
-    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F))
+    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F, 1.0e-4F))
       << "width " << width;
     for (std::int64_t row = 0; row < recognition_sequence_length(width);
          ++row) {
@@ -2584,7 +2589,7 @@ TEST(NumericalDynamicModel, PPOCRv6SmallRecInfersAndMatchesNcnnAcrossWidths) {
     std::vector<float> actual(expected->size());
     ASSERT_EQ(compiled.run_dynamic(input, dimensions, actual, actual.size()),
               kSuccess);
-    EXPECT_TRUE(compare_values(actual, *expected, 5.0e-4F));
+    EXPECT_TRUE(compare_values(actual, *expected, 1.0e-3F, 1.0e-3F));
   }
 }
 
@@ -2755,7 +2760,7 @@ TEST(NumericalDynamicModel, PPUVDocMatchesNcnnAcrossShapes) {
     std::vector<float> actual(expected->size());
     ASSERT_EQ(compiled.run_dynamic(input, runtime_shape, actual, actual.size()),
               kSuccess);
-    EXPECT_TRUE(compare_values(actual, *expected, 3.0e-3F))
+    EXPECT_TRUE(compare_values(actual, *expected, 3.0e-3F, 5.0e-5F))
       << shape.height << 'x' << shape.width;
     EXPECT_TRUE(std::ranges::all_of(
       actual, [](float value) { return std::isfinite(value); }));

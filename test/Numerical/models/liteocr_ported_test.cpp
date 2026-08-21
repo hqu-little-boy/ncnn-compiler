@@ -23,9 +23,9 @@ struct BgrImage {
 
 BgrImage make_document_image(int width, int height) {
   BgrImage image{
-    width,
-    height,
-    std::vector<std::uint8_t>(
+    .width = width,
+    .height = height,
+    .pixels = std::vector<std::uint8_t>(
       static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3U,
       245)};
   const auto fill = [&](int left,
@@ -39,15 +39,15 @@ BgrImage make_document_image(int width, int height) {
           (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
            static_cast<std::size_t>(x)) *
           3U;
-        std::copy(color.begin(), color.end(), image.pixels.begin() + offset);
+        std::ranges::copy(color, image.pixels.begin() + offset);
       }
     }
   };
 
   fill(width / 12, height / 12, width / 3, height / 5, {40, 70, 170});
   for (int row = 0; row < 7; ++row) {
-    const int top = height / 3 + row * std::max(4, height / 14);
-    const int right = width - width / (row % 3 + 5);
+    const int top = (height / 3) + (row * std::max(4, height / 14));
+    const int right = width - (width / (row % 3 + 5));
     fill(width / 10, top, right, top + std::max(2, height / 45), {25, 25, 25});
   }
   fill(width * 3 / 4,
@@ -60,9 +60,9 @@ BgrImage make_document_image(int width, int height) {
 
 BgrImage make_textline_image(int width, int height) {
   BgrImage image{
-    width,
-    height,
-    std::vector<std::uint8_t>(
+    .width = width,
+    .height = height,
+    .pixels = std::vector<std::uint8_t>(
       static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3U,
       255)};
   const auto glyph = [](char character) -> std::array<std::uint8_t, 7> {
@@ -95,7 +95,7 @@ BgrImage make_textline_image(int width, int height) {
   };
   constexpr std::string_view kText = "LITEOCR TEST 2026";
   const int scale = std::max(2, std::min(6, height / 10));
-  const int text_width = static_cast<int>(kText.size()) * 6 * scale - scale;
+  const int text_width = (static_cast<int>(kText.size()) * 6 * scale) - scale;
   const int left = std::max(scale, (width - text_width) / 2);
   const int top = std::max(scale, (height - 7 * scale) / 2);
   for (std::size_t index = 0; index < kText.size(); ++index) {
@@ -107,9 +107,9 @@ BgrImage make_textline_image(int width, int height) {
         }
         for (int dy = 0; dy < scale; ++dy) {
           for (int dx = 0; dx < scale; ++dx) {
-            const int x =
-              left + static_cast<int>(index) * 6 * scale + column * scale + dx;
-            const int y = top + row * scale + dy;
+            const int x = left + (static_cast<int>(index) * 6 * scale) +
+                          (column * scale) + dx;
+            const int y = top + (row * scale) + dy;
             if (x < 0 || x >= width || y < 0 || y >= height) {
               continue;
             }
@@ -129,7 +129,8 @@ BgrImage make_textline_image(int width, int height) {
 }
 
 BgrImage rotate_180(const BgrImage& source) {
-  BgrImage result{source.width, source.height, source.pixels};
+  BgrImage result{
+    .width = source.width, .height = source.height, .pixels = source.pixels};
   ncnn::kanna_rotate_c3(source.pixels.data(),
                         source.width,
                         source.height,
@@ -232,12 +233,12 @@ std::vector<float> preprocess_textline_orientation(const BgrImage& image,
     angle_net ? 255 : 114);
   const int copied_width = std::min(resized_width, target_width);
   for (int y = 0; y < target_height; ++y) {
-    std::copy_n(resized.data() + static_cast<std::size_t>(y) *
-                                   static_cast<std::size_t>(resized_width) * 3U,
-                static_cast<std::size_t>(copied_width) * 3U,
-                final_pixels.data() + static_cast<std::size_t>(y) *
-                                        static_cast<std::size_t>(target_width) *
-                                        3U);
+    std::copy_n(
+      resized.data() + (static_cast<std::size_t>(y) *
+                        static_cast<std::size_t>(resized_width) * 3U),
+      static_cast<std::size_t>(copied_width) * 3U,
+      final_pixels.data() + (static_cast<std::size_t>(y) *
+                             static_cast<std::size_t>(target_width) * 3U));
   }
 
   ncnn::Mat input = ncnn::Mat::from_pixels(
