@@ -131,6 +131,7 @@ std::span<const ImportEntry> importers() noexcept {
     ImportEntry{.type = "HardSigmoid", .handler = import_hard_sigmoid},
     ImportEntry{.type = "HardSwish", .handler = import_hard_swish},
     ImportEntry{.type = "Reshape", .handler = import_reshape},
+    ImportEntry{.type = "Flatten", .handler = import_flatten},
     ImportEntry{.type = "BinaryOp", .handler = import_binary_op},
     ImportEntry{.type = "InnerProduct", .handler = import_inner_product},
     ImportEntry{.type = "ShuffleChannel", .handler = import_shuffle_channel},

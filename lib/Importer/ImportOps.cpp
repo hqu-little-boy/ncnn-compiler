@@ -317,6 +317,42 @@ ImportResult import_reshape(ImportContext& importer,
     context, std::string(context.layer.get_outputs()[0]), op.getResult());
 }
 
+ImportResult import_flatten(ImportContext& importer,
+                            const LayerContext& context) {
+  auto valid = arity_params(context, 1, 1, {});
+  if (!valid) {
+    return std::unexpected(valid.error());
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto input_type = llvm::dyn_cast<mlir::RankedTensorType>(input->getType());
+  if (!input_type) {
+    return std::unexpected(make_error(context, "flatten input must be ranked"));
+  }
+  auto& b = importer.builder();
+  mlir::ncnn::ReshapeOp::Properties props;
+  props.shape = b.getDenseI64ArrayAttr({-1});
+  auto type = importer.infer_single_tensor_result<mlir::ncnn::ReshapeOp>(
+    b.getUnknownLoc(), *input, props);
+  if (mlir::failed(type)) {
+    return std::unexpected(make_error(context, importer.captured_diagnostic()));
+  }
+  auto op = b.create<mlir::ncnn::ReshapeOp>(b.getUnknownLoc(),
+                                            *type,
+                                            *input,
+                                            mlir::ValueRange{},
+                                            props.shape,
+                                            props.shape_spec,
+                                            props.shape_zero_sources,
+                                            props.shape_sources,
+                                            props.shape_expression);
+  importer.tag_source(op.getOperation(), context);
+  return importer.bind_blob(
+    context, std::string(context.layer.get_outputs()[0]), op.getResult());
+}
+
 ImportResult import_binary_op(ImportContext& importer,
                               const LayerContext& context) {
   constexpr int ids[] = {0, 1, 2};
@@ -698,9 +734,9 @@ ImportResult import_inner_product(ImportContext& importer,
       make_error(context, "unsupported InnerProduct configuration"));
   }
   const auto kernelType = context.layer.get_weights()[0].get_dtype();
-  if ((!quantized && kernelType != ncnn_graph::DataType::Float32) ||
-      (quantized && kernelType != ncnn_graph::DataType::Float32 &&
-       kernelType != ncnn_graph::DataType::Int8)) {
+  if ((!quantized && kernelType == ncnn_graph::DataType::Int8) ||
+      (quantized && (kernelType == ncnn_graph::DataType::Float16 ||
+                     kernelType == ncnn_graph::DataType::BFloat16))) {
     return std::unexpected(make_error(
       context, "InnerProduct kernel element type does not match scale term"));
   }
@@ -731,6 +767,15 @@ ImportResult import_inner_product(ImportContext& importer,
     context, context.layer.get_weights()[0], 0, !quantized);
   if (!weight) {
     return std::unexpected(weight.error());
+  }
+  if (!quantized) {
+    auto weightType = llvm::dyn_cast<mlir::RankedTensorType>(weight->getType());
+    if (!weightType || !weightType.getElementType().isF32()) {
+      return std::unexpected(make_error(
+        context,
+        "non-quantized InnerProduct requires an FP32 kernel after storage "
+        "conversion"));
+    }
   }
   llvm::SmallVector<mlir::Value> tail;
   for (std::size_t index = 1; index < params.expected_weight_tensors();

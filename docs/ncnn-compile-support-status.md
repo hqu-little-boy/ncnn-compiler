@@ -63,8 +63,9 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | `LayerNorm` | `ncnn.layer_norm` | affine_size, epsilon, affine | FP32，沿静态最后一维归一化；支持有/无 gamma、beta |
 | `MultiHeadAttention` | `ncnn.multi_head_attention` | embed_dim, num_heads, qdim/kdim/vdim, scale | FP32 rank-2 单输入 self-attention 子集，sequence extent 可动态；见 §2.3 限制 |
 | `Reshape` | `ncnn.reshape` | shape、shape_spec、shape_zero_sources、shape_sources、shape_expression | 支持静态 shape、单个 `-1`、`0` 复制维度，并保留原始 shape 语义；也支持引用单一 shape 输入并保持维序的表达式（如 `1w,1h,1c`） |
+| `Flatten` | `ncnn.reshape` | shape=[-1] | 导入为单个 `-1` 维的 reshape，输出 rank-1 展平结果 |
 | `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 加法/乘法/最大值；支持标量和同 rank 双向广播，动态 extent 保守推断 |
-| `InnerProduct` | `ncnn.inner_product` | has_bias, int8_scale_term | 支持 FP32 和受限 INT8 scale-term；静态输入按元素展平，另支持 rank-2 动态 M、静态 K 的 `[M,K] -> [M,O]` |
+| `InnerProduct` | `ncnn.inner_product` | has_bias, int8_scale_term | 支持 FP32 与 FP16/BF16-storage（导入时转换为 FP32）权重和受限 INT8 scale-term；静态输入按元素展平，另支持 rank-2 动态 M、静态 K 的 `[M,K] -> [M,O]` |
 | `ShuffleChannel` | `ncnn.shuffle_channel` | group, reverse | 静态 FP32；group 必须整除通道数 |
 | `Slice` | `ncnn.slice` | slices, axis | FP32；支持显式 sizes 和 `-233` 按序切分；动态切分轴上的显式 size 保持精确，`-233` 结果为动态 |
 | `Reduction` | `ncnn.reduction` | kind, reduce_all, coeff, axes, keepdims | FP32 mean 子集；动态归约范围使用运行时元素数计算除数 |

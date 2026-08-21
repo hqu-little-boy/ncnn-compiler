@@ -105,6 +105,9 @@ inline constexpr std::array kLayerDescriptors{
   LayerDescriptor{.source_type = "Reshape",
                   .capabilities = LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "Flatten",
+                  .capabilities = LayerCapability::NeedsNormalization |
+                                  LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "BinaryOp",
                   .capabilities = LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},

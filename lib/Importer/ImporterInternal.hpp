@@ -183,6 +183,8 @@ ImportResult import_hard_swish(ImportContext& importer,
                                const LayerContext& context);
 ImportResult import_reshape(ImportContext& importer,
                             const LayerContext& context);
+ImportResult import_flatten(ImportContext& importer,
+                            const LayerContext& context);
 ImportResult import_binary_op(ImportContext& importer,
                               const LayerContext& context);
 ImportResult import_inner_product(ImportContext& importer,
