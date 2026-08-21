@@ -786,6 +786,16 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.bin
     3x224x224)
 ncnn_add_compiled_fixture(
+    resnet50
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet50.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet50.ncnn.bin
+    3x224x224)
+ncnn_add_compiled_fixture(
+    resnet101
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet101.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet101.ncnn.bin
+    3x224x224)
+ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_doc_ori
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin
@@ -1519,6 +1529,8 @@ add_executable(numerical_tests
     models/squeezenet_test.cpp
     models/resnet18_test.cpp
     models/resnet34_test.cpp
+    models/resnet50_test.cpp
+    models/resnet101_test.cpp
     models/pp_lcnet_test.cpp
     models/liteocr_ported_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
@@ -1690,6 +1702,12 @@ target_compile_definitions(numerical_tests PRIVATE
     RESNET34_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.param"
     RESNET34_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.bin"
     RESNET34_LIBRARY_PATH="${resnet34_LIBRARY}"
+    RESNET50_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet50.ncnn.param"
+    RESNET50_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet50.ncnn.bin"
+    RESNET50_LIBRARY_PATH="${resnet50_LIBRARY}"
+    RESNET101_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet101.ncnn.param"
+    RESNET101_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet101.ncnn.bin"
+    RESNET101_LIBRARY_PATH="${resnet101_LIBRARY}"
     PP_LCNET_DOC_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
     PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
     PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}"
@@ -1796,6 +1814,8 @@ target_compile_definitions(numerical_tests PRIVATE
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_resnet18)
 add_dependencies(numerical_tests compile_resnet34)
+add_dependencies(numerical_tests compile_resnet50)
+add_dependencies(numerical_tests compile_resnet101)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori_int8)
