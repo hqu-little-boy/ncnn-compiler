@@ -1,0 +1,5 @@
+7767517
+3 4
+Input first 0 1 first 0=2 1=2 2=2
+Input second 0 1 second 0=2 1=2 2=2
+Eltwise weighted_sum 2 1 first second output 0=1 -23301=2,2.0,-1.5

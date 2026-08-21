@@ -5027,6 +5027,35 @@ class ConvertBinary final : public ConversionPattern {
   }
 };
 
+class ConvertUnary final : public OpConversionPattern<UnaryOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+    UnaryOp operation,
+    OpAdaptor adaptor,
+    ConversionPatternRewriter& rewriter) const final {
+    if (!isRankedF32Tensor(operation.getInput().getType()) ||
+        !isRankedF32Tensor(operation.getOutput().getType())) {
+      return operation->emitOpError("requires a ranked f32 tensor");
+    }
+    if (operation.getOpType() != 4) {
+      return operation->emitOpError(
+        "only the square operation (op_type=4) is supported");
+    }
+    Value input = applyLowPrecisionBoundary(
+      rewriter, operation.getLoc(), operation, adaptor.getInput());
+    auto outputType = cast<RankedTensorType>(input.getType());
+    Value shift = createI8Zero(rewriter, operation.getLoc());
+    Value result = rewriter.create<tosa::MulOp>(
+      operation.getLoc(), outputType, input, input, shift);
+    result = applyLowPrecisionBoundary(
+      rewriter, operation.getLoc(), operation, result);
+    rewriter.replaceOp(operation, result);
+    return success();
+  }
+};
+
 class ConvertInnerProduct final : public ConversionPattern {
  public:
   ConvertInnerProduct(const TypeConverter& typeConverter,
@@ -5548,6 +5577,7 @@ class ConvertNCNNToTosaPass final
     patterns.add<ConvertShapeChange>(
       typeConverter, context, "ncnn.expand_dims");
     patterns.add<ConvertBinary>(typeConverter, context, "ncnn.binary");
+    patterns.add<ConvertUnary>(typeConverter, context);
     patterns.add<ConvertInnerProduct>(
       typeConverter, context, "ncnn.inner_product");
     patterns.add<ConvertPadding,
@@ -5604,6 +5634,7 @@ class ConvertNCNNToTosaPass final
                            "ncnn.squeeze",
                            "ncnn.expand_dims",
                            "ncnn.binary",
+                           "ncnn.unary",
                            "ncnn.inner_product",
                            "ncnn.padding",
                            "ncnn.interp",

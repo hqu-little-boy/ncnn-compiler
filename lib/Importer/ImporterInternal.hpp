@@ -187,6 +187,8 @@ ImportResult import_flatten(ImportContext& importer,
                             const LayerContext& context);
 ImportResult import_binary_op(ImportContext& importer,
                               const LayerContext& context);
+ImportResult import_unary_op(ImportContext& importer,
+                             const LayerContext& context);
 ImportResult import_inner_product(ImportContext& importer,
                                   const LayerContext& context);
 ImportResult import_shuffle_channel(ImportContext& importer,

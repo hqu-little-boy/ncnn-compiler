@@ -1,0 +1,5 @@
+7767517
+3 4
+Input input 0 1 data 0=6 1=1 2=4
+Reshape reshape 1 1 data matrix 0=6 1=1 11=1 2=4
+Slice slice 1 2 matrix left right -23300=2,2,-233 1=3

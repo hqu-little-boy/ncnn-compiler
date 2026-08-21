@@ -1,0 +1,7 @@
+7767517
+5 5
+Input first 0 1 first 0=3 1=2 2=2
+Input second 0 1 second 0=2 1=2 2=1
+Reshape reshape_first 1 1 first first_matrix 0=3 1=2 11=2 2=1
+Reshape reshape_second 1 1 second second_matrix 0=1 1=2 11=2 2=1
+Concat concat_width4 2 1 first_matrix second_matrix output 0=3

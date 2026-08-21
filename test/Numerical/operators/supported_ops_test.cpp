@@ -1022,6 +1022,92 @@ TEST(NumericalOperator, PermuteRankTwoMatchesNcnn) {
                                0x5045524DU);
 }
 
+TEST(NumericalOperator, UnarySquareMatchesNcnn) {
+  expect_single_input_operator("unary_square",
+                               UNARY_SQUARE_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(3, 2, 4),
+                               24,
+                               0.0F,
+                               0x554E5351U);
+}
+
+TEST(NumericalOperator, PermuteRankFourOrderThreeMatchesNcnn) {
+  expect_single_input_operator("permute_rank4",
+                               PERMUTE_RANK4_LIBRARY_PATH,
+                               NUMERICAL_EMPTY_BIN_PATH,
+                               TensorShape(4, 2, 3),
+                               24,
+                               0.0F,
+                               0x5052344FU);
+}
+
+TEST(NumericalOperator, SliceRankFourWidthAxisMatchesNcnn) {
+  const TensorShape shape(6, 1, 4);
+  const auto input_elements = shape.element_count();
+  ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
+  ASSERT_TRUE(shape.byte_count(sizeof(float)).has_value());
+  const std::vector<float> input =
+    make_random_input(*input_elements, 0x53345234U);
+  constexpr std::array<std::string_view, 2> kOutputs{"left", "right"};
+  const std::array<ReferenceInput, 1> kInputs{
+    ReferenceInput("data", shape, input)};
+  const auto expected = run_ncnn_reference(
+    fixture_path("slice_rank4"), NUMERICAL_EMPTY_BIN_PATH, kInputs, kOutputs);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), 2U);
+  ASSERT_EQ(expected->front().size(), 8U);
+  ASSERT_EQ(expected->back().size(), 16U);
+
+  CompiledModel compiled(SLICE_RANK4_LIBRARY_PATH, "slice_rank4");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> first(8U);
+  std::vector<float> second(16U);
+  ASSERT_EQ(compiled.run_two_outputs(input, first, second), 0);
+  EXPECT_TRUE(compare_values(first, expected->front(), 0.0F));
+  EXPECT_TRUE(compare_values(second, expected->back(), 0.0F));
+}
+
+TEST(NumericalOperator, ConcatRankFourWidthAxisMatchesNcnn) {
+  expect_concat("concat_rank4",
+                CONCAT_RANK4_LIBRARY_PATH,
+                TensorShape(3, 2, 2),
+                TensorShape(2, 2, 1),
+                0x43345231U,
+                0x43345232U);
+}
+
+TEST(NumericalOperator, EltwiseWeightedSumMatchesNcnn) {
+  const TensorShape first_shape(2, 2, 2);
+  const TensorShape second_shape(2, 2, 2);
+  const auto first_elements = first_shape.element_count();
+  ASSERT_TRUE(first_elements.has_value()) << first_elements.error();
+  const auto second_elements = second_shape.element_count();
+  ASSERT_TRUE(second_elements.has_value()) << second_elements.error();
+  ASSERT_TRUE(first_shape.byte_count(sizeof(float)).has_value());
+  ASSERT_TRUE(second_shape.byte_count(sizeof(float)).has_value());
+  const std::vector<float> first =
+    make_random_input(*first_elements, 0x454C5731U);
+  const std::vector<float> second =
+    make_random_input(*second_elements, 0x454C5732U);
+  const std::array<ReferenceInput, 2> inputs{
+    ReferenceInput("first", first_shape, first),
+    ReferenceInput("second", second_shape, second)};
+  constexpr std::array<std::string_view, 1> kOutputs{"output"};
+  const auto expected = run_ncnn_reference(fixture_path("eltwise_weighted"),
+                                           NUMERICAL_EMPTY_BIN_PATH,
+                                           inputs,
+                                           kOutputs);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+  ASSERT_EQ(expected->size(), 1U);
+
+  CompiledModel compiled(ELTWISE_WEIGHTED_LIBRARY_PATH, "eltwise_weighted");
+  ASSERT_TRUE(compiled.valid()) << compiled.error();
+  std::vector<float> actual(*first_elements);
+  ASSERT_EQ(compiled.run_two_inputs(first, second, actual), 0);
+  EXPECT_TRUE(compare_values(actual, expected->front(), 0.0F));
+}
+
 TEST(NumericalOperator, GemmScaledBiasMatchesNcnn) {
   expect_single_input_operator("gemm",
                                GEMM_LIBRARY_PATH,

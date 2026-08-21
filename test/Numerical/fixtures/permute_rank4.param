@@ -1,0 +1,5 @@
+7767517
+3 3
+Input input 0 1 data 0=4 1=2 2=3
+Reshape reshape 1 1 data matrix 0=2 1=2 11=3 2=2
+Permute permute 1 1 matrix output 0=3

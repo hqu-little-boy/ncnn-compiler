@@ -111,6 +111,8 @@ inline constexpr std::array kLayerDescriptors{
   LayerDescriptor{.source_type = "BinaryOp",
                   .capabilities = LayerCapability::NeedsNormalization |
                                   LayerCapability::Lowerable},
+  LayerDescriptor{.source_type = "UnaryOp",
+                  .capabilities = LayerCapability::Lowerable},
   LayerDescriptor{.source_type = "InnerProduct",
                   .capabilities = LayerCapability::HasWeights |
                                   LayerCapability::NeedsNormalization |

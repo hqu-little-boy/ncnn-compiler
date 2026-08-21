@@ -374,6 +374,19 @@ def NCNN_BinaryOp : NCNN_LayerOp<"binary", [InferTensorTypeAdaptor]> {
   let results = (outs NCNN_RankedTensor:$output);
 }
 
+def NCNN_UnaryOp : NCNN_LayerOp<"unary", [SameOperandsAndResultType]> {
+  let summary = "Elementwise unary math (ncnn UnaryOp square subset).";
+  let description =
+    [{
+    Currently mirrors only the ncnn `UnaryOp` square instance (`op_type=4`,
+    used by the YOLOv5 detection head as `(2 * sigmoid_wh)^2`). Other
+    operation codes are rejected at import time.
+  }];
+  let arguments = (ins NCNN_RankedTensor:$input, I64Attr:$op_type);
+  let results = (outs NCNN_RankedTensor:$output);
+  let hasVerifier = 1;
+}
+
 def NCNN_InnerProductOp
   : NCNN_LayerOp<"inner_product", [InferTensorTypeAdaptor]> {
   let arguments = (ins NCNN_RankedTensor:$input,

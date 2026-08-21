@@ -372,6 +372,26 @@ ncnn_add_compiled_fixture(
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/permute.param
     ${empty_bin})
 ncnn_add_compiled_fixture(
+    unary_square
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/unary_square.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    permute_rank4
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/permute_rank4.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    slice_rank4
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/slice_rank4.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    concat_rank4
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/concat_rank4.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
+    eltwise_weighted
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/eltwise_weighted.param
+    ${empty_bin})
+ncnn_add_compiled_fixture(
     gemm
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gemm.param
     ${gemm_bin})
@@ -820,6 +840,11 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_cls.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_cls.ncnn.bin
     3x224x224)
+ncnn_add_compiled_fixture(
+    yolov5n
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.bin
+    3x640x640)
 ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_doc_ori
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param
@@ -1415,6 +1440,11 @@ set(numerical_fixture_targets
     compile_softmax_mixed_bf16
     compile_batch_norm_mixed_fp16
     compile_batch_norm_mixed_bf16
+    compile_unary_square
+    compile_permute_rank4
+    compile_slice_rank4
+    compile_concat_rank4
+    compile_eltwise_weighted
     compile_detection_output_mixed_fp16
     compile_detection_output_mixed_bf16
     compile_detection_output)
@@ -1561,6 +1591,7 @@ add_executable(numerical_tests
     models/yolov5m_cls_test.cpp
     models/yolov5l_cls_test.cpp
     models/yolov5x_cls_test.cpp
+    models/yolov5n_test.cpp
     models/pp_lcnet_test.cpp
     models/liteocr_ported_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
@@ -1661,6 +1692,11 @@ target_compile_definitions(numerical_tests PRIVATE
     BATCH_NORM_LIBRARY_PATH="${batch_norm_LIBRARY}"
     EXPAND_DIMS_LIBRARY_PATH="${expand_dims_LIBRARY}"
     PERMUTE_LIBRARY_PATH="${permute_LIBRARY}"
+    UNARY_SQUARE_LIBRARY_PATH="${unary_square_LIBRARY}"
+    PERMUTE_RANK4_LIBRARY_PATH="${permute_rank4_LIBRARY}"
+    SLICE_RANK4_LIBRARY_PATH="${slice_rank4_LIBRARY}"
+    CONCAT_RANK4_LIBRARY_PATH="${concat_rank4_LIBRARY}"
+    ELTWISE_WEIGHTED_LIBRARY_PATH="${eltwise_weighted_LIBRARY}"
     GEMM_LIBRARY_PATH="${gemm_LIBRARY}"
     BINARY_MUL_SCALAR_LIBRARY_PATH="${binary_mul_scalar_LIBRARY}"
     BINARY_MUL_CHANNEL_LIBRARY_PATH="${binary_mul_channel_LIBRARY}"
@@ -1753,6 +1789,9 @@ target_compile_definitions(numerical_tests PRIVATE
     YOLOV5X_CLS_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_cls.ncnn.param"
     YOLOV5X_CLS_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_cls.ncnn.bin"
     YOLOV5X_CLS_LIBRARY_PATH="${yolov5x_cls_LIBRARY}"
+    YOLOV5N_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.param"
+    YOLOV5N_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.bin"
+    YOLOV5N_LIBRARY_PATH="${yolov5n_LIBRARY}"
     PP_LCNET_DOC_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
     PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
     PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}"
@@ -1866,6 +1905,13 @@ add_dependencies(numerical_tests compile_yolov5s_cls)
 add_dependencies(numerical_tests compile_yolov5m_cls)
 add_dependencies(numerical_tests compile_yolov5l_cls)
 add_dependencies(numerical_tests compile_yolov5x_cls)
+add_dependencies(numerical_tests compile_yolov5n)
+add_dependencies(numerical_tests
+    compile_unary_square
+    compile_permute_rank4
+    compile_slice_rank4
+    compile_concat_rank4
+    compile_eltwise_weighted)
 add_dependencies(numerical_tests compile_detection_output)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori_int8)

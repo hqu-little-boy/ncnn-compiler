@@ -17,7 +17,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 `PP-OCRv6_tiny_rec`、`PP-OCRv6_small_rec`、`PP-OCRv6_small_rec_int8`、`PP-OCRv6_medium_rec`、`PP-OCRv6_medium_rec_int8`、`PP-OCRv6_tiny_det`、`PP-OCRv6_small_det`、
 `PP-OCRv6_medium_det`、`PP-OCRv5_mobile_det`、`PP-OCRv5_mobile_det_int8`、`PP-OCRv5_server_det`、
 `PP-OCRv5_mobile_rec`、`PP-OCRv5_server_rec`、
-`PP-StructrureV2_SLANet_plus_cnn`、`PP-FormulaNet_plus_S_encoder` 作为端到端验证目标。
+`PP-StructrureV2_SLANet_plus_cnn`、`PP-FormulaNet_plus_S_encoder` 以及静态 FP32 的
+`yolov5n`（YOLOv5 v7.0 目标检测，`3x640x640` 输入、`[25200,85]` 检测头输出）作为端到端验证目标。
 其中 PP-LCNet 两个方向模型、AngleNet、PP-OCRv5/v6 识别模型和五个检测模型还具有独立的
 fixed-rank 动态输入产物与跨 shape 数值回归；SLANet 和 FormulaNet 保持静态 specialization。
 
@@ -34,10 +35,10 @@ fixed-rank 动态输入产物与跨 shape 数值回归；SLANet 和 FormulaNet �
 | `ncnn.const` | 来自 `.bin` 的权重常量 |
 | `ncnn.output` | 标记导出输出 blob |
 
-### 2.2 计算 op（34 个 source 计算层，35 个方言计算 op）
+### 2.2 计算 op（35 个 source 计算层，36 个方言计算 op）
 
-Importer 当前注册 35 个 source layer type，包含 `Input` 和下表 34 个计算层。方言另有一个
-lowering 内部使用的 `ncnn.zero_point_cast`，因此共有 35 个计算 op。表中“支持”只表示对应受限实例可导入并通过产品
+Importer 当前注册 36 个 source layer type，包含 `Input` 和下表 35 个计算层。方言另有一个
+lowering 内部使用的 `ncnn.zero_point_cast`，因此共有 36 个计算 op。表中“支持”只表示对应受限实例可导入并通过产品
 strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言权威定义是
 [`NCNNOps.td`](../include/ncnn-mlir/Dialect/NCNN/IR/NCNNOps.td)，导入权威是
 `lib/Importer/NCNNImporter.cpp` 的 `importers()`；最终能力还须满足
@@ -65,6 +66,8 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | `Reshape` | `ncnn.reshape` | shape、shape_spec、shape_zero_sources、shape_sources、shape_expression | 支持静态 shape、单个 `-1`、`0` 复制维度，并保留原始 shape 语义；也支持引用单一 shape 输入并保持维序的表达式（如 `1w,1h,1c`） |
 | `Flatten` | `ncnn.reshape` | shape=[-1] | 导入为单个 `-1` 维的 reshape，输出 rank-1 展平结果 |
 | `BinaryOp` | `ncnn.binary` | op_type, with_scalar, scalar | 加法/乘法/最大值；支持标量和同 rank 双向广播，动态 extent 保守推断 |
+| `UnaryOp` | `ncnn.unary` | op_type | 仅支持 square（`op_type=4`）；YOLOv5 检测头 `wh=(2σ)²` 使用 |
+| `Eltwise` | `ncnn.binary`（展开） | op_type, coeffs | 仅支持双输入 SUM；系数通过标量乘法展开为 BinaryOp |
 | `InnerProduct` | `ncnn.inner_product` | has_bias, int8_scale_term | 支持 FP32 与 FP16/BF16-storage（导入时转换为 FP32）权重和受限 INT8 scale-term；静态输入按元素展平，另支持 rank-2 动态 M、静态 K 的 `[M,K] -> [M,O]` |
 | `ShuffleChannel` | `ncnn.shuffle_channel` | group, reverse | 静态 FP32；group 必须整除通道数 |
 | `Slice` | `ncnn.slice` | slices, axis | FP32；支持显式 sizes 和 `-233` 按序切分；动态切分轴上的显式 size 保持精确，`-233` 结果为动态 |
@@ -73,7 +76,7 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | `Squeeze` | `ncnn.squeeze` | axes | 显式静态 axes |
 | `BatchNorm` | `ncnn.batch_norm` | epsilon | 静态 FP32，按首维归一化 |
 | `ExpandDims` | `ncnn.expand_dims` | axes | 显式静态 axes |
-| `Permute` | `ncnn.permute` | permutation | 支持 rank-2 order 0/1，以及 rank-3 order 4（ncnn `h c w`） |
+| `Permute` | `ncnn.permute` | permutation | 支持 rank-2 order 0/1、rank-3 order 2/4，以及 rank-4 order 3（ncnn `d w h c`，YOLOv5 检测头 `[3,85,H,W]→[3,H,W,85]`） |
 | `Gemm` | `ncnn.gemm` | alpha, beta, int8_scale_term | 动态 A、转置常量 B、行偏置；支持 FP32 和受限 INT8 term 1/2 |
 | `DetectionOutput` | `ncnn.detection_output` | num_class, nms_threshold, nms_top_k, keep_top_k, confidence_threshold, variance_x/y/w/h | Caffe SSD 三输入子集；bounded 数据依赖输出，支持 FP16/BF16 mixed boundary |
 | `Quantize` | `ncnn.quantize` | scale | 受限 FP32 到 INT8 量化边界 |
@@ -244,7 +247,7 @@ include-pad 和尚未分配目标路径的 ncnn op 可以残留。单 pass 成�
 
 ### 5.1 CLI 接受与已验证目标
 
-- CLI 接受 64 位 Linux ELF triple。当前宿主 Linux x86-64 的全新 Release 验收为 `265/265`
+- CLI 接受 64 位 Linux ELF triple。当前宿主 Linux x86-64 的全新 Release 验收为 `374/374`
   CTest；数量会随构建配置和测试增减变化，权威实时值使用 `ctest --test-dir build -N` 查询。
 - AArch64 FP16 和 RISC-V Zfh/Zvfh FP16 已使用编译器生成的 LLVM IR 做静态 assembly 指令验证；
   这不等同于在目标硬件上运行。交叉编译仍需匹配的 Clang 工具链和 sysroot，`--verify-execution` 不能
@@ -362,6 +365,11 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
   - DetectionOutput：Caffe SSD decode、confidence filtering、逐类 top-k、IoU NMS、全局 top-k，
     同时验证最大 storage 与实际 `[count,6]` shape
 - `models/squeezenet_test.cpp`：完整 SqueezeNet v1.1 端到端
+- `models/yolov5n_test.cpp`：YOLOv5n 检测模型端到端；`3x640x640` 输入、`[25200,85]` 输出，
+  与 upstream ncnn 对齐（`1e-4` 相对 + `2e-5` 绝对预算，固定输入下实测最大绝对误差约 `1.7e-3`
+  且出现在 stride-32 大幅值坐标上），并验证重复调用一致性。该模型首次在产品路径覆盖
+  MemoryData 常量、Eltwise 加权求和、UnaryOp square、rank-4 Permute order 3、rank-4 宽轴
+  Slice/Concat，以及 rank-4 输出 ABI
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet、PP-OCRv6
   tiny/medium rec、tiny det、small det、medium det 和 PP-OCRv5 mobile/server det、mobile/server rec
   与 upstream ncnn 数值对齐；
@@ -382,7 +390,7 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
 
 - `squeezenet-shared-library`：完整编译 + `--verify-execution`
 - `ncnn-compile-cli`：CLI 契约测试
-- 静态数值基线通过 `ctest -L numerical-static-baseline` 独立执行，覆盖 34 个 source 计算层的静态
+- 静态数值基线通过 `ctest -L numerical-static-baseline` 独立执行，覆盖 35 个 source 计算层的静态
   lowering/数值测试、SqueezeNet、PP-LCNet、PP-OCR，以及固定 target 的导出符号、
   manifest、header 和共享库产物大小。静态产物不得导出 `_infer_output_shapes`；原生 artifact/CLI
   基线另使用 `static-baseline` label。
@@ -404,7 +412,7 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
 
 | 类别 | 限制 |
 |---|---|
-| 算子覆盖 | 34 个 source 计算层、35 个方言计算 op 的受限实例；DetectionOutput 仅 Caffe SSD；无 PriorBox/Proposal/Yolo、通用 group conv、RNN |
+| 算子覆盖 | 35 个 source 计算层、36 个方言计算 op 的受限实例；DetectionOutput 仅 Caffe SSD；无 PriorBox/Proposal/Yolo、通用 group conv、RNN；UnaryOp 仅 square、Eltwise 仅双输入 SUM |
 | 量化 | 支持已覆盖的 INT8 scale-term Convolution/Depthwise/InnerProduct/Gemm 与 Quantize/Dequantize/Requantize/Cast 链；未覆盖的量化层仍由严格 lowering gate 拒绝；FP16/BF16 storage boundary 按精度策略处理 |
 | 形状 | 静态 shape 广泛覆盖；fixed-rank 动态 extent 覆盖 Convolution、Depthwise、Deconvolution、Padding、Interp、Sigmoid/Hard activation/GELU/Dropout/Softmax/BatchNorm、空间 Concat、可证明的 Binary 广播、Reshape `0/-1`、Slice、Reduction、轴变换、regular/global/adaptive Pooling、Gemm/InnerProduct 动态 M。V2 shape program 支持多输入 Add/Multiply/FloorDiv/CeilDiv/Max。动态 rank 仅一入一出 identity/ReLU rank 1..4；DetectionOutput 动态 prior、动态权重及一般动态图仍不支持 |
 | 数据类型 | GenerateCAPI 支持 typed f16/bf16/f32/f64 与整数 ABI；当前 ncnn 模型数据主路径为 f32 |

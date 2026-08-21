@@ -406,6 +406,32 @@ ImportResult import_binary_op(ImportContext& importer,
     context, std::string(context.layer.get_outputs()[0]), op.getResult());
 }
 
+ImportResult import_unary_op(ImportContext& importer,
+                             const LayerContext& context) {
+  constexpr int ids[] = {0};
+  auto valid = arity_params(context, 1, 1, ids);
+  auto type = get_int(context.layer.get_params(), 0, 0, "op_type");
+  if (!valid) {
+    return std::unexpected(valid.error());
+  }
+  if (!type || *type != 4) {
+    return std::unexpected(make_error(
+      context, "UnaryOp supports the square operation (op_type=4) only"));
+  }
+  auto input = importer.find_blob(context, context.layer.get_inputs()[0]);
+  if (!input) {
+    return std::unexpected(input.error());
+  }
+  auto& b = importer.builder();
+  mlir::ncnn::UnaryOp::Properties props;
+  props.op_type = b.getI64IntegerAttr(*type);
+  auto op = b.create<mlir::ncnn::UnaryOp>(
+    b.getUnknownLoc(), (*input).getType(), *input, props.op_type);
+  importer.tag_source(op.getOperation(), context);
+  return importer.bind_blob(
+    context, std::string(context.layer.get_outputs()[0]), op.getResult());
+}
+
 ImportResult import_eltwise(ImportContext& importer,
                             const LayerContext& context) {
   constexpr int kAllowed[] = {0, 1};

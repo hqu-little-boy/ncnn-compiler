@@ -1956,6 +1956,17 @@ LogicalResult SwishOp::verify() {
   return success();
 }
 
+LogicalResult UnaryOp::verify() {
+  auto input = dyn_cast<RankedTensorType>(getInput().getType());
+  if (!input || !input.getElementType().isF32()) {
+    return emitOpError("input must be a ranked f32 tensor");
+  }
+  if (getOpType() != 4) {
+    return emitOpError("only the square operation (op_type=4) is supported");
+  }
+  return success();
+}
+
 LogicalResult ReshapeOp::inferReturnTypeComponents(
   MLIRContext*,
   std::optional<Location> location,
