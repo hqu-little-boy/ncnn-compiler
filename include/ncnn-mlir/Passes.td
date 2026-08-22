@@ -46,6 +46,13 @@ def NormalizeNCNNPass : Pass<"normalize-ncnn", "mlir::ModuleOp"> {
   let summary = "Normalize target-independent ncnn semantics";
 }
 
+def FoldLinalgConstantTransposePass
+    : Pass<"fold-linalg-constant-transpose", "mlir::ModuleOp"> {
+  let summary =
+    "Fold Linalg transposes of constant tensors into materialized constants";
+  let dependentDialects = ["arith::ArithDialect", "linalg::LinalgDialect"];
+}
+
 def VerifyBufferizedModelPass
     : Pass<"verify-bufferized-model", "mlir::ModuleOp"> {
   let summary = "Verify the bufferized ncnn entry point and its buffer ownership";

@@ -44,8 +44,7 @@ func.func @deconvolution_bias_relu(%arg0: tensor<2x3x4xf32>) -> tensor<3x6x10xf3
 }
 
 // CHECK-LABEL: func.func @deconvolution_bias_relu
-// CHECK: %[[WEIGHT:.*]] = tosa.transpose %{{.*}} {perms = array<i32: 0, 2, 3, 1>}
-// CHECK-SAME: -> tensor<3x3x3x2xf32>
+// CHECK: %[[WEIGHT:.*]] = arith.constant dense<1.000000e+00> : tensor<3x3x3x2xf32>
 // CHECK: %[[DECONV:.*]] = tosa.transpose_conv2d %{{[^,]+}}, %[[WEIGHT]], %{{[^,]+}}, %{{[^,]+}}, %{{[^ ]+}} {
 // CHECK-SAME: out_pad = array<i64: -1, 0, -1, -1>
 // CHECK-SAME: stride = array<i64: 2, 3>

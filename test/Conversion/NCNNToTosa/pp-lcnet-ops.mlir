@@ -29,9 +29,7 @@ func.func @depthwise(%arg0: tensor<4x5x5xf32>) -> tensor<4x5x5xf32> {
 }
 
 // CHECK-LABEL: func.func @depthwise
-// CHECK: %[[GROUPED:.*]] = tosa.reshape %cst, {{.*}} : (tensor<4x1x3x3xf32>, !tosa.shape<4>) -> tensor<4x1x3x3xf32>
-// CHECK: %[[WEIGHT:.*]] = tosa.transpose %[[GROUPED]] {perms = array<i32: 2, 3, 0, 1>}
-// CHECK-SAME: -> tensor<3x3x4x1xf32>
+// CHECK: %[[WEIGHT:.*]] = arith.constant dense<1.000000e+00> : tensor<3x3x4x1xf32>
 // CHECK: tosa.depthwise_conv2d
 // CHECK-SAME: pad = array<i64: 1, 1, 1, 1>
 // CHECK-SAME: -> tensor<1x5x5x4xf32>
@@ -61,8 +59,8 @@ func.func @reshape_inner_product(%arg0: tensor<2x2x2xf32>) -> tensor<3xf32> {
 // CHECK: %[[FLAT:.*]] = tosa.reshape {{.*}} : (tensor<2x2x2xf32>, !tosa.shape<1>) -> tensor<8xf32>
 // CHECK: %[[FC_INPUT:.*]] = tosa.reshape %[[FLAT]]
 // CHECK-SAME: -> tensor<1x1x8xf32>
-// CHECK: %[[FC_WEIGHT:.*]] = tosa.transpose {{.*}} {perms = array<i32: 1, 0>}
-// CHECK: %[[MATMUL:.*]] = tosa.matmul %[[FC_INPUT]],
+// CHECK: %[[FC_WEIGHT:.*]] = arith.constant dense<1.000000e+00> : tensor<1x8x3xf32>
+// CHECK: %[[MATMUL:.*]] = tosa.matmul %[[FC_INPUT]], %[[FC_WEIGHT]]
 // CHECK-SAME: -> tensor<1x1x3xf32>
 // CHECK: %[[BIASED:.*]] = tosa.add %[[MATMUL]],
 // CHECK: tosa.reshape %[[BIASED]]

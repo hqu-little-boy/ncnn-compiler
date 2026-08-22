@@ -8,6 +8,7 @@ target_include_directories(NCNNPipelines PUBLIC
 target_compile_options(NCNNPipelines PRIVATE -fno-rtti)
 target_link_libraries(NCNNPipelines PUBLIC
     BufferizeNCNN
+    FoldLinalgConstantTranspose
     GenerateCAPI
     NCNNToFunc
     NCNNToTosa

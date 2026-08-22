@@ -8,6 +8,7 @@ target_include_directories(NCNNToTosa PUBLIC
     ${PROJECT_BINARY_DIR}/include)
 target_link_libraries(NCNNToTosa PUBLIC
     NCNNDialect
+    NCNNConstantFoldSupport
     NCNNPrecisionSupport
     MLIRArithDialect
     MLIRFuncDialect

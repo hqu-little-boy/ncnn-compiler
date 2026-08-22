@@ -17,7 +17,7 @@ func.func @spatial(%arg0: tensor<2x5x5xf32>) -> tensor<6x2x2xf32> {
 // CHECK: %[[INPUT_TRANSPOSE:.*]] = tosa.transpose %arg0 {perms = array<i32: 1, 2, 0>} : (tensor<2x5x5xf32>) -> tensor<5x5x2xf32>
 // CHECK: %[[INPUT:.*]] = tosa.reshape %[[INPUT_TRANSPOSE]]
 // CHECK-SAME: -> tensor<1x5x5x2xf32>
-// CHECK: %[[WEIGHT:.*]] = tosa.transpose %{{.*}} {perms = array<i32: 0, 2, 3, 1>} : (tensor<3x2x3x3xf32>) -> tensor<3x3x3x2xf32>
+// CHECK: %[[WEIGHT:.*]] = arith.constant dense<0.000000e+00> : tensor<3x3x3x2xf32>
 // CHECK: %[[CONV:.*]] = tosa.conv2d %[[INPUT]], %[[WEIGHT]],
 // CHECK-SAME: dilation = array<i64: 1, 1>
 // CHECK-SAME: pad = array<i64: 1, 1, 1, 1>

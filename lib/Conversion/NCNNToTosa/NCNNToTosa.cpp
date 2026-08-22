@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
+#include <vector>
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
@@ -20,6 +22,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
+#include "ncnn-mlir/Support/ConstantFold.hpp"
 #include "ncnn-mlir/Support/Precision.hpp"
 
 namespace mlir::ncnn {
@@ -143,6 +146,89 @@ Value createIntegerZero(OpBuilder& builder,
   auto element = cast<IntegerType>(type.getElementType());
   auto value = DenseElementsAttr::get(type, builder.getIntegerAttr(element, 0));
   return {builder.create<tosa::ConstOp>(location, type, value)};
+}
+
+ElementsAttr getConstantTensorElements(Value value) {
+  Operation* defining = value.getDefiningOp();
+  if (!defining) {
+    return {};
+  }
+  if (auto constant = dyn_cast<arith::ConstantOp>(defining)) {
+    return dyn_cast<ElementsAttr>(constant.getValue());
+  }
+  if (auto constant = dyn_cast<tosa::ConstOp>(defining)) {
+    return constant.getValues();
+  }
+  return {};
+}
+
+Value foldConstantReshape(OpBuilder& builder,
+                          Location location,
+                          Value input,
+                          RankedTensorType outputType) {
+  auto sourceType = dyn_cast<RankedTensorType>(input.getType());
+  if (!sourceType || !sourceType.hasStaticShape() ||
+      !outputType.hasStaticShape() ||
+      !ncnn_mlir::is_foldable_element_type(outputType.getElementType()) ||
+      sourceType.getNumElements() != outputType.getNumElements()) {
+    return {};
+  }
+  ElementsAttr elements = getConstantTensorElements(input);
+  if (!elements || (!elements.isSplat() && !isa<DenseElementsAttr>(elements))) {
+    return {};
+  }
+  DenseElementsAttr folded =
+    ncnn_mlir::reshape_dense_elements(elements, outputType);
+  if (!folded) {
+    return {};
+  }
+  return builder.create<arith::ConstantOp>(location, outputType, folded);
+}
+
+Value foldConstantTranspose(OpBuilder& builder,
+                            Location location,
+                            Value input,
+                            ArrayRef<int32_t> permutation) {
+  auto sourceType = dyn_cast<RankedTensorType>(input.getType());
+  if (!sourceType || !sourceType.hasStaticShape() ||
+      permutation.size() != static_cast<size_t>(sourceType.getRank())) {
+    return {};
+  }
+  for (int32_t dimension : permutation) {
+    if (dimension < 0 || dimension >= sourceType.getRank()) {
+      return {};
+    }
+  }
+  ElementsAttr elements = getConstantTensorElements(input);
+  if (!elements || !cast<ShapedType>(elements.getType()).hasStaticShape()) {
+    return {};
+  }
+  SmallVector<int64_t> resultShape;
+  resultShape.reserve(permutation.size());
+  for (int32_t dimension : permutation) {
+    resultShape.push_back(sourceType.getShape()[dimension]);
+  }
+  auto resultType =
+    RankedTensorType::get(resultShape, sourceType.getElementType());
+  DenseElementsAttr folded = ncnn_mlir::transpose_dense_elements(
+    elements, sourceType, permutation, resultType);
+  if (!folded) {
+    return {};
+  }
+  return builder.create<arith::ConstantOp>(location, resultType, folded);
+}
+
+Value transposeOrFoldConstant(OpBuilder& builder,
+                              Location location,
+                              Value input,
+                              RankedTensorType resultType,
+                              ArrayRef<int32_t> permutation) {
+  if (Value folded =
+        foldConstantTranspose(builder, location, input, permutation)) {
+    return folded;
+  }
+  return {builder.create<tosa::TransposeOp>(
+    location, resultType, input, permutation)};
 }
 
 Value quantizeSignedI8(OpBuilder& builder,
@@ -685,6 +771,10 @@ Value reshapeValue(OpBuilder& builder,
                    Location location,
                    Value input,
                    RankedTensorType outputType) {
+  if (Value folded =
+        foldConstantReshape(builder, location, input, outputType)) {
+    return folded;
+  }
   Value shape = createShape(builder, location, outputType.getShape());
   return {builder.create<tosa::ReshapeOp>(location, outputType, input, shape)};
 }
@@ -759,8 +849,8 @@ Value convertCHWToNHWC(OpBuilder& builder, Location location, Value input) {
   auto hwcType = RankedTensorType::get(
     {chwType.getShape()[1], chwType.getShape()[2], chwType.getShape()[0]},
     chwType.getElementType());
-  Value transposed = builder.create<tosa::TransposeOp>(
-    location, hwcType, input, ArrayRef<int32_t>{1, 2, 0});
+  Value transposed = transposeOrFoldConstant(
+    builder, location, input, hwcType, ArrayRef<int32_t>{1, 2, 0});
   RankedTensorType nhwcType = getNHWCType(chwType);
   if (!chwType.hasStaticShape()) {
     SmallVector<OpFoldResult> outputShape;
@@ -970,8 +1060,11 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
       auto quantizedWeightType =
         cast<RankedTensorType>(quantizedWeight.getType());
       auto ohwiType = getOHWIType(quantizedWeightType);
-      Value weight = rewriter.create<tosa::TransposeOp>(
-        location, ohwiType, quantizedWeight, ArrayRef<int32_t>{0, 2, 3, 1});
+      Value weight = transposeOrFoldConstant(rewriter,
+                                             location,
+                                             quantizedWeight,
+                                             ohwiType,
+                                             ArrayRef<int32_t>{0, 2, 3, 1});
       Value inputZero = createIntegerZero(
         rewriter, location, RankedTensorType::get({1}, rewriter.getI8Type()));
       Value weightZero = createIntegerZero(
@@ -1037,8 +1130,12 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
         Value paddedInput = rewriter.create<tosa::PadOp>(
           location, paddedInputType, quantizedInput, paddingShape, zero);
         auto hwcfType = getHWCFType(quantizedWeightType);
-        Value linalgWeight = rewriter.create<tosa::TransposeOp>(
-          location, hwcfType, quantizedWeight, ArrayRef<int32_t>{2, 3, 1, 0});
+        Value linalgWeight =
+          transposeOrFoldConstant(rewriter,
+                                  location,
+                                  quantizedWeight,
+                                  hwcfType,
+                                  ArrayRef<int32_t>{2, 3, 1, 0});
         Value initialized = initializeDynamicConvolutionOutput(
           rewriter,
           location,
@@ -1137,8 +1234,11 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
       input = convertFloatingTensor(rewriter, location, input, storageElement);
       bias = convertFloatingTensor(rewriter, location, bias, storageElement);
       auto hwcfType = getHWCFType(weightType);
-      Value weight = rewriter.create<tosa::TransposeOp>(
-        location, hwcfType, sourceWeight, ArrayRef<int32_t>{2, 3, 1, 0});
+      Value weight = transposeOrFoldConstant(rewriter,
+                                             location,
+                                             sourceWeight,
+                                             hwcfType,
+                                             ArrayRef<int32_t>{2, 3, 1, 0});
       SmallVector<int64_t> padding{padTop, padBottom, padLeft, padRight};
       auto inputShape = cast<RankedTensorType>(input.getType()).getShape();
       auto adjustTrailingPadding = [&](int64_t inputSize,
@@ -1218,11 +1318,11 @@ class ConvertConvolution final : public OpConversionPattern<ConvolutionOp> {
       weightType = cast<RankedTensorType>(sourceWeight.getType());
     }
     auto ohwiType = getOHWIType(weightType);
-    Value weight =
-      rewriter.create<tosa::TransposeOp>(operation.getLoc(),
-                                         ohwiType,
-                                         sourceWeight,
-                                         ArrayRef<int32_t>{0, 2, 3, 1});
+    Value weight = transposeOrFoldConstant(rewriter,
+                                           operation.getLoc(),
+                                           sourceWeight,
+                                           ohwiType,
+                                           ArrayRef<int32_t>{0, 2, 3, 1});
     Value inputZero =
       createSplat(rewriter,
                   operation.getLoc(),
@@ -2749,11 +2849,11 @@ class ConvertDeconvolution final : public ConversionPattern {
       return success();
     }
     auto ohwiType = getOHWIType(weightType);
-    Value weight =
-      rewriter.create<tosa::TransposeOp>(operation->getLoc(),
-                                         ohwiType,
-                                         sourceWeight,
-                                         ArrayRef<int32_t>{0, 2, 3, 1});
+    Value weight = transposeOrFoldConstant(rewriter,
+                                           operation->getLoc(),
+                                           sourceWeight,
+                                           ohwiType,
+                                           ArrayRef<int32_t>{0, 2, 3, 1});
     Value inputZero =
       createSplat(rewriter,
                   operation->getLoc(),
@@ -2981,11 +3081,11 @@ class ConvertDepthwiseConvolution final : public ConversionPattern {
                                            channels,
                                            multiplier},
                                           weightType.getElementType());
-    Value weight =
-      rewriter.create<tosa::TransposeOp>(operation->getLoc(),
-                                         hwcmType,
-                                         groupedWeight,
-                                         ArrayRef<int32_t>{2, 3, 0, 1});
+    Value weight = transposeOrFoldConstant(rewriter,
+                                           operation->getLoc(),
+                                           groupedWeight,
+                                           hwcmType,
+                                           ArrayRef<int32_t>{2, 3, 0, 1});
     Value bias;
     if (hasBias) {
       if (operands.size() < 3 || !isStaticF32Tensor(operands[2].getType())) {
@@ -4082,10 +4182,11 @@ class ConvertMultiHeadAttention final
     Value matrixInput =
       reshapeSequence(adaptor.getInput(), matrixInputType, 1, 0);
     auto project = [&](Value weight, Value bias) {
-      Value transposed = rewriter.create<tosa::TransposeOp>(
+      Value transposed = transposeOrFoldConstant(
+        rewriter,
         location,
-        RankedTensorType::get({qdim, embed}, rewriter.getF32Type()),
         weight,
+        RankedTensorType::get({qdim, embed}, rewriter.getF32Type()),
         ArrayRef<int32_t>{1, 0});
       Value matrixWeight = reshapeValue(
         rewriter,
@@ -4166,10 +4267,11 @@ class ConvertMultiHeadAttention final
       context,
       ArrayRef<int32_t>{1, 0, 2});
     Value merged = reshapeSequence(sequenceMajor, projectedType, 1, 0);
-    Value outWeight = rewriter.create<tosa::TransposeOp>(
+    Value outWeight = transposeOrFoldConstant(
+      rewriter,
       location,
-      RankedTensorType::get({embed, qdim}, rewriter.getF32Type()),
       adaptor.getOutWeight(),
+      RankedTensorType::get({embed, qdim}, rewriter.getF32Type()),
       ArrayRef<int32_t>{1, 0});
     Value matrixOutWeight = reshapeValue(
       rewriter,
@@ -4850,10 +4952,11 @@ class ConvertGemm final : public OpConversionPattern<GemmOp> {
       rewriter, operation.getLoc(), sourceWeight, matrixWeightType);
     auto transposedWeightType =
       RankedTensorType::get({1, k, n}, weightType.getElementType());
-    weight = rewriter.create<tosa::TransposeOp>(operation.getLoc(),
-                                                transposedWeightType,
-                                                weight,
-                                                ArrayRef<int32_t>{0, 2, 1});
+    weight = transposeOrFoldConstant(rewriter,
+                                     operation.getLoc(),
+                                     weight,
+                                     transposedWeightType,
+                                     ArrayRef<int32_t>{0, 2, 1});
     auto matrixOutputType =
       RankedTensorType::get({1, m, n},
                             quantized ? static_cast<Type>(rewriter.getI32Type())
@@ -5144,11 +5247,11 @@ class ConvertInnerProduct final : public ConversionPattern {
     auto transposedWeightType = RankedTensorType::get(
       {inputs, outputs},
       cast<ShapedType>(sourceWeight.getType()).getElementType());
-    Value transposedWeight =
-      rewriter.create<tosa::TransposeOp>(operation->getLoc(),
-                                         transposedWeightType,
-                                         sourceWeight,
-                                         ArrayRef<int32_t>{1, 0});
+    Value transposedWeight = transposeOrFoldConstant(rewriter,
+                                                     operation->getLoc(),
+                                                     sourceWeight,
+                                                     transposedWeightType,
+                                                     ArrayRef<int32_t>{1, 0});
     auto matrixWeightType = RankedTensorType::get(
       {1, inputs, outputs}, transposedWeightType.getElementType());
     Value matrixWeight = reshapeValue(

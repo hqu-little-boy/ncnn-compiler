@@ -211,7 +211,7 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | 模型→函数 | `convert-ncnn-model-to-func` | Full dialect conversion：移动模型 region，建立 `func.func` + `arith.constant`，不 clone SSA 图 |
 | 规范化 | `normalize-ncnn` | 两阶段校验/提交：SAME padding 校验由 `TypeSwitch` 分派，提交由 typed `OpRewritePattern` 完成；Split 由标准 folder/canonicalize 消除 |
 | ncnn→目标 IR | `convert-ncnn-to-tosa` | 大多数算子生成 TOSA；动态 Interp 和 DetectionOutput 等白名单实例直接生成 Linalg/SCF/Tensor/Arith |
-| TOSA→Linalg | 上游 `addTosaToLinalgPasses` + `verify-no-tosa-ops` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith，并拒绝残留 TOSA |
+| TOSA→Linalg | 上游 `addTosaToLinalgPasses` + `fold-linalg-constant-transpose` + `verify-no-tosa-ops` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith；常量转置（如 conv2d 权重 OHWI→HWCF）在 lowering 后立即折叠，并拒绝残留 TOSA |
 | Linalg→MemRef | `bufferize-ncnn` + `buffer-results-to-out-params` + 两个 verify gate | One-Shot Bufferize，输出提升为 caller-owned 参数，并验证 buffer ownership 与 shape contract |
 | C API 生成 | `generate-ncnn-c-api` | 准备 bare-pointer ABI 元数据，通过 MLIR `SymbolTable` 重命名内部函数并更新全部符号引用 |
 | MemRef→LLVM | OpenMP 或 Affine vector/serial loops → ... → `finalize-ncnn-c-api` | 按 threads/vector 选项完整下降到 LLVM 方言 |
@@ -315,14 +315,17 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 
 | 层级 | 内容 |
 |---|---|
-| MLIR 级（始终执行） | canonicalize、CSE、LICM、One-Shot Bufferize、buffer-results-to-out-params、deallocation、linalg-to-loops、math-to-libm |
+| MLIR 级（始终执行） | canonicalize、CSE、LICM、常量转置折叠（`fold-linalg-constant-transpose`）、One-Shot Bufferize、buffer-results-to-out-params、deallocation、linalg-to-loops、math-to-libm |
 | 代码生成级 | Clang `-O0`/`-O1`/`-O2`/`-O3`（默认 `-O3`） |
 | SIMD | 默认使用 256-bit LLVM 向量宽度偏好；`--threads=1` 时使用 Affine Super Vectorizer 和 Vector-to-LLVM |
 | 多线程 | 默认将 Linalg 并行维 lowering 为 OpenMP，并由运行时使用可用 CPU；`--threads=1` 可关闭 |
 | 目标调优 | `--target-triple`、`--march`（含 `native`）、`--mcpu`、`--mtune`、`--target-feature`、`--sysroot` |
-| 图级优化 | 无（无算子融合、无常量折叠、无量化优化） |
+| 图级优化 | 权重常量预处理：卷积/深度卷积/反卷积 OIHW→OHWI/HWCF 转置、Gemm/InnerProduct `[O,K]→[K,O]` 转置与 bias/gamma 重排均在编译期折叠为 `.rodata` 常量（纯数据搬运，bit-exact）；无算子融合、无量化优化 |
 
-隐式优化：Dropout scale=1.0 折叠为恒等；Split 通过 SSA 消除。
+隐式优化：Dropout scale=1.0 折叠为恒等；Split 通过 SSA 消除。ncnn→TOSA 与 TOSA→Linalg
+lowering 中所有以编译期常量为操作数的 transpose/reshape（权重布局重排）均由
+`convert-ncnn-to-tosa` 的 folding helper 与 `fold-linalg-constant-transpose`
+pass 消除，运行时不再对权重做逐帧数据重排；非常量操作数保持原有运行时路径。
 
 ---
 
@@ -445,7 +448,7 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
 | 入口 | 一个执行入口；shape-only 动态输出另有 inference 入口；执行 ABI 按输入组、输出 data、数据依赖元数据排列 |
 | 平台 | Linux 64-bit ELF；x86-64 原生运行验证，AArch64/RISC-V 低精度指令静态验证 |
 | GPU/NPU | 无，仅 CPU（LLVM 后端） |
-| 图优化 | 无算子融合、无常量折叠 |
+| 图优化 | 权重常量折叠已实现（布局重排编译期完成）；无算子融合、无量化优化 |
 
 ---
 
