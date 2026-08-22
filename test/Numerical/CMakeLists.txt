@@ -892,6 +892,26 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_seg.ncnn.bin
     3x640x640)
 ncnn_add_compiled_fixture(
+    efficientnet_b0
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b0.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b0.ncnn.bin
+    3x224x224)
+ncnn_add_compiled_fixture(
+    efficientnet_b1
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b1.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b1.ncnn.bin
+    3x240x240)
+ncnn_add_compiled_fixture(
+    efficientnet_b2
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b2.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b2.ncnn.bin
+    3x260x260)
+ncnn_add_compiled_fixture(
+    efficientnet_b3
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b3.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b3.ncnn.bin
+    3x300x300)
+ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_doc_ori
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin
@@ -1647,6 +1667,10 @@ add_executable(numerical_tests
     models/yolov5m_seg_test.cpp
     models/yolov5l_seg_test.cpp
     models/yolov5x_seg_test.cpp
+    models/efficientnet_b0_test.cpp
+    models/efficientnet_b1_test.cpp
+    models/efficientnet_b2_test.cpp
+    models/efficientnet_b3_test.cpp
     models/pp_lcnet_test.cpp
     models/liteocr_ported_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
@@ -1874,6 +1898,18 @@ target_compile_definitions(numerical_tests PRIVATE
     YOLOV5X_SEG_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_seg.ncnn.param"
     YOLOV5X_SEG_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_seg.ncnn.bin"
     YOLOV5X_SEG_LIBRARY_PATH="${yolov5x_seg_LIBRARY}"
+    EFFICIENTNET_B0_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b0.ncnn.param"
+    EFFICIENTNET_B0_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b0.ncnn.bin"
+    EFFICIENTNET_B0_LIBRARY_PATH="${efficientnet_b0_LIBRARY}"
+    EFFICIENTNET_B1_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b1.ncnn.param"
+    EFFICIENTNET_B1_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b1.ncnn.bin"
+    EFFICIENTNET_B1_LIBRARY_PATH="${efficientnet_b1_LIBRARY}"
+    EFFICIENTNET_B2_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b2.ncnn.param"
+    EFFICIENTNET_B2_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b2.ncnn.bin"
+    EFFICIENTNET_B2_LIBRARY_PATH="${efficientnet_b2_LIBRARY}"
+    EFFICIENTNET_B3_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b3.ncnn.param"
+    EFFICIENTNET_B3_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b3.ncnn.bin"
+    EFFICIENTNET_B3_LIBRARY_PATH="${efficientnet_b3_LIBRARY}"
     PP_LCNET_DOC_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
     PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
     PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}"
@@ -1999,6 +2035,11 @@ add_dependencies(numerical_tests
     compile_yolov5m_seg
     compile_yolov5l_seg
     compile_yolov5x_seg)
+add_dependencies(numerical_tests
+    compile_efficientnet_b0
+    compile_efficientnet_b1
+    compile_efficientnet_b2
+    compile_efficientnet_b3)
 add_dependencies(numerical_tests
     compile_unary_square
     compile_permute_rank4

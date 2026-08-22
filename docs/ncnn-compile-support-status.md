@@ -22,6 +22,9 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 `3x640x640` 输入、`[25200,85]` 检测头输出）以及静态 FP32 的
 `yolov5n_seg`、`yolov5s_seg`、`yolov5m_seg`、`yolov5l_seg`、`yolov5x_seg`（YOLOv5 v7.0
 实例分割，`3x640x640` 输入、`[32,160,160]` 原型掩码 + `[25200,117]` 检测头输出）
+以及静态 FP32 的 `efficientnet_b0`、`efficientnet_b1`、`efficientnet_b2`、
+`efficientnet_b3`（EfficientNet B0–B3 图像分类，输入分别为
+`3x224x224`、`3x240x240`、`3x260x260`、`3x300x300`，`[1000]` logits 输出）
 作为端到端验证目标。
 其中 PP-LCNet 两个方向模型、AngleNet、PP-OCRv5/v6 识别模型和五个检测模型还具有独立的
 fixed-rank 动态输入产物与跨 shape 数值回归；SLANet 和 FormulaNet 保持静态 specialization。
@@ -385,6 +388,14 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
   双输出 ABI（`[32,160,160]` 原型掩码 + `[25200,117]` 检测头，117 = 85 检测属性 + 32 掩码
   系数），与 upstream ncnn 双输出对齐（`1e-4` 相对 + `2e-5` 绝对预算）并验证重复调用一致性；
   相比检测模型额外覆盖 3 倍 nearest Interp 上采样分支与 rank-3 输出 Concat
+- `models/efficientnet_b0_test.cpp`、`models/efficientnet_b1_test.cpp`、
+  `models/efficientnet_b2_test.cpp`、`models/efficientnet_b3_test.cpp`：
+  EfficientNet B0–B3 分类模型端到端；输入分别为 `3x224x224`、`3x240x240`、
+  `3x260x260`、`3x300x300`，`[1000]` logits 输出，与 upstream ncnn 对齐
+  （`1e-4` 相对 + `2e-5` 绝对预算）。该系列在产品路径覆盖 MBConv 结构：
+  Swish 激活、global average Pooling、`[1,1,C]` Reshape 与 rank-3 同秩广播的
+  BinaryOp 乘法（SE 模块）、ConvolutionDepthWise 下采样，以及尾部
+  Reshape + Flatten + InnerProduct 分类头
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet、PP-OCRv6
   tiny/medium rec、tiny det、small det、medium det 和 PP-OCRv5 mobile/server det、mobile/server rec
   与 upstream ncnn 数值对齐；
