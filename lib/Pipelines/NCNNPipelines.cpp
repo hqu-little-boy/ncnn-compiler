@@ -31,6 +31,7 @@
 #include "ncnn-mlir/Conversion/NCNNToTosa/NCNNToTosa.hpp"
 #include "ncnn-mlir/Transforms/BufferizeNCNN/BufferizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/FoldLinalgConstantTranspose/FoldLinalgConstantTranspose.hpp"
+#include "ncnn-mlir/Transforms/FoldNCNNBatchNorm/FoldNCNNBatchNorm.hpp"
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
@@ -42,6 +43,7 @@ namespace mlir::ncnn {
 
 void buildNCNNToTosaPipeline(OpPassManager& passManager) {
   passManager.addPass(createConvertNCNNModelToFuncPass());
+  passManager.addPass(createFoldNCNNBatchNormPass());
   passManager.addPass(createNormalizeNCNNPass());
   passManager.addPass(createConvertNCNNToTosaPass());
   passManager.addPass(createCanonicalizerPass());

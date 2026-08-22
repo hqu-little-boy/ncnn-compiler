@@ -209,6 +209,7 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | 解析 | `ncnn_graph::Graph::load` | 解析 `.param`（magic `7767517`）和 `.bin` 为 parsed-graph |
 | 导入 | `ncnn_importer::import_graph` | 提升为类型化 MLIR SSA DAG，通过 op 的 `InferTypeOpInterface` 执行 ranked shape inference |
 | 模型→函数 | `convert-ncnn-model-to-func` | Full dialect conversion：移动模型 region，建立 `func.func` + `arith.constant`，不 clone SSA 图 |
+| BN 折叠 | `fold-ncnn-batchnorm` | 将全常量 BatchNorm 按运行时语义折叠进前邻单用 Convolution/ConvolutionDepthWise 权重与 bias；量化卷积、非常量参数、多消费者场景不折叠 |
 | 规范化 | `normalize-ncnn` | 两阶段校验/提交：SAME padding 校验由 `TypeSwitch` 分派，提交由 typed `OpRewritePattern` 完成；Split 由标准 folder/canonicalize 消除 |
 | ncnn→目标 IR | `convert-ncnn-to-tosa` | 大多数算子生成 TOSA；动态 Interp 和 DetectionOutput 等白名单实例直接生成 Linalg/SCF/Tensor/Arith |
 | TOSA→Linalg | 上游 `addTosaToLinalgPasses` + `fold-linalg-constant-transpose` + `verify-no-tosa-ops` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith；常量转置（如 conv2d 权重 OHWI→HWCF）在 lowering 后立即折叠，并拒绝残留 TOSA |
@@ -326,8 +327,8 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 lowering 中所有以编译期常量为操作数的 transpose/reshape（权重布局重排）均由
 `convert-ncnn-to-tosa` 的 folding helper 与 `fold-linalg-constant-transpose`
 pass 消除，运行时不再对权重做逐帧数据重排；非常量操作数保持原有运行时路径。
-BatchNorm 折叠在 `normalize-ncnn` 阶段完成，其浮点求值顺序与显式 lowering 存在
-ULP 级差异，已由全量数值黄金测试独立验收。
+BatchNorm 折叠由独立 `fold-ncnn-batchnorm` pass 在规范化前完成，其浮点求值顺序与
+显式 lowering 存在 ULP 级差异，已由全量数值黄金测试独立验收。
 
 ---
 
@@ -465,6 +466,7 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
 | 导入器（算子族实现） | `lib/Importer/Import{Input,Convolution,Pooling,Activation,Tensor,Ops,Detection}.cpp` |
 | 模型→函数转换 | `lib/Conversion/NCNNToFunc/NCNNToFunc.cpp` |
 | 规范化 | `lib/Transforms/NormalizeNCNN/NormalizeNCNN.cpp` |
+| BatchNorm 卷积折叠 | `lib/Transforms/FoldNCNNBatchNorm/FoldNCNNBatchNorm.cpp` |
 | ncnn→TOSA 转换 | `lib/Conversion/NCNNToTosa/NCNNToTosa.cpp` |
 | C API 生成 | `lib/Transforms/GenerateCAPI/GenerateCAPI.cpp` |
 | 流水线组合 | `lib/Pipelines/NCNNPipelines.cpp` |

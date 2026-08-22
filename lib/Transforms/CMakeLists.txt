@@ -1,5 +1,6 @@
 add_subdirectory(BufferizeNCNN)
 add_subdirectory(FoldLinalgConstantTranspose)
+add_subdirectory(FoldNCNNBatchNorm)
 add_subdirectory(GenerateCAPI)
 add_subdirectory(NormalizeNCNN)
 add_subdirectory(VerifyBufferizedModel)

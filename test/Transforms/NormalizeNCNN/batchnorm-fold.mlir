@@ -1,4 +1,4 @@
-// RUN: ncnn-mlir-opt --normalize-ncnn %s | FileCheck %s
+// RUN: ncnn-mlir-opt --fold-ncnn-batchnorm %s | FileCheck %s
 
 // Constant BatchNorm parameters fold into the preceding convolution: the
 // channel scale is slope * (variance + eps)^-0.5 (with the 10000 fallback when

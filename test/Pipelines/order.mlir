@@ -2,9 +2,10 @@
 
 module {}
 
-// CHECK: Pass Manager with 6 passes:
+// CHECK: Pass Manager with 7 passes:
 // CHECK-NEXT: builtin.module(
 // CHECK-NEXT: convert-ncnn-model-to-func,
+// CHECK-NEXT: fold-ncnn-batchnorm,
 // CHECK-NEXT: normalize-ncnn,
 // CHECK-NEXT: convert-ncnn-to-tosa,
 // CHECK-NEXT: canonicalize{{.*}},

@@ -53,6 +53,12 @@ def FoldLinalgConstantTransposePass
   let dependentDialects = ["arith::ArithDialect", "linalg::LinalgDialect"];
 }
 
+def FoldNCNNBatchNormPass
+    : Pass<"fold-ncnn-batchnorm", "mlir::ModuleOp"> {
+  let summary = "Fold constant BatchNorm layers into preceding convolutions";
+  let dependentDialects = ["arith::ArithDialect"];
+}
+
 def VerifyBufferizedModelPass
     : Pass<"verify-bufferized-model", "mlir::ModuleOp"> {
   let summary = "Verify the bufferized ncnn entry point and its buffer ownership";
