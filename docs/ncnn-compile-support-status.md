@@ -315,17 +315,19 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 
 | 层级 | 内容 |
 |---|---|
-| MLIR 级（始终执行） | canonicalize、CSE、LICM、常量转置折叠（`fold-linalg-constant-transpose`）、One-Shot Bufferize、buffer-results-to-out-params、deallocation、linalg-to-loops、math-to-libm |
+| MLIR 级（始终执行） | canonicalize、CSE、LICM、常量转置折叠（`fold-linalg-constant-transpose`）、INT8 f32 权重编译期预量化（复刻 scale→round-half-away→clamp→i8 舍入语义）、One-Shot Bufferize、buffer-results-to-out-params、deallocation、linalg-to-loops、math-to-libm |
 | 代码生成级 | Clang `-O0`/`-O1`/`-O2`/`-O3`（默认 `-O3`） |
 | SIMD | 默认使用 256-bit LLVM 向量宽度偏好；`--threads=1` 时使用 Affine Super Vectorizer 和 Vector-to-LLVM |
 | 多线程 | 默认将 Linalg 并行维 lowering 为 OpenMP，并由运行时使用可用 CPU；`--threads=1` 可关闭 |
 | 目标调优 | `--target-triple`、`--march`（含 `native`）、`--mcpu`、`--mtune`、`--target-feature`、`--sysroot` |
-| 图级优化 | 权重常量预处理：卷积/深度卷积/反卷积 OIHW→OHWI/HWCF 转置、Gemm/InnerProduct `[O,K]→[K,O]` 转置与 bias/gamma 重排均在编译期折叠为 `.rodata` 常量（纯数据搬运，bit-exact）；无算子融合、无量化优化 |
+| 图级优化 | 权重常量预处理：卷积/深度卷积/反卷积 OIHW→OHWI/HWCF 转置、Gemm/InnerProduct `[O,K]→[K,O]` 转置与 bias/gamma 重排均在编译期折叠为 `.rodata` 常量（纯数据搬运，bit-exact）；INT8 scale-term 卷积的 f32 权重按运行时舍入语义编译期预量化为 i8 常量；BatchNorm 全常量参数折叠进前邻单用 Convolution/ConvolutionDepthWise 权重与 bias（量化卷积、非常量参数、多消费者场景不折叠）；无算子融合、无量化图优化 |
 
 隐式优化：Dropout scale=1.0 折叠为恒等；Split 通过 SSA 消除。ncnn→TOSA 与 TOSA→Linalg
 lowering 中所有以编译期常量为操作数的 transpose/reshape（权重布局重排）均由
 `convert-ncnn-to-tosa` 的 folding helper 与 `fold-linalg-constant-transpose`
 pass 消除，运行时不再对权重做逐帧数据重排；非常量操作数保持原有运行时路径。
+BatchNorm 折叠在 `normalize-ncnn` 阶段完成，其浮点求值顺序与显式 lowering 存在
+ULP 级差异，已由全量数值黄金测试独立验收。
 
 ---
 
@@ -448,7 +450,7 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
 | 入口 | 一个执行入口；shape-only 动态输出另有 inference 入口；执行 ABI 按输入组、输出 data、数据依赖元数据排列 |
 | 平台 | Linux 64-bit ELF；x86-64 原生运行验证，AArch64/RISC-V 低精度指令静态验证 |
 | GPU/NPU | 无，仅 CPU（LLVM 后端） |
-| 图优化 | 权重常量折叠已实现（布局重排编译期完成）；无算子融合、无量化优化 |
+| 图优化 | 权重常量折叠已实现（布局重排与 INT8 f32 权重预量化编译期完成，BatchNorm 可折叠进前邻卷积）；无算子融合、无量化图优化 |
 
 ---
 

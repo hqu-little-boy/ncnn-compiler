@@ -231,6 +231,94 @@ Value transposeOrFoldConstant(OpBuilder& builder,
     location, resultType, input, permutation)};
 }
 
+DenseElementsAttr quantizeConstantToI8(ElementsAttr elements,
+                                       RankedTensorType sourceType,
+                                       ElementsAttr scaleElements,
+                                       std::optional<unsigned> scaleDimension) {
+  const int64_t rank = sourceType.getRank();
+  if (!elements || !scaleElements || !sourceType.hasStaticShape() ||
+      rank == 0 || !sourceType.getElementType().isF32() ||
+      (scaleDimension && *scaleDimension != 0)) {
+    return {};
+  }
+  auto scaleType = dyn_cast<RankedTensorType>(scaleElements.getType());
+  if (!scaleType || !scaleType.hasStaticShape() ||
+      !scaleType.getElementType().isF32() || scaleType.getRank() != 1) {
+    return {};
+  }
+  const int64_t channels = sourceType.getShape()[0];
+  if (scaleType.getShape()[0] != 1 &&
+      (!scaleDimension || scaleType.getShape()[0] != channels)) {
+    return {};
+  }
+  auto dense = dyn_cast<DenseElementsAttr>(elements);
+  auto denseScale = dyn_cast<DenseElementsAttr>(scaleElements);
+  if (!dense || !denseScale) {
+    return {};
+  }
+  const bool scalarScale = scaleType.getShape()[0] == 1;
+  const int64_t count = sourceType.getNumElements();
+  const int64_t rowSize = channels > 0 ? count / channels : 0;
+  APFloat half(0.5f);
+  APFloat negativeHalf(-0.5f);
+  APFloat zero(0.0f);
+  APFloat maximum(127.0f);
+  APFloat minimum(-127.0f);
+  SmallVector<APInt> quantized;
+  quantized.reserve(count);
+  auto inputValues = dense.getValues<APFloat>();
+  auto scaleValues = denseScale.getValues<APFloat>();
+  auto inputValue = inputValues.begin();
+  for (int64_t offset = 0; offset < count; ++offset, ++inputValue) {
+    const int64_t scaleIndex = scalarScale ? 0 : offset / rowSize;
+    if (scaleIndex >= scaleType.getShape()[0]) {
+      return {};
+    }
+    APFloat scaled(*inputValue);
+    scaled.multiply(*(scaleValues.begin() + scaleIndex),
+                    APFloat::rmNearestTiesToEven);
+    if (!scaled.isFinite()) {
+      return {};
+    }
+    APFloat positive(scaled);
+    positive.add(half, APFloat::rmNearestTiesToEven);
+    positive.roundToIntegral(llvm::RoundingMode::TowardNegative);
+    APFloat negative(scaled);
+    negative.add(negativeHalf, APFloat::rmNearestTiesToEven);
+    negative.roundToIntegral(llvm::RoundingMode::TowardPositive);
+    APFloat rounded =
+      scaled.compare(zero) == APFloat::cmpLessThan ? negative : positive;
+    if (rounded.compare(maximum) == APFloat::cmpGreaterThan) {
+      rounded = maximum;
+    } else if (rounded.compare(minimum) == APFloat::cmpLessThan) {
+      rounded = minimum;
+    }
+    const double integral = rounded.convertToDouble();
+    quantized.push_back(APInt(8, static_cast<int64_t>(integral), true));
+  }
+  return DenseElementsAttr::get(
+    sourceType.clone(IntegerType::get(sourceType.getContext(), 8)), quantized);
+}
+
+Value foldConstantQuantizeI8(OpBuilder& builder,
+                             Location location,
+                             Value input,
+                             Value scale,
+                             std::optional<unsigned> scaleDimension) {
+  auto sourceType = dyn_cast<RankedTensorType>(input.getType());
+  if (!sourceType || !sourceType.hasStaticShape()) {
+    return {};
+  }
+  ElementsAttr elements = getConstantTensorElements(input);
+  ElementsAttr scaleElements = getConstantTensorElements(scale);
+  DenseElementsAttr folded =
+    quantizeConstantToI8(elements, sourceType, scaleElements, scaleDimension);
+  if (!folded) {
+    return {};
+  }
+  return builder.create<arith::ConstantOp>(location, folded.getType(), folded);
+}
+
 Value quantizeSignedI8(OpBuilder& builder,
                        Location location,
                        Value input,
@@ -239,6 +327,10 @@ Value quantizeSignedI8(OpBuilder& builder,
   auto inputType = cast<RankedTensorType>(input.getType());
   if (inputType.getElementType().isInteger(8)) {
     return input;
+  }
+  if (Value folded = foldConstantQuantizeI8(
+        builder, location, input, scale, scaleDimension)) {
+    return folded;
   }
   auto outputType = inputType.clone(builder.getI8Type());
   Value empty = builder.create<tensor::EmptyOp>(
