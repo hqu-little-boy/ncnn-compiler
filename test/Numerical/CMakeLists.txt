@@ -112,6 +112,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             --clang ${CLANG}
             --nm ${LLVM_NM}
             --readelf ${LLVM_READELF}
+            --llvm-as ${LLVM_AS}
             --param ${param_file}
             --bin ${bin_file}
             --model-name ${name}
@@ -844,6 +845,26 @@ ncnn_add_compiled_fixture(
     yolov5n
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.bin
+    3x640x640)
+ncnn_add_compiled_fixture(
+    yolov5s
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s.ncnn.bin
+    3x640x640)
+ncnn_add_compiled_fixture(
+    yolov5m
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m.ncnn.bin
+    3x640x640)
+ncnn_add_compiled_fixture(
+    yolov5l
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l.ncnn.bin
+    3x640x640)
+ncnn_add_compiled_fixture(
+    yolov5x
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x.ncnn.bin
     3x640x640)
 ncnn_add_compiled_fixture(
     pp_lcnet_x1_0_doc_ori
@@ -1592,6 +1613,10 @@ add_executable(numerical_tests
     models/yolov5l_cls_test.cpp
     models/yolov5x_cls_test.cpp
     models/yolov5n_test.cpp
+    models/yolov5s_test.cpp
+    models/yolov5m_test.cpp
+    models/yolov5l_test.cpp
+    models/yolov5x_test.cpp
     models/pp_lcnet_test.cpp
     models/liteocr_ported_test.cpp)
 target_link_libraries(numerical_tests PRIVATE
@@ -1792,6 +1817,18 @@ target_compile_definitions(numerical_tests PRIVATE
     YOLOV5N_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.param"
     YOLOV5N_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.bin"
     YOLOV5N_LIBRARY_PATH="${yolov5n_LIBRARY}"
+    YOLOV5S_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s.ncnn.param"
+    YOLOV5S_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s.ncnn.bin"
+    YOLOV5S_LIBRARY_PATH="${yolov5s_LIBRARY}"
+    YOLOV5M_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m.ncnn.param"
+    YOLOV5M_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m.ncnn.bin"
+    YOLOV5M_LIBRARY_PATH="${yolov5m_LIBRARY}"
+    YOLOV5L_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l.ncnn.param"
+    YOLOV5L_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l.ncnn.bin"
+    YOLOV5L_LIBRARY_PATH="${yolov5l_LIBRARY}"
+    YOLOV5X_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x.ncnn.param"
+    YOLOV5X_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x.ncnn.bin"
+    YOLOV5X_LIBRARY_PATH="${yolov5x_LIBRARY}"
     PP_LCNET_DOC_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
     PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
     PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}"
@@ -1906,6 +1943,11 @@ add_dependencies(numerical_tests compile_yolov5m_cls)
 add_dependencies(numerical_tests compile_yolov5l_cls)
 add_dependencies(numerical_tests compile_yolov5x_cls)
 add_dependencies(numerical_tests compile_yolov5n)
+add_dependencies(numerical_tests
+    compile_yolov5s
+    compile_yolov5m
+    compile_yolov5l
+    compile_yolov5x)
 add_dependencies(numerical_tests
     compile_unary_square
     compile_permute_rank4

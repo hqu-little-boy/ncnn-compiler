@@ -9,6 +9,7 @@ find_program(MLIR_TRANSLATE NAMES mlir-translate-21 REQUIRED)
 find_program(CLANG NAMES clang-21 REQUIRED)
 find_program(LLVM_NM NAMES llvm-nm-21 REQUIRED)
 find_program(LLVM_READELF NAMES llvm-readelf-21 REQUIRED)
+find_program(LLVM_AS NAMES llvm-as-21 REQUIRED)
 find_program(LLVM_OBJDUMP NAMES llvm-objdump-21 REQUIRED)
 find_program(LLVM_SIZE NAMES llvm-size-21 REQUIRED)
 find_program(LLVM_MCA NAMES llvm-mca-21 REQUIRED)
@@ -64,6 +65,7 @@ add_test(NAME squeezenet-shared-library
         --clang ${CLANG}
         --nm ${LLVM_NM}
         --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
         --param ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn/examples/squeezenet_v1.1.param
         --bin ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn/examples/squeezenet_v1.1.bin
         --model-name squeezenet_v1_1

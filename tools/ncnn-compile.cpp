@@ -188,6 +188,10 @@ llvm::cl::opt<std::string> g_readelf("readelf",
                                      llvm::cl::init(""),
                                      llvm::cl::Hidden,
                                      llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_llvm_as("llvm-as",
+                                     llvm::cl::init(""),
+                                     llvm::cl::Hidden,
+                                     llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_expected_undefined("expected-undefined",
                                                 llvm::cl::init(""),
                                                 llvm::cl::Hidden,
@@ -1763,13 +1767,15 @@ int main(int argc, char** argv) {
   auto clang = find_tool(executable_dir, g_clang, {}, {"clang-21"});
   auto nm = find_tool(executable_dir, g_nm, {}, {"llvm-nm-21"});
   auto readelf = find_tool(executable_dir, g_readelf, {}, {"llvm-readelf-21"});
+  auto llvm_as = find_tool(executable_dir, g_llvm_as, {}, {"llvm-as-21"});
   for (const ToolResult* tool :
-       {&driver, &opt, &translate, &clang, &nm, &readelf}) {
+       {&driver, &opt, &translate, &clang, &nm, &readelf, &llvm_as}) {
     if (!*tool) {
       return fail(tool->error());
     }
   }
-  if (!*driver || !*opt || !*translate || !*clang || !*nm || !*readelf) {
+  if (!*driver || !*opt || !*translate || !*clang || !*nm || !*readelf ||
+      !*llvm_as) {
     return fail(
       "required compiler tool not found; use -v and verify PATH or "
       "the installed toolchain");
@@ -1887,6 +1893,11 @@ int main(int argc, char** argv) {
                         llvm_ir.string()})) {
     return status;
   }
+  const fs::path llvm_bitcode = staging.path() / "model.bc";
+  if (int status =
+        run({**llvm_as, llvm_ir.string(), "-o", llvm_bitcode.string()})) {
+    return status;
+  }
 
   std::vector<std::string> target_args;
   std::vector<std::string> codegen_args;
@@ -1921,7 +1932,7 @@ int main(int argc, char** argv) {
   compile.insert(compile.end(), codegen_args.begin(), codegen_args.end());
   compile.insert(compile.end(), g_clang_args.begin(), g_clang_args.end());
   compile.insert(compile.end(),
-                 {"-c", llvm_ir.string(), "-o", object.string()});
+                 {"-c", llvm_bitcode.string(), "-o", object.string()});
   if (int status = run(compile)) {
     return status;
   }
@@ -1930,7 +1941,7 @@ int main(int argc, char** argv) {
   assemble.insert(assemble.end(), codegen_args.begin(), codegen_args.end());
   assemble.insert(assemble.end(), g_clang_args.begin(), g_clang_args.end());
   assemble.insert(assemble.end(),
-                  {"-S", llvm_ir.string(), "-o", assembly.string()});
+                  {"-S", llvm_bitcode.string(), "-o", assembly.string()});
   if (int status = run(assemble)) {
     return status;
   }

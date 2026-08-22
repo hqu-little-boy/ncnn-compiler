@@ -18,7 +18,8 @@ ncnn compiler 是一个基于 MLIR 的 ahead-of-time 编译器，将 ncnn 模型
 `PP-OCRv6_medium_det`、`PP-OCRv5_mobile_det`、`PP-OCRv5_mobile_det_int8`、`PP-OCRv5_server_det`、
 `PP-OCRv5_mobile_rec`、`PP-OCRv5_server_rec`、
 `PP-StructrureV2_SLANet_plus_cnn`、`PP-FormulaNet_plus_S_encoder` 以及静态 FP32 的
-`yolov5n`（YOLOv5 v7.0 目标检测，`3x640x640` 输入、`[25200,85]` 检测头输出）作为端到端验证目标。
+`yolov5n`、`yolov5s`、`yolov5m`、`yolov5l`、`yolov5x`（YOLOv5 v7.0 目标检测，
+`3x640x640` 输入、`[25200,85]` 检测头输出）作为端到端验证目标。
 其中 PP-LCNet 两个方向模型、AngleNet、PP-OCRv5/v6 识别模型和五个检测模型还具有独立的
 fixed-rank 动态输入产物与跨 shape 数值回归；SLANet 和 FormulaNet 保持静态 specialization。
 
@@ -186,12 +187,13 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
          └─ ncnn-mlir-opt --ncnn-tosa-to-linalg-pipeline ─▶ model.linalg.mlir
              └─ ncnn-mlir-opt --ncnn-linalg-to-memref-pipeline ─▶ model.memref.mlir
                  └─ ncnn-mlir-opt --generate-ncnn-c-api ─▶ model.capi.mlir (+ JSON manifest)
-                     └─ ncnn-mlir-opt --ncnn-memref-to-llvm-pipeline ─▶ model.llvm.mlir
-                         └─ mlir-translate --mlir-to-llvmir ─▶ model.ll
-                             └─ clang -x ir -fPIC -O<n> -c ─▶ model.o
-                                 └─ clang -shared -nostdlib ─▶ libmodel.so
-                                     └─ 符号/依赖审计 + 头文件生成
-                                         └─ 原子发布: model.h + libmodel.so
+                      └─ ncnn-mlir-opt --ncnn-memref-to-llvm-pipeline ─▶ model.llvm.mlir
+                          └─ mlir-translate --mlir-to-llvmir ─▶ model.ll
+                              └─ llvm-as ─▶ model.bc
+                                  └─ clang -x ir -fPIC -O<n> -c ─▶ model.o
+                                      └─ clang -shared -nostdlib ─▶ libmodel.so
+                                          └─ 符号/依赖审计 + 头文件生成
+                                              └─ 原子发布: model.h + libmodel.so
 ```
 
 ### 3.1 各阶段说明
@@ -207,7 +209,7 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | Linalg→MemRef | `bufferize-ncnn` + `buffer-results-to-out-params` + 两个 verify gate | One-Shot Bufferize，输出提升为 caller-owned 参数，并验证 buffer ownership 与 shape contract |
 | C API 生成 | `generate-ncnn-c-api` | 准备 bare-pointer ABI 元数据，通过 MLIR `SymbolTable` 重命名内部函数并更新全部符号引用 |
 | MemRef→LLVM | OpenMP 或 Affine vector/serial loops → ... → `finalize-ncnn-c-api` | 按 threads/vector 选项完整下降到 LLVM 方言 |
-| 代码生成 | `mlir-translate` + `clang` | LLVM IR → 目标文件 → 共享库 |
+| 代码生成 | `mlir-translate` + `llvm-as` + `clang` | LLVM IR 文本经 bitcode 化（避免超大模型超出 clang SourceLocation 地址空间）→ 目标文件 → 共享库 |
 
 项目 pass 的参数、说明、dependent dialect、factory 和统一注册由
 `include/ncnn-mlir/Passes.td` 生成；各实现只继承生成的 pass base 并提供核心逻辑。
@@ -370,6 +372,10 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
   且出现在 stride-32 大幅值坐标上），并验证重复调用一致性。该模型首次在产品路径覆盖
   MemoryData 常量、Eltwise 加权求和、UnaryOp square、rank-4 Permute order 3、rank-4 宽轴
   Slice/Concat，以及 rank-4 输出 ABI
+- `models/yolov5s_test.cpp`、`models/yolov5m_test.cpp`、`models/yolov5l_test.cpp`、
+  `models/yolov5x_test.cpp`：YOLOv5 s/m/l/x 检测模型端到端；与 yolov5n 相同的
+  `3x640x640` 输入、`[25200,85]` 输出、`1e-4` 相对 + `2e-5` 绝对预算和重复调用一致性，
+  覆盖同一算子集在更大深度/宽度配置下的数值验收
 - `models/pp_lcnet_test.cpp`：PP-LCNet doc ori、textline ori、ChineseOCR Lite AngleNet、PP-OCRv6
   tiny/medium rec、tiny det、small det、medium det 和 PP-OCRv5 mobile/server det、mobile/server rec
   与 upstream ncnn 数值对齐；
