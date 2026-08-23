@@ -10,3 +10,13 @@ target_include_directories(NCNNConstantFoldSupport SYSTEM PUBLIC
 target_compile_definitions(NCNNConstantFoldSupport PUBLIC ${LLVM_DEFINITIONS})
 target_compile_options(NCNNConstantFoldSupport PRIVATE -fno-rtti)
 target_link_libraries(NCNNConstantFoldSupport PUBLIC MLIRIR)
+
+add_library(NCNNTargetVectorInfoSupport STATIC TargetVectorInfo.cpp)
+target_include_directories(NCNNTargetVectorInfoSupport PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_BINARY_DIR}/include)
+target_include_directories(NCNNTargetVectorInfoSupport SYSTEM PUBLIC
+    ${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
+target_compile_definitions(NCNNTargetVectorInfoSupport PUBLIC ${LLVM_DEFINITIONS})
+target_compile_options(NCNNTargetVectorInfoSupport PRIVATE -fno-rtti)
+target_link_libraries(NCNNTargetVectorInfoSupport PUBLIC LLVMSupport)

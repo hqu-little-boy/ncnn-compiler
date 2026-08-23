@@ -67,6 +67,39 @@ def FuseLinalgEpiloguePass
     "arith::ArithDialect", "linalg::LinalgDialect", "scf::SCFDialect",
     "tensor::TensorDialect"
   ];
+  let options = [
+    Option<"tileWidth", "tile-width", "int64_t", /*default=*/"16",
+           "Output column tiling width for fused producers">
+  ];
+}
+
+def VectorizeNCNNPass
+    : Pass<"vectorize-ncnn", "mlir::ModuleOp"> {
+  let summary = "Vectorize Linalg computations to the target vector ABI";
+  let dependentDialects = [
+    "arith::ArithDialect", "linalg::LinalgDialect", "scf::SCFDialect",
+    "tensor::TensorDialect", "vector::VectorDialect"
+  ];
+  let options = [
+    Option<"lanes", "lanes", "unsigned", /*default=*/"0",
+           "Target SIMD lane count enabling vectorization; 0 disables">,
+    Option<"scalable", "scalable", "bool", /*default=*/"false",
+           "Reserved for scalable-vector emission (SVE/RVV)">,
+    Option<"unroll", "unroll", "bool", /*default=*/"false",
+           "Reserved for lane-width contraction splitting">
+  ];
+}
+
+def LowerVectorTransfersNCNNPass
+    : Pass<"lower-vector-transfers-ncnn", "mlir::ModuleOp"> {
+  let summary =
+    "Normalize vector transfers into VectorToLLVM-lowerable form";
+  let dependentDialects = ["memref::MemRefDialect", "vector::VectorDialect"];
+  let options = [
+    Option<"targetBitwidth", "target-bitwidth", "int64_t",
+           /*default=*/"512",
+           "Flattening cap for n-D transfer bitwidth">
+  ];
 }
 
 def VerifyBufferizedModelPass

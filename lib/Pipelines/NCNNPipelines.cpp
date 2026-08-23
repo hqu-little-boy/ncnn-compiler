@@ -25,6 +25,7 @@
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/Passes.h"
+#include "mlir/Dialect/Vector/Transforms/Passes.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
@@ -35,6 +36,8 @@
 #include "ncnn-mlir/Transforms/FuseLinalgEpilogue/FuseLinalgEpilogue.hpp"
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
+#include "ncnn-mlir/Transforms/VectorizeNCNN/LowerVectorTransfersNCNN.hpp"
+#include "ncnn-mlir/Transforms/VectorizeNCNN/VectorizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
 #include "ncnn-mlir/Transforms/VerifyModelShapeContracts/VerifyModelShapeContracts.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
@@ -53,6 +56,11 @@ void buildNCNNToTosaPipeline(OpPassManager& passManager) {
 }
 
 void buildNCNNTosaToLinalgPipeline(OpPassManager& passManager) {
+  buildNCNNTosaToLinalgPipeline(passManager, NCNNTosaToLinalgPipelineOptions());
+}
+
+void buildNCNNTosaToLinalgPipeline(
+  OpPassManager& passManager, const NCNNTosaToLinalgPipelineOptions& options) {
   TosaToLinalgNamedOptions namedOptions;
   namedOptions.preferConv2DKernelLayoutHWCF = true;
   tosa::addTosaToLinalgPasses(
@@ -65,11 +73,33 @@ void buildNCNNTosaToLinalgPipeline(OpPassManager& passManager) {
   passManager.addPass(createLinalgInlineScalarOperandsPass());
   passManager.addPass(createLinalgFoldIntoElementwisePass());
   passManager.addPass(createCanonicalizerPass());
-  passManager.addPass(createFuseLinalgEpiloguePass());
+  FuseLinalgEpiloguePassOptions epilogueOptions;
+  epilogueOptions.tileWidth = options.epilogueTileWidth;
+  passManager.addPass(createFuseLinalgEpiloguePass(epilogueOptions));
   passManager.addPass(createVerifyNoTosaOpsPass());
 }
 
 void buildNCNNLinalgToMemRefPipeline(OpPassManager& passManager) {
+  buildNCNNLinalgToMemRefPipeline(passManager,
+                                  NCNNLinalgToMemRefPipelineOptions());
+}
+
+void buildNCNNLinalgToMemRefPipeline(
+  OpPassManager& passManager,
+  const NCNNLinalgToMemRefPipelineOptions& options) {
+  if (options.vectorLanes > 0) {
+    // 向量化阶段：tensor 层先于 bufferize（Bufferization.md 指南），vector op
+    // 由已注册的 BufferizableOpInterface 外部模型消费。
+    passManager.addPass(createCanonicalizerPass());
+    passManager.addPass(createCSEPass());
+    VectorizeNCNNPassOptions vectorizeOptions;
+    vectorizeOptions.lanes = options.vectorLanes;
+    vectorizeOptions.scalable = options.vectorScalable;
+    passManager.addPass(createVectorizeNCNNPass(vectorizeOptions));
+    passManager.addPass(createCanonicalizerPass());
+    passManager.addPass(createCSEPass());
+  }
+
   passManager.addPass(createBufferizeNCNNPass());
 
   bufferization::BufferResultsToOutParamsPassOptions outParamOptions;
@@ -113,9 +143,24 @@ void buildNCNNMemRefToLLVMPipeline(
   passManager.addPass(createLoopInvariantCodeMotionPass());
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());
+  const bool hasVectorIR = options.vectorSize > 0 || options.vectorLowering;
+  if (hasVectorIR) {
+    // multi_reduction/mask 不在 VectorToLLVM 覆盖范围内，必须在 ArithToLLVM
+    // 之前降级，避免新生成的 arith op 漏掉整型/浮点转换。
+    passManager.addNestedPass<func::FuncOp>(
+      vector::createLowerVectorMultiReductionPass());
+    passManager.addNestedPass<func::FuncOp>(
+      vector::createLowerVectorMaskPass());
+  }
   passManager.addPass(createLowerAffinePass());
   passManager.addPass(createSCFToControlFlowPass());
   passManager.addPass(createConvertMathToLibmPass());
+  if (hasVectorIR) {
+    // N-D transfer 规范化必须在 ExpandStridedMetadata/MemRefToLLVM 之前：
+    // 此时周边仍是 memref/scf 语义，且其新建的 memref op 会被后续展开与
+    // LLVM 化覆盖。
+    passManager.addPass(createLowerVectorTransfersNCNNPass());
+  }
   passManager.addPass(memref::createExpandStridedMetadataPass());
   passManager.addPass(createLowerAffinePass());
   passManager.addPass(createArithToLLVMConversionPass());
@@ -123,7 +168,7 @@ void buildNCNNMemRefToLLVMPipeline(
   passManager.addPass(createConvertFuncToLLVMPass());
   passManager.addPass(createFinalizeCAPIPass());
   passManager.addPass(createConvertControlFlowToLLVMPass());
-  if (options.vectorSize > 0 && options.threads == 1) {
+  if (hasVectorIR) {
     passManager.addPass(createConvertVectorToLLVMPass());
     passManager.addPass(createArithToLLVMConversionPass());
     passManager.addPass(createUBToLLVMConversionPass());
@@ -139,14 +184,22 @@ void registerNCNNPipelines() {
     "ncnn-to-tosa-pipeline",
     "Strict ncnn model-to-TOSA pipeline",
     buildNCNNToTosaPipeline);
-  static PassPipelineRegistration<> tosaToLinalgRegistration(
-    "ncnn-tosa-to-linalg-pipeline",
-    "Strict TOSA-to-Linalg pipeline for ncnn models",
-    buildNCNNTosaToLinalgPipeline);
-  static PassPipelineRegistration<> linalgToMemRefRegistration(
-    "ncnn-linalg-to-memref-pipeline",
-    "Bufferize ncnn Linalg models with caller-owned output parameters",
-    buildNCNNLinalgToMemRefPipeline);
+  static PassPipelineRegistration<NCNNTosaToLinalgPipelineOptions>
+    tosaToLinalgRegistration(
+      "ncnn-tosa-to-linalg-pipeline",
+      "Strict TOSA-to-Linalg pipeline for ncnn models",
+      [](OpPassManager& passManager,
+         const NCNNTosaToLinalgPipelineOptions& options) {
+        buildNCNNTosaToLinalgPipeline(passManager, options);
+      });
+  static PassPipelineRegistration<NCNNLinalgToMemRefPipelineOptions>
+    linalgToMemRefRegistration(
+      "ncnn-linalg-to-memref-pipeline",
+      "Bufferize ncnn Linalg models with caller-owned output parameters",
+      [](OpPassManager& passManager,
+         const NCNNLinalgToMemRefPipelineOptions& options) {
+        buildNCNNLinalgToMemRefPipeline(passManager, options);
+      });
   static PassPipelineRegistration<NCNNMemRefToLLVMPipelineOptions>
     memRefToLLVMRegistration(
       "ncnn-memref-to-llvm-pipeline",

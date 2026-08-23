@@ -28,6 +28,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "ncnn-mlir/Support/Precision.hpp"
 #include "ncnn-mlir/Support/ShapeProgram.hpp"
+#include "ncnn-mlir/Support/TargetVectorInfo.hpp"
 
 namespace {
 
@@ -116,6 +117,12 @@ llvm::cl::opt<unsigned> g_vector_width(
   "vector-width",
   llvm::cl::desc("Preferred SIMD vector width in bits (0 disables preference)"),
   llvm::cl::init(256),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_vector_mode(
+  "vector-mode",
+  llvm::cl::desc(
+    "MLIR-level vectorization mode: off, auto, fixed-width, or scalable"),
+  llvm::cl::init("off"),
   llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_target_triple(
   "target-triple",
@@ -1807,6 +1814,54 @@ int main(int argc, char** argv) {
       return fail("clang returned an empty native target triple");
     }
   }
+
+  // 解析 MLIR 级向量化模式：off 保持历史行为；auto 由目标推导；
+  // fixed-width/scalable 显式指定（lanes 可经 --vector-width 覆盖）。
+  const llvm::SmallVector<llvm::StringRef, 8> target_feature_refs(
+    g_target_features.begin(), g_target_features.end());
+  const ncnn_mlir::TargetVectorInfo vector_info =
+    ncnn_mlir::TargetVectorInfo::resolve(
+      effective_target_triple, g_march, target_feature_refs);
+  unsigned vector_lanes = 0;
+  bool vector_scalable = false;
+  bool vector_active = false;
+  if (g_vector_mode == "off") {
+    // 历史行为：不做 MLIR 级向量化。
+  } else if (g_vector_mode == "auto") {
+    switch (vector_info.mode) {
+      case ncnn_mlir::TargetVectorInfo::Mode::FixedWidth:
+        vector_lanes = vector_info.lanes;
+        break;
+      case ncnn_mlir::TargetVectorInfo::Mode::Scalable:
+        vector_lanes = vector_info.lanes;
+        vector_scalable = true;
+        break;
+      case ncnn_mlir::TargetVectorInfo::Mode::Scalar:
+        break;
+    }
+  } else if (g_vector_mode == "fixed-width") {
+    vector_lanes =
+      vector_info.mode == ncnn_mlir::TargetVectorInfo::Mode::FixedWidth
+        ? vector_info.lanes
+        : 4;
+  } else if (g_vector_mode == "scalable") {
+    vector_scalable = true;
+    vector_lanes =
+      vector_info.mode == ncnn_mlir::TargetVectorInfo::Mode::Scalable
+        ? vector_info.lanes
+        : 4;
+  } else {
+    return fail(
+      "--vector-mode must be one of off, auto, fixed-width, "
+      "scalable");
+  }
+  if (g_vector_mode == "fixed-width" || g_vector_mode == "scalable") {
+    if (g_vector_width != 0 && g_vector_width % 32 == 0 &&
+        g_vector_width / 32 > vector_lanes) {
+      vector_lanes = g_vector_width / 32;
+    }
+  }
+  vector_active = vector_lanes != 0;
   const fs::path ncnn_ir = staging.path() / "model.ncnn.mlir";
   const fs::path tosa_ir = staging.path() / "model.tosa.mlir";
   const fs::path linalg_ir = staging.path() / "model.linalg.mlir";
@@ -1861,8 +1916,14 @@ int main(int argc, char** argv) {
                         linalg_ir.string()})) {
     return status;
   }
+  std::string linalg_pipeline_option = "--ncnn-linalg-to-memref-pipeline";
+  if (vector_active) {
+    linalg_pipeline_option += "=vector-lanes=" + std::to_string(vector_lanes);
+    linalg_pipeline_option +=
+      vector_scalable ? " vector-scalable=true" : " vector-scalable=false";
+  }
   if (int status = run({opt_path,
-                        "--ncnn-linalg-to-memref-pipeline",
+                        linalg_pipeline_option,
                         linalg_ir.string(),
                         "-o",
                         memref_ir.string()})) {
@@ -1878,7 +1939,11 @@ int main(int argc, char** argv) {
   std::string llvm_pipeline = "--ncnn-memref-to-llvm-pipeline=";
   const bool uses_openmp = g_threads != 1;
   llvm_pipeline += "threads=" + std::to_string(g_threads);
-  llvm_pipeline += " vector-size=" + std::to_string(g_vector_width / 32);
+  if (!vector_active) {
+    llvm_pipeline += " vector-size=" + std::to_string(g_vector_width / 32);
+  } else {
+    llvm_pipeline += " vector-lowering=true";
+  }
   if (int status = run({opt_path,
                         llvm_pipeline,
                         capi_ir.string(),
@@ -1918,7 +1983,12 @@ int main(int argc, char** argv) {
     codegen_args.insert(codegen_args.end(),
                         {"-Xclang", "-target-feature", "-Xclang", feature});
   }
-  if (g_vector_width != 0) {
+  const llvm::StringRef effective_triple_ref(effective_target_triple);
+  const bool target_is_x86 = effective_triple_ref.contains("x86_64") ||
+                             effective_triple_ref.contains("amd64") ||
+                             effective_triple_ref.contains("i686") ||
+                             effective_triple_ref.contains("i386");
+  if (g_vector_width != 0 && target_is_x86) {
     codegen_args.push_back("-mprefer-vector-width=" +
                            std::to_string(g_vector_width));
   }

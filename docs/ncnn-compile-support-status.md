@@ -318,10 +318,10 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 |---|---|
 | MLIR 级（始终执行） | canonicalize、CSE、LICM、常量转置折叠（`fold-linalg-constant-transpose`）、INT8 f32 权重编译期预量化（复刻 scale→round-half-away→clamp→i8 舍入语义）、One-Shot Bufferize、buffer-results-to-out-params、deallocation、linalg-to-loops、math-to-libm |
 | 代码生成级 | Clang `-O0`/`-O1`/`-O2`/`-O3`（默认 `-O3`） |
-| SIMD | 默认使用 256-bit LLVM 向量宽度偏好；`--threads=1` 时使用 Affine Super Vectorizer 和 Vector-to-LLVM |
+| SIMD | MLIR 级行向量化（opt-in，`--vector-mode={off,auto,fixed-width,scalable}`）：静态逐元素 Linalg generic 改写为外层标量循环 + 最内维 rank-1 `vector.transfer_read/write` 行处理，经 Vector-to-LLVM 下降；`lower-vector-transfers-ncnn` 在 MemRefToLLVM 前规范化 transfer（去前导单位维/连续展平）。SqueezeNet 标量对照实测 ~5× 加速且输出 bit-exact。跨架构：x86-64 / AArch64 NEON+SVE / RISC-V RVV 静态 asm 验证均出现 SIMD 指令；lane 数由 `TargetVectorInfo` 按 triple/march 推导。卷积/matmul 的窗口仿射映射暂不满足向量化前置条件，保持标量循环 + clang 兜底（待算子形态策略层转 matmul 后接入）；Affine Super Vectorizer 路径保留为 legacy（`--threads=1 --vector-width=N`） |
 | 多线程 | 默认将 Linalg 并行维 lowering 为 OpenMP，并由运行时使用可用 CPU；`--threads=1` 可关闭 |
-| 目标调优 | `--target-triple`、`--march`（含 `native`）、`--mcpu`、`--mtune`、`--target-feature`、`--sysroot` |
-| 图级优化 | 权重常量预处理：卷积/深度卷积/反卷积 OIHW→OHWI/HWCF 转置、Gemm/InnerProduct `[O,K]→[K,O]` 转置与 bias/gamma 重排均在编译期折叠为 `.rodata` 常量（纯数据搬运，bit-exact）；INT8 scale-term 卷积的 f32 权重按运行时舍入语义编译期预量化为 i8 常量；BatchNorm 全常量参数折叠进前邻单用 Convolution/ConvolutionDepthWise 权重与 bias（量化卷积、非常量参数、多消费者场景不折叠）；无算子融合、无量化图优化 |
+| 目标调优 | `--target-triple`、`--march`（含 `native`）、`--mcpu`、`--mtune`、`--target-feature`、`--sysroot`；`-mprefer-vector-width` 仅对 x86 triple 生效 |
+| 图级优化 | 权重常量预处理：卷积/深度卷积/反卷积 OIHW→OHWI/HWCF 转置、Gemm/InnerProduct `[O,K]→[K,O]` 转置与 bias/gamma 重排均在编译期折叠为 `.rodata` 常量（纯数据搬运，bit-exact）；INT8 scale-term 卷积的 f32 权重按运行时舍入语义编译期预量化为 i8 常量；BatchNorm 全常量参数折叠进前邻单用 Convolution/ConvolutionDepthWise 权重与 bias（量化卷积、非常量参数、多消费者场景不折叠）；Linalg 激活 epilogue 融合（`fuse-linalg-epilogue`）：单用户 elementwise 以 tile 列切分 Conv/Matmul producer；无量化图优化 |
 
 隐式优化：Dropout scale=1.0 折叠为恒等；Split 通过 SSA 消除。ncnn→TOSA 与 TOSA→Linalg
 lowering 中所有以编译期常量为操作数的 transpose/reshape（权重布局重排）均由

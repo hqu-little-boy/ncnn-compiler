@@ -15,6 +15,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN
+    VectorizeNCNN
     VerifyBufferizedModel
     VerifyModelShapeContracts
     VerifyNoNCNNOps
@@ -42,5 +43,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     MLIRTosaToTensor
     MLIRTosaTransforms
     MLIRUBToLLVM
+    MLIRVectorDialect
     MLIRVectorToLLVM
+    MLIRVectorTransforms
     MLIRTransforms)

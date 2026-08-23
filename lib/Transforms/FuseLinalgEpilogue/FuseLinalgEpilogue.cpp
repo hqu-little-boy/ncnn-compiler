@@ -23,9 +23,6 @@ namespace mlir::ncnn {
 
 namespace {
 
-constexpr int64_t kConvTileWidth = 16;
-constexpr int64_t kMatmulTileColumns = 16;
-
 bool isFusableElementwiseBody(linalg::GenericOp consumer) {
   Region& region = consumer->getRegion(0);
   if (!region.hasOneBlock()) {
@@ -156,7 +153,8 @@ Value buildStaticTiledSequence(RewriterBase& rewriter,
 
 Value tileConvolution(RewriterBase& rewriter,
                       linalg::Conv2DNhwcHwcfOp convolution,
-                      linalg::GenericOp consumer) {
+                      linalg::GenericOp consumer,
+                      int64_t tileWidth) {
   Location location = convolution.getLoc();
   auto resultType = cast<RankedTensorType>(convolution.getResult(0).getType());
   const ArrayRef<int64_t> outputShape = resultType.getShape();
@@ -268,13 +266,14 @@ Value tileConvolution(RewriterBase& rewriter,
                                   consumer,
                                   convolution.getOperation(),
                                   width,
-                                  kConvTileWidth,
+                                  tileWidth,
                                   buildChunk);
 }
 
 Value tileMatmul(RewriterBase& rewriter,
                  linalg::MatmulOp matmul,
-                 linalg::GenericOp consumer) {
+                 linalg::GenericOp consumer,
+                 int64_t tileWidth) {
   Location location = matmul.getLoc();
   auto resultType = cast<RankedTensorType>(matmul.getResult(0).getType());
   const int64_t rows = resultType.getShape()[0];
@@ -343,12 +342,8 @@ Value tileMatmul(RewriterBase& rewriter,
                                 rewriter.getIndexAttr(1)});
   };
 
-  return buildStaticTiledSequence(rewriter,
-                                  consumer,
-                                  matmul.getOperation(),
-                                  columns,
-                                  kMatmulTileColumns,
-                                  buildChunk);
+  return buildStaticTiledSequence(
+    rewriter, consumer, matmul.getOperation(), columns, tileWidth, buildChunk);
 }
 
 bool hasTensorViewProducer(Value value) {
@@ -416,10 +411,11 @@ class FuseLinalgEpiloguePass final
         continue;
       }
       Value fused;
+      const int64_t tileWidth = this->tileWidth.getValue();
       if (auto convolution = dyn_cast<linalg::Conv2DNhwcHwcfOp>(producer)) {
-        fused = tileConvolution(rewriter, convolution, consumer);
+        fused = tileConvolution(rewriter, convolution, consumer, tileWidth);
       } else if (auto matmul = dyn_cast<linalg::MatmulOp>(producer)) {
-        fused = tileMatmul(rewriter, matmul, consumer);
+        fused = tileMatmul(rewriter, matmul, consumer, tileWidth);
       } else {
         continue;
       }

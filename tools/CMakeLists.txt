@@ -20,6 +20,7 @@ target_include_directories(ncnn-compile PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_include_directories(ncnn-compile SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(ncnn-compile PRIVATE
     NCNNPrecisionSupport
+    NCNNTargetVectorInfoSupport
     ${NCNN_DRIVER_LLVM_LIBS})
 install(TARGETS ncnn-compile RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
