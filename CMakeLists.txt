@@ -140,7 +140,7 @@ file(GLOB_RECURSE NCNN_FORMAT_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/test/*.h"
     "${CMAKE_SOURCE_DIR}/test/*.hpp")
 list(FILTER NCNN_FORMAT_SOURCES EXCLUDE REGEX
-    "/(build[^/]*|third_party|generated)/")
+    "/([^/]*build[^/]*|third_party|generated)/")
 
 # clang-tidy 的检查范围由 tidy 目标里的 -source-filter 正则从 compile_commands.json
 # 中筛选（头文件经由所属翻译单元检查，不作为 main file 传入）。
@@ -153,10 +153,10 @@ if(COMPILER_ENABLE_FORMAT_TARGETS)
     set(NCNN_TIDY_HEADER_FILTER
         "^${CMAKE_SOURCE_DIR}/(include|lib|bin|tools|test)/")
     set(NCNN_TIDY_EXCLUDE_HEADER_FILTER
-        "^${CMAKE_SOURCE_DIR}/(build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$)")
-    # 仅第一方 lib/bin/tools/test 下的 .cpp；排除 build*/third_party/generated。
+        "^${CMAKE_SOURCE_DIR}/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$)")
+    # 仅第一方 lib/bin/tools/test 下的 .cpp；排除 *build*/third_party/generated。
     set(NCNN_TIDY_SOURCE_FILTER
-        "^(?!${CMAKE_SOURCE_DIR}/(build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$))${CMAKE_SOURCE_DIR}/(lib|bin|tools|test)/.*[.]cpp$")
+        "^(?!${CMAKE_SOURCE_DIR}/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$))${CMAKE_SOURCE_DIR}/(lib|bin|tools|test)/.*[.]cpp$")
     set(NCNN_RUN_TIDY_SCRIPT "${CMAKE_SOURCE_DIR}/run-clang-tidy.py")
     set(NCNN_RUN_TIDY_ARGS
         "${NCNN_RUN_TIDY_SCRIPT}"
