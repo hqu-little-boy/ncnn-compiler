@@ -25,6 +25,8 @@ set(COMPILER_SANITIZERS "" CACHE STRING
     "Sanitizers for all targets, semicolon-separated subset of: address, undefined")
 option(COMPILER_ENABLE_FORMAT_TARGETS
     "Add clang-format/clang-tidy helper targets (requires the tools at configure time)" ON)
+set(COMPILER_TIDY_JOBS "" CACHE STRING
+    "Parallel jobs for the tidy target via run-clang-tidy.py (empty = all cores)")
 option(COMPILER_INSTALL_RPATH
     "Embed LLVM_LIBRARY_DIR as INSTALL_RPATH (makes installed binaries non-relocatable)" OFF)
 option(COMPILER_ENABLE_IPO "Enable interprocedural optimization / LTO" OFF)
@@ -140,23 +142,40 @@ file(GLOB_RECURSE NCNN_FORMAT_SOURCES CONFIGURE_DEPENDS
 list(FILTER NCNN_FORMAT_SOURCES EXCLUDE REGEX
     "/(build[^/]*|third_party|generated)/")
 
-# Headers are checked through their owning translation units, never as main
-# files, so clang-tidy receives only first-party .cpp compile database entries.
-file(GLOB_RECURSE NCNN_TIDY_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/lib/*.cpp"
-    "${CMAKE_SOURCE_DIR}/bin/*.cpp"
-    "${CMAKE_SOURCE_DIR}/tools/*.cpp"
-    "${CMAKE_SOURCE_DIR}/test/*.cpp")
-list(FILTER NCNN_TIDY_SOURCES EXCLUDE REGEX
-    "/(build[^/]*|third_party|generated)/")
+# clang-tidy 的检查范围由 tidy 目标里的 -source-filter 正则从 compile_commands.json
+# 中筛选（头文件经由所属翻译单元检查，不作为 main file 传入）。
 
 if(COMPILER_ENABLE_FORMAT_TARGETS)
     find_program(CLANG_FORMAT NAMES clang-format-21 REQUIRED)
     find_program(CLANG_TIDY NAMES clang-tidy-21 REQUIRED)
+    # tidy_fix 经 run-clang-tidy.py 合并修复，需要 clang-apply-replacements。
+    find_program(CLANG_APPLY_REPLACEMENTS NAMES clang-apply-replacements-21 REQUIRED)
     set(NCNN_TIDY_HEADER_FILTER
         "^${CMAKE_SOURCE_DIR}/(include|lib|bin|tools|test)/")
     set(NCNN_TIDY_EXCLUDE_HEADER_FILTER
         "^${CMAKE_SOURCE_DIR}/(build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$)")
+    # 仅第一方 lib/bin/tools/test 下的 .cpp；排除 build*/third_party/generated。
+    set(NCNN_TIDY_SOURCE_FILTER
+        "^(?!${CMAKE_SOURCE_DIR}/(build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$))${CMAKE_SOURCE_DIR}/(lib|bin|tools|test)/.*[.]cpp$")
+    set(NCNN_RUN_TIDY_SCRIPT "${CMAKE_SOURCE_DIR}/run-clang-tidy.py")
+    set(NCNN_RUN_TIDY_ARGS
+        "${NCNN_RUN_TIDY_SCRIPT}"
+        "-p=${CMAKE_BINARY_DIR}"
+        "-clang-tidy-binary=${CLANG_TIDY}"
+        # run-clang-tidy.py 的长选项是单横线风格（与 clang-tidy 本体不同）。
+        "-header-filter=${NCNN_TIDY_HEADER_FILTER}"
+        "-exclude-header-filter=${NCNN_TIDY_EXCLUDE_HEADER_FILTER}"
+        "-source-filter=${NCNN_TIDY_SOURCE_FILTER}")
+    # 默认全核并行；COMPILER_TIDY_JOBS 可显式限速。
+    if(COMPILER_TIDY_JOBS)
+        list(APPEND NCNN_RUN_TIDY_ARGS "-j${COMPILER_TIDY_JOBS}")
+    else()
+        include(ProcessorCount)
+        ProcessorCount(NCNN_TIDY_JOBS_DEFAULT)
+        if(NCNN_TIDY_JOBS_DEFAULT GREATER 0)
+            list(APPEND NCNN_RUN_TIDY_ARGS "-j${NCNN_TIDY_JOBS_DEFAULT}")
+        endif()
+    endif()
 
     # clang-format：检查格式是否合规（不改文件，发现违例即失败）
     add_custom_target(format_check
@@ -171,23 +190,19 @@ if(COMPILER_ENABLE_FORMAT_TARGETS)
         COMMENT "Reformatting code with clang-format (Google)"
         VERBATIM)
 
-    # clang-tidy：静态检查（依赖 compile_commands.json）
+    # clang-tidy：静态检查（依赖 compile_commands.json）。
+    # run-clang-tidy.py 并行运行，默认使用全部核心，可用 COMPILER_TIDY_JOBS 限速。
     add_custom_target(tidy
-        COMMAND ${CLANG_TIDY} -p=${CMAKE_BINARY_DIR}
-                --header-filter=${NCNN_TIDY_HEADER_FILTER}
-                --exclude-header-filter=${NCNN_TIDY_EXCLUDE_HEADER_FILTER}
-                ${NCNN_TIDY_SOURCES}
+        COMMAND python3 ${NCNN_RUN_TIDY_ARGS}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running clang-tidy (Google)"
+        COMMENT "Running clang-tidy in parallel (Google)"
         VERBATIM)
     add_dependencies(tidy NCNNOpsIncGen NCNNPassesIncGen)
     add_custom_target(tidy_fix
-        COMMAND ${CLANG_TIDY} -p=${CMAKE_BINARY_DIR} --fix --fix-errors
-                --header-filter=${NCNN_TIDY_HEADER_FILTER}
-                --exclude-header-filter=${NCNN_TIDY_EXCLUDE_HEADER_FILTER}
-                ${NCNN_TIDY_SOURCES}
+        COMMAND python3 ${NCNN_RUN_TIDY_ARGS} -fix
+                "-clang-apply-replacements-binary=${CLANG_APPLY_REPLACEMENTS}"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Auto-fixing with clang-tidy (Google)"
+        COMMENT "Auto-fixing with clang-tidy in parallel (Google)"
         VERBATIM)
     add_dependencies(tidy_fix NCNNOpsIncGen NCNNPassesIncGen)
 endif()
