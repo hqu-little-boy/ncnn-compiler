@@ -1,4 +1,4 @@
-add_library(VerifyBufferizedModel STATIC
+add_library(VerifyBufferizedModel
     VerifyBufferizedModel.cpp
 )
 add_dependencies(VerifyBufferizedModel NCNNPassesIncGen)

@@ -1,5 +1,5 @@
 # importer：parsed-graph -> ncnn 方言 MLIR 模块。
-add_library(NCNNImporter STATIC
+add_library(NCNNImporter
     ImportActivation.cpp
     ImportConvolution.cpp
     ImportDetection.cpp

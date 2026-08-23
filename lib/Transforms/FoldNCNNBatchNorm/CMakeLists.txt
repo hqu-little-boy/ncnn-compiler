@@ -1,4 +1,4 @@
-add_library(FoldNCNNBatchNorm STATIC
+add_library(FoldNCNNBatchNorm
     FoldNCNNBatchNorm.cpp
 )
 add_dependencies(FoldNCNNBatchNorm NCNNPassesIncGen)

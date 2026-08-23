@@ -1,4 +1,4 @@
-add_library(VerifyModelShapeContracts STATIC
+add_library(VerifyModelShapeContracts
     VerifyModelShapeContracts.cpp
 )
 add_dependencies(VerifyModelShapeContracts NCNNPassesIncGen)

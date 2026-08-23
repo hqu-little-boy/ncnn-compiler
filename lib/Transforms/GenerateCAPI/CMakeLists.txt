@@ -1,4 +1,4 @@
-add_library(GenerateCAPI STATIC
+add_library(GenerateCAPI
     GenerateCAPI.cpp
 )
 add_dependencies(GenerateCAPI NCNNPassesIncGen)

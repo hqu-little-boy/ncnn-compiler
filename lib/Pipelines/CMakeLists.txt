@@ -1,4 +1,4 @@
-add_library(NCNNPipelines STATIC
+add_library(NCNNPipelines
     NCNNPipelines.cpp
 )
 add_dependencies(NCNNPipelines NCNNPassesIncGen)

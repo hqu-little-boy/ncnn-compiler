@@ -1,4 +1,4 @@
-add_library(FoldLinalgConstantTranspose STATIC
+add_library(FoldLinalgConstantTranspose
     FoldLinalgConstantTranspose.cpp
 )
 add_dependencies(FoldLinalgConstantTranspose NCNNPassesIncGen)

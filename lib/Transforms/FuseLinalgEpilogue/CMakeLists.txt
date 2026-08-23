@@ -1,4 +1,4 @@
-add_library(FuseLinalgEpilogue STATIC
+add_library(FuseLinalgEpilogue
     FuseLinalgEpilogue.cpp
 )
 add_dependencies(FuseLinalgEpilogue NCNNPassesIncGen)

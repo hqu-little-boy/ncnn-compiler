@@ -1,4 +1,4 @@
-add_library(VectorizeNCNN STATIC
+add_library(VectorizeNCNN
     VectorizeNCNN.cpp
     LowerVectorTransfersNCNN.cpp
 )

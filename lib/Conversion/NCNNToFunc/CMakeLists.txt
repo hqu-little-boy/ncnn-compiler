@@ -1,4 +1,4 @@
-add_library(NCNNToFunc STATIC
+add_library(NCNNToFunc
     NCNNToFunc.cpp
 )
 add_dependencies(NCNNToFunc NCNNPassesIncGen)

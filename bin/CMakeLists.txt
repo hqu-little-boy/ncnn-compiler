@@ -12,9 +12,11 @@ target_include_directories(ncnn-mlir-opt PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROJECT_BINARY_DIR}/include)
 target_compile_options(ncnn-mlir-opt PRIVATE -fno-rtti)
-set_target_properties(ncnn-mlir-opt PROPERTIES
-    BUILD_RPATH "${LLVM_LIBRARY_DIR}"
-    INSTALL_RPATH "${LLVM_LIBRARY_DIR}")
+set(NCNN_EXEC_RPATH_PROPERTIES BUILD_RPATH "${LLVM_LIBRARY_DIR}")
+if(COMPILER_INSTALL_RPATH)
+    list(APPEND NCNN_EXEC_RPATH_PROPERTIES INSTALL_RPATH "${LLVM_LIBRARY_DIR}")
+endif()
+set_target_properties(ncnn-mlir-opt PROPERTIES ${NCNN_EXEC_RPATH_PROPERTIES})
 target_link_libraries(ncnn-mlir-opt PRIVATE
     BufferizeNCNN
     GenerateCAPI

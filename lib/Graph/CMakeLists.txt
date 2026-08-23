@@ -1,5 +1,5 @@
 # ncnn 模型解析器与计算图数据模型（纯 C++，不依赖 MLIR）。
-add_library(NCNNGraph STATIC
+add_library(NCNNGraph
     graph.cpp
     parser.cpp
 )

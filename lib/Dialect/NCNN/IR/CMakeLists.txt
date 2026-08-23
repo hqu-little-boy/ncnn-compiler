@@ -1,5 +1,5 @@
 # ncnn 方言库。
-add_library(NCNNDialect STATIC
+add_library(NCNNDialect
     NCNNDialect.cpp
     NCNNOps.cpp
 )

@@ -1,4 +1,4 @@
-add_library(BufferizeNCNN STATIC
+add_library(BufferizeNCNN
     BufferizeNCNN.cpp
 )
 add_dependencies(BufferizeNCNN NCNNPassesIncGen)

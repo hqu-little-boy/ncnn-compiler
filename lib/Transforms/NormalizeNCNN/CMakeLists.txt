@@ -1,4 +1,4 @@
-add_library(NormalizeNCNN STATIC
+add_library(NormalizeNCNN
     NormalizeNCNN.cpp
 )
 add_dependencies(NormalizeNCNN NCNNPassesIncGen)

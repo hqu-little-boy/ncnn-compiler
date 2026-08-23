@@ -1,4 +1,4 @@
-add_library(VerifyNoNCNNOps STATIC
+add_library(VerifyNoNCNNOps
     VerifyNoNCNNOps.cpp
 )
 add_dependencies(VerifyNoNCNNOps NCNNPassesIncGen)
