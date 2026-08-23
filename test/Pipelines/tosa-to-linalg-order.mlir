@@ -11,5 +11,10 @@ module {}
 // CHECK: tosa-to-linalg
 // CHECK: tosa-to-tensor
 // CHECK: tosa-to-arith
+// CHECK: canonicalize
 // CHECK: cse
+// CHECK: linalg-inline-scalar-operands
+// CHECK: linalg-fold-into-elementwise
+// CHECK: canonicalize
+// CHECK: fuse-linalg-epilogue
 // CHECK: verify-no-tosa-ops

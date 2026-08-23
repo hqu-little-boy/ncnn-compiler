@@ -32,6 +32,7 @@
 #include "ncnn-mlir/Transforms/BufferizeNCNN/BufferizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/FoldLinalgConstantTranspose/FoldLinalgConstantTranspose.hpp"
 #include "ncnn-mlir/Transforms/FoldNCNNBatchNorm/FoldNCNNBatchNorm.hpp"
+#include "ncnn-mlir/Transforms/FuseLinalgEpilogue/FuseLinalgEpilogue.hpp"
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
@@ -61,6 +62,10 @@ void buildNCNNTosaToLinalgPipeline(OpPassManager& passManager) {
   passManager.addNestedPass<func::FuncOp>(createTosaToArithPass());
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());
+  passManager.addPass(createLinalgInlineScalarOperandsPass());
+  passManager.addPass(createLinalgFoldIntoElementwisePass());
+  passManager.addPass(createCanonicalizerPass());
+  passManager.addPass(createFuseLinalgEpiloguePass());
   passManager.addPass(createVerifyNoTosaOpsPass());
 }
 

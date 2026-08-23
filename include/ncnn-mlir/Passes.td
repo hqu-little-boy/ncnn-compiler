@@ -59,6 +59,16 @@ def FoldNCNNBatchNormPass
   let dependentDialects = ["arith::ArithDialect"];
 }
 
+def FuseLinalgEpiloguePass
+    : Pass<"fuse-linalg-epilogue", "mlir::ModuleOp"> {
+  let summary =
+    "Fuse elementwise epilogues into tiled convolution and matmul loops";
+  let dependentDialects = [
+    "arith::ArithDialect", "linalg::LinalgDialect", "scf::SCFDialect",
+    "tensor::TensorDialect"
+  ];
+}
+
 def VerifyBufferizedModelPass
     : Pass<"verify-bufferized-model", "mlir::ModuleOp"> {
   let summary = "Verify the bufferized ncnn entry point and its buffer ownership";

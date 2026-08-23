@@ -10,6 +10,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     BufferizeNCNN
     FoldLinalgConstantTranspose
     FoldNCNNBatchNorm
+    FuseLinalgEpilogue
     GenerateCAPI
     NCNNToFunc
     NCNNToTosa
