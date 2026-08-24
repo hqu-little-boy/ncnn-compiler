@@ -212,7 +212,7 @@ strict pipeline，不表示该 ncnn 层的所有参数组合都接受。方言�
 | BN 折叠 | `fold-ncnn-batchnorm` | 将全常量 BatchNorm 按运行时语义折叠进前邻单用 Convolution/ConvolutionDepthWise 权重与 bias；量化卷积、非常量参数、多消费者场景不折叠 |
 | 规范化 | `normalize-ncnn` | 两阶段校验/提交：SAME padding 校验由 `TypeSwitch` 分派，提交由 typed `OpRewritePattern` 完成；Split 由标准 folder/canonicalize 消除 |
 | ncnn→目标 IR | `convert-ncnn-to-tosa` | 大多数算子生成 TOSA；动态 Interp 和 DetectionOutput 等白名单实例直接生成 Linalg/SCF/Tensor/Arith |
-| TOSA→Linalg | 上游 `addTosaToLinalgPasses` + `fold-linalg-constant-transpose` + `verify-no-tosa-ops` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith；常量转置（如 conv2d 权重 OHWI→HWCF）在 lowering 后立即折叠，并拒绝残留 TOSA |
+| TOSA→Linalg | 上游 `addTosaToLinalgPasses` + `fold-linalg-constant-transpose` + `strategy-ncnn` + `verify-no-tosa-ops` | 标准 TOSA-to-Linalg + TosaToTensor + TosaToArith；常量转置（如 conv2d 权重 OHWI→HWCF）在 lowering 后立即折叠；算子形态策略层把可改写卷积变为 matmul 形态（详见 §6）；最后拒绝残留 TOSA |
 | Linalg→MemRef | `bufferize-ncnn` + `buffer-results-to-out-params` + 两个 verify gate | One-Shot Bufferize，输出提升为 caller-owned 参数，并验证 buffer ownership 与 shape contract |
 | C API 生成 | `generate-ncnn-c-api` | 准备 bare-pointer ABI 元数据，通过 MLIR `SymbolTable` 重命名内部函数并更新全部符号引用 |
 | MemRef→LLVM | OpenMP 或 Affine vector/serial loops → ... → `finalize-ncnn-c-api` | 按 threads/vector 选项完整下降到 LLVM 方言 |
@@ -316,9 +316,10 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 
 | 层级 | 内容 |
 |---|---|
-| MLIR 级（始终执行） | canonicalize、CSE、LICM、常量转置折叠（`fold-linalg-constant-transpose`）、INT8 f32 权重编译期预量化（复刻 scale→round-half-away→clamp→i8 舍入语义）、One-Shot Bufferize、buffer-results-to-out-params、deallocation、linalg-to-loops、math-to-libm |
+| MLIR 级（始终执行） | canonicalize、CSE、LICM、常量转置折叠（`fold-linalg-constant-transpose`）、算子形态策略层（`strategy-ncnn`）、INT8 f32 权重编译期预量化（复刻 scale→round-half-away→clamp→i8 舍入语义）、One-Shot Bufferize、buffer-results-to-out-params、deallocation、linalg-to-loops、math-to-libm |
+| 算子形态策略层 | `strategy-ncnn`（A1）：在向量化之前把卷积改写为投影映射的 matmul 形态——①1×1 s1 无条件 collapse 为 `[N·H·W,C]×[C,O]` 视图 matmul（动态空间维同样成立）；②其余 k×k 仅静态空间维且命中 ncnn `prefer_sgemm` 启发式（工作集字节 > L2 预算或任一通道 >16）时走 im2col gather + matmul；③conv 结果的唯一用户若为恒等逐元素 generic，则一并提升进折叠二维域（matmul → 2D generic → expand_shape），激活随 matmul 主循环落位。深度卷积 lower 为独立 op 不进本策略；Winograd 仅预留 `--conv-strategy=winograd` 开关位（数值预算未验证，默认关闭）。权重 collapse 由 canonicalizer 折叠为 `.rodata` 常量；累加顺序与直接卷积存在差异，由全量数值黄金测试按既定预算验收。CLI：`--conv-strategy={auto,gemm,conv,winograd}`、`--conv-gemm-l2-bytes=<N>`（默认 524288） |
 | 代码生成级 | Clang `-O0`/`-O1`/`-O2`/`-O3`（默认 `-O3`） |
-| SIMD | MLIR 级行向量化（opt-in，`--vector-mode={off,auto,fixed-width,scalable}`）：静态逐元素 Linalg generic 改写为外层标量循环 + 最内维 rank-1 `vector.transfer_read/write` 行处理，经 Vector-to-LLVM 下降；`lower-vector-transfers-ncnn` 在 MemRefToLLVM 前规范化 transfer（去前导单位维/连续展平）。SqueezeNet 标量对照实测 ~5× 加速且输出 bit-exact。跨架构：x86-64 / AArch64 NEON+SVE / RISC-V RVV 静态 asm 验证均出现 SIMD 指令；lane 数由 `TargetVectorInfo` 按 triple/march 推导。卷积/matmul 的窗口仿射映射暂不满足向量化前置条件，保持标量循环 + clang 兜底（待算子形态策略层转 matmul 后接入）；Affine Super Vectorizer 路径保留为 legacy（`--threads=1 --vector-width=N`） |
+| SIMD | MLIR 级行向量化（opt-in，`--vector-mode={off,auto,fixed-width,scalable}`）：静态逐元素 Linalg generic 改写为外层标量循环 + 最内维 rank-1 `vector.transfer_read/write` 行处理，经 Vector-to-LLVM 下降；`lower-vector-transfers-ncnn` 在 MemRefToLLVM 前规范化 transfer（去前导单位维/连续展平）。SqueezeNet 标量对照实测 ~5× 加速且输出 bit-exact。跨架构：x86-64 / AArch64 NEON+SVE / RISC-V RVV 静态 asm 验证均出现 SIMD 指令；lane 数由 `TargetVectorInfo` 按 triple/march 推导。卷积/matmul 本体暂保持标量循环 + OpenMP 多核 + clang 兜底（matmul 形态已由 `strategy-ncnn` 就绪，SIMD 内核为后续 A1b 阶段）；Affine Super Vectorizer 路径保留为 legacy（`--threads=1 --vector-width=N`） |
 | 多线程 | 默认将 Linalg 并行维 lowering 为 OpenMP，并由运行时使用可用 CPU；`--threads=1` 可关闭 |
 | 目标调优 | `--target-triple`、`--march`（含 `native`）、`--mcpu`、`--mtune`、`--target-feature`、`--sysroot`；`-mprefer-vector-width` 仅对 x86 triple 生效 |
 | 图级优化 | 权重常量预处理：卷积/深度卷积/反卷积 OIHW→OHWI/HWCF 转置、Gemm/InnerProduct `[O,K]→[K,O]` 转置与 bias/gamma 重排均在编译期折叠为 `.rodata` 常量（纯数据搬运，bit-exact）；INT8 scale-term 卷积的 f32 权重按运行时舍入语义编译期预量化为 i8 常量；BatchNorm 全常量参数折叠进前邻单用 Convolution/ConvolutionDepthWise 权重与 bias（量化卷积、非常量参数、多消费者场景不折叠）；Linalg 激活 epilogue 融合（`fuse-linalg-epilogue`）：单用户 elementwise 以 tile 列切分 Conv/Matmul producer；无量化图优化 |

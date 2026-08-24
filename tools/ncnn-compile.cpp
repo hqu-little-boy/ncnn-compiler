@@ -124,6 +124,19 @@ llvm::cl::opt<std::string> g_vector_mode(
     "MLIR-level vectorization mode: off, auto, fixed-width, or scalable"),
   llvm::cl::init("off"),
   llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_conv_strategy(
+  "conv-strategy",
+  llvm::cl::desc(
+    "Convolution operator-shape strategy (A1): auto, gemm, conv, winograd"),
+  llvm::cl::init("auto"),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<int64_t> g_conv_gemm_l2_bytes(
+  "conv-gemm-l2-bytes",
+  llvm::cl::desc(
+    "L2 cache byte budget for the convolution prefer-GEMM heuristic "
+    "(ncnn prefer_sgemm)"),
+  llvm::cl::init(524288),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_target_triple(
   "target-triple",
   llvm::cl::desc("Target triple (64-bit Linux ELF only)"),
@@ -1867,6 +1880,10 @@ int main(int argc, char** argv) {
   unsigned vector_lanes = 0;
   bool vector_scalable = false;
   bool vector_active = false;
+  if (g_conv_strategy != "auto" && g_conv_strategy != "gemm" &&
+      g_conv_strategy != "conv" && g_conv_strategy != "winograd") {
+    return fail("--conv-strategy must be one of auto, gemm, conv, winograd");
+  }
   if (g_vector_mode == "off") {
     // 历史行为：不做 MLIR 级向量化。
   } else if (g_vector_mode == "auto") {
@@ -1951,8 +1968,14 @@ int main(int argc, char** argv) {
                         tosa_ir.string()})) {
     return status;
   }
+  std::string tosa_linalg_pipeline_option = "--ncnn-tosa-to-linalg-pipeline";
+  if (g_conv_strategy != "auto" || g_conv_gemm_l2_bytes != 524288) {
+    tosa_linalg_pipeline_option +=
+      "=conv-strategy=" + g_conv_strategy +
+      " conv-gemm-l2-bytes=" + std::to_string(g_conv_gemm_l2_bytes);
+  }
   if (int status = run({opt_path,
-                        "--ncnn-tosa-to-linalg-pipeline",
+                        tosa_linalg_pipeline_option,
                         tosa_ir.string(),
                         "-o",
                         linalg_ir.string()})) {

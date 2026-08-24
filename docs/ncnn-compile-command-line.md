@@ -311,7 +311,28 @@ ncnn-compile model.param --march=native --vector-width=256
 显式向量化适用于 `--threads=1` 的串行 lowering。OpenMP 模式下，编译器把该值作为每个 worker
 内 LLVM 自动向量化的宽度偏好。使用 `--threads=1 --vector-width=0` 可同时关闭并行和显式 SIMD。
 
-### 3.4 `-g` 和 `--debug-info`
+### 3.4 `--conv-strategy=<mode>` 和 `--conv-gemm-l2-bytes=<bytes>`
+
+控制算子形态策略层（`strategy-ncnn`）的卷积改写行为。该层在向量化之前把卷积
+改写为 matmul 形态，使计算主体进入投影映射的收缩主干：
+
+```bash
+ncnn-compile model.param --conv-strategy=auto
+```
+
+`--conv-strategy` 取值：
+
+| 取值 | 行为 |
+|---|---|
+| `auto`（默认） | 1×1 s1 无条件折叠为 matmul；其余 k×k 仅静态空间维且命中 ncnn `prefer_sgemm` 启发式时走 im2col+matmul |
+| `gemm` | 静态实例强制走 GEMM 形态（跳过阈值判断） |
+| `conv` | 关闭全部改写，保留直接卷积 |
+| `winograd` | 预留开关位，当前等价于 `conv`（Winograd 数值预算未验证） |
+
+`--conv-gemm-l2-bytes` 覆盖启发式中的 L2 缓存字节预算（默认 `524288`，即 512 KiB）。
+数值上 im2col 路径改变累加顺序（ULP 级差异），由全量数值黄金测试按既定预算验收。
+
+### 3.5 `-g` 和 `--debug-info`
 
 让 Clang 在目标文件和动态库中生成调试信息：
 

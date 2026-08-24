@@ -37,6 +37,7 @@
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/RewriteLinalgCopies/RewriteLinalgCopies.hpp"
+#include "ncnn-mlir/Transforms/StrategyNCNN/StrategyNCNN.hpp"
 #include "ncnn-mlir/Transforms/VectorizeNCNN/LowerVectorTransfersNCNN.hpp"
 #include "ncnn-mlir/Transforms/VectorizeNCNN/VectorizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
@@ -71,6 +72,13 @@ void buildNCNNTosaToLinalgPipeline(
   passManager.addNestedPass<func::FuncOp>(createTosaToArithPass());
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());
+  // 算子形态策略层（A1）：在 epilogue 融合与向量化之前把可改写卷积变为
+  // matmul 形态，使计算大头进入投影映射的收缩主干；权重 collapse 由紧随
+  // 其后的 canonicalizer 折叠为 .rodata 常量。
+  StrategyNCNNPassOptions strategyOptions;
+  strategyOptions.strategy = options.convStrategy.getValue();
+  strategyOptions.gemmL2Bytes = options.convGemmL2Bytes.getValue();
+  passManager.addPass(createStrategyNCNNPass(strategyOptions));
   passManager.addPass(createLinalgInlineScalarOperandsPass());
   passManager.addPass(createLinalgFoldIntoElementwisePass());
   passManager.addPass(createCanonicalizerPass());

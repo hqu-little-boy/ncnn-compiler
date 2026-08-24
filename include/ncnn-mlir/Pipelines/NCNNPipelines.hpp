@@ -12,6 +12,18 @@ struct NCNNTosaToLinalgPipelineOptions
     "epilogue-tile-width",
     llvm::cl::desc("Output column tiling width for fused Linalg epilogues"),
     llvm::cl::init(16)};
+  Option<std::string> convStrategy{
+    *this,
+    "conv-strategy",
+    llvm::cl::desc(
+      "Convolution operator-shape strategy: auto, gemm, conv, winograd"),
+    llvm::cl::init("auto")};
+  Option<int64_t> convGemmL2Bytes{
+    *this,
+    "conv-gemm-l2-bytes",
+    llvm::cl::desc("L2 cache byte budget for the convolution prefer-GEMM "
+                   "heuristic"),
+    llvm::cl::init(524288)};
 };
 
 struct NCNNLinalgToMemRefPipelineOptions

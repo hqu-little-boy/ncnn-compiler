@@ -23,8 +23,10 @@
 // TOSA-NOT: = ncnn.
 
 // LINALG-LABEL: func.func @model(%arg0: tensor<3x227x227xf32>) -> tensor<1000xf32>
-// LINALG: linalg.conv_2d_nhwc_hwcf
+// A1 算子形态策略层：全部卷积改写为 matmul 形态（1×1 视图折叠 / k×k im2col）。
+// LINALG: linalg.matmul
 // LINALG: math.exp
+// LINALG-NOT: linalg.conv_2d
 // LINALG-NOT: tosa.
 
 // MEMREF-LABEL: func.func @model(

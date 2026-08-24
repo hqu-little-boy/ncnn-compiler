@@ -65,6 +65,33 @@ def FoldNCNNBatchNormPass
   let dependentDialects = ["arith::ArithDialect"];
 }
 
+def StrategyNCNNPass
+    : Pass<"strategy-ncnn", "mlir::ModuleOp"> {
+  let summary =
+    "Rewrite convolutions into matmul forms ahead of vectorization";
+  let description = [{
+    Operator-shape strategy layer (A1). Convolutions whose window indexing
+    maps cannot reach vector.contract are rewritten into matmul forms:
+    1x1 stride-1 convs become collapsed-view matmuls; other kxk convs with
+    static spatial dims and an ncnn-style prefer-gemm verdict become
+    im2col+matmul. A single-user identity elementwise epilogue is lifted
+    into the collapsed 2-D domain so activations stay attached to the
+    matmul main loop. Depthwise convolutions lower to a dedicated op and
+    never enter this pass. Winograd is a reserved switch only.
+  }];
+  let dependentDialects = [
+    "arith::ArithDialect", "linalg::LinalgDialect",
+    "math::MathDialect", "tensor::TensorDialect"
+  ];
+  let options = [
+    Option<"strategy", "strategy", "std::string", /*default=*/"\"auto\"",
+           "Convolution lowering strategy: auto, gemm, conv, winograd">,
+    Option<"gemmL2Bytes", "conv-gemm-l2-bytes", "int64_t",
+           /*default=*/"524288",
+           "L2 cache byte budget for the ncnn-style prefer-gemm heuristic">
+  ];
+}
+
 def FuseLinalgEpiloguePass
     : Pass<"fuse-linalg-epilogue", "mlir::ModuleOp"> {
   let summary =

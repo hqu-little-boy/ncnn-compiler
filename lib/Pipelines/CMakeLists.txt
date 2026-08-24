@@ -16,6 +16,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN
+    StrategyNCNN
     VectorizeNCNN
     VerifyBufferizedModel
     VerifyModelShapeContracts
