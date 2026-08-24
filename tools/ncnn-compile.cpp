@@ -258,6 +258,9 @@ struct Manifest {
   std::vector<InputDimensionRelation> input_dimension_relations;
   std::optional<PrecisionPolicy> precision_policy;
   std::optional<Target> target;
+  // 多线程产物是否依赖 OpenMP 运行时（libomp 探测失败回退 threads=1 时
+  // 为 false；探测成功为 true）。旧 manifest 无此字段。
+  std::optional<bool> openmp;
 };
 
 class ScopedDirectory {
@@ -914,6 +917,9 @@ int run(const std::vector<std::string>& command,
     target["features"] = std::move(features);
     target["execution_profile"] = manifest.target->execution_profile;
     object["target"] = std::move(target);
+  }
+  if (manifest.openmp) {
+    object["openmp"] = *manifest.openmp;
   }
   return write_file(
     path, llvm::formatv("{0:2}\n", llvm::json::Value(std::move(object))).str());
@@ -1815,6 +1821,42 @@ int main(int argc, char** argv) {
     }
   }
 
+  // libomp 探测：多线程产物链接 -lomp；sysroot 缺少 OpenMP 运行时（部分
+  // RISC-V 裸环境）要到链接阶段才失败。先行以最小探针验证 -lomp 可解析，
+  // 失败则等价回退 --threads=1 并在 manifest 标注 openmp=false。
+  unsigned effective_threads = g_threads;
+  if (g_threads != 1) {
+    const fs::path probe_source = staging.path() / "omp_probe.c";
+    const fs::path probe_library = staging.path() / "libomp_probe.so";
+    constexpr std::string_view probe_text =
+      "extern int __kmpc_global_thread_num(void *);\n"
+      "int ncnn_omp_probe(void) {\n"
+      "  return __kmpc_global_thread_num((void *)0);\n"
+      "}\n";
+    auto probe_written = write_file(probe_source, probe_text);
+    bool omp_available = probe_written.has_value();
+    if (omp_available) {
+      std::vector<std::string> probe_command{clang_path,
+                                             "-shared",
+                                             "-fPIC",
+                                             probe_source.string(),
+                                             "-o",
+                                             probe_library.string(),
+                                             "-lomp"};
+      probe_command.push_back("--target=" + effective_target_triple);
+      if (!g_sysroot.empty()) {
+        probe_command.push_back("--sysroot=" + g_sysroot);
+      }
+      omp_available =
+        run(probe_command) == 0 && fs::is_regular_file(probe_library);
+    }
+    if (!omp_available) {
+      llvm::errs() << "ncnn-compile: warning: OpenMP runtime (-lomp) not "
+                      "available for the target; falling back to threads=1\n";
+      effective_threads = 1;
+    }
+  }
+
   // 解析 MLIR 级向量化模式：off 保持历史行为；auto 由目标推导；
   // fixed-width/scalable 显式指定（lanes 可经 --vector-width 覆盖）。
   const llvm::SmallVector<llvm::StringRef, 8> target_feature_refs(
@@ -1937,8 +1979,8 @@ int main(int argc, char** argv) {
     return status;
   }
   std::string llvm_pipeline = "--ncnn-memref-to-llvm-pipeline=";
-  const bool uses_openmp = g_threads != 1;
-  llvm_pipeline += "threads=" + std::to_string(g_threads);
+  const bool uses_openmp = effective_threads != 1;
+  llvm_pipeline += "threads=" + std::to_string(effective_threads);
   if (!vector_active) {
     llvm_pipeline += " vector-size=" + std::to_string(g_vector_width / 32);
   } else {
@@ -2047,6 +2089,7 @@ int main(int argc, char** argv) {
     .features = {g_target_features.begin(), g_target_features.end()},
     .execution_profile =
       ncnn_mlir::precision_execution_profile(*policy, target_spec)};
+  manifest->openmp = uses_openmp;
   auto manifest_result = write_manifest(manifest_path, *manifest);
   if (!manifest_result) {
     return fail(manifest_result.error());

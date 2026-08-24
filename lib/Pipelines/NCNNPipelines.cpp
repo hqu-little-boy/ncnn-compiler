@@ -36,6 +36,7 @@
 #include "ncnn-mlir/Transforms/FuseLinalgEpilogue/FuseLinalgEpilogue.hpp"
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
+#include "ncnn-mlir/Transforms/RewriteLinalgCopies/RewriteLinalgCopies.hpp"
 #include "ncnn-mlir/Transforms/VectorizeNCNN/LowerVectorTransfersNCNN.hpp"
 #include "ncnn-mlir/Transforms/VectorizeNCNN/VectorizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
@@ -101,6 +102,10 @@ void buildNCNNLinalgToMemRefPipeline(
   }
 
   passManager.addPass(createBufferizeNCNNPass());
+  // bufferize 的拷贝以恒等 linalg.generic 形式存在（memCpyFn 产物）；
+  // 改写为 memref.copy，避免多线程路径把它们当作可并行 linalg op 在
+  // forall 区域内再并行化（嵌套 omp），并让尾段走更廉价的整块复制。
+  passManager.addPass(createRewriteLinalgCopiesPass());
 
   bufferization::BufferResultsToOutParamsPassOptions outParamOptions;
   outParamOptions.addResultAttribute = true;
@@ -123,23 +128,38 @@ void buildNCNNMemRefToLLVMPipeline(OpPassManager& passManager) {
 void buildNCNNMemRefToLLVMPipeline(
   OpPassManager& passManager, const NCNNMemRefToLLVMPipelineOptions& options) {
   if (options.threads != 1) {
+    // 过渡期双轨：convert-linalg-to-parallel-loops 仅服务残余 linalg op
+    // （conv/matmul/pooling，A1 接管前保持多核标量）；向量化产生的
+    // scf.forall 经上游 scf-forall-to-parallel 归一为 scf.parallel 后，
+    // 与旧路径共用同一条 OpenMP 转换。forall 转换对 shared_outs +
+    // parallel_insert_slice 的 bufferized 形态产出写不相交的
+    // scf.parallel（外层线程级并行，内层 SIMD 不受影响）。
     passManager.addPass(createConvertLinalgToParallelLoopsPass());
     passManager.addPass(createParallelLoopFusionPass());
+    passManager.addPass(createForallToParallelLoopPass());
     ConvertSCFToOpenMPPassOptions openmpOptions;
     if (options.threads > 1) {
       openmpOptions.numThreads = options.threads;
     }
     passManager.addPass(createConvertSCFToOpenMPPass(openmpOptions));
-  } else if (options.vectorSize > 0) {
-    passManager.addPass(createConvertLinalgToAffineLoopsPass());
-    affine::AffineVectorizeOptions vectorOptions;
-    vectorOptions.vectorSizes.push_back(options.vectorSize);
-    vectorOptions.vectorizeReductions = true;
-    passManager.addNestedPass<func::FuncOp>(
-      affine::createAffineVectorize(vectorOptions));
   } else {
-    passManager.addPass(createConvertLinalgToLoopsPass());
+    // 串行回退：threads=1 时 forall 无并行语义承载，先归一为 scf.for，
+    // 再进入既有的 affine 向量化或标量循环下降。
+    passManager.addPass(createForallToForLoopPass());
+    if (options.vectorSize > 0) {
+      passManager.addPass(createConvertLinalgToAffineLoopsPass());
+      affine::AffineVectorizeOptions vectorOptions;
+      vectorOptions.vectorSizes.push_back(options.vectorSize);
+      vectorOptions.vectorizeReductions = true;
+      passManager.addNestedPass<func::FuncOp>(
+        affine::createAffineVectorize(vectorOptions));
+    } else {
+      passManager.addPass(createConvertLinalgToLoopsPass());
+    }
   }
+  // 门禁断言：OpenMP/串行转换对不认识的 SCF 形态会静默跳过；任何残留的
+  // scf.forall/scf.parallel 都意味着并行性悄悄丢失，必须在此失败。
+  passManager.addPass(createVerifyNoSCFForallPass());
   passManager.addPass(createLoopInvariantCodeMotionPass());
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());

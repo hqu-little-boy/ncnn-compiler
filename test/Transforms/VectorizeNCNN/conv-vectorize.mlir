@@ -1,8 +1,11 @@
 // RUN: ncnn-mlir-opt --vectorize-ncnn=lanes=4 %s | FileCheck %s
 
-// 静态逐元素 generic 行级向量化：外层标量循环 + 最内维整行 rank-1 向量
-// （rank-1 连续 transfer 是 VectorToLLVM 的可靠下降形态）；标量 linalg
-// generic 消失。卷积的窗口仿射映射不满足前置条件，保持 Linalg 形式。
+// 静态逐元素 generic 行级向量化：除最内维外的输出维组成
+// scf.forall(shared_outs) 网格（外层线程级并行形态），最内维整行
+// rank-1 向量 transfer（rank-1 连续 transfer 是 VectorToLLVM 的可靠
+// 下降形态）；结果行经 tensor.parallel_insert_slice 落回共享输出，
+// 各迭代写不相交切片；标量 linalg generic 消失。卷积的窗口仿射映射
+// 不满足前置条件，保持 Linalg 形式。
 
 func.func @relu(%arg0: tensor<6x8xf32>) -> tensor<6x8xf32> {
   %empty = tensor.empty() : tensor<6x8xf32>
@@ -17,10 +20,13 @@ func.func @relu(%arg0: tensor<6x8xf32>) -> tensor<6x8xf32> {
 
 // CHECK-LABEL: func.func @relu
 // CHECK-NOT: linalg.generic
-// CHECK: scf.for
+// CHECK: scf.forall
+// CHECK-SAME: shared_outs
 // CHECK: vector.transfer_read {{.*}} vector<8xf32>
 // CHECK: arith.maximumf {{.*}} vector<8xf32>
 // CHECK: vector.transfer_write {{.*}} vector<8xf32>
+// CHECK: scf.forall.in_parallel {
+// CHECK: tensor.parallel_insert_slice
 
 func.func @conv2d(%arg0: tensor<1x8x34x3xf32>) -> tensor<1x6x32x4xf32> {
   %cst = arith.constant dense<1.0> : tensor<3x3x3x4xf32>

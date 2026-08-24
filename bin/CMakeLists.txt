@@ -19,6 +19,7 @@ endif()
 set_target_properties(ncnn-mlir-opt PROPERTIES ${NCNN_EXEC_RPATH_PROPERTIES})
 target_link_libraries(ncnn-mlir-opt PRIVATE
     BufferizeNCNN
+    RewriteLinalgCopies
     GenerateCAPI
     NCNNDialect
     NCNNToFunc
@@ -29,6 +30,7 @@ target_link_libraries(ncnn-mlir-opt PRIVATE
     VerifyModelShapeContracts
     VerifyNoNCNNOps
     VerifyNoTosaOps
+    VerifyNoSCFForall
     MLIRMlirOptMain
     MLIR
     LLVM)

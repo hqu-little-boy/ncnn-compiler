@@ -8,6 +8,7 @@ target_include_directories(NCNNPipelines PUBLIC
 target_compile_options(NCNNPipelines PRIVATE -fno-rtti)
 target_link_libraries(NCNNPipelines PUBLIC
     BufferizeNCNN
+    RewriteLinalgCopies
     FoldLinalgConstantTranspose
     FoldNCNNBatchNorm
     FuseLinalgEpilogue
@@ -20,6 +21,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     VerifyModelShapeContracts
     VerifyNoNCNNOps
     VerifyNoTosaOps
+    VerifyNoSCFForall
     MLIRFuncDialect
     MLIRBufferizationPipelines
     MLIRBufferizationTransforms

@@ -26,6 +26,12 @@ def BufferizeNCNNPass : Pass<"bufferize-ncnn", "mlir::ModuleOp"> {
   ];
 }
 
+def RewriteLinalgCopiesPass : Pass<"rewrite-linalg-copies", "mlir::ModuleOp"> {
+  let summary =
+    "Rewrite identity linalg.generic copies into sequential copy loops";
+  let dependentDialects = ["linalg::LinalgDialect", "memref::MemRefDialect"];
+}
+
 def GenerateCAPIPass : Pass<"generate-ncnn-c-api", "mlir::ModuleOp"> {
   let summary = "Prepare a typed model-specific C ABI for an ncnn entry";
   let dependentDialects = ["LLVM::LLVMDialect"];
@@ -120,6 +126,12 @@ def VerifyNoNCNNOpsPass : Pass<"verify-no-ncnn-ops", "mlir::ModuleOp"> {
 
 def VerifyNoTosaOpsPass : Pass<"verify-no-tosa-ops", "mlir::ModuleOp"> {
   let summary = "Fail if any TOSA dialect operation remains";
+}
+
+def VerifyNoSCFForallPass : Pass<"verify-no-scf-forall", "mlir::ModuleOp"> {
+  let summary =
+    "Fail if any SCF forall or parallel loop remains after parallel lowering";
+  let dependentDialects = ["scf::SCFDialect"];
 }
 
 #endif

@@ -1,7 +1,7 @@
 #include "ncnn-mlir/Transforms/VectorizeNCNN/VectorizeNCNN.hpp"
 
 #include <cstdint>
-#include <functional>
+#include <optional>
 
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -36,10 +36,14 @@ bool isLiftableElementwise(Operation& operation) {
 }
 
 // 行级向量化：静态、恒等映射的纯逐元素 generic 改写为
-// 外层标量 scf.for 嵌套 + 最内维整行 rank-1 vector.transfer_read /
-// 向量化 body / vector.transfer_write。rank-1 连续 transfer 是
-// VectorToLLVM 的可靠下降形态；行宽由最内维 extent 决定，寄存器宽度
-// 由 LLVM 合法化拆分。动态 shape 与非恒等映射实例保持标量。
+// scf.forall(shared_outs) 网格（除最内维外的全部输出维）+ 最内维整行
+// rank-1 vector.transfer_read / 向量化 body。每个迭代把结果行写入私有
+// 行张量，再经 tensor.parallel_insert_slice 落回共享输出——各迭代写
+// 不相交切片，bufferize 后即 OpenMP 安全的外层线程并行形态，与内层
+// SIMD 正交叠加（外层 OpenMP × 内层 SIMD）。rank-1 连续 transfer 保持
+// VectorToLLVM 的可靠下降形态；行宽由最内维 extent 决定，寄存器宽度由
+// LLVM 合法化拆分。rank-1 张量没有可并行的外层维，保持串行直写；动态
+// shape 与非恒等映射实例保持标量。
 LogicalResult vectorizeElementwiseRows(MLIRContext* context, ModuleOp module) {
   SmallVector<linalg::GenericOp> candidates;
   module.walk([&](linalg::GenericOp generic) {
@@ -91,113 +95,152 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context, ModuleOp module) {
     Value resultBuffer =
       rewriter.create<tensor::EmptyOp>(location, shape, elementType);
 
-    SmallVector<Value> indexZero;
-    indexZero.reserve(rank);
-    for (int64_t dimension = 0; dimension < rank; ++dimension) {
-      indexZero.push_back(rewriter.create<arith::ConstantIndexOp>(location, 0));
-    }
-
     auto& genericBlock = generic.getRegion().front();
     linalg::YieldOp genericYield =
       cast<linalg::YieldOp>(genericBlock.getTerminator());
 
-    // 递归构造循环嵌套；最内层生成整行向量读写与向量化 body。
-    // 返回该层级写出的最新 tensor（函数式语义下逐次串联）。
-    std::function<Value(int64_t, SmallVector<Value>, Value)> buildLevel =
-      [&](
-        int64_t level, SmallVector<Value> indices, Value accumulator) -> Value {
-      if (level == rank - 1) {
-        VectorType rowType = VectorType::get(shape.back(), elementType);
-        // in_bounds 与向量秩一致（rank-1 行读取）。
-        SmallVector<bool> inBounds(1, true);
-        IRMapping mapping;
+    // 最内层：生成整行向量读写与向量化 body，返回该行的结果向量。
+    // 调用方负责设定插入点。body 引用的外部标量值提升为整行 splat，
+    // 并缓存复用。
+    auto buildRowVector = [&](ValueRange indices) -> Value {
+      VectorType rowType = VectorType::get(shape.back(), elementType);
+      SmallVector<bool> inBounds(1, true);
+      IRMapping mapping;
 
-        // body 引用的外部标量值提升为整行 splat，并缓存复用。
-        auto resolveOperand = [&](Value value) -> Value {
-          if (mapping.contains(value)) {
-            return mapping.lookup(value);
-          }
-          Value splat =
-            rewriter.create<vector::SplatOp>(location, rowType, value);
-          mapping.map(value, splat);
-          return splat;
-        };
-
-        unsigned inputIndex = 0;
-        for (Value input : generic.getInputs()) {
-          mapping.map(genericBlock.getArgument(inputIndex),
-                      rewriter.create<vector::TransferReadOp>(
-                        location,
-                        rowType,
-                        input,
-                        indices,
-                        rewriter.create<ub::PoisonOp>(location, elementType),
-                        inBounds));
-          ++inputIndex;
+      auto resolveOperand = [&](Value value) -> Value {
+        if (mapping.contains(value)) {
+          return mapping.lookup(value);
         }
-        mapping.map(genericBlock.getArgument(generic.getInputs().size()),
+        Value splat =
+          rewriter.create<vector::SplatOp>(location, rowType, value);
+        mapping.map(value, splat);
+        return splat;
+      };
+
+      unsigned inputIndex = 0;
+      for (Value input : generic.getInputs()) {
+        mapping.map(genericBlock.getArgument(inputIndex),
                     rewriter.create<vector::TransferReadOp>(
                       location,
                       rowType,
-                      generic.getDpsInitOperand(0)->get(),
+                      input,
                       indices,
                       rewriter.create<ub::PoisonOp>(location, elementType),
                       inBounds));
-
-        Value current;
-        for (Operation& operation : genericBlock.without_terminator()) {
-          if (isa<arith::ConstantOp>(operation)) {
-            auto constant = cast<arith::ConstantOp>(operation);
-            Value splat = rewriter.create<arith::ConstantOp>(
-              location,
-              rowType,
-              DenseElementsAttr::get(rowType, constant.getValue()));
-            mapping.map(constant.getResult(), splat);
-            continue;
-          }
-          SmallVector<Value> operands;
-          operands.reserve(operation.getNumOperands());
-          for (Value operand : operation.getOperands()) {
-            operands.push_back(resolveOperand(operand));
-          }
-          OperationState state(location, operation.getName());
-          state.addOperands(operands);
-          state.addTypes(SmallVector<Type>(operation.getNumResults(), rowType));
-          state.addAttributes(SmallVector<NamedAttribute>(
-            operation.getAttrs().begin(), operation.getAttrs().end()));
-          Operation* lifted = rewriter.create(state);
-          for (auto [oldResult, newResult] :
-               llvm::zip(operation.getResults(), lifted->getResults())) {
-            mapping.map(oldResult, newResult);
-          }
-          current = lifted->getResult(0);
-        }
-        current = mapping.lookup(genericYield.getValues().front());
-        return rewriter
-          .create<vector::TransferWriteOp>(
-            location, current, accumulator, indices, inBounds)
-          .getResult();
+        ++inputIndex;
       }
+      mapping.map(genericBlock.getArgument(generic.getInputs().size()),
+                  rewriter.create<vector::TransferReadOp>(
+                    location,
+                    rowType,
+                    generic.getDpsInitOperand(0)->get(),
+                    indices,
+                    rewriter.create<ub::PoisonOp>(location, elementType),
+                    inBounds));
 
-      Value lowerBound = rewriter.create<arith::ConstantIndexOp>(location, 0);
-      Value upperBound =
-        rewriter.create<arith::ConstantIndexOp>(location, shape[level]);
-      Value step = rewriter.create<arith::ConstantIndexOp>(location, 1);
-      auto loop = rewriter.create<scf::ForOp>(
-        location, lowerBound, upperBound, step, ValueRange{accumulator});
-      rewriter.setInsertionPointToStart(loop.getBody());
-      SmallVector<Value> nextIndices(indices);
-      nextIndices[level] = loop.getInductionVar();
-      Value updated =
-        buildLevel(level + 1, nextIndices, loop.getRegionIterArg(0));
-      rewriter.setInsertionPointAfter(loop);
-      rewriter.setInsertionPointToEnd(loop.getBody());
-      rewriter.create<scf::YieldOp>(location, updated);
-      return loop.getResult(0);
+      Value current;
+      for (Operation& operation : genericBlock.without_terminator()) {
+        if (isa<arith::ConstantOp>(operation)) {
+          auto constant = cast<arith::ConstantOp>(operation);
+          Value splat = rewriter.create<arith::ConstantOp>(
+            location,
+            rowType,
+            DenseElementsAttr::get(rowType, constant.getValue()));
+          mapping.map(constant.getResult(), splat);
+          continue;
+        }
+        SmallVector<Value> operands;
+        operands.reserve(operation.getNumOperands());
+        for (Value operand : operation.getOperands()) {
+          operands.push_back(resolveOperand(operand));
+        }
+        OperationState state(location, operation.getName());
+        state.addOperands(operands);
+        state.addTypes(SmallVector<Type>(operation.getNumResults(), rowType));
+        state.addAttributes(SmallVector<NamedAttribute>(
+          operation.getAttrs().begin(), operation.getAttrs().end()));
+        Operation* lifted = rewriter.create(state);
+        for (auto [oldResult, newResult] :
+             llvm::zip(operation.getResults(), lifted->getResults())) {
+          mapping.map(oldResult, newResult);
+        }
+        current = lifted->getResult(0);
+      }
+      return mapping.lookup(genericYield.getValues().front());
     };
 
-    Value accumulated = buildLevel(0, indexZero, resultBuffer);
-    rewriter.replaceOp(generic, accumulated);
+    if (rank == 1) {
+      // 无外层维可并行：串行直写（历史形态）。
+      SmallVector<Value> indexZero{
+        rewriter.create<arith::ConstantIndexOp>(location, 0)};
+      Value rowVector = buildRowVector(indexZero);
+      Value updated =
+        rewriter
+          .create<vector::TransferWriteOp>(location,
+                                           rowVector,
+                                           resultBuffer,
+                                           indexZero,
+                                           SmallVector<bool>(1, true))
+          .getResult();
+      rewriter.replaceOp(generic, updated);
+      continue;
+    }
+
+    // 除最内维外的全部输出维组成 forall 网格，每迭代处理一行。
+    SmallVector<OpFoldResult> upperBounds;
+    for (int64_t dimension = 0; dimension < rank - 1; ++dimension) {
+      upperBounds.push_back(rewriter.getIndexAttr(shape[dimension]));
+    }
+    auto forall = rewriter.create<scf::ForallOp>(
+      location, upperBounds, ValueRange{resultBuffer}, std::nullopt);
+
+    Block* body = &forall.getRegion().front();
+    const unsigned gridRank = rank - 1;
+    Value sharedOut = body->getArgument(gridRank);
+    rewriter.setInsertionPointToStart(body);
+
+    SmallVector<Value> gridIndices;
+    llvm::append_range(gridIndices, forall.getInductionVars());
+    gridIndices.push_back(rewriter.create<arith::ConstantIndexOp>(location, 0));
+    Value rowVector = buildRowVector(gridIndices);
+
+    // 私有行张量 [1,...,1,D]：先写满，再在 in_parallel 终结符里以
+    // parallel_insert_slice 落回共享输出（forall 要求共享写只出现在
+    // in_parallel 内，保证各迭代写不相交切片）。行张量内部的写入索
+    // 引是全零——网格索引只用于 insert_slice 的外层定位。
+    SmallVector<int64_t> tileShape(rank, 1);
+    tileShape.back() = shape.back();
+    Value emptyTile =
+      rewriter.create<tensor::EmptyOp>(location, tileShape, elementType);
+    Value tileZeroIndex = rewriter.create<arith::ConstantIndexOp>(location, 0);
+    SmallVector<Value> tileIndices(rank, tileZeroIndex);
+    Value rowTensor =
+      rewriter
+        .create<vector::TransferWriteOp>(location,
+                                         rowVector,
+                                         emptyTile,
+                                         tileIndices,
+                                         SmallVector<bool>(1, true))
+        .getResult();
+
+    SmallVector<OpFoldResult> offsets;
+    SmallVector<OpFoldResult> sizes;
+    SmallVector<OpFoldResult> strides;
+    for (unsigned dimension = 0; dimension < gridRank; ++dimension) {
+      offsets.push_back(OpFoldResult(forall.getInductionVars()[dimension]));
+      sizes.push_back(rewriter.getIndexAttr(1));
+      strides.push_back(rewriter.getIndexAttr(1));
+    }
+    offsets.push_back(rewriter.getIndexAttr(0));
+    sizes.push_back(rewriter.getIndexAttr(shape.back()));
+    strides.push_back(rewriter.getIndexAttr(1));
+
+    scf::InParallelOp inParallel = forall.getTerminator();
+    rewriter.setInsertionPointToEnd(&inParallel.getRegion().front());
+    rewriter.create<tensor::ParallelInsertSliceOp>(
+      location, rowTensor, sharedOut, offsets, sizes, strides);
+
+    rewriter.replaceOp(generic, forall.getResults());
   }
   return success();
 }
@@ -214,7 +257,7 @@ class VectorizeNCNNPass final
       return;
     }
 
-    // 阶段一：静态逐元素 generic 行级向量化为 rank-1 vector op。
+    // 阶段一：静态逐元素 generic 行级向量化为 forall 网格 + rank-1 vector op。
     if (failed(vectorizeElementwiseRows(&getContext(), module))) {
       signalPassFailure();
       return;

@@ -50,6 +50,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             list(APPEND clang_args --clang-arg ${CMAKE_MATCH_1})
         elseif(argument MATCHES "^LINKER_ARG=(.+)$")
             list(APPEND linker_args --linker-arg ${CMAKE_MATCH_1})
+        elseif(argument MATCHES "^VECTOR_MODE=(.+)$")
+            list(APPEND precision_args --vector-mode ${CMAKE_MATCH_1})
         elseif(argument MATCHES "^INPUT_SHAPE=(.+)$")
             list(APPEND additional_input_shapes ${CMAKE_MATCH_1})
         elseif(argument STREQUAL "EMIT_IR")
@@ -596,6 +598,14 @@ ncnn_add_compiled_fixture(
     sigmoid
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
     ${empty_bin})
+# A3 守护夹具：MLIR 级向量化 + 默认多线程（threads=0 → OpenMP），
+# 覆盖 scf.forall(shared_outs) → OpenMP 与内层 SIMD 的组合路径。
+ncnn_add_compiled_fixture(
+    sigmoid_vector_fixed
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
+    ${empty_bin}
+    ""
+    VECTOR_MODE=fixed-width)
 ncnn_add_compiled_fixture(
     relu_dynamic
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/relu_dynamic.param
@@ -1645,6 +1655,7 @@ target_include_directories(numerical_test_support PUBLIC
 target_link_libraries(numerical_test_support PUBLIC ncnn GTest::gtest)
 
 add_executable(numerical_tests
+    operators/vectorized_ops_test.cpp
     operators/supported_ops_test.cpp
     operators/int8_ops_test.cpp
     models/squeezenet_test.cpp
@@ -1837,6 +1848,7 @@ target_compile_definitions(numerical_tests PRIVATE
     DECONVOLUTION_NO_BIAS_LIBRARY_PATH="${deconvolution_no_bias_LIBRARY}"
     DECONVOLUTION_TINY_HEAD_LIBRARY_PATH="${deconvolution_tiny_head_LIBRARY}"
     SIGMOID_LIBRARY_PATH="${sigmoid_LIBRARY}"
+    SIGMOID_VECTOR_FIXED_LIBRARY_PATH="${sigmoid_vector_fixed_LIBRARY}"
     DETECTION_OUTPUT_LIBRARY_PATH="${detection_output_LIBRARY}"
     SQUEEZENET_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param"
     SQUEEZENET_BIN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin"
@@ -2014,6 +2026,8 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_FORMULANET_PLUS_S_DECODER_TOSA_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/model.tosa.mlir"
     PP_FORMULANET_PLUS_S_DECODER_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/model.linalg.mlir")
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
+add_dependencies(numerical_tests compile_sigmoid)
+add_dependencies(numerical_tests compile_sigmoid_vector_fixed)
 add_dependencies(numerical_tests compile_resnet18)
 add_dependencies(numerical_tests compile_resnet34)
 add_dependencies(numerical_tests compile_resnet50)
@@ -2047,6 +2061,8 @@ add_dependencies(numerical_tests
     compile_concat_rank4
     compile_eltwise_weighted)
 add_dependencies(numerical_tests compile_detection_output)
+# A3 守护夹具：scf.forall(shared_outs) → OpenMP × 内层 SIMD 组合路径。
+add_dependencies(numerical_tests compile_sigmoid_vector_fixed)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori_int8)
 add_dependencies(numerical_tests

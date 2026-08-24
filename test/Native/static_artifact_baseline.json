@@ -9,7 +9,7 @@
         "files": {
           "librelu_all.so": 13720,
           "relu_all.h": 1217,
-          "relu_all.json": 534
+          "relu_all.json": 553
         },
         "manifest": {
           "function": "relu_all",
@@ -44,7 +44,8 @@
                 5
               ]
             }
-          ]
+          ],
+          "openmp": false
         }
       }
     }
