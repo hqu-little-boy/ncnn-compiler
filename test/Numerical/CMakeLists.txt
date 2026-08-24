@@ -278,6 +278,14 @@ ncnn_add_compiled_fixture(
     convolution_scalar
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
     ${convolution_bin})
+# A3 守护夹具：conv→matmul 策略 + MLIR 向量化 + 默认 OpenMP 多线程，
+# 覆盖 tile-matmul-forall / forallize-disjoint-tile-loops 的组合路径。
+ncnn_add_compiled_fixture(
+    convolution_vector_fixed
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution.param
+    ${convolution_bin}
+    ""
+    VECTOR_MODE=fixed-width)
 ncnn_add_compiled_fixture(
     convolution_no_bias
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_no_bias.param
@@ -1401,6 +1409,7 @@ set(numerical_fixture_targets
     compile_gemm_int8_term2
     compile_int8_complete_chain
     compile_convolution_scalar
+    compile_convolution_vector_fixed
     compile_convolution_no_bias
     compile_convolution_dilated
     compile_convolution_asymmetric
@@ -1800,6 +1809,7 @@ target_compile_definitions(numerical_tests PRIVATE
     REDUCTION_MEAN_LIBRARY_PATH="${reduction_mean_LIBRARY}"
     REDUCTION_MEAN_KEEPDIMS_COEFF_LIBRARY_PATH="${reduction_mean_keepdims_coeff_LIBRARY}"
     CONVOLUTION_LIBRARY_PATH="${convolution_scalar_LIBRARY}"
+    CONVOLUTION_VECTOR_FIXED_LIBRARY_PATH="${convolution_vector_fixed_LIBRARY}"
     RELU_LIBRARY_PATH="${relu_scalar_LIBRARY}"
     RELU_LEAKY_LIBRARY_PATH="${relu_leaky_LIBRARY}"
     POOLING_LIBRARY_PATH="${pooling_scalar_LIBRARY}"

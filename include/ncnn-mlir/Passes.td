@@ -161,4 +161,28 @@ def VerifyNoSCFForallPass : Pass<"verify-no-scf-forall", "mlir::ModuleOp"> {
   let dependentDialects = ["scf::SCFDialect"];
 }
 
+def TileMatmulForallPass : Pass<"tile-matmul-forall", "mlir::ModuleOp"> {
+  let summary =
+    "Tile top-level static matmuls into scf.forall grids along M/N";
+  let dependentDialects = [
+    "arith::ArithDialect", "linalg::LinalgDialect", "scf::SCFDialect",
+    "tensor::TensorDialect"
+  ];
+  let options = [
+    Option<"tileRows", "tile-rows", "int64_t", /*default=*/"32",
+           "Row (M) tile size; K contraction is never tiled">,
+    Option<"tileColumns", "tile-columns", "int64_t", /*default=*/"32",
+           "Column (N) tile size">
+  ];
+}
+
+def ForallizeDisjointTileLoopsPass
+    : Pass<"forallize-disjoint-tile-loops", "mlir::ModuleOp"> {
+  let summary =
+    "Rewrite disjoint-window tiled scf.for loops into shared_outs scf.forall";
+  let dependentDialects = ["arith::ArithDialect", "scf::SCFDialect",
+                           "tensor::TensorDialect"];
+}
+
+
 #endif

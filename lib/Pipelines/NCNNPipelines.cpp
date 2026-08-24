@@ -33,11 +33,13 @@
 #include "ncnn-mlir/Transforms/BufferizeNCNN/BufferizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/FoldLinalgConstantTranspose/FoldLinalgConstantTranspose.hpp"
 #include "ncnn-mlir/Transforms/FoldNCNNBatchNorm/FoldNCNNBatchNorm.hpp"
+#include "ncnn-mlir/Transforms/ForallizeDisjointTileLoops/ForallizeDisjointTileLoops.hpp"
 #include "ncnn-mlir/Transforms/FuseLinalgEpilogue/FuseLinalgEpilogue.hpp"
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/RewriteLinalgCopies/RewriteLinalgCopies.hpp"
 #include "ncnn-mlir/Transforms/StrategyNCNN/StrategyNCNN.hpp"
+#include "ncnn-mlir/Transforms/TileMatmulForall/TileMatmulForall.hpp"
 #include "ncnn-mlir/Transforms/VectorizeNCNN/LowerVectorTransfersNCNN.hpp"
 #include "ncnn-mlir/Transforms/VectorizeNCNN/VectorizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
@@ -96,11 +98,16 @@ void buildNCNNLinalgToMemRefPipeline(OpPassManager& passManager) {
 void buildNCNNLinalgToMemRefPipeline(
   OpPassManager& passManager,
   const NCNNLinalgToMemRefPipelineOptions& options) {
+  // 并行化单轨化（T4b 配套）：顶层 matmul 沿 M/N 切进 forall 网格，
+  // epilogue 分块循环改写为 shared_outs forall——两者都在向量化之前
+  // 完成，体内 generic 随后照常被行级向量化。K 维全程不被切分。
+  passManager.addPass(createTileMatmulForallPass());
+  passManager.addPass(createForallizeDisjointTileLoopsPass());
+  passManager.addPass(createCanonicalizerPass());
+  passManager.addPass(createCSEPass());
   if (options.vectorLanes > 0) {
     // 向量化阶段：tensor 层先于 bufferize（Bufferization.md 指南），vector op
     // 由已注册的 BufferizableOpInterface 外部模型消费。
-    passManager.addPass(createCanonicalizerPass());
-    passManager.addPass(createCSEPass());
     VectorizeNCNNPassOptions vectorizeOptions;
     vectorizeOptions.lanes = options.vectorLanes;
     vectorizeOptions.scalable = options.vectorScalable;
@@ -136,14 +143,13 @@ void buildNCNNMemRefToLLVMPipeline(OpPassManager& passManager) {
 void buildNCNNMemRefToLLVMPipeline(
   OpPassManager& passManager, const NCNNMemRefToLLVMPipelineOptions& options) {
   if (options.threads != 1) {
-    // 过渡期双轨：convert-linalg-to-parallel-loops 仅服务残余 linalg op
-    // （conv/matmul/pooling，A1 接管前保持多核标量）；向量化产生的
-    // scf.forall 经上游 scf-forall-to-parallel 归一为 scf.parallel 后，
-    // 与旧路径共用同一条 OpenMP 转换。forall 转换对 shared_outs +
-    // parallel_insert_slice 的 bufferized 形态产出写不相交的
-    // scf.parallel（外层线程级并行，内层 SIMD 不受影响）。
+    // 并行化发射：张量级 tile-matmul-forall / forallize-disjoint-tile-
+    // loops 已产出分块 forall；本处对残余 linalg（含 forall 区域内的
+    // 分块 matmul）用上游全域并行化降为 scf.parallel 后统一进 OpenMP。
+    // 区域内产生的嵌套 omp 团队在 libomp 默认非嵌套语义下自动串行化，
+    // 正确性与 K 归约序不受影响；其彻底消除待区域内部改走显式循环后
+    // （后续迭代）完成。
     passManager.addPass(createConvertLinalgToParallelLoopsPass());
-    passManager.addPass(createParallelLoopFusionPass());
     passManager.addPass(createForallToParallelLoopPass());
     ConvertSCFToOpenMPPassOptions openmpOptions;
     if (options.threads > 1) {

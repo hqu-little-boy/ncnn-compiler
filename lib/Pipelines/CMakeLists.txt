@@ -16,7 +16,9 @@ target_link_libraries(NCNNPipelines PUBLIC
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN
+    ForallizeDisjointTileLoops
     StrategyNCNN
+    TileMatmulForall
     VectorizeNCNN
     VerifyBufferizedModel
     VerifyModelShapeContracts

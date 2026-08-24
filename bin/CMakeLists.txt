@@ -30,6 +30,8 @@ target_link_libraries(ncnn-mlir-opt PRIVATE
     VerifyModelShapeContracts
     VerifyNoNCNNOps
     VerifyNoTosaOps
+    TileMatmulForall
+    ForallizeDisjointTileLoops
     VerifyNoSCFForall
     MLIRMlirOptMain
     MLIR

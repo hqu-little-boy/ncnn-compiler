@@ -49,6 +49,35 @@ TEST(NumericalOperator, SigmoidVectorizedOpenMPMatchesScalarBitwise) {
   EXPECT_TRUE(compare_values(vectorized_output, scalar_output, 0.0F));
 }
 
+// conv→matmul 策略路径的守护：卷积经 strategy-ncnn 折叠为 matmul 后，
+// tile-matmul-forall 的分块融合与 forallize-disjoint-tile-loops 的
+// epilogue 并行化必须保持与标量产物逐位一致（K 维归约序不变）。
+TEST(NumericalOperator, ConvolutionVectorizedOpenMPMatchesScalarBitwise) {
+  const TensorShape shape(4, 4, 1);
+  const ReferenceModel reference(
+    fixture_path("convolution"), CONVOLUTION_BIN_PATH, "data", "output", shape);
+  const auto inputElements = shape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x434F4E56U);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel scalar(CONVOLUTION_LIBRARY_PATH, "convolution_scalar");
+  ASSERT_TRUE(scalar.valid()) << scalar.error();
+  std::vector<float> scalar_output(32);
+  ASSERT_EQ(scalar.run(input, scalar_output), 0);
+
+  CompiledModel vectorized(CONVOLUTION_VECTOR_FIXED_LIBRARY_PATH,
+                           "convolution_vector_fixed");
+  ASSERT_TRUE(vectorized.valid()) << vectorized.error();
+  std::vector<float> vectorized_output(32);
+  ASSERT_EQ(vectorized.run(input, vectorized_output), 0);
+
+  EXPECT_TRUE(compare_values(vectorized_output, *expected, 1.0e-5F));
+  EXPECT_TRUE(compare_values(vectorized_output, scalar_output, 0.0F));
+}
+
 }  // namespace
 
 }  // namespace ncnn_compiler::test
