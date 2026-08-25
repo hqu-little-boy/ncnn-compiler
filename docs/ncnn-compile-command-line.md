@@ -332,7 +332,40 @@ ncnn-compile model.param --conv-strategy=auto
 `--conv-gemm-l2-bytes` 覆盖启发式中的 L2 缓存字节预算（默认 `524288`，即 512 KiB）。
 数值上 im2col 路径改变累加顺序（ULP 级差异），由全量数值黄金测试按既定预算验收。
 
-### 3.5 `-g` 和 `--debug-info`
+### 3.5 `--vector-math=<mode>`
+
+控制超越函数（expf/tanhf/erff/logf/powf）在向量 IR 中的下降后端，默认
+`auto`：
+
+```bash
+ncnn-compile model.param --vector-mode=auto --vector-math=auto   # 默认
+ncnn-compile model.param --vector-mode=auto --vector-math=libmvec
+ncnn-compile model.param --vector-mode=auto --vector-math=sleef
+ncnn-compile model.param --vector-math=none                      # 历史标量路径
+```
+
+取值语义：
+
+| 取值 | 行为 |
+|---|---|
+| `auto`（默认） | 探测目标 sysroot 的 libmvec；可用则直连，否则静默降级 vendored SLEEF 静态档案，再退 `none` |
+| `libmvec` | 显式 glibc libmvec。探测不可用时**报错退出**——点名即兑现 |
+| `sleef` | 显式 vendored SLEEF（`third_party/sleef` 构建出的静态档案）；档案缺失时报错退出 |
+| `none` | 保持历史行为：MathToLibm 标量 libcall |
+
+探测以 `-Wl,-z,defs -lm` 编译引用全部五个 `_ZGV` 符号的探针：glibc 的
+libm linker script 会按需带入 `libmvec.so.1`（产物自动获得该 DT_NEEDED），
+musl/旧 glibc 直接失败。libmvec 变体绑定编译期 ISA（显式 feature/march
+提示推导 `_ZGV{b,c,d,e}N{4,8,16}` 与 AArch64 `_ZGVnN4`）；SLEEF 入口
+（如 `Sleef_expf8_u10`）内部自带运行时 ISA 分发。
+
+部署契约：产物携带编译期解析的符号版本引用。"目标支持但部署机更旧"由构
+建方以 `--sysroot` 指向对应环境重编解决，编译器不补偿。libmvec 的
+tanh/erf 向量变体要求 x86-64 glibc ≥ 2.35、AArch64 ≥ 2.40；exp 类要求
+x86-64 ≥ 2.22、AArch64 ≥ 2.38。musl 无 libmvec。SLEEF 路径为静态编入，
+无运行时库要求。erfcf 无向量变体，任何后端下保持标量。
+
+### 3.6 `-g` 和 `--debug-info`
 
 让 Clang 在目标文件和动态库中生成调试信息：
 

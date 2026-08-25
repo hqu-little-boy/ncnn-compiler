@@ -78,6 +78,49 @@ TEST(NumericalOperator, ConvolutionVectorizedOpenMPMatchesScalarBitwise) {
   EXPECT_TRUE(compare_values(vectorized_output, scalar_output, 0.0F));
 }
 
+// 向量数学后端守护（--vector-math）：sigmoid 的 exp 经 libmvec /
+// vendored SLEEF 向量调用，属近似实现。数值契约改为对齐 ncnn FP32 参考
+// 容差（1e-6），不再要求与标量产物逐位一致；两后端之间也只比对参考。
+TEST(NumericalOperator, SigmoidVectorMathLibmvecMatchesReference) {
+  const TensorShape shape(5, 2, 2);
+  constexpr std::array<float, 20> input{
+    -20.0F, -10.0F, -6.0F, -3.0F, -1.0F, -0.5F, -0.1F, 0.0F,  0.1F,  0.5F,
+    1.0F,   2.0F,   3.0F,  4.0F,  5.0F,  6.0F,  8.0F,  10.0F, 15.0F, 20.0F};
+
+  const ReferenceModel reference(
+    fixture_path("sigmoid"), NUMERICAL_EMPTY_BIN_PATH, "data", "output", shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel vectorized(SIGMOID_VECTOR_LMV_LIBRARY_PATH,
+                           "sigmoid_vector_lmv");
+  ASSERT_TRUE(vectorized.valid()) << vectorized.error();
+  std::vector<float> vectorized_output(input.size());
+  ASSERT_EQ(vectorized.run(input, vectorized_output), 0);
+
+  EXPECT_TRUE(compare_values(vectorized_output, *expected, 1.0e-6F));
+}
+
+TEST(NumericalOperator, SigmoidVectorMathSleefMatchesReference) {
+  const TensorShape shape(5, 2, 2);
+  constexpr std::array<float, 20> input{
+    -20.0F, -10.0F, -6.0F, -3.0F, -1.0F, -0.5F, -0.1F, 0.0F,  0.1F,  0.5F,
+    1.0F,   2.0F,   3.0F,  4.0F,  5.0F,  6.0F,  8.0F,  10.0F, 15.0F, 20.0F};
+
+  const ReferenceModel reference(
+    fixture_path("sigmoid"), NUMERICAL_EMPTY_BIN_PATH, "data", "output", shape);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel vectorized(SIGMOID_VECTOR_SLEEF_LIBRARY_PATH,
+                           "sigmoid_vector_sleef");
+  ASSERT_TRUE(vectorized.valid()) << vectorized.error();
+  std::vector<float> vectorized_output(input.size());
+  ASSERT_EQ(vectorized.run(input, vectorized_output), 0);
+
+  EXPECT_TRUE(compare_values(vectorized_output, *expected, 1.0e-6F));
+}
+
 }  // namespace
 
 }  // namespace ncnn_compiler::test

@@ -52,6 +52,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             list(APPEND linker_args --linker-arg ${CMAKE_MATCH_1})
         elseif(argument MATCHES "^VECTOR_MODE=(.+)$")
             list(APPEND precision_args --vector-mode ${CMAKE_MATCH_1})
+        elseif(argument MATCHES "^VECTOR_MATH=(.+)$")
+            list(APPEND precision_args --vector-math ${CMAKE_MATCH_1})
         elseif(argument MATCHES "^INPUT_SHAPE=(.+)$")
             list(APPEND additional_input_shapes ${CMAKE_MATCH_1})
         elseif(argument STREQUAL "EMIT_IR")
@@ -614,6 +616,22 @@ ncnn_add_compiled_fixture(
     ${empty_bin}
     ""
     VECTOR_MODE=fixed-width)
+# 向量数学后端守护夹具：同一激活分别走 libmvec 与 vendored SLEEF，
+# 验证近似实现相对 ncnn FP32 参考的容差契约（非逐位）。
+ncnn_add_compiled_fixture(
+    sigmoid_vector_lmv
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
+    ${empty_bin}
+    ""
+    VECTOR_MODE=fixed-width
+    VECTOR_MATH=libmvec)
+ncnn_add_compiled_fixture(
+    sigmoid_vector_sleef
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/sigmoid.param
+    ${empty_bin}
+    ""
+    VECTOR_MODE=fixed-width
+    VECTOR_MATH=sleef)
 ncnn_add_compiled_fixture(
     relu_dynamic
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/relu_dynamic.param
@@ -1859,6 +1877,8 @@ target_compile_definitions(numerical_tests PRIVATE
     DECONVOLUTION_TINY_HEAD_LIBRARY_PATH="${deconvolution_tiny_head_LIBRARY}"
     SIGMOID_LIBRARY_PATH="${sigmoid_LIBRARY}"
     SIGMOID_VECTOR_FIXED_LIBRARY_PATH="${sigmoid_vector_fixed_LIBRARY}"
+    SIGMOID_VECTOR_LMV_LIBRARY_PATH="${sigmoid_vector_lmv_LIBRARY}"
+    SIGMOID_VECTOR_SLEEF_LIBRARY_PATH="${sigmoid_vector_sleef_LIBRARY}"
     DETECTION_OUTPUT_LIBRARY_PATH="${detection_output_LIBRARY}"
     SQUEEZENET_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param"
     SQUEEZENET_BIN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin"
@@ -2038,6 +2058,8 @@ target_compile_definitions(numerical_tests PRIVATE
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_sigmoid)
 add_dependencies(numerical_tests compile_sigmoid_vector_fixed)
+add_dependencies(numerical_tests compile_sigmoid_vector_lmv)
+add_dependencies(numerical_tests compile_sigmoid_vector_sleef)
 add_dependencies(numerical_tests compile_resnet18)
 add_dependencies(numerical_tests compile_resnet34)
 add_dependencies(numerical_tests compile_resnet50)
@@ -2073,6 +2095,8 @@ add_dependencies(numerical_tests
 add_dependencies(numerical_tests compile_detection_output)
 # A3 守护夹具：scf.forall(shared_outs) → OpenMP × 内层 SIMD 组合路径。
 add_dependencies(numerical_tests compile_sigmoid_vector_fixed)
+add_dependencies(numerical_tests compile_sigmoid_vector_lmv)
+add_dependencies(numerical_tests compile_sigmoid_vector_sleef)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori)
 add_dependencies(numerical_tests compile_pp_lcnet_x1_0_doc_ori_int8)
 add_dependencies(numerical_tests

@@ -30,7 +30,7 @@
 | 后端 | 函数覆盖 | ISA 变体 | 目标机门槛 |
 |---|---|---|---|
 | glibc libmvec | expf/logf/powf/sinf/cosf/tanhf/erff/expm1f… | `_ZGV{b,c,d,e}N{4,8,8,16}v_*`（x86）；`_ZGVnN4v_*`（AArch64 NEON） | tanh/erf x86≥GLIBC_2.35、ARM≥2.40；musl 无 |
-| vendored SLEEF（u10 dispatch） | 同上全集含 erfc 类 | 单一 `Sleef_*Withdispatch` 入口，内部 CPU 分发 | 无（静态编入产物） |
+| vendored SLEEF 3.6.1（静态检入 third_party/sleef） | expf/logf/powf/tanhf/erff × 宽度 {1,4,8,16} | `Sleef_<基名><宽度>_u10`，入口内部自带运行时 ISA 分发（SIGILL 探测+首调用缓存） | 无（静态编入产物；分发器需 libc 的 clock_gettime/posix_memalign，审计已放行） |
 
 ## 4. 阶段规划
 
@@ -62,9 +62,11 @@ SLEEF 档案定位链与链接注入。
 2. ncnn-compile-cli 与 squeezenet-shared-library 测试双模式绿；
 3. static_artifact_baseline.json 与 manifest 字段同提交更新。
 
-### Phase M4：SLEEF vendoring（2 天）
-third_party/sleef 子模块；CMake 裁剪集成（测试关闭）；双档案
-（libsleefdispatch.a + libsleef.a）安装至 `../lib` 并纳入定位链。
+### Phase M4：SLEEF 源码检入与链接集成（已完成，按用户决策改检入制）
+GitHub git 协议在开发环境不可达，经确认改为源码检入：third_party/sleef
+（3.6.1 精简树）。CMake 裁剪集成（共享库/测试/DFT/GNUABI 全关），单静态档
+案 `libsleef.a`（分发器内置）经 `$<TARGET_FILE_DIR:sleef>` 注入定位链，
+并随 install 发布至 `<prefix>/lib`。
 
 验收：
 1. auto 在无 libmvec 目标上自动选中 SLEEF；

@@ -307,6 +307,9 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 - 允许的 libc/libm 未定义符号包括：`ceilf`、`floorf`、`erfcf`、`erff`、`expf`、`powf`、
   `free`、`malloc`、`memcpy`、`memset`。默认 OpenMP 产物还允许审计过的 `__kmpc_*` 并依赖
   `libomp`；`--threads=1` 不引入 OpenMP 依赖。目标链接还显式加入匹配的 compiler-rt builtins。
+- `--vector-math=libmvec` 产物额外允许 `_ZGV*` 未定义符号并依赖 `libmvec.so.1`；
+  `--vector-math=sleef` 将 vendored SLEEF 静态档案编入产物（符号经版本脚本保持
+  local，导出面不变），额外允许分发器所需的 `clock_gettime`、`posix_memalign`。
 - 仅导出模型执行入口，以及存在 shape-only 动态输出时的 `<model>_infer_output_shapes`。
 - 禁止出现：`memrefCopy`、`runner_utils`、`RunnerUtils`、`ncnn_runtime`。
 
@@ -320,6 +323,7 @@ int <model_name>(const <input_type> *input1, ..., <output_type> *output1, ...);
 | 算子形态策略层 | `strategy-ncnn`（A1）：在向量化之前把卷积改写为投影映射的 matmul 形态——①1×1 s1 无条件 collapse 为 `[N·H·W,C]×[C,O]` 视图 matmul（动态空间维同样成立）；②其余 k×k 仅静态空间维且命中 ncnn `prefer_sgemm` 启发式（工作集字节 > L2 预算或任一通道 >16）时走 im2col gather + matmul；③conv 结果的唯一用户若为恒等逐元素 generic，则一并提升进折叠二维域（matmul → 2D generic → expand_shape），激活随 matmul 主循环落位。深度卷积 lower 为独立 op 不进本策略；Winograd 仅预留 `--conv-strategy=winograd` 开关位（数值预算未验证，默认关闭）。权重 collapse 由 canonicalizer 折叠为 `.rodata` 常量；累加顺序与直接卷积存在差异，由全量数值黄金测试按既定预算验收。CLI：`--conv-strategy={auto,gemm,conv,winograd}`、`--conv-gemm-l2-bytes=<N>`（默认 524288） |
 | 代码生成级 | Clang `-O0`/`-O1`/`-O2`/`-O3`（默认 `-O3`） |
 | SIMD | MLIR 级行向量化（opt-in，`--vector-mode={off,auto,fixed-width,scalable}`）：静态逐元素 Linalg generic 改写为外层标量循环 + 最内维 rank-1 `vector.transfer_read/write` 行处理，经 Vector-to-LLVM 下降；`lower-vector-transfers-ncnn` 在 MemRefToLLVM 前规范化 transfer（去前导单位维/连续展平）。SqueezeNet 标量对照实测 ~5× 加速且输出 bit-exact。跨架构：x86-64 / AArch64 NEON+SVE / RISC-V RVV 静态 asm 验证均出现 SIMD 指令；lane 数由 `TargetVectorInfo` 按 triple/march 推导。卷积/matmul 本体暂保持标量循环 + OpenMP 多核 + clang 兜底（matmul 形态已由 `strategy-ncnn` 就绪，SIMD 内核为后续 A1b 阶段）；Affine Super Vectorizer 路径保留为 legacy（`--threads=1 --vector-width=N`） |
+| 向量数学后端 | `lower-vector-math-ncnn`：ABI 等宽 f32 向量 math op 整体替换为向量库调用（消除 MathToLibm 的逐 lane 标量化），lanes 整数倍 ≤4× 的整行展开 slice/call/insert 链。CLI `--vector-math={auto,libmvec,sleef,none}`（默认 auto）：auto 探测 libmvec 失败静默降级 vendored SLEEF 静态档案再退 none，显式指定不可用则报错退出。近似实现数值契约对齐 ncnn FP32 参考容差（1e-6），不与标量产物逐位比对。部署下限与覆盖矩阵见 docs/vector-math-improvement-plan.md §3 |
 | 多线程 | 默认将 Linalg 并行维 lowering 为 OpenMP，并由运行时使用可用 CPU；`--threads=1` 可关闭 |
 | 目标调优 | `--target-triple`、`--march`（含 `native`）、`--mcpu`、`--mtune`、`--target-feature`、`--sysroot`；`-mprefer-vector-width` 仅对 x86 triple 生效 |
 | 图级优化 | 权重常量预处理：卷积/深度卷积/反卷积 OIHW→OHWI/HWCF 转置、Gemm/InnerProduct `[O,K]→[K,O]` 转置与 bias/gamma 重排均在编译期折叠为 `.rodata` 常量（纯数据搬运，bit-exact）；INT8 scale-term 卷积的 f32 权重按运行时舍入语义编译期预量化为 i8 常量；BatchNorm 全常量参数折叠进前邻单用 Convolution/ConvolutionDepthWise 权重与 bias（量化卷积、非常量参数、多消费者场景不折叠）；Linalg 激活 epilogue 融合（`fuse-linalg-epilogue`）：单用户 elementwise 以 tile 列切分 Conv/Matmul producer；无量化图优化 |
