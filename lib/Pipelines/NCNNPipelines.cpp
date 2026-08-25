@@ -36,6 +36,7 @@
 #include "ncnn-mlir/Transforms/ForallizeDisjointTileLoops/ForallizeDisjointTileLoops.hpp"
 #include "ncnn-mlir/Transforms/FuseLinalgEpilogue/FuseLinalgEpilogue.hpp"
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
+#include "ncnn-mlir/Transforms/LowerVectorMathNCNN/LowerVectorMathNCNN.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/RewriteLinalgCopies/RewriteLinalgCopies.hpp"
 #include "ncnn-mlir/Transforms/StrategyNCNN/StrategyNCNN.hpp"
@@ -185,6 +186,16 @@ void buildNCNNMemRefToLLVMPipeline(
       vector::createLowerVectorMultiReductionPass());
     passManager.addNestedPass<func::FuncOp>(
       vector::createLowerVectorMaskPass());
+  }
+  if (hasVectorIR && options.vectorMath != "none") {
+    // 向量数学库调用下降：抢在标量 MathToLibm 之前把 ABI 等宽的 f32 向量
+    // math op 整体替换为 libmvec/SLEEF 调用。位置刻意保持在 SCFToControl-
+    // Flow 之前，为后续宽向量循环分块保留 scf 发射合法性。
+    LowerVectorMathNCNNPassOptions mathOptions;
+    mathOptions.backend = options.vectorMath.getValue();
+    mathOptions.lanes = options.vectorMathLanes.getValue();
+    mathOptions.abiFragment = options.vectorMathAbi.getValue();
+    passManager.addPass(createLowerVectorMathNCNNPass(mathOptions));
   }
   passManager.addPass(createLowerAffinePass());
   passManager.addPass(createSCFToControlFlowPass());

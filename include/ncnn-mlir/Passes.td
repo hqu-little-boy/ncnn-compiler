@@ -135,6 +135,33 @@ def LowerVectorTransfersNCNNPass
   ];
 }
 
+def LowerVectorMathNCNNPass
+    : Pass<"lower-vector-math-ncnn", "mlir::ModuleOp"> {
+  let summary = "Lower vector math ops to vectorized math library calls";
+  let description = [{
+    Replaces the per-lane scalarization that convert-math-to-libm applies
+    to vector math ops with whole-vector calls into a vector math backend.
+    Fixed-shape f32 vectors matching the target ABI lane count become
+    direct library calls; lane-multiple rows within the unroll budget
+    expand into slice/call/insert chains. Odd widths, scalable vectors,
+    non-f32 element types, and ops without a backend vector variant stay
+    untouched for the scalar MathToLibm fallback.
+  }];
+  let dependentDialects = [
+    "arith::ArithDialect", "func::FuncDialect", "math::MathDialect",
+    "vector::VectorDialect"
+  ];
+  let options = [
+    Option<"backend", "backend", "std::string", /*default=*/"\"none\"",
+           "Vector math backend: none, libmvec, sleef">,
+    Option<"lanes", "lanes", "unsigned", /*default=*/"0",
+           "Target SIMD lane count for chunking decisions">,
+    Option<"abiFragment", "abi", "std::string", /*default=*/"\"\"",
+           "Backend ABI fragment (libmvec ISA prefix such as _ZGVdN8, "
+           "or SLEEF accuracy/dispatch tag)">
+  ];
+}
+
 def VerifyBufferizedModelPass
     : Pass<"verify-bufferized-model", "mlir::ModuleOp"> {
   let summary = "Verify the bufferized ncnn entry point and its buffer ownership";

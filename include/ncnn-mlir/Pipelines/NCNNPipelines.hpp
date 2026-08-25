@@ -62,6 +62,24 @@ struct NCNNMemRefToLLVMPipelineOptions
       "IR already contains vector ops from earlier ncnn pipelines; append "
       "the Vector-to-LLVM lowering tail"),
     llvm::cl::init(false)};
+  Option<std::string> vectorMath{
+    *this,
+    "vector-math",
+    llvm::cl::desc("Resolved vector math backend: none, libmvec, sleef; "
+                   "none keeps scalar MathToLibm lowering"),
+    llvm::cl::init("none")};
+  Option<unsigned> vectorMathLanes{
+    *this,
+    "vector-math-lanes",
+    llvm::cl::desc("SIMD lane count used by the vector math backend for "
+                   "chunking decisions"),
+    llvm::cl::init(0)};
+  Option<std::string> vectorMathAbi{
+    *this,
+    "vector-math-abi",
+    llvm::cl::desc("Backend ABI fragment (libmvec ISA prefix such as "
+                   "_ZGVdN8, or SLEEF accuracy/dispatch tag)"),
+    llvm::cl::init("")};
 };
 
 void buildNCNNToTosaPipeline(OpPassManager& passManager);

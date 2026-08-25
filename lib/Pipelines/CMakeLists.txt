@@ -13,6 +13,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     FoldNCNNBatchNorm
     FuseLinalgEpilogue
     GenerateCAPI
+    LowerVectorMathNCNN
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN
