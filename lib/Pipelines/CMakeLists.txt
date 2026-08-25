@@ -14,6 +14,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     FuseLinalgEpilogue
     GenerateCAPI
     LowerVectorMathNCNN
+    MatmulKernelNCNN
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN

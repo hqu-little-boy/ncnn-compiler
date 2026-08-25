@@ -162,6 +162,22 @@ def LowerVectorMathNCNNPass
   ];
 }
 
+def MatmulKernelNCNNPass : Pass<"matmul-kernel-ncnn", "mlir::ModuleOp"> {
+  let summary = "Emit explicit SIMD kernels for forall-tiled matmuls";
+  let description = [{
+    Rewrites static memref linalg.matmul ops inside scf.forall regions
+    (the tiles produced by tile-matmul-forall) into explicit vector FMA
+    loop nests: the K loop streams one B row vector per iteration and the
+    M loop accumulates broadcast(A[m,k]) * B-row into C rows. Without
+    this pass the generic matmul expansion degenerates to scalar loops,
+    which dominates end-to-end latency on wide PP-family models.
+  }];
+  let dependentDialects = [
+    "arith::ArithDialect", "linalg::LinalgDialect", "memref::MemRefDialect",
+    "scf::SCFDialect", "vector::VectorDialect"
+  ];
+}
+
 def VerifyBufferizedModelPass
     : Pass<"verify-bufferized-model", "mlir::ModuleOp"> {
   let summary = "Verify the bufferized ncnn entry point and its buffer ownership";

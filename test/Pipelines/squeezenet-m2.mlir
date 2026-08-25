@@ -32,7 +32,9 @@
 // MEMREF-LABEL: func.func @model(
 // MEMREF-SAME: %[[INPUT:.*]]: memref<3x227x227xf32>,
 // MEMREF-SAME: %[[OUTPUT:.*]]: memref<1000xf32> {bufferize.result})
-// MEMREF-NOT: ->
+// 入口无 tensor/memref 返回值（A1b 内核的 iter_args 箭头不算）。
+// MEMREF-NOT: -> tensor
+// MEMREF-NOT: -> memref
 // MEMREF: linalg.generic {{.*}}outs(%[[OUTPUT]] : memref<1000xf32>)
 // MEMREF: math.exp
 // MEMREF: linalg.generic {{.*}}outs(%[[OUTPUT]] : memref<1000xf32>)

@@ -37,6 +37,7 @@
 #include "ncnn-mlir/Transforms/FuseLinalgEpilogue/FuseLinalgEpilogue.hpp"
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/LowerVectorMathNCNN/LowerVectorMathNCNN.hpp"
+#include "ncnn-mlir/Transforms/MatmulKernelNCNN/MatmulKernelNCNN.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/RewriteLinalgCopies/RewriteLinalgCopies.hpp"
 #include "ncnn-mlir/Transforms/StrategyNCNN/StrategyNCNN.hpp"
@@ -122,6 +123,9 @@ void buildNCNNLinalgToMemRefPipeline(
   // 改写为 memref.copy，避免多线程路径把它们当作可并行 linalg op 在
   // forall 区域内再并行化（嵌套 omp），并让尾段走更廉价的整块复制。
   passManager.addPass(createRewriteLinalgCopiesPass());
+  // A1b SIMD matmul 内核：把 forall 内的静态 memref matmul 改写为显式
+  // 向量 FMA 循环，消除通用标量展开在大图 PP 系模型上的病态劣化。
+  passManager.addPass(createMatmulKernelNCNNPass());
 
   bufferization::BufferResultsToOutParamsPassOptions outParamOptions;
   outParamOptions.addResultAttribute = true;
