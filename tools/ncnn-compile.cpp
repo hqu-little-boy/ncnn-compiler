@@ -130,6 +130,20 @@ llvm::cl::opt<std::string> g_conv_strategy(
     "Convolution operator-shape strategy (A1): auto, gemm, conv, winograd"),
   llvm::cl::init("auto"),
   llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_vector_math(
+  "vector-math",
+  llvm::cl::desc(
+    "Vector math backend for transcendental calls: auto, libmvec, sleef, "
+    "or none"),
+  llvm::cl::init("auto"),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_sleef_path(
+  "sleef-path",
+  llvm::cl::desc("Directory holding vendored SLEEF static archives "
+                 "(libsleefdispatch.a + libsleef.a)"),
+  llvm::cl::init(""),
+  llvm::cl::Hidden,
+  llvm::cl::cat(g_category));
 llvm::cl::opt<int64_t> g_conv_gemm_l2_bytes(
   "conv-gemm-l2-bytes",
   llvm::cl::desc(
@@ -274,6 +288,8 @@ struct Manifest {
   // 多线程产物是否依赖 OpenMP 运行时（libomp 探测失败回退 threads=1 时
   // 为 false；探测成功为 true）。旧 manifest 无此字段。
   std::optional<bool> openmp;
+  // 实际生效的向量数学后端（none/libmvec/sleef）。旧 manifest 无此字段。
+  std::optional<std::string> vector_math;
 };
 
 class ScopedDirectory {
@@ -298,6 +314,34 @@ class ScopedDirectory {
   fs::path path_;
   bool remove_;
 };
+
+// 定位 vendored SLEEF 静态档案（dispatch 与 ISA 两个）。顺序：--sleef-path >
+// 可执行文件相对 ../lib 与同目录 > 构建期注入的构建树路径。
+bool locate_sleef_archives(fs::path& dispatch_archive, fs::path& isa_archive) {
+  std::vector<fs::path> candidates;
+  if (!g_sleef_path.empty()) {
+    candidates.emplace_back(g_sleef_path.getValue());
+  }
+  std::error_code error;
+  const fs::path executable = fs::read_symlink("/proc/self/exe", error);
+  if (!error) {
+    candidates.push_back(executable.parent_path() / ".." / "lib");
+    candidates.push_back(executable.parent_path());
+  }
+#ifdef NCNN_SLEEF_ARCHIVE_DIR
+  candidates.emplace_back(NCNN_SLEEF_ARCHIVE_DIR);
+#endif
+  for (const fs::path& directory : candidates) {
+    const fs::path dispatch = directory / "libsleefdispatch.a";
+    const fs::path isa = directory / "libsleef.a";
+    if (fs::is_regular_file(dispatch) && fs::is_regular_file(isa)) {
+      dispatch_archive = dispatch;
+      isa_archive = isa;
+      return true;
+    }
+  }
+  return false;
+}
 
 int fail(llvm::Twine message) {
   llvm::errs() << "ncnn-compile: error: " << message << '\n';
@@ -933,6 +977,9 @@ int run(const std::vector<std::string>& command,
   }
   if (manifest.openmp) {
     object["openmp"] = *manifest.openmp;
+  }
+  if (manifest.vector_math) {
+    object["vector_math"] = *manifest.vector_math;
   }
   return write_file(
     path, llvm::formatv("{0:2}\n", llvm::json::Value(std::move(object))).str());
@@ -1921,6 +1968,172 @@ int main(int argc, char** argv) {
     }
   }
   vector_active = vector_lanes != 0;
+
+  // 解析向量数学后端：auto 按目标探测 libmvec，缺失时静默降级 vendored
+  // SLEEF 静态档案，再退回 none；显式指定而不可用时报错退出。部署环境
+  // 由 --sysroot 声明并据此重编，编译器不补偿构建机与部署机的 libc 差异。
+  std::string resolved_vector_math;
+  std::string vector_math_abi;
+  unsigned vector_math_lanes = 0;
+  bool uses_libmvec = false;
+  fs::path sleef_dispatch_archive;
+  fs::path sleef_isa_archive;
+  {
+    if (g_vector_math != "auto" && g_vector_math != "libmvec" &&
+        g_vector_math != "sleef" && g_vector_math != "none") {
+      return fail("--vector-math must be one of auto, libmvec, sleef, none");
+    }
+    const llvm::StringRef backend_triple(effective_target_triple);
+    const bool backend_arm64 = backend_triple.contains("aarch64");
+    const bool backend_x86 =
+      backend_triple.contains("x86_64") || backend_triple.contains("amd64") ||
+      backend_triple.contains("i686") || backend_triple.contains("i386");
+    auto hint_present = [&](std::string_view hint) {
+      for (const std::string& feature : g_target_features) {
+        if (llvm::StringRef(feature).contains(hint)) {
+          return true;
+        }
+      }
+      return llvm::StringRef(g_march).contains(hint);
+    };
+    // libmvec 变体绑定编译期 ISA：显式 feature/march 提示优先，缺省取基线。
+    // 变体宽度跟随 ISA 寄存器而非 --vector-width；--march=native 不展开
+    // feature，按基线变体探测。
+    std::string libmvec_abi;
+    unsigned libmvec_lanes = 0;
+    if (!vector_scalable && backend_x86) {
+      if (hint_present("avx512")) {
+        libmvec_abi = "_ZGVeN16";
+        libmvec_lanes = 16;
+      } else if (hint_present("avx2") || hint_present("-v3")) {
+        libmvec_abi = "_ZGVdN8";
+        libmvec_lanes = 8;
+      } else if (hint_present("avx")) {
+        libmvec_abi = "_ZGVcN8";
+        libmvec_lanes = 8;
+      } else {
+        libmvec_abi = "_ZGVbN4";
+        libmvec_lanes = 4;
+      }
+    } else if (!vector_scalable && backend_arm64) {
+      libmvec_abi = "_ZGVnN4";
+      libmvec_lanes = 4;
+    }
+
+    // 探针引用后端可能发射的全部五个符号：任一缺失即判定不可用，避免
+    // -z defs 在产物链接期才暴露。链接以 -Wl,-z,defs + -lm 强制解析——
+    // glibc 的 libm linker script 会按需带入 libmvec，musl/旧 glibc 则
+    // 直接失败。
+    auto probe_libmvec = [&]() -> bool {
+      if (libmvec_abi.empty()) {
+        return false;
+      }
+      const unsigned probe_bytes = libmvec_lanes * 4;
+      const fs::path probe_source = staging.path() / "libmvec_probe.c";
+      const fs::path probe_library = staging.path() / "liblibmvec_probe.so";
+      std::string probe_text = "typedef float vsf __attribute__((vector_size(" +
+                               std::to_string(probe_bytes) +
+                               ")));\n"
+                               "extern vsf " +
+                               libmvec_abi +
+                               "v_expf(vsf);\n"
+                               "extern vsf " +
+                               libmvec_abi +
+                               "v_tanhf(vsf);\n"
+                               "extern vsf " +
+                               libmvec_abi +
+                               "v_erff(vsf);\n"
+                               "extern vsf " +
+                               libmvec_abi +
+                               "v_logf(vsf);\n"
+                               "extern vsf " +
+                               libmvec_abi +
+                               "vv_powf(vsf, vsf);\n"
+                               "int ncnn_libmvec_probe(vsf x) {\n"
+                               "  vsf r = " +
+                               libmvec_abi +
+                               "v_expf(x);\n"
+                               "  r += " +
+                               libmvec_abi +
+                               "v_tanhf(x);\n"
+                               "  r += " +
+                               libmvec_abi +
+                               "v_erff(x);\n"
+                               "  r += " +
+                               libmvec_abi +
+                               "v_logf(x);\n"
+                               "  r += " +
+                               libmvec_abi +
+                               "vv_powf(x, x);\n"
+                               "  return (int)r[0];\n"
+                               "}\n";
+      auto written = write_file(probe_source, probe_text);
+      bool available = written.has_value();
+      if (available) {
+        std::vector<std::string> command{clang_path,
+                                         "-shared",
+                                         "-fPIC",
+                                         probe_source.string(),
+                                         "-o",
+                                         probe_library.string(),
+                                         "-Wl,-z,defs",
+                                         "-lm"};
+        command.push_back("--target=" + effective_target_triple);
+        if (!g_sysroot.empty()) {
+          command.push_back("--sysroot=" + g_sysroot);
+        }
+        available = run(command) == 0 && fs::is_regular_file(probe_library);
+      }
+      return available;
+    };
+
+    if (g_vector_math == "none") {
+      resolved_vector_math = "none";
+    } else {
+      const bool sleef_ready =
+        locate_sleef_archives(sleef_dispatch_archive, sleef_isa_archive);
+      if (g_vector_math == "auto") {
+        if (probe_libmvec()) {
+          uses_libmvec = true;
+        } else if (sleef_ready) {
+          llvm::errs() << "ncnn-compile: info: libmvec unavailable for the "
+                          "target; using vendored SLEEF\n";
+        } else {
+          llvm::errs() << "ncnn-compile: warning: neither libmvec nor "
+                          "vendored SLEEF is available; keeping scalar math\n";
+        }
+      } else if (g_vector_math == "libmvec") {
+        if (!probe_libmvec()) {
+          return fail(
+            "--vector-math=libmvec is not available for target " +
+            effective_target_triple +
+            "; provide a sysroot whose libm pulls in the required _ZGV "
+            "symbols or choose --vector-math=auto");
+        }
+        uses_libmvec = true;
+      } else {  // sleef
+        if (!sleef_ready) {
+          return fail(
+            "--vector-math=sleef requires the vendored SLEEF static archives "
+            "(libsleefdispatch.a + libsleef.a); point --sleef-path at their "
+            "directory");
+        }
+      }
+      resolved_vector_math = uses_libmvec                      ? "libmvec"
+                             : !sleef_dispatch_archive.empty() ? "sleef"
+                                                               : "none";
+    }
+    if (uses_libmvec) {
+      vector_math_abi = libmvec_abi;
+      vector_math_lanes = libmvec_lanes;
+    } else if (resolved_vector_math == "sleef") {
+      vector_math_lanes =
+        vector_info.mode == ncnn_mlir::TargetVectorInfo::Mode::FixedWidth
+          ? vector_info.lanes
+          : 4;
+      vector_math_abi = "U10withdispatch";
+    }
+  }
   const fs::path ncnn_ir = staging.path() / "model.ncnn.mlir";
   const fs::path tosa_ir = staging.path() / "model.tosa.mlir";
   const fs::path linalg_ir = staging.path() / "model.linalg.mlir";
@@ -2008,6 +2221,13 @@ int main(int argc, char** argv) {
     llvm_pipeline += " vector-size=" + std::to_string(g_vector_width / 32);
   } else {
     llvm_pipeline += " vector-lowering=true";
+  }
+  if (resolved_vector_math != "none") {
+    llvm_pipeline += " vector-math=" + resolved_vector_math;
+    if (!vector_math_abi.empty()) {
+      llvm_pipeline += " vector-math-abi=" + vector_math_abi;
+    }
+    llvm_pipeline += " vector-math-lanes=" + std::to_string(vector_math_lanes);
   }
   if (int status = run({opt_path,
                         llvm_pipeline,
@@ -2113,6 +2333,7 @@ int main(int argc, char** argv) {
     .execution_profile =
       ncnn_mlir::precision_execution_profile(*policy, target_spec)};
   manifest->openmp = uses_openmp;
+  manifest->vector_math = resolved_vector_math;
   auto manifest_result = write_manifest(manifest_path, *manifest);
   if (!manifest_result) {
     return fail(manifest_result.error());
@@ -2183,6 +2404,12 @@ int main(int argc, char** argv) {
   link.insert(link.end(), target_args.begin(), target_args.end());
   link.push_back(object.string());
   link.push_back(builtins_path);
+  if (!sleef_dispatch_archive.empty()) {
+    // SLEEF 静态档案在目标对象之后、系统库之前：符号由 version script
+    // 保持 local，导出面不变。
+    link.push_back(sleef_dispatch_archive.string());
+    link.push_back(sleef_isa_archive.string());
+  }
   link.insert(link.end(), g_linker_args.begin(), g_linker_args.end());
   if (uses_openmp) {
     link.emplace_back("-lomp");
@@ -2224,6 +2451,7 @@ int main(int argc, char** argv) {
                                          "tanhf"};
   const auto is_allowed_undefined = [&](const std::string& symbol) {
     return allowed.contains(symbol) ||
+           (uses_libmvec && symbol.starts_with("_ZGV")) ||
            (uses_openmp && symbol.starts_with("__kmpc_")) ||
            (uses_address_sanitizer && symbol.starts_with("__asan_")) ||
            (uses_undefined_sanitizer && symbol.starts_with("__ubsan_")) ||
@@ -2300,8 +2528,9 @@ int main(int argc, char** argv) {
        (name.starts_with("libubsan.so") ||
         name.starts_with("libclang_rt.ubsan_standalone-")));
     const bool openmp_runtime = uses_openmp && name.starts_with("libomp.so");
+    const bool libmvec_runtime = uses_libmvec && name.starts_with("libmvec.so");
     if (!name.starts_with("libc.so") && !name.starts_with("libm.so") &&
-        !openmp_runtime && !sanitizer_runtime) {
+        !openmp_runtime && !sanitizer_runtime && !libmvec_runtime) {
       return fail(
         std::format("shared library has an unexpected dependency: {}", name));
     }
