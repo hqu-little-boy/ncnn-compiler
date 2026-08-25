@@ -64,6 +64,12 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context, ModuleOp module) {
                       [](int64_t extent) { return extent > 0; })) {
       return;
     }
+    // 最内维宽度 1 的退化行（如 matmul N=1 输出的 clamp）没有向量化收
+    // 益，且 vector<1> 触发上游 TransferWriteOp::build 的越界崩溃，直接
+    // 跳过保持标量。
+    if (resultType.getShape().back() == 1) {
+      return;
+    }
     auto& block = generic.getRegion().front();
     auto yieldValue = dyn_cast<linalg::YieldOp>(block.getTerminator());
     if (!yieldValue ||
@@ -104,6 +110,8 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context, ModuleOp module) {
     // 并缓存复用。
     auto buildRowVector = [&](ValueRange indices) -> Value {
       VectorType rowType = VectorType::get(shape.back(), elementType);
+      // in_bounds 长度 = 置换结果数（identity minor transfer 即向量秩），
+      // 与源张量秩无关。
       SmallVector<bool> inBounds(1, true);
       IRMapping mapping;
 
