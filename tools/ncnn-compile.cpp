@@ -315,9 +315,10 @@ class ScopedDirectory {
   bool remove_;
 };
 
-// 定位 vendored SLEEF 静态档案（dispatch 与 ISA 两个）。顺序：--sleef-path >
-// 可执行文件相对 ../lib 与同目录 > 构建期注入的构建树路径。
-bool locate_sleef_archives(fs::path& dispatch_archive, fs::path& isa_archive) {
+// 定位 vendored SLEEF 静态档案（单档案，dispatcher 内置运行时 ISA 自分
+// 发）。顺序：--sleef-path > 可执行文件相对 ../lib > 构建期注入的构建树
+// 路径。
+bool locate_sleef_archive(fs::path& archive) {
   std::vector<fs::path> candidates;
   if (!g_sleef_path.empty()) {
     candidates.emplace_back(g_sleef_path.getValue());
@@ -332,11 +333,9 @@ bool locate_sleef_archives(fs::path& dispatch_archive, fs::path& isa_archive) {
   candidates.emplace_back(NCNN_SLEEF_ARCHIVE_DIR);
 #endif
   for (const fs::path& directory : candidates) {
-    const fs::path dispatch = directory / "libsleefdispatch.a";
-    const fs::path isa = directory / "libsleef.a";
-    if (fs::is_regular_file(dispatch) && fs::is_regular_file(isa)) {
-      dispatch_archive = dispatch;
-      isa_archive = isa;
+    const fs::path candidate = directory / "libsleef.a";
+    if (fs::is_regular_file(candidate)) {
+      archive = candidate;
       return true;
     }
   }
@@ -1976,8 +1975,7 @@ int main(int argc, char** argv) {
   std::string vector_math_abi;
   unsigned vector_math_lanes = 0;
   bool uses_libmvec = false;
-  fs::path sleef_dispatch_archive;
-  fs::path sleef_isa_archive;
+  fs::path sleef_archive;
   {
     if (g_vector_math != "auto" && g_vector_math != "libmvec" &&
         g_vector_math != "sleef" && g_vector_math != "none") {
@@ -2090,8 +2088,10 @@ int main(int argc, char** argv) {
     if (g_vector_math == "none") {
       resolved_vector_math = "none";
     } else {
+      // SLEEF 静态档案的宽度入口自带运行时 ISA 分发；scalable 目标无
+      // 固定宽度入口，v1 不选 SLEEF。
       const bool sleef_ready =
-        locate_sleef_archives(sleef_dispatch_archive, sleef_isa_archive);
+        !vector_scalable && locate_sleef_archive(sleef_archive);
       if (g_vector_math == "auto") {
         if (probe_libmvec()) {
           uses_libmvec = true;
@@ -2114,24 +2114,34 @@ int main(int argc, char** argv) {
       } else {  // sleef
         if (!sleef_ready) {
           return fail(
-            "--vector-math=sleef requires the vendored SLEEF static archives "
-            "(libsleefdispatch.a + libsleef.a); point --sleef-path at their "
-            "directory");
+            std::string(
+              "--vector-math=sleef requires the vendored SLEEF static archive "
+              "(libsleef.a); point --sleef-path at its directory") +
+            (vector_scalable ? "; scalable targets are not supported yet"
+                             : ""));
         }
       }
-      resolved_vector_math = uses_libmvec                      ? "libmvec"
-                             : !sleef_dispatch_archive.empty() ? "sleef"
-                                                               : "none";
+      resolved_vector_math =
+        uses_libmvec ? "libmvec" : (!sleef_archive.empty() ? "sleef" : "none");
     }
     if (uses_libmvec) {
       vector_math_abi = libmvec_abi;
       vector_math_lanes = libmvec_lanes;
     } else if (resolved_vector_math == "sleef") {
-      vector_math_lanes =
-        vector_info.mode == ncnn_mlir::TargetVectorInfo::Mode::FixedWidth
-          ? vector_info.lanes
-          : 4;
-      vector_math_abi = "U10withdispatch";
+      // 入口名 = Sleef_<基名><宽度>_u10，如 Sleef_expf8_u10；宽度入口
+      // 内部自带运行时 ISA 分发。
+      const bool backend_x86 =
+        backend_triple.contains("x86_64") || backend_triple.contains("amd64");
+      if (backend_x86 && hint_present("avx512")) {
+        vector_math_abi = "16_u10";
+        vector_math_lanes = 16;
+      } else if (backend_x86 && hint_present("avx2")) {
+        vector_math_abi = "8_u10";
+        vector_math_lanes = 8;
+      } else {
+        vector_math_abi = "4_u10";
+        vector_math_lanes = 4;
+      }
     }
   }
   const fs::path ncnn_ir = staging.path() / "model.ncnn.mlir";
@@ -2404,11 +2414,10 @@ int main(int argc, char** argv) {
   link.insert(link.end(), target_args.begin(), target_args.end());
   link.push_back(object.string());
   link.push_back(builtins_path);
-  if (!sleef_dispatch_archive.empty()) {
+  if (!sleef_archive.empty()) {
     // SLEEF 静态档案在目标对象之后、系统库之前：符号由 version script
     // 保持 local，导出面不变。
-    link.push_back(sleef_dispatch_archive.string());
-    link.push_back(sleef_isa_archive.string());
+    link.push_back(sleef_archive.string());
   }
   link.insert(link.end(), g_linker_args.begin(), g_linker_args.end());
   if (uses_openmp) {
@@ -2450,8 +2459,12 @@ int main(int argc, char** argv) {
                                          "powf",
                                          "tanhf"};
   const auto is_allowed_undefined = [&](const std::string& symbol) {
+    // SLEEF 静态档案的分发器运行需要这两个 libc 例程（计时与对齐分配）。
+    static const std::set<std::string> sleef_allowed = {"clock_gettime",
+                                                        "posix_memalign"};
     return allowed.contains(symbol) ||
            (uses_libmvec && symbol.starts_with("_ZGV")) ||
+           (!sleef_archive.empty() && sleef_allowed.contains(symbol)) ||
            (uses_openmp && symbol.starts_with("__kmpc_")) ||
            (uses_address_sanitizer && symbol.starts_with("__asan_")) ||
            (uses_undefined_sanitizer && symbol.starts_with("__ubsan_")) ||

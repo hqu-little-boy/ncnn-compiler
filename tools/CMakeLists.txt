@@ -24,7 +24,13 @@ target_link_libraries(ncnn-compile PRIVATE
     NCNNPrecisionSupport
     NCNNTargetVectorInfoSupport
     ${NCNN_DRIVER_LLVM_LIBS})
+# 运行期按此目录定位 vendored SLEEF 静态档案（构建树内直接可用；安装布局
+# 由 ../lib 相对定位兜底）。
+target_compile_definitions(ncnn-compile PRIVATE
+    NCNN_SLEEF_ARCHIVE_DIR="$<TARGET_FILE_DIR:sleef>")
+add_dependencies(ncnn-compile sleef)
 install(TARGETS ncnn-compile RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES $<TARGET_FILE:sleef> DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/compile_ncnn_model.py

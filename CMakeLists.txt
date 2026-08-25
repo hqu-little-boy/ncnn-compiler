@@ -92,6 +92,18 @@ add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(bin)
 add_subdirectory(tools)
+
+# vendored SLEEF（向量数学后端，静态档案）。测试/DFT/GNUABI 全关，只产出
+# <build>/lib/libsleef.a 供 ncnn-compile 定位注入产物链接。
+set(SLEEF_BUILD_SHARED_LIBS OFF)
+set(SLEEF_BUILD_TESTS OFF)
+set(SLEEF_BUILD_GNUABI_LIBS OFF)
+set(SLEEF_BUILD_DFT OFF)
+set(SLEEF_BUILD_QUAD OFF)
+set(SLEEF_BUILD_INLINE_HEADERS OFF)
+set(SLEEF_SHOW_CONFIG OFF)
+add_subdirectory(third_party/sleef)
+
 if(BUILD_TESTING)
     add_subdirectory(test)
 endif()
