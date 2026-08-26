@@ -16,7 +16,9 @@
 #include <utility>
 #include <vector>
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileSystem/UniqueID.h"
@@ -2205,10 +2207,30 @@ int main(int argc, char** argv) {
     return status;
   }
   std::string linalg_pipeline_option = "--ncnn-linalg-to-memref-pipeline";
-  if (vector_active) {
-    linalg_pipeline_option += "=vector-lanes=" + std::to_string(vector_lanes);
-    linalg_pipeline_option +=
-      vector_scalable ? " vector-scalable=true" : " vector-scalable=false";
+  {
+    // 现代向量尾 = OpenMP 路径或张量级行向量化。串行 legacy affine
+    // 路径（threads=1 且未启用 vector-mode）仍由 affine-super-vectorize
+    // 负责，本组改写不得抢占。
+    const bool vector_tail = g_threads != 1 || vector_active;
+    llvm::SmallVector<std::string> linalgOptions;
+    if (vector_active) {
+      linalgOptions.push_back("vector-lanes=" + std::to_string(vector_lanes));
+      linalgOptions.push_back(vector_scalable ? "vector-scalable=true"
+                                              : "vector-scalable=false");
+    }
+    if (vector_tail) {
+      linalgOptions.push_back("vector-tail=true");
+    }
+    if (!linalgOptions.empty()) {
+      std::string joined;
+      for (const std::string& item : linalgOptions) {
+        if (!joined.empty()) {
+          joined += ' ';
+        }
+        joined += item;
+      }
+      linalg_pipeline_option += "=" + joined;
+    }
   }
   if (int status = run({opt_path,
                         linalg_pipeline_option,

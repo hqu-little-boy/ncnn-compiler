@@ -40,6 +40,13 @@ struct NCNNLinalgToMemRefPipelineOptions
     "vector-scalable",
     llvm::cl::desc("Emit scalable vectors (SVE/RVV) with lanes as minimum VL"),
     llvm::cl::init(false)};
+  Option<bool> vectorTail{
+    *this,
+    "vector-tail",
+    llvm::cl::desc(
+      "Downstream memref-to-llvm will run the vector lowering tail; "
+      "gates passes that emit vector dialect ops"),
+    llvm::cl::init(false)};
 };
 
 struct NCNNMemRefToLLVMPipelineOptions

@@ -123,9 +123,12 @@ void buildNCNNLinalgToMemRefPipeline(
   // 改写为 memref.copy，避免多线程路径把它们当作可并行 linalg op 在
   // forall 区域内再并行化（嵌套 omp），并让尾段走更廉价的整块复制。
   passManager.addPass(createRewriteLinalgCopiesPass());
-  // A1b SIMD matmul 内核：把 forall 内的静态 memref matmul 改写为显式
-  // 向量 FMA 循环，消除通用标量展开在大图 PP 系模型上的病态劣化。
-  passManager.addPass(createMatmulKernelNCNNPass());
+  if (options.vectorTail) {
+    // A1b SIMD matmul 内核与 forall 路径标量热点清理。发射 vector/
+    // ub.poison op，必须确保下游有向量下降尾（串行遗留路径没有），
+    // 由调用方经 vector-tail 显式声明。
+    passManager.addPass(createMatmulKernelNCNNPass());
+  }
 
   bufferization::BufferResultsToOutParamsPassOptions outParamOptions;
   outParamOptions.addResultAttribute = true;
