@@ -41,6 +41,7 @@ class MatmulKernelNCNNPass final
     ModuleOp module = getOperation();
     SmallVector<linalg::MatmulOp> matmuls;
     SmallVector<linalg::GenericOp> rowGenerics;
+    SmallVector<linalg::GenericOp> gathers;
     SmallVector<scf::ForOp> selfCopyLoops;
     module.walk([&](Operation* operation) {
       const bool inForall =
@@ -53,8 +54,9 @@ class MatmulKernelNCNNPass final
         return;
       }
       if (auto generic = dyn_cast<linalg::GenericOp>(operation)) {
-        // gather 改写暂时禁用：实测在 PP-det 上引入回归，待重设计。
-        if (isRowVectorizable(generic)) {
+        if (isIm2colGatherCopy(generic)) {
+          gathers.push_back(generic);
+        } else if (isRowVectorizable(generic)) {
           rowGenerics.push_back(generic);
         }
         return;
@@ -65,7 +67,8 @@ class MatmulKernelNCNNPass final
         }
       }
     });
-    if (matmuls.empty() && rowGenerics.empty() && selfCopyLoops.empty()) {
+    if (matmuls.empty() && rowGenerics.empty() && selfCopyLoops.empty() &&
+        gathers.empty()) {
       return;
     }
 
@@ -73,6 +76,9 @@ class MatmulKernelNCNNPass final
     // 自拷贝循环先删，避免干扰后续改写的结构匹配。
     for (scf::ForOp loop : selfCopyLoops) {
       rewriter.eraseOp(loop);
+    }
+    for (linalg::GenericOp generic : gathers) {
+      gatherToParallelVectorCopy(rewriter, generic);
     }
     for (linalg::GenericOp generic : rowGenerics) {
       vectorizeRowGeneric(rewriter, generic);
@@ -163,6 +169,175 @@ class MatmulKernelNCNNPass final
     return true;
   }
 
+  // 判定仿射表达式 ≡ s·strideDim + w·windowDim 形式的系数抽取（系数 1
+  // 会折叠成裸维度，两种操作数顺序都接受）。
+  static bool extractStrideDilation(AffineExpr expression,
+                                    unsigned strideDim,
+                                    unsigned windowDim,
+                                    int64_t& stride,
+                                    int64_t& dilation) {
+    auto binary = dyn_cast<AffineBinaryOpExpr>(expression);
+    if (!binary || binary.getKind() != AffineExprKind::Add) {
+      return false;
+    }
+    auto matchTerm = [](AffineExpr term,
+                        unsigned dim,
+                        bool allowOne) -> std::optional<int64_t> {
+      if (auto dimExpr = dyn_cast<AffineDimExpr>(term)) {
+        if (allowOne && dimExpr.getPosition() == dim) {
+          return 1;
+        }
+        return std::nullopt;
+      }
+      if (auto product = dyn_cast<AffineBinaryOpExpr>(term);
+          product && product.getKind() == AffineExprKind::Mul) {
+        for (auto [lhs, rhs] : {std::pair{product.getLHS(), product.getRHS()},
+                                {product.getRHS(), product.getLHS()}}) {
+          auto coefficient = dyn_cast<AffineConstantExpr>(lhs);
+          auto dimExpr = dyn_cast<AffineDimExpr>(rhs);
+          if (coefficient && dimExpr && dimExpr.getPosition() == dim) {
+            return coefficient.getValue();
+          }
+        }
+      }
+      return std::nullopt;
+    };
+    for (auto [first, second] : {std::pair{binary.getLHS(), binary.getRHS()},
+                                 {binary.getRHS(), binary.getLHS()}}) {
+      auto strideMatch = matchTerm(first, strideDim, false);
+      auto dilationMatch = matchTerm(second, windowDim, true);
+      if (strideMatch && dilationMatch) {
+        stride = *strideMatch;
+        dilation = *dilationMatch;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // im2col gather 识别：5 层全并行、纯转发拷贝，ins 映射呈窗口形式
+  //   (d0,d1,d2,d3,d4) -> (0, sh*d0 + dh*d2, sw*d1 + dw*d3, d4)
+  // outs 恒等。
+  static bool isIm2colGatherCopy(linalg::GenericOp generic) {
+    if (!generic.hasPureBufferSemantics() || generic.getNumDpsInputs() != 1 ||
+        generic.getNumDpsInits() != 1 || generic.getNumLoops() != 5) {
+      return false;
+    }
+    SmallVector<AffineMap> maps = generic.getIndexingMapsArray();
+    if (maps.size() != 2 || !maps[1].isIdentity()) {
+      return false;
+    }
+    Value input = generic.getDpsInputs().front();
+    Value output = generic.getDpsInits().front();
+    const auto inputType = dyn_cast<MemRefType>(input.getType());
+    const auto outputType = dyn_cast<MemRefType>(output.getType());
+    if (!inputType || !outputType || !inputType.hasStaticShape() ||
+        !outputType.hasStaticShape() || inputType.getRank() != 4 ||
+        outputType.getRank() != 5 ||
+        inputType.getElementType() != outputType.getElementType() ||
+        !isa<FloatType>(inputType.getElementType())) {
+      return false;
+    }
+
+    MLIRContext* context = generic.getContext();
+    auto constantZero = dyn_cast<AffineConstantExpr>(maps[0].getResult(0));
+    if (!constantZero || constantZero.getValue() != 0) {
+      return false;
+    }
+    if (maps[0].getResult(3) !=
+        getAffineDimExpr(generic.getNumLoops() - 1, context)) {
+      return false;
+    }
+    int64_t strideHeight = 0;
+    int64_t dilationHeight = 0;
+    int64_t strideWidth = 0;
+    int64_t dilationWidth = 0;
+    if (!extractStrideDilation(
+          maps[0].getResult(1), 0, 2, strideHeight, dilationHeight) ||
+        !extractStrideDilation(
+          maps[0].getResult(2), 1, 3, strideWidth, dilationWidth)) {
+      return false;
+    }
+    const int64_t channels = inputType.getShape()[3];
+    // 仅当通道数是 2 的幂（≥8）时改写：保证整行向量宽度合法；否则保持
+    // 原 generic 下降（其行为等价于基线）。
+    return channels >= 8 && channels <= kMaxRowWidth &&
+           (channels & (channels - 1)) == 0 &&
+           outputType.getShape()[4] == channels;
+  }
+
+  // im2col gather → scf.parallel + 整 IC 行向量拷贝。并行维度沿用原
+  // generic 的四个 leading 维，保留通用下降 scf.parallel 的 OpenMP 多
+  // 线程；行内 IC 连续段为 SIMD 拷贝。步长/膨胀从映射重新抽取。
+  void gatherToParallelVectorCopy(IRRewriter& rewriter,
+                                  linalg::GenericOp generic) const {
+    Value input = generic.getDpsInputs().front();
+    Value output = generic.getDpsInits().front();
+    const auto inputType = cast<MemRefType>(input.getType());
+    SmallVector<int64_t> bounds = generic.getStaticLoopRanges();
+    const int64_t channels = inputType.getShape()[3];
+
+    AffineMap inputMap = generic.getIndexingMapsArray()[0];
+    int64_t strideHeight = 1;
+    int64_t dilationHeight = 1;
+    int64_t strideWidth = 1;
+    int64_t dilationWidth = 1;
+    extractStrideDilation(
+      inputMap.getResult(1), 0, 2, strideHeight, dilationHeight);
+    extractStrideDilation(
+      inputMap.getResult(2), 1, 3, strideWidth, dilationWidth);
+
+    ImplicitLocOpBuilder builder(generic.getLoc(), rewriter);
+    builder.setInsertionPoint(generic);
+
+    auto vectorType = VectorType::get({channels}, inputType.getElementType());
+    auto zeroIndex = builder.create<arith::ConstantIndexOp>(0);
+
+    SmallVector<Value> lowerBounds;
+    SmallVector<Value> upperBounds;
+    SmallVector<Value> steps;
+    for (int64_t dimension = 0; dimension < 4; ++dimension) {
+      lowerBounds.push_back(
+        builder.create<arith::ConstantIndexOp>(0).getResult());
+      upperBounds.push_back(
+        builder.create<arith::ConstantIndexOp>(bounds[dimension]).getResult());
+      steps.push_back(builder.create<arith::ConstantIndexOp>(1).getResult());
+    }
+    auto parallel = builder.create<scf::ParallelOp>(
+      generic.getLoc(), lowerBounds, upperBounds, steps);
+    builder.setInsertionPointToStart(parallel.getBody());
+
+    SmallVector<Value> indices(parallel.getInductionVars());
+
+    auto heightIndex = builder.create<arith::MulIOp>(
+      builder.create<arith::ConstantIndexOp>(strideHeight), indices[0]);
+    auto heightOffset = builder.create<arith::MulIOp>(
+      builder.create<arith::ConstantIndexOp>(dilationHeight), indices[2]);
+    auto widthIndex = builder.create<arith::MulIOp>(
+      builder.create<arith::ConstantIndexOp>(strideWidth), indices[1]);
+    auto widthOffset = builder.create<arith::MulIOp>(
+      builder.create<arith::ConstantIndexOp>(dilationWidth), indices[3]);
+    auto sourceRow = builder.create<arith::AddIOp>(heightIndex, heightOffset);
+    auto sourceColumn = builder.create<arith::AddIOp>(widthIndex, widthOffset);
+
+    auto row = builder.create<vector::TransferReadOp>(
+      vectorType,
+      input,
+      ValueRange{zeroIndex.getResult(),
+                 sourceRow.getResult(),
+                 sourceColumn.getResult(),
+                 zeroIndex.getResult()},
+      std::nullopt);
+    builder.create<vector::TransferWriteOp>(
+      row,
+      output,
+      ValueRange{
+        indices[0], indices[1], indices[2], indices[3], zeroIndex.getResult()},
+      std::nullopt);
+
+    rewriter.eraseOp(generic);
+  }
+
   void vectorizeRowGeneric(IRRewriter& rewriter,
                            linalg::GenericOp generic) const {
     Value out = generic.getOutputs().front();
@@ -175,30 +350,48 @@ class MatmulKernelNCNNPass final
     builder.setInsertionPoint(generic);
 
     auto vectorType = VectorType::get({shape.back()}, elementType);
-    auto zero = builder.create<arith::ConstantIndexOp>(0);
-    auto one = builder.create<arith::ConstantIndexOp>(1);
 
-    // 外层循环链（leading dims），逐层下探到最内行。
-    SmallVector<Value> indices(rank, zero);
-    for (int64_t dimension = 0; dimension < rank - 1; ++dimension) {
-      auto bound = builder.create<arith::ConstantIndexOp>(shape[dimension]);
-      auto loop = builder.create<scf::ForOp>(zero, bound.getResult(), one);
-      indices[dimension] = loop.getInductionVar();
-      builder.setInsertionPointToStart(loop.getBody());
+    // leading dims 发射为 scf.parallel：保留原 generic 经
+    // ConvertLinalgToParallelLoops 的 OpenMP 多线程语义（串行 scf.for
+    // 链会在大图 epilogue 上丢失全部并行度）。
+    SmallVector<Value> parallelIndices(rank - 1);
+    if (rank > 1) {
+      SmallVector<Value> lowerBounds;
+      SmallVector<Value> upperBounds;
+      SmallVector<Value> steps;
+      for (int64_t dimension = 0; dimension < rank - 1; ++dimension) {
+        lowerBounds.push_back(
+          builder.create<arith::ConstantIndexOp>(0).getResult());
+        upperBounds.push_back(
+          builder.create<arith::ConstantIndexOp>(shape[dimension]).getResult());
+        steps.push_back(builder.create<arith::ConstantIndexOp>(1).getResult());
+      }
+      auto parallel = builder.create<scf::ParallelOp>(
+        generic.getLoc(), lowerBounds, upperBounds, steps);
+      llvm::copy(parallel.getInductionVars(), parallelIndices.begin());
+      builder.setInsertionPointToStart(parallel.getBody());
     }
+
+    SmallVector<Value> indices(rank, builder.create<arith::ConstantIndexOp>(0));
+    llvm::copy(parallelIndices, indices.begin());
 
     IRMapping mapping;
     unsigned inputIndex = 0;
     Block& block = generic.getRegion().front();
     for (Value input : generic.getDpsInputs()) {
-      mapping.map(block.getArgument(inputIndex),
-                  builder.create<vector::TransferReadOp>(
-                    vectorType, input, indices, std::nullopt));
+      mapping.map(
+        block.getArgument(inputIndex),
+        builder.create<vector::TransferReadOp>(vectorType,
+                                               input,
+                                               indices,
+                                               std::nullopt,
+                                               SmallVector<bool>(1, true)));
       ++inputIndex;
     }
-    mapping.map(block.getArgument(generic.getNumDpsInputs()),
-                builder.create<vector::TransferReadOp>(
-                  vectorType, out, indices, std::nullopt));
+    mapping.map(
+      block.getArgument(generic.getNumDpsInputs()),
+      builder.create<vector::TransferReadOp>(
+        vectorType, out, indices, std::nullopt, SmallVector<bool>(1, true)));
 
     for (Operation& statement : block.without_terminator()) {
       if (auto constant = dyn_cast<arith::ConstantOp>(&statement)) {
@@ -231,8 +424,10 @@ class MatmulKernelNCNNPass final
     }
 
     Value yielded = block.getTerminator()->getOperand(0);
-    builder.create<vector::TransferWriteOp>(
-      mapping.lookup(yielded), out, indices, std::nullopt);
+    auto rowWrite = builder.create<vector::TransferWriteOp>(
+      mapping.lookup(yielded), out, indices);
+    rowWrite.setInBoundsAttr(
+      builder.getBoolArrayAttr(SmallVector<bool>(1, true)));
 
     rewriter.eraseOp(generic);
   }

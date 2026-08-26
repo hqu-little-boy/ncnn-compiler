@@ -51,9 +51,9 @@ module {
 // 自拷贝嵌套被整体删除：forall 内不再存在标量 load/store 对。
 // CHECK-NOT: memref.store
 
-// relu generic 行向量化为三层循环 + 整行 transfer。
+// relu generic 行向量化：leading dims 发射 scf.parallel 保留多线程。
 // CHECK-LABEL: func.func @relu
-// CHECK-COUNT-3: scf.for
+// CHECK: scf.parallel
 // CHECK: vector.transfer_read {{.*}} : memref<1x320x320x32xf32>, vector<32xf32>
 // CHECK: arith.maximumf
 // CHECK: vector.transfer_write {{.*}} : vector<32xf32>, memref<1x320x320x32xf32>
