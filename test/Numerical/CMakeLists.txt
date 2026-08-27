@@ -1676,7 +1676,8 @@ add_dependencies(compile_pp_formulanet_plus_s_encoder_fp16
                  compile_pp_structrurev2_slanet_plus_cnn_fp16)
 
 add_library(numerical_test_support STATIC
-    support/numerical_test_support.cpp)
+    support/numerical_test_support.cpp
+    support/performance_test_support.cpp)
 target_include_directories(numerical_test_support PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(numerical_test_support PUBLIC ncnn GTest::gtest)
@@ -2428,4 +2429,138 @@ gtest_discover_tests(numerical_dynamic_operator_tests
     PROPERTIES
         LABELS numerical-dynamic
         TIMEOUT 900
+        RUN_SERIAL TRUE)
+
+# ── 性能基准（performance 标签）：编译产物 vs upstream ncnn 墙钟对比 ──
+# 复用上方已注册的 compile_<model> fixture，不重复编译任何模型；数值正确性
+# 仍由 numerical_tests 保证。默认纯报告（测试恒过），NCNN_PERF_MAX_RATIO
+# 可启用回归门禁，详见 test/Numerical/README.md 的性能基准一节。
+set(performance_under_sanitizer 0)
+if(CMAKE_CXX_FLAGS MATCHES "fsanitize")
+    set(performance_under_sanitizer 1)
+endif()
+add_executable(performance_tests
+    models/performance_test.cpp)
+target_link_libraries(performance_tests PRIVATE
+    numerical_test_support
+    GTest::gtest
+    ${CMAKE_DL_LIBS})
+target_compile_definitions(performance_tests PRIVATE
+    GTEST_HAS_CXXABI_H_=0
+    PERFORMANCE_UNDER_SANITIZER=${performance_under_sanitizer}
+    SQUEEZENET_PARAM_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param"
+    SQUEEZENET_BIN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin"
+    SQUEEZENET_LIBRARY_PATH="${squeezenet_v1_1_LIBRARY}"
+    RESNET18_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.param"
+    RESNET18_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.bin"
+    RESNET18_LIBRARY_PATH="${resnet18_LIBRARY}"
+    RESNET34_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.param"
+    RESNET34_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.bin"
+    RESNET34_LIBRARY_PATH="${resnet34_LIBRARY}"
+    RESNET50_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet50.ncnn.param"
+    RESNET50_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet50.ncnn.bin"
+    RESNET50_LIBRARY_PATH="${resnet50_LIBRARY}"
+    RESNET101_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet101.ncnn.param"
+    RESNET101_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet101.ncnn.bin"
+    RESNET101_LIBRARY_PATH="${resnet101_LIBRARY}"
+    YOLOV5N_CLS_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n_cls.ncnn.param"
+    YOLOV5N_CLS_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n_cls.ncnn.bin"
+    YOLOV5N_CLS_LIBRARY_PATH="${yolov5n_cls_LIBRARY}"
+    YOLOV5S_CLS_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s_cls.ncnn.param"
+    YOLOV5S_CLS_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s_cls.ncnn.bin"
+    YOLOV5S_CLS_LIBRARY_PATH="${yolov5s_cls_LIBRARY}"
+    YOLOV5M_CLS_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m_cls.ncnn.param"
+    YOLOV5M_CLS_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m_cls.ncnn.bin"
+    YOLOV5M_CLS_LIBRARY_PATH="${yolov5m_cls_LIBRARY}"
+    YOLOV5L_CLS_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l_cls.ncnn.param"
+    YOLOV5L_CLS_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l_cls.ncnn.bin"
+    YOLOV5L_CLS_LIBRARY_PATH="${yolov5l_cls_LIBRARY}"
+    YOLOV5X_CLS_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_cls.ncnn.param"
+    YOLOV5X_CLS_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_cls.ncnn.bin"
+    YOLOV5X_CLS_LIBRARY_PATH="${yolov5x_cls_LIBRARY}"
+    YOLOV5N_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.param"
+    YOLOV5N_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.bin"
+    YOLOV5N_LIBRARY_PATH="${yolov5n_LIBRARY}"
+    YOLOV5S_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s.ncnn.param"
+    YOLOV5S_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s.ncnn.bin"
+    YOLOV5S_LIBRARY_PATH="${yolov5s_LIBRARY}"
+    YOLOV5M_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m.ncnn.param"
+    YOLOV5M_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m.ncnn.bin"
+    YOLOV5M_LIBRARY_PATH="${yolov5m_LIBRARY}"
+    YOLOV5L_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l.ncnn.param"
+    YOLOV5L_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l.ncnn.bin"
+    YOLOV5L_LIBRARY_PATH="${yolov5l_LIBRARY}"
+    YOLOV5X_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x.ncnn.param"
+    YOLOV5X_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x.ncnn.bin"
+    YOLOV5X_LIBRARY_PATH="${yolov5x_LIBRARY}"
+    YOLOV5N_SEG_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n_seg.ncnn.param"
+    YOLOV5N_SEG_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n_seg.ncnn.bin"
+    YOLOV5N_SEG_LIBRARY_PATH="${yolov5n_seg_LIBRARY}"
+    YOLOV5S_SEG_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s_seg.ncnn.param"
+    YOLOV5S_SEG_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s_seg.ncnn.bin"
+    YOLOV5S_SEG_LIBRARY_PATH="${yolov5s_seg_LIBRARY}"
+    YOLOV5M_SEG_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m_seg.ncnn.param"
+    YOLOV5M_SEG_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m_seg.ncnn.bin"
+    YOLOV5M_SEG_LIBRARY_PATH="${yolov5m_seg_LIBRARY}"
+    YOLOV5L_SEG_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l_seg.ncnn.param"
+    YOLOV5L_SEG_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l_seg.ncnn.bin"
+    YOLOV5L_SEG_LIBRARY_PATH="${yolov5l_seg_LIBRARY}"
+    YOLOV5X_SEG_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_seg.ncnn.param"
+    YOLOV5X_SEG_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_seg.ncnn.bin"
+    YOLOV5X_SEG_LIBRARY_PATH="${yolov5x_seg_LIBRARY}"
+    EFFICIENTNET_B0_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b0.ncnn.param"
+    EFFICIENTNET_B0_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b0.ncnn.bin"
+    EFFICIENTNET_B0_LIBRARY_PATH="${efficientnet_b0_LIBRARY}"
+    EFFICIENTNET_B1_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b1.ncnn.param"
+    EFFICIENTNET_B1_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b1.ncnn.bin"
+    EFFICIENTNET_B1_LIBRARY_PATH="${efficientnet_b1_LIBRARY}"
+    EFFICIENTNET_B2_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b2.ncnn.param"
+    EFFICIENTNET_B2_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b2.ncnn.bin"
+    EFFICIENTNET_B2_LIBRARY_PATH="${efficientnet_b2_LIBRARY}"
+    EFFICIENTNET_B3_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b3.ncnn.param"
+    EFFICIENTNET_B3_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b3.ncnn.bin"
+    EFFICIENTNET_B3_LIBRARY_PATH="${efficientnet_b3_LIBRARY}"
+    PP_LCNET_DOC_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param"
+    PP_LCNET_DOC_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin"
+    PP_LCNET_DOC_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_LIBRARY}"
+    PP_LCNET_TEXTLINE_ORI_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param"
+    PP_LCNET_TEXTLINE_ORI_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin"
+    PP_LCNET_TEXTLINE_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_LIBRARY}"
+    CHINESEOCR_LITE_ANGLENET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param"
+    CHINESEOCR_LITE_ANGLENET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin"
+    CHINESEOCR_LITE_ANGLENET_LIBRARY_PATH="${chineseocr_lite_anglenet_LIBRARY}")
+add_dependencies(performance_tests
+    compile_squeezenet_v1_1
+    compile_resnet18
+    compile_resnet34
+    compile_resnet50
+    compile_resnet101
+    compile_yolov5n_cls
+    compile_yolov5s_cls
+    compile_yolov5m_cls
+    compile_yolov5l_cls
+    compile_yolov5x_cls
+    compile_yolov5n
+    compile_yolov5s
+    compile_yolov5m
+    compile_yolov5l
+    compile_yolov5x
+    compile_yolov5n_seg
+    compile_yolov5s_seg
+    compile_yolov5m_seg
+    compile_yolov5l_seg
+    compile_yolov5x_seg
+    compile_efficientnet_b0
+    compile_efficientnet_b1
+    compile_efficientnet_b2
+    compile_efficientnet_b3
+    compile_pp_lcnet_x1_0_doc_ori
+    compile_pp_lcnet_x1_0_textline_ori
+    compile_chineseocr_lite_anglenet)
+# 性能数字只在 sanitizer 构建里自跳（PERFORMANCE_UNDER_SANITIZER），因此不套用
+# 数值测试的超时放大系数。
+gtest_discover_tests(performance_tests
+    PROPERTIES
+        LABELS performance
+        TIMEOUT 1800
         RUN_SERIAL TRUE)

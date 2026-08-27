@@ -296,6 +296,13 @@ cmake --build compiler/build \
 复用旧的 generated `.so`，从而使数值、符号依赖和性能结果失真。详细坑点和命令见
 [`ncnn-suspected-issues.md`](ncnn-suspected-issues.md) 的“CTest 不会重建 fixture”一节。
 
+性能基准（`performance` 标签）同样遵守该规则：先构建 `performance_tests` target 再跑
+CTest。每个性能测试内置一次宽松数值 sanity（rtol=atol=5e-3），专门兜底“计时了陈旧或
+错误 `.so`”的情况；方法论、环境变量与门禁用法见
+[`test/Numerical/README.md`](../test/Numerical/README.md) 的性能基准一节。另外，有意义的
+性能对比必须在 Release 构建下进行：Debug 构建中 vendored ncnn 参考以 `-O0` 编译，
+加速比会严重虚高。
+
 ## 15. 并行构建下生成 fixture 要避免相互踩产物
 
 多个模型 fixture 会同时运行 driver、opt、translate、clang、nm 和 readelf。本环境曾在并行构建
