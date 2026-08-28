@@ -178,7 +178,28 @@ CHW 数组不能通过一次整块 `memcpy` 映射到多 channel Mat。这个行
 因为不同合法实现的 float32 累加顺序会产生舍入差异。应先比较单算子、第一处中间结果、
 top-k 和 softmax sum，再决定是否存在语义错误。
 
-## 4. 结论与维护规则
+## 4. Int8 推理在 PP-OCR 系 det 模型的 Depthwise int8 kernel 内段错误
+
+现象：性能基准（`test/Numerical/models/performance_test.cpp`）在
+`opt.use_int8_inference=true` 下加载 `PP-OCRv6_tiny_det_int8.param/.bin` 并执行一次
+Extractor 推理即 SIGSEGV，gdb 栈顶为
+`ncnn::ConvolutionDepthWise_x86_fma::forward_int8_x86(ncnn::Mat const&, ncnn::Mat&,
+ncnn::Option const&)`（vendored ncnn `a4d2ea1d`，Release 构建，x86_64 fma 路径）。
+加载期 ncnn 还打印该模型含 “Convolution 1d input compatibility path is deprecated”
+建议改写为 InnerProduct 的告警。同类 det_int8 模型（PP-OCRv6 small/medium、
+PP-OCRv5 mobile）按同一方式处置；PP-LCNet int8 与 OCR rec int8 模型的 Int8 推理
+正常，FP32 模式全部正常。
+
+处置：已用仅链接 vendored ncnn 的独立最小复现（默认选项、默认线程、无 OpenMP
+混载与测试环境因素）确认崩溃与 perf 套件环境无关，且与线程数无关（`threads=1`
+同样崩溃）。四个 det_int8 模型的 FP32 模式全部崩溃；Int8 模式下仅
+`PP-OCRv6_medium_det_int8` 存活。perf 套件据此移除 tiny/small/mobile 三个
+det_int8 行，`medium_det_int8` 保留 Int8 双侧同模式对比（见
+`test/Numerical/README.md`）。数值金标对 int8 只做稳定性校验、不做交叉推理，
+因此该崩溃此前未被发现。是否为上游 int8 Depthwise kernel 越界还是 deprecated
+Convolution-1d 兼容路径触发，仍需进一步最小 `.param` 隔离后向 upstream 报告。
+
+## 5. 结论与维护规则
 
 - 当前只有 external Mat 的 `cstep`/尾部空间契约值得作为高优先级 API 文档问题向
   upstream 进一步确认；是否存在独立的 kernel 越界缺陷仍需最小复现隔离。

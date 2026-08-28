@@ -230,12 +230,13 @@ std::expected<TimingStats, std::string> time_repeated_inference(
 struct NcnnBenchRunner::Impl final {
   Impl(std::string_view param_path,
        std::string_view bin_path,
-       int num_threads) {
-    // opt 块与 run_ncnn_reference 的 FP32 CPU 路径逐字对齐，保证计时对象与
+       int num_threads,
+       ReferenceInferenceMode mode) {
+    // opt 块与 run_ncnn_reference 的对应推理路径逐字对齐，保证计时对象与
     // 数值金标参考完全同构。
     network.opt.lightmode = false;
     network.opt.use_vulkan_compute = false;
-    network.opt.use_int8_inference = false;
+    network.opt.use_int8_inference = mode == ReferenceInferenceMode::Int8;
     network.opt.use_fp16_packed = false;
     network.opt.use_fp16_storage = false;
     network.opt.use_fp16_arithmetic = false;
@@ -258,8 +259,9 @@ struct NcnnBenchRunner::Impl final {
 
 NcnnBenchRunner::NcnnBenchRunner(std::string_view param_path,
                                  std::string_view bin_path,
-                                 int num_threads)
-  : impl_(new Impl(param_path, bin_path, num_threads)) {}
+                                 int num_threads,
+                                 ReferenceInferenceMode mode)
+  : impl_(new Impl(param_path, bin_path, num_threads, mode)) {}
 
 NcnnBenchRunner::~NcnnBenchRunner() {
   delete impl_;

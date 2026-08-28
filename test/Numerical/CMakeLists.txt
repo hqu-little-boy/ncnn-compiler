@@ -2528,7 +2528,64 @@ target_compile_definitions(performance_tests PRIVATE
     PP_LCNET_TEXTLINE_ORI_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_LIBRARY}"
     CHINESEOCR_LITE_ANGLENET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param"
     CHINESEOCR_LITE_ANGLENET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin"
-    CHINESEOCR_LITE_ANGLENET_LIBRARY_PATH="${chineseocr_lite_anglenet_LIBRARY}")
+    CHINESEOCR_LITE_ANGLENET_LIBRARY_PATH="${chineseocr_lite_anglenet_LIBRARY}"
+    PP_LCNET_DOC_ORI_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.param"
+    PP_LCNET_DOC_ORI_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.bin"
+    PP_LCNET_DOC_ORI_INT8_LIBRARY_PATH="${pp_lcnet_x1_0_doc_ori_int8_LIBRARY}"
+    PP_LCNET_TEXTLINE_ORI_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori_int8.param"
+    PP_LCNET_TEXTLINE_ORI_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori_int8.bin"
+    PP_LCNET_TEXTLINE_ORI_INT8_LIBRARY_PATH="${pp_lcnet_x1_0_textline_ori_int8_LIBRARY}"
+    PP_OCRV6_TINY_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param"
+    PP_OCRV6_TINY_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin"
+    PP_OCRV6_TINY_REC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_LIBRARY}"
+    PP_OCRV6_TINY_REC_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.param"
+    PP_OCRV6_TINY_REC_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.bin"
+    PP_OCRV6_TINY_REC_INT8_LIBRARY_PATH="${pp_ocrv6_tiny_rec_int8_LIBRARY}"
+    PP_OCRV5_MOBILE_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.param"
+    PP_OCRV5_MOBILE_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.bin"
+    PP_OCRV5_MOBILE_REC_LIBRARY_PATH="${pp_ocrv5_mobile_rec_LIBRARY}"
+    PP_OCRV5_MOBILE_REC_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec_int8.param"
+    PP_OCRV5_MOBILE_REC_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec_int8.bin"
+    PP_OCRV5_MOBILE_REC_INT8_LIBRARY_PATH="${pp_ocrv5_mobile_rec_int8_LIBRARY}"
+    PP_OCRV5_SERVER_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_rec.param"
+    PP_OCRV5_SERVER_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_rec.bin"
+    PP_OCRV5_SERVER_REC_LIBRARY_PATH="${pp_ocrv5_server_rec_LIBRARY}"
+    PP_OCRV6_MEDIUM_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.param"
+    PP_OCRV6_MEDIUM_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.bin"
+    PP_OCRV6_MEDIUM_REC_LIBRARY_PATH="${pp_ocrv6_medium_rec_LIBRARY}"
+    PP_OCRV6_MEDIUM_REC_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec_int8.param"
+    PP_OCRV6_MEDIUM_REC_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec_int8.bin"
+    PP_OCRV6_MEDIUM_REC_INT8_LIBRARY_PATH="${pp_ocrv6_medium_rec_int8_LIBRARY}"
+    PP_OCRV6_SMALL_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec.param"
+    PP_OCRV6_SMALL_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec.bin"
+    PP_OCRV6_SMALL_REC_LIBRARY_PATH="${pp_ocrv6_small_rec_LIBRARY}"
+    PP_OCRV6_SMALL_REC_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec_int8.param"
+    PP_OCRV6_SMALL_REC_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec_int8.bin"
+    PP_OCRV6_SMALL_REC_INT8_LIBRARY_PATH="${pp_ocrv6_small_rec_int8_LIBRARY}"
+    PP_OCRV6_TINY_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param"
+    PP_OCRV6_TINY_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin"
+    PP_OCRV6_TINY_DET_LIBRARY_PATH="${pp_ocrv6_tiny_det_LIBRARY}"
+    PP_OCRV6_SMALL_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.param"
+    PP_OCRV6_SMALL_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.bin"
+    PP_OCRV6_SMALL_DET_LIBRARY_PATH="${pp_ocrv6_small_det_LIBRARY}"
+    PP_OCRV6_MEDIUM_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param"
+    PP_OCRV6_MEDIUM_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin"
+    PP_OCRV6_MEDIUM_DET_LIBRARY_PATH="${pp_ocrv6_medium_det_LIBRARY}"
+    PP_OCRV6_MEDIUM_DET_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det_int8.param"
+    PP_OCRV6_MEDIUM_DET_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det_int8.bin"
+    PP_OCRV6_MEDIUM_DET_INT8_LIBRARY_PATH="${pp_ocrv6_medium_det_int8_LIBRARY}"
+    PP_OCRV5_MOBILE_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param"
+    PP_OCRV5_MOBILE_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin"
+    PP_OCRV5_MOBILE_DET_LIBRARY_PATH="${pp_ocrv5_mobile_det_static_LIBRARY}"
+    PP_OCRV5_SERVER_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param"
+    PP_OCRV5_SERVER_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin"
+    PP_OCRV5_SERVER_DET_STATIC_LIBRARY_PATH="${pp_ocrv5_server_det_static_LIBRARY}"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin"
+    PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH="${pp_structrurev2_slanet_plus_cnn_LIBRARY}"
+    PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param"
+    PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin"
+    PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH="${pp_formulanet_plus_s_encoder_LIBRARY}")
 add_dependencies(performance_tests
     compile_squeezenet_v1_1
     compile_resnet18
@@ -2556,7 +2613,26 @@ add_dependencies(performance_tests
     compile_efficientnet_b3
     compile_pp_lcnet_x1_0_doc_ori
     compile_pp_lcnet_x1_0_textline_ori
-    compile_chineseocr_lite_anglenet)
+    compile_chineseocr_lite_anglenet
+    compile_pp_lcnet_x1_0_doc_ori_int8
+    compile_pp_lcnet_x1_0_textline_ori_int8
+    compile_pp_ocrv6_tiny_rec
+    compile_pp_ocrv6_tiny_rec_int8
+    compile_pp_ocrv5_mobile_rec
+    compile_pp_ocrv5_mobile_rec_int8
+    compile_pp_ocrv5_server_rec
+    compile_pp_ocrv6_medium_rec
+    compile_pp_ocrv6_medium_rec_int8
+    compile_pp_ocrv6_small_rec
+    compile_pp_ocrv6_small_rec_int8
+    compile_pp_ocrv6_tiny_det
+    compile_pp_ocrv6_small_det
+    compile_pp_ocrv6_medium_det
+    compile_pp_ocrv6_medium_det_int8
+    compile_pp_ocrv5_mobile_det_static
+    compile_pp_ocrv5_server_det_static
+    compile_pp_structrurev2_slanet_plus_cnn
+    compile_pp_formulanet_plus_s_encoder)
 # 性能数字只在 sanitizer 构建里自跳（PERFORMANCE_UNDER_SANITIZER），因此不套用
 # 数值测试的超时放大系数。
 gtest_discover_tests(performance_tests

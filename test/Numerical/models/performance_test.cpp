@@ -6,7 +6,9 @@
 #include "numerical_test_support.hpp"
 #include "performance_test_support.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -31,6 +33,18 @@ constexpr std::size_t kSegProtoElements = 32U * 160U * 160U;
 constexpr std::size_t kSegDetectionElements =
   kYolov5GridSum * kYolov5Anchors * 117U;
 
+// OCR rec 输出 = 40 帧序列 × 类别数（序列长度 = (输入宽 + 3) / 8）。
+constexpr std::size_t kRecSequenceLength = 40;
+constexpr std::size_t kTinyRecClasses = 6906;
+constexpr std::size_t kMobileRecClasses = 18385;
+constexpr std::size_t kServerRecClasses = 18385;
+constexpr std::size_t kMediumRecClasses = 18710;
+constexpr std::size_t kSmallRecClasses = 18710;
+constexpr std::size_t kDetMapElements = 640U * 640U;
+constexpr std::size_t kDetInt8MapElements = 32U * 32U;
+constexpr std::size_t kSlanetCnnElements = 256U * 96U;
+constexpr std::size_t kFormulaEncoderElements = 144U * 2048U;
+
 struct ModelSpec final {
   std::string_view name;
   std::string_view param_path;
@@ -43,6 +57,11 @@ struct ModelSpec final {
   TensorShape input_shape;
   std::array<std::size_t, 2> output_element_counts{};
   std::uint32_t seed;
+  // int8 产物行用 Int8 参考（双侧同模式计时才有意义）。
+  ReferenceInferenceMode reference_mode = ReferenceInferenceMode::Float32;
+  // int8 金标契约只做稳定性校验、无跨厂商交叉对比，这些行以有限域检查替代
+  // compare_values 宽松对比。
+  bool verify_against_reference = true;
 };
 
 // 重模型（输入 >= 640x640x3）用更少的迭代次数控制整包时长。
@@ -86,8 +105,10 @@ void run_model_benchmark(const ModelSpec& spec) {
 
   CompiledModel compiled(spec.library_path, spec.symbol);
   ASSERT_TRUE(compiled.valid()) << compiled.error();
-  NcnnBenchRunner runner(
-    spec.param_path, spec.bin_path, resolved_thread_count());
+  NcnnBenchRunner runner(spec.param_path,
+                         spec.bin_path,
+                         resolved_thread_count(),
+                         spec.reference_mode);
   ASSERT_TRUE(runner.valid()) << runner.error();
 
   const bool two_outputs = spec.output_element_counts[1] != 0;
@@ -118,13 +139,21 @@ void run_model_benchmark(const ModelSpec& spec) {
   if (sanity_check_enabled()) {
     ASSERT_EQ(reference_inference(), 0) << runner.error();
     ASSERT_EQ(compiled_inference(), 0);
-    EXPECT_TRUE(
-      compare_values(first_output, reference_outputs[0], 5.0e-3F, 5.0e-3F))
-      << spec.name << ": compiled output diverges from ncnn reference";
-    if (two_outputs) {
+    if (spec.verify_against_reference) {
       EXPECT_TRUE(
-        compare_values(second_output, reference_outputs[1], 5.0e-3F, 5.0e-3F))
-        << spec.name << ": compiled second output diverges";
+        compare_values(first_output, reference_outputs[0], 5.0e-3F, 5.0e-3F))
+        << spec.name << ": compiled output diverges from ncnn reference";
+      if (two_outputs) {
+        EXPECT_TRUE(
+          compare_values(second_output, reference_outputs[1], 5.0e-3F, 5.0e-3F))
+          << spec.name << ": compiled second output diverges";
+      }
+    } else {
+      const auto finite = [](float value) {
+        return std::isfinite(value);
+      };
+      EXPECT_TRUE(std::ranges::all_of(first_output, finite))
+        << spec.name << ": compiled output is not finite";
     }
   }
 
@@ -553,6 +582,310 @@ TEST(PerformanceModel, Yolov5xSeg) {
     .input_shape = TensorShape(640, 640, 3),
     .output_element_counts = {kSegProtoElements, kSegDetectionElements},
     .seed = 0x53454735U,
+  });
+}
+
+TEST(PerformanceModel, PPLCNetDocOriInt8) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_lcnet_x1_0_doc_ori_int8",
+    .param_path = PP_LCNET_DOC_ORI_INT8_PARAM_PATH,
+    .bin_path = PP_LCNET_DOC_ORI_INT8_BIN_PATH,
+    .library_path = PP_LCNET_DOC_ORI_INT8_LIBRARY_PATH,
+    .symbol = "pp_lcnet_x1_0_doc_ori_int8",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(224, 224, 3),
+    .output_element_counts = {4},
+    .seed = 0x4C434938U,
+    .reference_mode = ReferenceInferenceMode::Int8,
+    .verify_against_reference = false,
+  });
+}
+
+TEST(PerformanceModel, PPLCNetTextlineOriInt8) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_lcnet_x1_0_textline_ori_int8",
+    .param_path = PP_LCNET_TEXTLINE_ORI_INT8_PARAM_PATH,
+    .bin_path = PP_LCNET_TEXTLINE_ORI_INT8_BIN_PATH,
+    .library_path = PP_LCNET_TEXTLINE_ORI_INT8_LIBRARY_PATH,
+    .symbol = "pp_lcnet_x1_0_textline_ori_int8",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(160, 80, 3),
+    .output_element_counts = {2},
+    .seed = 0x544C4938U,
+    .reference_mode = ReferenceInferenceMode::Int8,
+    .verify_against_reference = false,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv6TinyRec) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_tiny_rec",
+    .param_path = PP_OCRV6_TINY_REC_PARAM_PATH,
+    .bin_path = PP_OCRV6_TINY_REC_BIN_PATH,
+    .library_path = PP_OCRV6_TINY_REC_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_tiny_rec",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(320, 48, 3),
+    .output_element_counts = {kRecSequenceLength * kTinyRecClasses},
+    .seed = 0x4F435236U,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv6TinyRecInt8) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_tiny_rec_int8",
+    .param_path = PP_OCRV6_TINY_REC_INT8_PARAM_PATH,
+    .bin_path = PP_OCRV6_TINY_REC_INT8_BIN_PATH,
+    .library_path = PP_OCRV6_TINY_REC_INT8_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_tiny_rec_int8",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(320, 48, 3),
+    .output_element_counts = {kRecSequenceLength * kTinyRecClasses},
+    .seed = 0x36544938U,
+    .reference_mode = ReferenceInferenceMode::Int8,
+    .verify_against_reference = false,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv5MobileRec) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv5_mobile_rec",
+    .param_path = PP_OCRV5_MOBILE_REC_PARAM_PATH,
+    .bin_path = PP_OCRV5_MOBILE_REC_BIN_PATH,
+    .library_path = PP_OCRV5_MOBILE_REC_LIBRARY_PATH,
+    .symbol = "pp_ocrv5_mobile_rec",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(320, 48, 3),
+    .output_element_counts = {kRecSequenceLength * kMobileRecClasses},
+    .seed = 0x354D5245U,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv5MobileRecInt8) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv5_mobile_rec_int8",
+    .param_path = PP_OCRV5_MOBILE_REC_INT8_PARAM_PATH,
+    .bin_path = PP_OCRV5_MOBILE_REC_INT8_BIN_PATH,
+    .library_path = PP_OCRV5_MOBILE_REC_INT8_LIBRARY_PATH,
+    .symbol = "pp_ocrv5_mobile_rec_int8",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(320, 48, 3),
+    .output_element_counts = {kRecSequenceLength * kMobileRecClasses},
+    .seed = 0x354D4938U,
+    .reference_mode = ReferenceInferenceMode::Int8,
+    .verify_against_reference = false,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv5ServerRec) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv5_server_rec",
+    .param_path = PP_OCRV5_SERVER_REC_PARAM_PATH,
+    .bin_path = PP_OCRV5_SERVER_REC_BIN_PATH,
+    .library_path = PP_OCRV5_SERVER_REC_LIBRARY_PATH,
+    .symbol = "pp_ocrv5_server_rec",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(320, 48, 3),
+    .output_element_counts = {kRecSequenceLength * kServerRecClasses},
+    .seed = 0x35535245U,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv6MediumRec) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_medium_rec",
+    .param_path = PP_OCRV6_MEDIUM_REC_PARAM_PATH,
+    .bin_path = PP_OCRV6_MEDIUM_REC_BIN_PATH,
+    .library_path = PP_OCRV6_MEDIUM_REC_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_medium_rec",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(320, 48, 3),
+    .output_element_counts = {kRecSequenceLength * kMediumRecClasses},
+    .seed = 0x364D5245U,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv6MediumRecInt8) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_medium_rec_int8",
+    .param_path = PP_OCRV6_MEDIUM_REC_INT8_PARAM_PATH,
+    .bin_path = PP_OCRV6_MEDIUM_REC_INT8_BIN_PATH,
+    .library_path = PP_OCRV6_MEDIUM_REC_INT8_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_medium_rec_int8",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(320, 48, 3),
+    .output_element_counts = {kRecSequenceLength * kMediumRecClasses},
+    .seed = 0x364D4938U,
+    .reference_mode = ReferenceInferenceMode::Int8,
+    .verify_against_reference = false,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv6SmallRec) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_small_rec",
+    .param_path = PP_OCRV6_SMALL_REC_PARAM_PATH,
+    .bin_path = PP_OCRV6_SMALL_REC_BIN_PATH,
+    .library_path = PP_OCRV6_SMALL_REC_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_small_rec",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(320, 48, 3),
+    .output_element_counts = {kRecSequenceLength * kSmallRecClasses},
+    .seed = 0x36534D45U,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv6SmallRecInt8) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_small_rec_int8",
+    .param_path = PP_OCRV6_SMALL_REC_INT8_PARAM_PATH,
+    .bin_path = PP_OCRV6_SMALL_REC_INT8_BIN_PATH,
+    .library_path = PP_OCRV6_SMALL_REC_INT8_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_small_rec_int8",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(320, 48, 3),
+    .output_element_counts = {kRecSequenceLength * kMediumRecClasses},
+    // 该 fixture 无专属金标测试，种子为新增固定值。
+    .seed = 0x36534D49U,
+    .reference_mode = ReferenceInferenceMode::Int8,
+    .verify_against_reference = false,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv6TinyDet) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_tiny_det",
+    .param_path = PP_OCRV6_TINY_DET_PARAM_PATH,
+    .bin_path = PP_OCRV6_TINY_DET_BIN_PATH,
+    .library_path = PP_OCRV6_TINY_DET_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_tiny_det",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(640, 640, 3),
+    .output_element_counts = {kDetMapElements},
+    .seed = 0x44455436U,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv6SmallDet) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_small_det",
+    .param_path = PP_OCRV6_SMALL_DET_PARAM_PATH,
+    .bin_path = PP_OCRV6_SMALL_DET_BIN_PATH,
+    .library_path = PP_OCRV6_SMALL_DET_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_small_det",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(640, 640, 3),
+    .output_element_counts = {kDetMapElements},
+    .seed = 0x53444554U,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv6MediumDet) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_medium_det",
+    .param_path = PP_OCRV6_MEDIUM_DET_PARAM_PATH,
+    .bin_path = PP_OCRV6_MEDIUM_DET_BIN_PATH,
+    .library_path = PP_OCRV6_MEDIUM_DET_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_medium_det",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(640, 640, 3),
+    .output_element_counts = {kDetMapElements},
+    .seed = 0x4D444554U,
+  });
+}
+
+// det_int8 系列的上游 ncnn 参考在独立最小复现下即崩溃（FP32 全崩，Int8 仅
+// medium 存活，见 docs/ncnn-suspected-issues.md 第 4 节），tiny/small/mobile
+// 三个 det_int8 无法提供任何参考侧计时，暂无对应行；medium_det_int8 保留
+// Int8 双侧同模式对比。
+TEST(PerformanceModel, PPOcrv6MediumDetInt8) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv6_medium_det_int8",
+    .param_path = PP_OCRV6_MEDIUM_DET_INT8_PARAM_PATH,
+    .bin_path = PP_OCRV6_MEDIUM_DET_INT8_BIN_PATH,
+    .library_path = PP_OCRV6_MEDIUM_DET_INT8_LIBRARY_PATH,
+    .symbol = "pp_ocrv6_medium_det_int8",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(32, 32, 3),
+    .output_element_counts = {kDetInt8MapElements},
+    .seed = 0x49384D44U,
+    .reference_mode = ReferenceInferenceMode::Int8,
+    .verify_against_reference = false,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv5MobileDetStatic) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv5_mobile_det_static",
+    .param_path = PP_OCRV5_MOBILE_DET_PARAM_PATH,
+    .bin_path = PP_OCRV5_MOBILE_DET_BIN_PATH,
+    .library_path = PP_OCRV5_MOBILE_DET_LIBRARY_PATH,
+    .symbol = "pp_ocrv5_mobile_det_static",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(640, 640, 3),
+    .output_element_counts = {kDetMapElements},
+    .seed = 0x354D4445U,
+  });
+}
+
+TEST(PerformanceModel, PPOcrv5ServerDetStatic) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_ocrv5_server_det_static",
+    .param_path = PP_OCRV5_SERVER_DET_PARAM_PATH,
+    .bin_path = PP_OCRV5_SERVER_DET_BIN_PATH,
+    .library_path = PP_OCRV5_SERVER_DET_STATIC_LIBRARY_PATH,
+    .symbol = "pp_ocrv5_server_det_static",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(640, 640, 3),
+    .output_element_counts = {kDetMapElements},
+    .seed = 0x35534445U,
+  });
+}
+
+TEST(PerformanceModel, PPStructrureV2SlanetPlusCnn) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_structrurev2_slanet_plus_cnn",
+    .param_path = PP_STRUCTRUREV2_SLANET_PLUS_CNN_PARAM_PATH,
+    .bin_path = PP_STRUCTRUREV2_SLANET_PLUS_CNN_BIN_PATH,
+    .library_path = PP_STRUCTRUREV2_SLANET_PLUS_CNN_LIBRARY_PATH,
+    .symbol = "pp_structrurev2_slanet_plus_cnn",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(488, 488, 3),
+    .output_element_counts = {kSlanetCnnElements},
+    .seed = 0x534C414EU,
+  });
+}
+
+TEST(PerformanceModel, PPFormulaNetPlusSEncoder) {
+  run_model_benchmark(ModelSpec{
+    .name = "pp_formulanet_plus_s_encoder",
+    .param_path = PP_FORMULANET_PLUS_S_ENCODER_PARAM_PATH,
+    .bin_path = PP_FORMULANET_PLUS_S_ENCODER_BIN_PATH,
+    .library_path = PP_FORMULANET_PLUS_S_ENCODER_LIBRARY_PATH,
+    .symbol = "pp_formulanet_plus_s_encoder",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(384, 384, 1),
+    .output_element_counts = {kFormulaEncoderElements},
+    .seed = 0x464F524DU,
   });
 }
 

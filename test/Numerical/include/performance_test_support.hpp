@@ -18,10 +18,11 @@ namespace ncnn_compiler::test {
 [[nodiscard]] std::expected<int, std::string> resolve_benchmark_thread_count();
 
 // 按 vendored ncnn benchmark/benchncnn.cpp 的惯例配置线程：
-// set_cpu_powersave(2)、set_omp_dynamic(0)、set_omp_num_threads(n)，并尽力
-// 设置 OMP_NUM_THREADS。ncnn 与生成的 .so 在 clang 工具链下链接同一 libomp
-// 实例，主线程上设置的 nthreads-var 对两者同时生效；环境变量只是为
-// “晚加载的独立 OpenMP 运行时”兜底。必须在任何计时之前调用。
+// set_cpu_powersave(2)、set_omp_dynamic(0)、set_omp_num_threads(n)，并设置
+// OMP_NUM_THREADS。ncnn（随构建工具链可能链 libgomp）与生成的 .so（clang 链
+// libomp）在进程内是两个独立 OpenMP 运行时：ncnn 侧的线程数经其自带的
+// set_omp_num_threads 生效，dlopen 加载的 libomp 在初始化时读取
+// OMP_NUM_THREADS——两条路径缺一不可。必须在任何计时之前调用。
 void apply_benchncnn_threading(int threads);
 
 struct TimingPolicy final {
@@ -48,14 +49,16 @@ struct TimingStats final {
   const std::function<int()>& inference, const TimingPolicy& policy);
 
 // 复用已加载 ncnn::Net 的参考运行器（pimpl，避免在头文件暴露 ncnn 类型）。
-// opt 块与 run_ncnn_reference 的 FP32 CPU 路径逐字对齐，仅追加
+// opt 块与 run_ncnn_reference 的对应推理路径逐字对齐（FP32 或 Int8），仅追加
 // opt.num_threads；每次 run() 新建 Extractor——与 benchncnn 计时体一致，
 // Extractor 开销计入上游运行时成本是刻意为之。
 class NcnnBenchRunner final {
  public:
-  NcnnBenchRunner(std::string_view param_path,
-                  std::string_view bin_path,
-                  int num_threads);
+  NcnnBenchRunner(
+    std::string_view param_path,
+    std::string_view bin_path,
+    int num_threads,
+    ReferenceInferenceMode mode = ReferenceInferenceMode::Float32);
   ~NcnnBenchRunner();
 
   NcnnBenchRunner(const NcnnBenchRunner&) = delete;

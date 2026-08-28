@@ -114,13 +114,23 @@ NCNN_PERF_JSON=/tmp/perf.ndjson ctest --test-dir compiler/build -L performance
 
 ### 覆盖范围
 
-当前覆盖 27 个静态形状模型：squeezenet_v1_1、resnet18/34/50/101、yolov5n/s/m/l/x_cls、
+当前覆盖 46 个静态形状模型：squeezenet_v1_1、resnet18/34/50/101、yolov5n/s/m/l/x_cls、
 yolov5n/s/m/l/x 检测（640x640）、yolov5n/s/m/l/x_seg（双输出）、efficientnet_b0-b3、
-PP-LCNet doc_ori/textline_ori、Chineseocr-Lite AngleNet。
+PP-LCNet doc_ori/textline_ori（FP32+Int8）、Chineseocr-Lite AngleNet、PP-OCRv5/v6
+rec 全系（tiny/mobile/server/medium/small，FP32+Int8）、PP-OCRv5/v6 det 静态头
+（FP32 640x640 与 medium_det_int8）、PP-StructrureV2 SLANet CNN、PP-FormulaNet_plus_S
+encoder。
 
-明确不覆盖：多输入模型（SLAHead、FormulaNet embed/decoder）、dynamic OCR 族、operators
-单算子（执行时间微秒级，计时噪声占比过大）。新增 OCR rec/det 等单入单出模型时在
-`models/performance_test.cpp` 按 `ModelSpec` 扩行即可。
+明确不覆盖：多输入模型（SLAHead、FormulaNet embed/decoder）、dynamic 系 fixture
+（含 `pp_uvdoc_dynamic`、`pp_ocrv5_server_det_int8`——后者无模型资产，本就不存在）、
+fp16/bf16 精度孪生产物、operators 单算子（执行时间微秒级，计时噪声占比过大）。
+det_int8 中的 tiny/small/mobile 三行缺失：其上游 ncnn 参考在独立最小复现下即段
+错误（FP32/Int8 均然，见 `docs/ncnn-suspected-issues.md`），无法提供对比侧；上游
+修复后按 `ModelSpec` 补行即可。新增单入单出模型时同样扩行。
+
+int8 行的计时在 `ReferenceInferenceMode::Int8` 下双侧同模式进行；由于 int8 金标
+契约只做稳定性校验、无跨厂商交叉对比，这些行的 sanity 以有限域检查替代宽松
+`compare_values`。
 
 `../yolov5_v7.0_models` 或 `../ncnn_modelzoo/liteocr` 资产缺失时构建 `compile_<model>`
 会失败——与数值测试行为一致（仅 squeezenet 自带于 third_party）。
