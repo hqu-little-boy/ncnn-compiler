@@ -140,10 +140,78 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     set(${name}_LIBRARY ${library} PARENT_SCOPE)
 endfunction()
 
+# ── P0 对比口径：模型 fixture 统一按本机目标能力向量化 ──────────────
+# ncnn 参考侧经 runtime dispatch 实际运行在 AVX2/AVX512 内核上；编译产物若不
+# 声明目标 ISA，clang 会落到 SSE2/128-bit，perf 对比失去公平性。模型层 fixture
+# （perf 与 golden 共享同一产物）统一注入：MLIR 侧 vector lane 声明 +
+# clang -march=x86-64-v3（AVX2+FMA）。
+# 实测：+avx512f 16-lane 声明配合 -march=native 会使部分模型（efficientnet_b3、
+# PP-OCRv6_tiny_rec）的 clang -O3 IR 编译进入小时级爆炸（即代码中
+# “超宽向量引发 LLVM 合法化期编译爆炸”警告的实例化），故基线取 8-lane
+# x86-64-v3：编译时长与 P0 前同量级，向量宽度仍是 SSE2 基线的 4 倍且带 FMA。
+# operator 级 fixture 与显式精度实验 fixture 不受影响，维持各自契约。
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
+    set(ncnn_model_vector_args
+        VECTOR_MODE=fixed-width
+        TARGET_FEATURE=+avx2
+        TARGET_FEATURE=+fma
+        CLANG_ARG=-march=x86-64-v3)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(ncnn_model_vector_args
+        VECTOR_MODE=fixed-width
+        CLANG_ARG=-march=native)
+else()
+    set(ncnn_model_vector_args VECTOR_MODE=fixed-width)
+endif()
+
+# 实测编译爆炸名单：以下模型在任意 vector lane 宽度（4/8/16）下
+# `clang -x ir -O3` 进入数十分钟至小时级编译（“超宽向量引发 LLVM 合法化期
+# 编译爆炸”警告在大 attention 模型上的实例化，与宽度无关，属代码生成问题，
+# 列入路线 P1）。名单内模型关闭 MLIR 显式行向量化，但仍显式传入与普通模型
+# 相同的 x86-64-v3 目标 ISA，避免性能对比退回 SSE2；其 scalar LLVM loop 的
+# auto-vectorization 由 clang 自行决定。
+set(ncnn_model_no_vector_overrides
+    pp_ocrv6_tiny_rec
+    pp_ocrv6_tiny_rec_int8
+    pp_ocrv5_mobile_rec
+    pp_ocrv5_mobile_rec_int8
+    pp_ocrv5_server_rec
+    pp_ocrv6_medium_rec
+    pp_ocrv6_medium_rec_int8
+    pp_ocrv6_small_rec
+    pp_ocrv6_small_rec_int8
+    pp_structrurev2_slanet_plus_cnn
+    pp_formulanet_plus_s_encoder)
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
+    set(ncnn_model_scalar_args CLANG_ARG=-march=x86-64-v3)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(ncnn_model_scalar_args CLANG_ARG=-march=native)
+else()
+    set(ncnn_model_scalar_args)
+endif()
+
+function(ncnn_add_model_fixture name param_file bin_file)
+    set(input_shape "${ARGV3}")
+    set(input_constraints ${ARGN})
+    if(NOT "${input_shape}" STREQUAL "" AND input_constraints)
+        list(REMOVE_AT input_constraints 0)
+    endif()
+    set(vector_args ${ncnn_model_vector_args})
+    if("${name}" IN_LIST ncnn_model_no_vector_overrides)
+        set(vector_args ${ncnn_model_scalar_args})
+    endif()
+    ncnn_add_compiled_fixture(${name} ${param_file} ${bin_file} "${input_shape}"
+        ${vector_args} ${input_constraints})
+    set(${name}_LIBRARY ${${name}_LIBRARY} PARENT_SCOPE)
+endfunction()
+
 function(ncnn_add_compiled_shape_pair
          name param_file bin_file static_shape dynamic_shape)
-    ncnn_add_compiled_fixture(
+    ncnn_add_model_fixture(
         ${name}_static ${param_file} ${bin_file} ${static_shape})
+    # dynamic fixture 不属于 P0 性能比较范围，保留原有编译口径，避免让
+    # 动态形状数值测试承担模型层 ISA/编译时长策略的变化。
     ncnn_add_compiled_fixture(
         ${name}_dynamic ${param_file} ${bin_file} ${dynamic_shape} ${ARGN})
     set(${name}_static_LIBRARY ${${name}_static_LIBRARY} PARENT_SCOPE)
@@ -828,126 +896,126 @@ ncnn_add_compiled_fixture(
     detection_output
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/detection_output.param
     ${empty_bin})
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     squeezenet_v1_1
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.param
     ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn/examples/squeezenet_v1.1.bin)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     resnet18
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     resnet34
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     resnet50
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet50.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet50.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     resnet101
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet101.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet101.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5n_cls
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n_cls.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n_cls.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5s_cls
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s_cls.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s_cls.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5m_cls
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m_cls.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m_cls.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5l_cls
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l_cls.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l_cls.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5x_cls
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_cls.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_cls.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5n
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5s
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5m
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5l
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5x
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5n_seg
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n_seg.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5n_seg.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5s_seg
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s_seg.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5s_seg.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5m_seg
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m_seg.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5m_seg.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5l_seg
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l_seg.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5l_seg.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     yolov5x_seg
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_seg.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/yolov5x_seg.ncnn.bin
     3x640x640)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     efficientnet_b0
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b0.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b0.ncnn.bin
     3x224x224)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     efficientnet_b1
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b1.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b1.ncnn.bin
     3x240x240)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     efficientnet_b2
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b2.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b2.ncnn.bin
     3x260x260)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     efficientnet_b3
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b3.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/efficientnet_b3.ncnn.bin
     3x300x300)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_lcnet_x1_0_doc_ori
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori.bin
@@ -960,7 +1028,7 @@ ncnn_add_compiled_fixture(
     0:1:min=1,multiple=1
     0:2:min=1,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_lcnet_x1_0_doc_ori_int8
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_doc_ori_int8.bin
@@ -988,7 +1056,7 @@ ncnn_add_compiled_fixture(
     3x?x?
     0:1:min=1,multiple=1
     0:2:min=1,multiple=1)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_lcnet_x1_0_textline_ori
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori.bin
@@ -1001,7 +1069,7 @@ ncnn_add_compiled_fixture(
     0:1:min=1,multiple=1
     0:2:min=1,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_lcnet_x1_0_textline_ori_int8
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori_int8.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-LCNet_x1_0_textline_ori_int8.bin
@@ -1030,7 +1098,7 @@ ncnn_add_compiled_fixture(
     3x?x?
     0:1:min=1,multiple=1
     0:2:min=1,multiple=1)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     chineseocr_lite_anglenet
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/Chineseocr_Lite_AngleNet.bin
@@ -1043,7 +1111,7 @@ ncnn_add_compiled_fixture(
     0:1:min=1,multiple=1
     0:2:min=1,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_tiny_rec
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin
@@ -1055,7 +1123,7 @@ ncnn_add_compiled_fixture(
     3x48x?
     0:2:min=5,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_tiny_rec_int8
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.bin
@@ -1067,7 +1135,7 @@ ncnn_add_compiled_fixture(
     3x48x?
     0:2:min=5,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv5_mobile_rec
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.bin
@@ -1080,7 +1148,7 @@ ncnn_add_compiled_fixture(
     3x48x?
     0:2:min=5,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv5_mobile_rec_int8
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec_int8.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec_int8.bin
@@ -1092,7 +1160,7 @@ ncnn_add_compiled_fixture(
     3x48x?
     0:2:min=5,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv5_server_rec
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_rec.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_server_rec.bin
@@ -1105,7 +1173,7 @@ ncnn_add_compiled_fixture(
     3x48x?
     0:2:min=5,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_medium_rec
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec.bin
@@ -1118,7 +1186,7 @@ ncnn_add_compiled_fixture(
     3x48x?
     0:2:min=5,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_small_rec
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec.bin
@@ -1131,7 +1199,7 @@ ncnn_add_compiled_fixture(
     3x48x?
     0:2:min=5,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_small_rec_int8
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec_int8.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec_int8.bin
@@ -1143,7 +1211,7 @@ ncnn_add_compiled_fixture(
     3x48x?
     0:2:min=5,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_medium_rec_int8
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec_int8.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec_int8.bin
@@ -1155,7 +1223,7 @@ ncnn_add_compiled_fixture(
     3x48x?
     0:2:min=5,multiple=1
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_tiny_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.bin
@@ -1180,7 +1248,7 @@ ncnn_add_compiled_fixture(
     0:1:min=32,multiple=32
     0:2:min=32,multiple=32
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_small_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_det.bin
@@ -1205,7 +1273,7 @@ ncnn_add_compiled_fixture(
     0:1:min=32,multiple=32
     0:2:min=32,multiple=32
     EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_medium_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin
@@ -1217,7 +1285,7 @@ ncnn_add_compiled_fixture(
     3x?x?
     0:1:min=32,multiple=32
     0:2:min=32,multiple=32)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_ocrv6_medium_det_int8
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det_int8.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det_int8.bin
@@ -1259,7 +1327,7 @@ ncnn_add_compiled_shape_pair(
     3x?x?
     0:1:min=32,multiple=32
     0:2:min=32,multiple=32)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_structrurev2_slanet_plus_cnn
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_cnn.bin
@@ -1271,7 +1339,7 @@ ncnn_add_compiled_fixture(
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-StructrureV2_SLANet_plus_slahead.bin
     ""
     INPUT_SHAPE=1x256 INPUT_SHAPE=256x96 INPUT_SHAPE=1x50 EMIT_IR)
-ncnn_add_compiled_fixture(
+ncnn_add_model_fixture(
     pp_formulanet_plus_s_encoder
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.param
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-FormulaNet_plus_S_encoder.bin

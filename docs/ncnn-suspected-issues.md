@@ -186,18 +186,22 @@ Extractor 推理即 SIGSEGV，gdb 栈顶为
 `ncnn::ConvolutionDepthWise_x86_fma::forward_int8_x86(ncnn::Mat const&, ncnn::Mat&,
 ncnn::Option const&)`（vendored ncnn `a4d2ea1d`，Release 构建，x86_64 fma 路径）。
 加载期 ncnn 还打印该模型含 “Convolution 1d input compatibility path is deprecated”
-建议改写为 InnerProduct 的告警。同类 det_int8 模型（PP-OCRv6 small/medium、
-PP-OCRv5 mobile）按同一方式处置；PP-LCNet int8 与 OCR rec int8 模型的 Int8 推理
-正常，FP32 模式全部正常。
+建议改写为 InnerProduct 的告警。同类 det_int8 模型（PP-OCRv6 small/medium、PP-OCRv5 mobile）按同一方式处置；
+PP-LCNet doc_ori/textline_ori int8 也在相同的 ncnn 参考路径中崩溃，普通 FP32
+模型与 OCR rec int8 模型正常。
 
-处置：已用仅链接 vendored ncnn 的独立最小复现（默认选项、默认线程、无 OpenMP
-混载与测试环境因素）确认崩溃与 perf 套件环境无关，且与线程数无关（`threads=1`
-同样崩溃）。四个 det_int8 模型的 FP32 模式全部崩溃；Int8 模式下仅
-`PP-OCRv6_medium_det_int8` 存活。perf 套件据此移除 tiny/small/mobile 三个
-det_int8 行，`medium_det_int8` 保留 Int8 双侧同模式对比（见
-`test/Numerical/README.md`）。数值金标对 int8 只做稳定性校验、不做交叉推理，
-因此该崩溃此前未被发现。是否为上游 int8 Depthwise kernel 越界还是 deprecated
-Convolution-1d 兼容路径触发，仍需进一步最小 `.param` 隔离后向 upstream 报告。
+处置：已用仅链接 vendored ncnn 的独立最小复现工程
+（`../ncnn-det-int8-crash-repro/`，默认选项、可指定线程、无 OpenMP 混载与测试
+环境因素）确认崩溃与 perf 套件环境无关，且与线程数无关（`threads=1` 同样崩
+溃）。崩溃阶段随模式不同：FP32 模式崩在 `load_model` 的 int8 权重→float 转换
+（`convolution_im2col_gemm_transform_kernel`），Int8 模式崩在 `extract` 前向
+（`ConvolutionDepthWise_x86_fma::forward_int8_x86`）。四个 det_int8 模型的
+FP32 模式全部崩溃；Int8 模式下仅 `PP-OCRv6_medium_det_int8` 存活。perf 套件
+据此移除 tiny/small/mobile 三个 det_int8 行，`medium_det_int8` 保留 Int8 双侧
+同模式对比（见 `test/Numerical/README.md`）。数值金标对 int8 只做稳定性校验、
+不做交叉推理，因此该崩溃此前未被发现。是否为上游 int8 Depthwise kernel 越界
+还是 deprecated Convolution-1d 兼容路径触发，仍需进一步最小 `.param` 隔离后向
+upstream 报告。
 
 ## 5. 结论与维护规则
 

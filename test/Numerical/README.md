@@ -65,7 +65,10 @@ SqueezeNet 第一版验收要求：所有输出 finite、softmax sum 误差不�
 ## 性能基准（performance 标签）
 
 `performance_tests` executable 将编译产物与 upstream ncnn 的运行时墙钟耗时对比，
-与数值金标复用同一批 `compile_<model>` fixture（不重复编译模型）。运行前必须先构建：
+与数值金标复用同一批 `compile_<model>` fixture（不重复编译模型）。首轮全量
+基线数据与热点结论见
+[`docs/ncnn-performance-baseline-report.md`](../../docs/ncnn-performance-baseline-report.md)。
+运行前必须先构建：
 
 ```bash
 cmake --build compiler/build --target performance_tests --parallel
@@ -75,6 +78,15 @@ ctest --test-dir compiler/build -L performance -V   # ctest 默认隐藏通过�
 **有意义的对比必须在 Release 构建下进行**：Debug 构建中 vendored ncnn 参考以 `-O0`
 编译，加速比会严重虚高。sanitizer 构建下所有性能测试自动 `GTEST_SKIP`（计时无意义，
 fixture 本身也带插桩）。
+
+普通模型 fixture 的 P0 公平口径已写入 `test/Numerical/CMakeLists.txt`：x86 使用
+`--vector-mode=fixed-width`、`+avx2`、`+fma` 和 `-march=x86-64-v3`，与本机 ncnn
+runtime dispatch 的 AVX2/FMA 路径对齐；attention/大归约模型因显式行向量化会触发
+LLVM 小时级编译爆炸，关闭该层 vector mode 但仍统一传入 `-march=x86-64-v3`，避免
+退回 SSE2。若目标机器不支持 x86-64-v3，不应运行这组预编译产物。P0 后首次代表
+测量（Release，本机 6 大核）为 resnet18 13.4→53.2 ms（ratio 3.96）、yolov5n det
+48.7→107.6 ms（ratio 2.21）；完整报告中的旧表值来自 P0 前 SSE2 口径，供历史参考，
+不应直接与新值作差分。
 
 ### 方法论
 
@@ -114,7 +126,8 @@ NCNN_PERF_JSON=/tmp/perf.ndjson ctest --test-dir compiler/build -L performance
 
 ### 覆盖范围
 
-当前覆盖 46 个静态形状模型：squeezenet_v1_1、resnet18/34/50/101、yolov5n/s/m/l/x_cls、
+当前覆盖 46 个静态形状模型（其中 44 个可实际完成双侧计时，2 个 upstream
+参考崩溃而显式 `GTEST_SKIP`）：squeezenet_v1_1、resnet18/34/50/101、yolov5n/s/m/l/x_cls、
 yolov5n/s/m/l/x 检测（640x640）、yolov5n/s/m/l/x_seg（双输出）、efficientnet_b0-b3、
 PP-LCNet doc_ori/textline_ori（FP32+Int8）、Chineseocr-Lite AngleNet、PP-OCRv5/v6
 rec 全系（tiny/mobile/server/medium/small，FP32+Int8）、PP-OCRv5/v6 det 静态头
@@ -125,8 +138,9 @@ encoder。
 （含 `pp_uvdoc_dynamic`、`pp_ocrv5_server_det_int8`——后者无模型资产，本就不存在）、
 fp16/bf16 精度孪生产物、operators 单算子（执行时间微秒级，计时噪声占比过大）。
 det_int8 中的 tiny/small/mobile 三行缺失：其上游 ncnn 参考在独立最小复现下即段
-错误（FP32/Int8 均然，见 `docs/ncnn-suspected-issues.md`），无法提供对比侧；上游
-修复后按 `ModelSpec` 补行即可。新增单入单出模型时同样扩行。
+错误（FP32/Int8 均然，见 `docs/ncnn-suspected-issues.md`），无法提供对比侧；
+PP-LCNet 两个 Int8 参考行同样因 upstream ncnn 崩溃而显式跳过。上游修复后按
+`ModelSpec` 补回计时行即可。新增单入单出模型时同样扩行。
 
 int8 行的计时在 `ReferenceInferenceMode::Int8` 下双侧同模式进行；由于 int8 金标
 契约只做稳定性校验、无跨厂商交叉对比，这些行的 sanity 以有限域检查替代宽松
