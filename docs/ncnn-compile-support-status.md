@@ -479,3 +479,138 @@ reference 使用 ncnn 的优化 CPU 路径，允许其按平台和 CPU 选择 ru
 | 前端驱动 | `tools/ncnn-mlir-driver.cpp` |
 | 编译驱动 | `tools/ncnn-compile.cpp` |
 | mlir-opt 克隆 | `bin/ncnn-mlir-opt.cpp` |
+| 精度与目标能力 | `include/ncnn-mlir/Support/Precision.hpp`、`lib/Support/Precision.cpp` |
+| 低精度/原生算术验收脚本 | `test/Native/check_fp16_arithmetic.py` |
+
+---
+
+## 10. 面试问题与答案（目标平台能力 / FP16/INT8 / Manifest profile）
+
+### 10.1 阶段六到阶段七最大的变化是什么？
+
+答案：把"模型 dtype 决定计算路径"换成"目标 capability + 用户精度策略共同决定路径"。
+阶段六只用模型自带的 fp16-storage 决定要不要走 FP16 通道；阶段七同时校验目标是否
+**真的具备**原生 FP16 arithmetic，并把结果以 profile 写进 manifest。
+
+`compiler/lib/Support/Precision.cpp` 的关键差异：
+
+- `infer_target_capabilities` 现在会按 triple、march、mcpu、target features 联合推断；
+- `resolve_precision_policy` 在 FP16 accumulator 模式下，**显式**校验
+  `fp16_arithmetic` 而不只是 `fp16_storage`；
+- 错误信息包含目标描述和缺失能力，方便用户定位 march / mcpu 选型。
+
+### 10.2 `infer_target_capabilities` 怎么识别 AVX512-FP16？
+
+答案：函数读取 `--target-triple`、`--march`、`--mcpu`、`--target-feature` 联合生成的
+属性字符串。x86-64 分支下，FP16 arithmetic 默认是关；当 `march` 含 `x86-64-v4`、
+或 features 含 `+avx512fp16`、或 `mcpu` 是 `sapphirerapids` / `cooperlake` 之一时，
+`fp16_arithmetic` 才被打开。**这与 Clang 21 的行为一致**：只有显式开启才有 vfp16
+指令生成。
+
+### 10.3 RISC-V `Zfh` 和 `Zvfh` 的区分意义是什么？
+
+答案：`Zfh` 是标量 FP16，`Zvfh` 是 vector FP16（即 RVV 上的 `vfmul.h`/`vfmacc.vf`）。
+阶段七把二者分开：
+
+- `zvfh` 出现在 features 中 → `riscv-rvv-fp16` profile，卷积能拿到 RVV FP16 指令；
+- 只有 `zfh` → `riscv-zfh` profile，卷积只能走 scalar FP16，性能与 scalar FP32 接近；
+- 二者都没有 → 必须 fallback，profile 标 `riscv-*-fp16-storage-fp32`。
+
+这条规则写在 `precision_execution_profile` 的 RISC-V 分支里；早期实现没区分，
+导致在 `zfh` only 的目标上误报“原生 FP16 vector”，量化指标失真。
+
+### 10.4 AArch64 上 FP16 / BF16 / dotprod / i8mm 怎么落地？
+
+答案：阶段六只支持 `armv8.2-a+fp16` 的 FP16 storage。阶段七在 `infer_target_capabilities`
+里把 `armv8.2..armv8.8`、`armv9`、`fullfp16`、`asimdhp`、`bf16`、`dotprod`、`i8mm`
+全部加入白名单，并加了一组 `armFp16` 局部变量：FP16 storage 只要 march ≥ armv8.2 就
+默认开；FP16 arithmetic 需要 march ≥ armv8.2 或 features 含 `fullfp16`/`asimdhp`。
+
+`precision_execution_profile` 在 AArch64 上的输出：
+
+- FP16 arithmetic：`aarch64-fp16`；
+- BF16：`aarch64-bf16`；
+- INT8 含 `i8mm`：`aarch64-i8mm`；否则 `aarch64-dotprod`。
+
+### 10.5 阶段七的 profile 命名规则是什么？
+
+答案：`<arch>-<precision-feature>[-<modifier>]`：
+
+- `x86-64-auto`、`x86-64-fp32`：未指定精度策略；
+- `x86-64-avx512-fp16`：FP16 arithmetic with AVX512-FP16；
+- `x86-64-avx512-bf16`：BF16 with AVX512-BF16；
+- `x86-64-avx512-vnni` / `x86-64-avx-vnni`：INT8 with VNNI；
+- `x86-64-fp16-storage-fp32`：FP16 storage 但 FP32 accumulation（fallback）；
+- `aarch64-fp16`、`aarch64-bf16`、`aarch64-i8mm`、`aarch64-dotprod`；
+- `riscv-rvv-fp16`、`riscv-zfh`、`riscv-rvv-int8`。
+
+profile 是字符串，便于写到 manifest，但**校验时**仍按 capability 走：
+
+- 任何 profile 都不能违反 `infer_target_capabilities`；
+- `x86-64-fp16-storage-fp32` 仅在 `--allow-fallback` 启用且 accumulator 被改写为
+  `f32` 时才出现。
+
+### 10.6 阶段七最坑的回归：FP16 storage 权重被默默提升为 FP32
+
+答案：阶段六的实现是“FP16 storage 权重在 import 时按 ncnn 语义提升为 FP32”，导致即使
+manifest 写 `storage: fp16`、profile 写 `x86-64-avx512-fp16`，但模型权重的 element
+type 已经被替换成 `f32`，而 conv 输入仍是 `f16` 时会被 Linalg 静默 insert
+`arith.extf`。这个 bug 在 PP-FormulaNet FP16 storage fixture 上复现：跑分偏小
+但数值差异 > 4%。
+
+**修复**：
+
+1. 在 `compiler/lib/Importer/ImportConvolution.cpp` 里改用 `F16` 权重 IR value，
+   不再自动转 `F32`；
+2. `compiler/lib/Conversion/NCNNToTosa/NCNNToTosa.cpp` 的 conv pattern 添加
+   类型匹配校验：weight 与 input 类型必须一致；
+3. `compiler/test/Numerical/CMakeLists.txt` 的 `pp_formulanet_plus_s_encoder_fp16`
+   fixture 增加 `EMIT_IR` 校验 IR 仍含 `xf16>` 张量；
+4. `compiler/test/Numerical/models/pp_lcnet_test.cpp` 的
+   `FormulaNetFp16ArtifactsPreserveStorageAndFp32Abi` 测试断言 manifest 仍包含
+   `element_type: f32`（这是 ABI 层，ABI 不暴露 f16，OK），但 linalg IR 必须出现
+   `arith.extf`/`arith.truncf`（说明 storage 在 lowering 阶段真的发生转换）。
+
+### 10.7 阶段七最坑的回归：x86 `squeezenet-shared-library` 复用旧 build 失败
+
+答案：squeezenet 编译目标用 `target_triple=` 空，driver 阶段会用 `clang -dumpmachine`
+兜底。阶段六到阶段七切换时，如果直接增量 build，旧的 `model.ll` 是按老参数生成的，
+而新的 driver 阶段会重新写 manifest。**症状**：squeezenet 共享库测试失败，但报的是
+“manifest precision_policy.storage 缺失”。**修复**：CI 强制
+`/tmp/ncnn-compiler-stage-<name>` 全新 build，并把 `ctest --test-dir` 路径写进
+`compile_ncnn_model.py` 包装器里。
+
+### 10.8 `x86-64-fp16-storage-fp32` profile 在 PP-OCRv6 tiny det 上是 1.x% 的差距
+
+答案：FP16 storage + FP32 accumulator 路径用了 `arith.extf`/`arith.truncf` 包裹
+FP16 乘加，循环没有按 FP16 native 算，所以 Linalg/Vector pipeline 里的 vector
+宽度被限制在 128-bit（受 FP32 accumulator 类型影响），实际跑分比原生 FP16 慢
+约 25–30%。**这与 SPEC 描述一致**，在 `docs/ncnn-mlir-performance-roadmap.md` 里
+已经标红：阶段七不要求“FP16 storage + FP32 accumulator”与 native FP16 跑分对齐。
+
+### 10.9 为什么 INT8 不在阶段七的 profile 验收里？
+
+答案：INT8 需要 shape inference 处理 `tosa.rescale`/`tosa.conv2d` 之间的
+`multiplier`/`shift` 一致性。PP-LCNet INT8 fixture 上仍有 1 个 conv 在
+`output_zp=128` 时被 `verify-no-tosa-ops` 拒绝。阶段七只要求 capability 识别
+正确，不要求 INT8 跑分。INT8 的端到端 lowering 在 P6 阶段已经实现，但完整 INT8
+profile 验收要等下一个里程碑。
+
+### 10.10 如果未来要支持 ROCm / CUDA，profile 命名会冲突吗？
+
+答案：不会。`target_architecture_name` 现在返回 `unknown` 时使用 `*-auto` 等
+profile；后续添加 GPU 时只要新增 `amdgcn` / `nvptx` 识别即可，profile
+字符串格式 `<arch>-<feature>` 仍然适用。`precision_execution_profile` 当前
+在 `unknown` 架构上 fallback 到 `*-auto`/`*-fp32`/`*-bf16` 等通用名字，对未来
+扩展没有破坏性。
+
+### 10.11 阶段七没有做的事
+
+答案：
+
+- **不**为 INT8 写跨架构的 mca throughput 报告（目前只有 FP16）；
+- **不**在 x86 之外的主机上跑数值测试（依赖 native runner）；
+- **不**把 `feature_enabled` 的覆盖语义扩展到 `--march` 隐含 feature（目前仍需要
+  显式 `--target-feature=+xxx` 才能完全开启某些 ISA）；
+- **不**做 per-operator 性能 contract（阶段七的 profile 描述的是“模型整体”而不是
+  “卷积层用了哪条指令”）。

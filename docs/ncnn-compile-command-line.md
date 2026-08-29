@@ -921,3 +921,146 @@ python3 tools/compile_ncnn_model.py \
 当前 Python 脚本缺少 `--precision`、`--fp16-accumulator`、`--allow-fallback`、`--threads` 和
 `--vector-width`；其 `--emit=all` 只发布 ncnn/tosa/linalg/memref/capi/llvm 六个 MLIR 阶段，
 不发布 `.ll`、`.o` 或 `.s`。这些能力的权威接口是 C++ `ncnn-compile --help`。
+
+---
+
+## 11. 面试问题与答案（精度策略 / 目标代码生成 / Manifest）
+
+### 11.1 `--precision` 和 `--target-triple` 怎样联动？
+
+答案：精度策略并不是只看模型 dtype，而是同时校验目标是否具备对应的硬件能力。
+`compiler/tools/ncnn-mlir-driver.cpp` 在解析 `--precision`、`--fp16-accumulator`、
+`--allow-fallback`、`--target-triple`、`--march`、`--mcpu`、`--target-feature` 之后构造
+`ncnn_mlir::TargetSpec`，调用 `resolve_precision_policy`：
+
+- 先用 `infer_target_capabilities` 推断 `TargetCapabilities`（FP16 storage、FP16
+  arithmetic、BF16、INT8 四项布尔）；
+- 再用 `validate_precision_target` 校验当前 `--precision` 是否被目标支持；
+- 最后，如果 `--precision=fp16` 且要求 FP16 accumulator，会再次校验
+  `fp16_arithmetic`；缺失时如果没有 `--allow-fallback` 就直接报错。
+
+需要特别说明的是，这一组校验早于 `ncnn-graph→ncnn-dialect` 导入，所以一旦不支持
+就会在 driver 阶段拒绝，不会留下一个“看起来能跑但运行时崩溃”的产物。
+
+### 11.2 阶段七“目标特化”到底特化在哪里？
+
+答案：落地在三个相互独立但必须一致的层次。
+
+1. **能力层**：`compiler/lib/Support/Precision.cpp` 的 `infer_target_capabilities`
+   按 triple + march + mcpu + features 推断能力，x86-64/AArch64/RISC-V 各自有不同的
+   启发式 fallback。例如 RISC-V 需要显式 `zvfh` 才会被认为是 vector FP16 arithmetic，
+   而 `zfh` 只算 scalar FP16 arithmetic。
+2. **代码生成层**：`compiler/tools/ncnn-compile.cpp` 把 `--target-triple`、
+   `--march`、`--mcpu`、`--mtune`、`--target-feature` 透传给 `clang`（含 LLVM
+   `TargetMachine` 的 `target=` 和 `-Xclang -target-feature`）。
+3. **契约层**：编译完成后 `Manifest::Target` 写回 JSON，告诉调用方这次产物的
+   target provenance 和 `execution_profile`，下游不能把 `x86-64-fp16-storage-fp32`
+   误报成原生 FP16。
+
+早期实现是仅靠 `--target-feature` 透传给 Clang，不做能力校验，结果出现
+`--precision=int8` 在没有 VNNI 的目标上能“成功”编译但跑出完全不同的数值。
+阶段七把能力校验提前到 driver，消除了“能编但不算”这个语义漏洞。
+
+### 11.3 `feature_enabled(target, names, fallback)` 的语义是什么？
+
+答案：它把"用户显式开关"和"架构默认值"合在一起：
+
+```text
+enabled = fallback  // 架构默认
+for feature in target.features:
+    if feature matches one of names:
+        enabled = not feature.startswith('-')
+```
+
+实现位置在 `compiler/lib/Support/Precision.cpp`，对应 `compiler/include/ncnn-mlir/Support/Precision.hpp`
+的同名 `TargetSpec`。`fallback` 表示“当前架构（如 x86-64）默认是否具备该能力”，
+而 `target.features` 表示“用户是否用 `+`/`-` 覆盖”。注意 `fallback` 不是 boolean
+而是 `initializer_list` 里那些“架构默认就开”的判断结果。
+
+### 11.4 `validate_precision_target` 抛出的错误为什么比阶段六更长？
+
+答案：阶段六的错误只说“目标不支持 fp16”。阶段七的诊断会包含具体目标描述和缺失能力：
+
+```text
+precision fp16 is not supported by target 'aarch64-unknown-linux-gnu/armv8.2-a';
+missing native FP16 arithmetic support; specify a matching --march, --mcpu,
+or --target-feature
+```
+
+由 `target_description()` 输出 triple + `mcpu`（或 `march` 退化），错误信息再明确指出
+FP16 storage 还是 FP16 arithmetic，方便使用者立刻知道是 march 缺了 `+fp16` 还是 mcpu
+选错了。
+
+### 11.5 为什么 Manifest 要额外写 `target` 而不是把 triple 塞进 `precision_policy`？
+
+答案：`precision_policy` 描述的是“这次编译采用什么数值规则”，而 `target` 描述的是
+“目标硬件的 provenance”。两者解耦的原因有两个：
+
+1. **诊断稳定性**：`precision_policy` 可能在不同 host 上相同（都是 `f16` accumulator），
+   但 `target` 反映具体代码生成参数（`mcpu=sapphirerapids`、`+avx512fp16`）。当数值偏差
+   出问题时，先看 `target` 再看 `precision_policy`。
+2. **profile 命名**：`precision_execution_profile` 依赖目标架构和 accumulator：FP16
+   arithmetic 在 x86-64 上叫 `x86-64-avx512-fp16`，在 aarch64 上叫 `aarch64-fp16`，
+   在 RISC-V RVV 上叫 `riscv-rvv-fp16`。profile 和 capability 必须能同时索引。
+
+### 11.6 `x86-64-fp16-storage-fp32` 这个 profile 的含义是什么？
+
+答案：明确是 fallback，不能被算作原生 FP16。规则如下：
+
+- `--precision=fp16`、`--fp16-accumulator=f16` 同时设置，但目标只有 `+f16c` 没有
+  `+avx512fp16`；
+- 用户给了 `--allow-fallback`；
+- `resolve_precision_policy` 把 accumulator 强制改为 `f32`，`used_fallback = true`；
+- manifest profile 写 `x86-64-fp16-storage-fp32`；
+- MLIR 上的 `ncnn.fp16_accumulator` 也被改为 `"f32"`，下游 Linalg 会插
+  `arith.extf`/`arith.truncf` 完成 FP16 storage、FP32 accumulation。
+
+这条 profile 的意义在于：避免出现“产物名为 fp16，权重也是 fp16，但实际是按 FP32
+accumulation 算”的报告偏差。
+
+### 11.7 阶段七遇到的坑：build 目录被误复用
+
+答案：阶段六 commit 之后，有人直接在旧的 build 目录里继续构建。`ncnn-mlir-opt` 仍然指向
+旧目标的 `.mlir` 通过而驱动层 `--precision=fp16` 报错 “`feature +avx512fp16` 不可识别”。
+因为 `clang-21 -x ir -c` 的目标参数和驱动参数在两个不同的层生效，旧 build 会保留旧
+`model.ll`，而驱动层会按新参数重新生成 capability 报告。**修复**：门禁脚本里强制
+`/tmp/ncnn-compiler-stage-<name>` 作为新 build 目录并把 `--parallel` 写进所有
+`cmake --build` 调用。
+
+### 11.8 阶段七遇到的坑：manifest 字段被重复写入
+
+答案：旧实现里 `generate-ncnn-c-api` pass 写一次 manifest，C++ driver 再写一次，
+导致 `target` 字段出现两次，第二组覆盖第一组。**修复**：在 driver 端只在 manifest 不存在
+`target` 字段时写入，避免重复；并把 `precision_execution_profile` 写进 IR 上的
+`ncnn.precision` 字符串，避免下游 IR 通过器误读。
+
+### 11.9 阶段七遇到的坑：x86-64 “原生 FP16” 在 RISC-V 上“看上去也成功”
+
+答案：因为 `feature_enabled` 在 RISC-V 上默认把 `zvfh` 标为开，如果用户
+`--target-feature=+zfh -zvfh` 写错顺序，capability 会变成“FP16 arithmetic 不开”
+但 `--precision=fp16` 还能继续。**修复**：`feature_enabled` 改成按出现顺序覆盖
+（不是按 `+`/`-` 一次性取最后），并要求同一特征多次出现时给出 `compiler warning`。
+
+### 11.10 阶段七的回归测试为何没加 INT8 + AVX-VNNI 的跑分？
+
+答案：当前 CI 宿主只有 x86-64 sapphire rapids，AVX-VNNI 存在但 AVX512-VNNI
+不存在。`ncnn-compile --precision=int8` 在这两个 host 上都生成 INT32 accumulation，
+差异主要来自 loop unroll 和 L1 cache。我们把 INT8 VNNI 选型标记为 `P8` 路线图，不在
+阶段七硬塞跑分；阶段七的“目标代码生成”以**指令级静态检查**和 **IR 端 capability**
+为验收点。
+
+### 11.11 一次跨架构的 FP16 静态验证具体跑什么？
+
+答案：`compiler/test/Native/check_fp16_arithmetic.py`：
+
+- `clang-21 -x ir -S model.ll -target aarch64-unknown-linux-gnu -march=armv8.2-a+fp16`
+  生成 `aarch64-armv8.2-fp16.s`，正则检查 `fmul|add|mla h` 至少出现一次。
+- 同样以 `-target riscv64-unknown-linux-gnu -march=rv64gcv_zfh_zvfh` 检查
+  `fmul.h/fadd.h/fmadd.h`。
+- 同时检查 `model.ll` 包含 `fmul half` / `fadd half`，并通过 `llvm-mca` 跑出
+  `Block RThroughput` 写入 `fp16-performance.json`。
+- manifest 校验 `target.execution_profile == "x86-64-avx512-fp16"` 且
+  `+avx512fp16` 在 `features` 中。
+
+这里**不**执行 foreign binary（没有 AArch64 / RISC-V 硬件），所以测试报告必须明确
+“静态指令验证”而不是“目标硬件运行验证”。

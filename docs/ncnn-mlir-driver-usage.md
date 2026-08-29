@@ -408,3 +408,132 @@ int squeezenet_v1_1(const float *input1, float *output1);
 - SqueezeNet pipeline 测试：`compiler/test/Pipelines/squeezenet-m2.mlir`
 - 解析器/数据模型：`lib/Graph/`（`ncnn_graph` 库）
 - 构建配置：各目录 `CMakeLists.txt`（顶层 `compiler/CMakeLists.txt`）
+
+---
+
+## 7. 面试问题与答案（driver / 精度 / 目标 capability）
+
+### 7.1 driver 为什么不直接用 `llvm::Expected<>` 自己处理 fallback？
+
+答案：fallback 是用户可见的策略行为，不是错误。`compiler/lib/Support/Precision.cpp`
+的 `resolve_precision_policy` 返回 `std::expected<PrecisionPolicy, std::string>`，
+但**`PrecisionPolicy` 自带 `used_fallback` 字段**。这样 driver 拿到 policy 后必须
+判断 `used_fallback`：
+
+- true → 把 fallback 显式写到 manifest 和 `ncnn.precision_fallback` 上，并打印
+  `warning: FP16 arithmetic unavailable; using FP32 accumulation because
+  --allow-fallback was specified`；
+- false → 正常路径。
+
+如果直接用异常或者错误码，driver 的“用户希望看到清晰警告”这一约束会丢失。
+
+### 7.2 `--allow-fallback` 只在什么场景下被尊重？
+
+答案：仅在 `--precision=fp16 --fp16-accumulator=f16` 的组合下被尊重。其它场景
+（比如 BF16 或 INT8）下，缺失 capability 不会自动 fallback，因为这两种精度的
+acc 精度不可降：BF16 不存在 BF16 accumulator 替代；INT8 缺少 dotprod / VNNI 时
+无法在不退化的前提下替换。这也是 `resolve_precision_policy` 中
+`if (mode != PrecisionMode::Float16 || accumulator != FP16AccumulatorMode::Float16)`
+的早返回。
+
+### 7.3 `ncnn.precision` 属性和 `--precision` CLI 是怎么挂钩的？
+
+答案：
+
+1. driver 解析 `--precision=fp16` → `parse_precision_mode` 校验字符串并返回
+   `PrecisionMode::Float16`；
+2. `resolve_precision_policy` 推断 `TargetCapabilities` 并校验；
+3. `import_options.precision = *policy` 传进 importer；
+4. `compiler/lib/Importer/NCNNImporter.cpp` 的 `prepare_model()` 在 `ncnn.model`
+   上写 `ncnn.precision = "fp16"`、`ncnn.fp16_accumulator = "f16"`，以及
+   必要时的 `ncnn.precision_fallback` 单元属性；
+5. `compiler/lib/Conversion/NCNNToFunc/NCNNToFunc.cpp` 在
+   `convert-ncnn-model-to-func` pass 里把 `ncnn.precision` / `ncnn.fp16_accumulator`
+   / `ncnn.precision_fallback` 复制到 entry function 上；
+6. `compiler/lib/Transforms/GenerateCAPI/GenerateCAPI.cpp` 读取 entry function
+   上的属性，把它写进 manifest 的 `precision_policy` 段。
+
+这条链路上**任意一环丢失**都会导致后续 lowering 拿不到精度信息。阶段六的 bug 是
+NCNNToFunc 没有复制 `ncnn.precision_fallback`，导致 manifest 不带 `fallback: true`。
+
+### 7.4 driver 为什么要读取 native triple？
+
+答案：当用户没传 `--target-triple` 时，`compiler/tools/ncnn-compile.cpp` 调
+`clang -dumpmachine` 兜底。原因是 `clang` 已经知道宿主 triple（在交叉编译 setup
+时配置），而 driver 不应该自己 hardcode `x86_64-unknown-linux-gnu`。这与 CI
+中 `squeezenet-shared-library` 测试要求一致：测试**不**传 target triple，使用
+clang 原生目标。
+
+注意这一行为只在 `ncnn-compile`（不是 driver）里做，因为 driver 只是把 IR
+写出来，不涉及 clang codegen。阶段七起，driver 也开始读取 `target-triple`
+但**不**调用 `clang -dumpmachine`，因为它不发起代码生成。
+
+### 7.5 阶段七在 driver 阶段最坑的 regression 是什么？
+
+答案：NCNNToFunc 没有把 `ncnn.precision` 复制到 entry function，导致 manifest
+始终写 `storage: f32`。**症状**：PP-OCRv5 mobile det 用 `--precision=fp16` 编译
+成功后，manifest 仍然写 `storage: f32`；但 `.so` 实际使用 FP16 路径。
+
+**修复**：
+
+- `NCNNToFunc.cpp` 第 137 行附近明确 `ncnn.precision`、`ncnn.fp16_accumulator`、
+  `ncnn.precision_fallback` 三个 attribute 一起复制；
+- `compiler/test/Native/check_ncnn_compile.py` 增加 `target.execution_profile` 字段
+  校验；
+- `compiler/test/Unit/precision_test.cpp` 增加 `RecognizesArchitectureSpecificProfiles`
+  单元测试覆盖三架构 profile。
+
+### 7.6 `target-features` 透传时的顺序问题
+
+答案：`compiler/tools/ncnn-compile.cpp` 把每个 `--target-feature` 展开成
+`-Xclang -target-feature -Xclang <feature>`。如果用户写
+`--target-feature=+avx512fp16 -avx512fp16`，最终会向 clang 传两组
+`-target-feature` 标志，后者覆盖前者。这与 `feature_enabled` 内部“最后一次出现
+决定最终状态”的语义一致。
+
+**坑**：如果用户写成 `--target-feature=+avx512fp16,-avx512fp16`，被当成一个
+字符串传给 driver，**只会有一次** `feature_enabled` 调用，最终是
+`+avx512fp16`（逗号不算分隔符）。**修复**：driver 拒绝 `+a,-a` 这种串联形式，
+必须多次出现 `--target-feature`。
+
+### 7.7 阶段七的 driver 怎么和 ncnn-mlir-opt 交互？
+
+答案：driver 不直接和 `ncnn-mlir-opt` 共享 capability 状态。`ncnn-mlir-opt` 是
+mlir-opt 的克隆，只能看到 MLIR 文本，**不**接收 `target_triple` 等编译参数。
+capability 全部由 `ncnn-mlir-driver` 在 import 之前检查。
+
+这就是为什么 `compiler/test/Native/check_fp16_arithmetic.py` 里**没有**调用
+`ncnn-mlir-opt` 直接处理 fp16 模型：capability 校验发生在 driver，并且已经写入
+`ncnn.precision_fallback` IR 标记，下游 Linalg→Vector→LLVM pipeline 直接信任
+这个标记。
+
+### 7.8 `ncnn-mlir-driver --emit=parsed-graph` 时精度策略会生效吗？
+
+答案：不会。parsed-graph 阶段**不**生成 `ncnn.model`，只输出
+`Graph::dump()` 的文本；能力检查是在 import 阶段（生成 `ncnn.model`）才执行的。
+所以 `parsed-graph` 阶段接受任何 `--precision` 都不会触发 fallback 警告。
+
+这是一个有意的“早期失败 vs 早期退出”权衡：`parsed-graph` 是为了排查 `.param`/`.bin`
+解析，不应该让 capability 校验阻塞。阶段七没有动这条语义。
+
+### 7.9 未来新增 `precision=fp8` 时，driver / capability / profile 怎么扩展？
+
+答案：
+
+1. `compiler/include/ncnn-mlir/Support/Precision.hpp` 的 `PrecisionMode` 加枚举；
+2. `parse_precision_mode` 加字符串识别；
+3. `infer_target_capabilities` 加 `fp8_storage` / `fp8_arithmetic` 字段；
+4. `resolve_precision_policy` 加 fallback 分支（FP8 同样可以 fallback 到 FP16
+   accumulator）；
+5. `precision_execution_profile` 加分支命名（`x86-64-fp8` 等）；
+6. `compiler/lib/Importer/NCNNImporter.cpp` 在 `ncnn.model` 上写
+   `ncnn.precision = "fp8"`；
+7. `compiler/lib/Conversion/NCNNToTosa/NCNNToTosa.cpp` 在 conv pattern
+   里识别 `fp8` 权重并选 `linalg.matmul`/`arith.extf`；
+8. `compiler/test/Unit/precision_test.cpp` 加 `precision_execution_profile` 断言；
+9. `compiler/test/Native/check_fp8_arithmetic.py`（新文件）跑 cross-arch 静态
+   指令验证。
+
+阶段七在落地 FP16 / BF16 / INT8 的同时，已经把上述 9 步的全部基础结构（capability
+表、profile 命名、manifest schema、IR 属性传递、跨架构静态验证脚本）搭好，新增
+FP8 / FP4 不会破坏现有契约。
