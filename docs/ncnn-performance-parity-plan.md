@@ -1,0 +1,251 @@
+# ncnn 性能追平计划（v1）
+
+> **执行状态（2026-09-03）**：P0、P1 已落地（同日验证）。
+> - P1：A1b K 内层改发射 `vector::FMAOp`（MatmulKernelNCNN.cpp），lit
+>   `forall-kernel.mlir` 断言 vector.fma / 禁 mulf；产物 asm 复核
+>   resnet18 444 / resnet34 780 / yolov5s 540 / formula 564 / server_rec 640
+>   / medium_rec 312 / yolov5n 652 条 vfmadd（此前全表为 0）；int8 产物
+>   保持 0（Q 路径不进 A1b，P4 处理）。原计划中"VectorizeNCNN/FuseLinalg
+>   加 contract fastmath"经核实**无落点**——两 pass 不自产累加 op（clone
+>   继承源 flags），全工具链唯一自产 MAC 链就是 A1b；linalg named op 的
+>   body 由 linalg 自动生成，contract 注入留待 P3/P5 内核工作时一并处理。
+> - P0：per-class 门禁表（performance_test.cpp `default_ratio_gate`，
+>   `NCNN_PERF_MAX_RATIO` 未设时生效、显式设置全局覆盖、0=显式关闭、
+>   NCNN_PERF_THREADS pin 时让位）；fixture 编译计时包装
+>   `test/Numerical/support/timed_compile.cmake`（STATUS 常态打印 +
+>   超 300s WARNING）；汇总脚本 `tools/perf_json_summary.py`
+>   （p50/p90 + --baseline 逐模型 Δratio）。
+> - **P1 实测收益（2026-09-03 全量 44 模型重测，47/47 过门禁）**：全表
+>   p50 4.00→3.35、max 42.93→38.77，44/44 全线改善。绝对值大点：
+>   server_det_static 5.59×→3.17×（25.99s→14.09s，−46%）、server_rec
+>   31.2×→22.7×（14.40s→10.03s，−30%）；ratio 大点：server_det_static
+>   −2.42、server_rec −8.47、resnet34 −1.10、tiny_rec −1.18、
+>   mobile_rec_int8 −1.49。int8 系仅小幅变化（medium_rec_int8
+>   29.84→27.15，Q 路径未进 A1b，符合预期）。
+> - P0 附带发现：efficientnet_b1/b2/b3 单 fixture `clang -x ir -O3`
+>   实测 60 分钟–2 小时级（RSS ~340MB 缓慢爬升，慢性非爆炸；17 个
+>   fixture 超 300s 预算触发 WARNING），是 P2 编译爆炸根除的现行样本；
+>   FMA 是否为诱因待 P2 一行回退 A/B 排查。
+
+> 目标：44 模型 performance_tests 套件编译产物全面追平 vendored ncnn
+> （x86-64 AVX2/FMA 口径）。根因依据见姊妹篇
+> [`ncnn-performance-gap-analysis.md`](ncnn-performance-gap-analysis.md)
+> （2026-09-03 定案：并行无罪、内核有罪——零 FMA、向量化名单=最差名单、
+> int8 无 VNNI/pass 覆盖、搬运:算术 19:1–80:1）。
+> 本文按根因给出阶段化路线、验收口径与风险。
+
+---
+
+## 1. 目标与验收口径
+
+**"追上"的定义（分级）**，ratio = compiled_mean / ncnn_mean（6 线程正式口径）：
+
+| 里程碑 | 覆盖 | 门禁 |
+|---|---|---|
+| M1（P1–P3 后） | 常规 conv 网 | 全部 ≤ 2.0，中位数 ≤ 1.5 |
+| M2（P4–P6 后） | 全表 | 重模型（ncnn ≥ 100ms）≤ 1.5，中位数 ≤ 1.3 |
+| M3（P7–P8 后） | 全表 | 重模型 ≤ 1.1，轻模型 ≤ 1.25（含计时噪声带），中位数 ≤ 1.0 |
+
+- 门禁落地：`NCNN_PERF_MAX_RATIO` 升级为按类阈值表（P0），ctest 内强制，
+  轻模型阈值宽、重模型严（与 baseline-report §4 的 cv 观察一致）。
+- **编译时长预算**：单 fixture `clang -x ir -O3` 段 ≤ 5 分钟、整包重建
+  不劣于当前（防止修复劣化重蹈"编译爆炸名单"覆辙）。P0 起在 fixture
+  构建记录编译耗时并在超预算时告警。
+- 每阶段验收固定三件套：① 全量数值黄金 ctest 绿（预算不放宽）；
+  ② `NCNN_PERF_JSON` 全量表重测并更新 baseline-report；③ 静态 asm
+  抽查（objdump 断言目标指令出现/消失）。
+
+## 2. 现状锚点（2026-09-03）
+
+| 分层 | 现值 | 主根因（对应 §3 阶段） |
+|---|---|---|
+| 常规 conv 网（名单外 33 模型） | 2.2–5.0× | 零 FMA、无 M×N 分块、无 Winograd、depthwise 标量（P1/P3/P5/P6/P7） |
+| rec/attention 系（名单内 11 模型） | 4.7–42.9× | 关闭显式向量化（编译爆炸），标量卷积/GEMM（P2） |
+| int8 全系 | 4.9–29.8× | 标量 i32-MAC、无 VNNI、逐层量化/反量化 pass（P4） |
+| 单核算力锚点 | resnet18 10 vs 64 GFLOP/s；yolov5s 24 vs 92 | 同上 |
+
+## 3. 阶段规划
+
+### P0 门禁与度量基建（0.5–1 天）
+
+- per-class ratio 阈值表进 `test/Numerical/CMakeLists.txt`（模型清单已知，
+  按上表 M1 口径先设宽松值，随里程碑收紧）；
+- fixture 构建脚本记录各模型编译耗时，超 5 分钟/个即 ctest 告警（防爆炸回归）；
+- perf JSON 增加 p50/p90 汇总脚本（复用现有 NDJSON）。
+
+验收：门禁生效（人为构造超阈值用例失败）；耗时记录产出当前基线表。
+
+### P1 FMA 落地（1–2 天）——全局一行级收益
+
+根因：A1b/VectorizeNCNN 发射的 `MulFOp`+`AddFOp` 无 fastmath，工具链无
+contract 处理 → 全产物 0 条 `vfmadd*`，MAC 指令数与依赖链延迟双倍。
+
+- `MatmulKernelNCNN`：K 内层 `mul+add` 直接发射 **`vector::FMAOp`**
+  （单舍入，与 ncnn FMA 内核舍入语义一致，数值预算可吸收）；
+- `VectorizeNCNN`/`FuseLinalgEpilogue` 生成的累加型 arith op 链：设置
+  arith fastmath `<contract>`（MLIR 21 arith 原生支持），保留 LLVM 合约
+  自由度；仅限累加路径，逐元素单舍入 op 不动；
+- lit：断言 A1b 产物出现 `vector.fma`；asm 抽查：resnet18/公式产物
+  `vfmadd*` 计数 > 0、`vmulps` 显著下降。
+
+验收：golden 全绿 + 隔离 matmul bench（现状 18–26 GFLOP/s）≥ 1.6×；
+全量表重测，GEMM 主导模型（resnet/yolo/公式系）预期 1.3–2× 收益。
+
+### P2 编译爆炸根除，11 模型回归向量化（3–5 天）——最大单项
+
+根因：`ncnn_model_no_vector_overrides` 11 模型在任意 lane 宽度下
+`clang -x ir -O3` 数十分钟至小时级编译（LLVM 合法化期），被迫整模关闭
+MLIR 显式向量化；名单与 ratio ≥ 6× 全部重合。
+
+- **Spike（0.5–1 天）**：binary-search 定位爆炸源——候选：①
+  VectorizeNCNN 行向量化对大 K matmul-邻接 generic 产生的超长直线
+  vector 代码；② `vector<128xf32>` 整行类型在 x86 合法化的拆分代价；
+  ③ A1b 显式内核落地后（名单制定在先）爆炸是否已自然缓解。
+- **主修路线**：matmul 形态改走 **canonical tiling + `vector.contract`**
+  （`scf::tileUsingSCF` 切 M/N tile → vector.contract；A3 的
+  TileMatmulForall/ForallizeDisjointTileLoops 基建已就绪），其 LLVM
+  下降产出规整紧凑代码，绕开行向量化直线爆炸；行向量化保留给逐元素
+  generic。
+- **备选路线**：保留 A1b 手写内核 + 收敛行宽/unroll 上界（按 spike 结论
+  定界），P1 的 vector.fma 直接受益。
+- 名单收敛：按模型逐个移出 override，编译耗时预算内放行。
+
+验收：11 模型全量编译 ≤ 预算；全量表重测——rec/attention 系从
+4.7–42.9× 收敛至与名单外同量级（预期 ≤ 5×）；golden 全绿。
+
+### P3 matmul 微内核 M×N 寄存器分块（3–4 天）
+
+根因：A1b 每行单 accumulator、B 按行反复重读，算术强度 ~0.5 flop/byte，
+带宽受限；ncnn sgemm 为打包面板 + 6×16 寄存器分块。
+
+- A1b 内核改 M×N tile：M 方向 4–6 行 accumulator 驻留寄存器，A tile
+  一次读入、B 行复用 4–6 次；行宽由 TargetVectorInfo 推导（延续 tile/lane
+  解耦原则）；
+- 打包评估：先做零拷贝（kernel 内 A 子面板 hoist 到寄存器/栈），K·N
+  工作集仍超 L2 时再评估显式 B 打包（P6 联动）；
+- 线程：外层 M（或 M×N 网格）保持 scf.parallel→OpenMP。
+
+验收：隔离 bench 1T ≥ 60 GFLOP/s（ncnn sgemm 同形状对照 ≥ 100 作为
+差距标尺）；resnet18 1T 端到端 ≥ 2× 于 P1 后水平；golden 全绿。
+
+### P4 int8 VNNI 线（5–8 天）——独立最差分支
+
+根因：量化卷积不进 strategy/matmul-kernel/向量化任何 pass，标量
+i32-MAC + 逐层激活量化/反量化全量 pass；产物 0 VNNI（ncnn 为
+avxvnni `vpdpbusd` + LUT requant）。
+
+- **Spike（1 天）**：LLVM 21 对 i8i8→i32 `vector.contract` 的 x86 下降
+  能力——依次验证 ① 直出 `vpdpbusd`（avxvnni）；② i8→i16 ext +
+  i16i16→i32 contract 出 `vpmaddwd` 链；③ 均不可则 widened 自动向量化
+  兜底。以 spike 结论定内核形态，三档均可接受（收益递减）。
+- 量化卷积接入 `strategy-ncnn`：Q-conv（含 depthwise-Q 变体）与浮点同
+  路径改写 im2col+matmul；i8 数据布局复用浮点 matmul 微内核骨架；
+- 语义精确性：requant（scale-term 乘加 + round-half-away + clamp）、
+  激活量化舍入语义逐位复刻（沿用 INT8 预量化的既有对账方法），golden
+  int8 稳定性契约不放宽；
+- 量化/反量化融合：producer epilogue 内联激活量化（省全量 pass），
+  consumer 侧 dequant 融进 requant 尾部。
+
+验收：int8 行 ratio ≤ 自身 FP32 行 ratio × 1.5；asm 抽查出现
+`vpdpbusd`（或 spike 定档的对应指令）；medium_rec_int8 预期 29.8× → ≤ 4×。
+
+### P5 depthwise 行向量化（2–3 天）
+
+根因：DepthwiseConv2D lower 为独立 generic，窗口 gather 不满足逐元素
+匹配条件，纯标量（attention 系每模型 27–28 层）。
+
+- `VectorizeNCNN` 增补 depthwise 形态：multiplier=1 时窗口读在 C 维连续
+  （`x[oh+kh][ow+kw][c0..c0+VL]`），按 C 行 rank-1 transfer 改写；
+  多通道 multiplier 变体降级标量留待 P8 评估；
+- 复用 matmul-kernel pass 的"通道为 2 的幂"门控经验（vector<3> 非法
+  宽度教训）。
+
+验收：formula_encoder 1T 单测中 depthwise 段 asm 出现行向量拷贝+FMA；
+全量表 det/公式系 1.2–1.5× 收益；golden 全绿。
+
+### P6 搬运削减：im2col 融合与布局折腾（3–5 天）
+
+根因：搬运:算术 19:1–80:1——im2col 物化拷贝、逐 op 布局转换、
+`vmovss`/`vinsertps` 部分 lane 脚手架。
+
+- im2col 与 matmul 微内核融合（gather-free：kernel 内按窗口索引直取
+  A 面板），优先做 1×1 已是视图无损耗、k×k 窗口融合分档启用
+  （工作集阈值沿用 `--conv-gemm-l2-bytes` 启发式）；
+- 非 2 幂窄通道 gather 行向量化补齐（B5 遗留：IC 非 2 幂仍标量）；
+- MHA/attention 非常量 transpose 运行时路径审计：QKV 投影后的逐帧
+  转置按 consumer 形态消解或并入相邻 matmul 的映射。
+
+验收：重模型 perf 表中 im2col 热点段（SIGUSR2 采样器复用）占比 < 10%；
+全量表 + golden 三件套绿。
+
+### P7 Winograd（4–6 天，含数值预算验证）
+
+根因：ncnn 对 3×3 s1 默认 Winograd（resnet/yolo/det 类主力），本工具链
+仅留开关位。M3 目标下 conv 系从 1.3–2× 再往 1.1× 走基本绕不开。
+
+- `strategy-ncnn` 落地 `winograd`：F(6×6,3×3)（ncnn 同款）——输入/权重
+  变换为 generic（可向量化），中心 matmul 复用 P3 微内核，逆变换同；
+- dispatch 启发式编译期化：3×3 s1 且 OC·IC 超阈值（复刻 ncnn
+  convolution.winograd 判据），CLI `--conv-strategy=winograd` 保持默认
+  off，预算验证通过后翻 auto 默认；
+- **数值预算先行**：F(6,3) 误差上界逐模型对账（复用 golden 预算机制，
+  参考 ExpandStridedMetadata 教训——预算过不了就只对宽松预算模型启用，
+  不做全局默认）。
+
+验收：预算内模型 auto 走 Winograd，resnet18/yolov5 系 3×3 段 ≥ 1.5×
+于 P3 后水平；golden 全绿且误差在已对账预算内。
+
+### P8 收尾与追平宣告（2–3 天）
+
+- 小模型固定开销审计：每 run 的 malloc/free 链（One-Shot Bufferize +
+  deallocation 逐 tensor 分配）——arena 化/entry 级 hoist 评估，
+  anglenet 级亚 5ms 模型轻模型门禁的最后一公里；
+- per-class 阈值收紧到 M3 口径，门禁转强制；
+- baseline-report 全量重测更新、gap-analysis 附修复后对照；
+- 文档沉淀：support-status §6 优化矩阵更新，本计划标注完成态。
+
+## 4. 依赖与排序
+
+```
+P0 ─→ P1 ─→ P2 ─→ P3 ─→ P4（复用 P3 骨架）
+              │      └─→ P6
+              └──────────→ P5（独立，可并行）
+                     P3 ─→ P7（复用微内核）
+              全部 ─→ P8
+```
+
+- P1 最先：所有后续内核路径直接受益，且改动最小；
+- P2 先于 P3-P7 的度量解读：否则 11 个模型（含全部极值点）不可见；
+- P5 独立可穿插；P4 依赖 P3 的微内核骨架与 P2 的 tiling 路线；
+- 串行预估：**22–31 人天**（P0 0.5–1 / P1 1–2 / P2 3–5 / P3 3–4 /
+  P4 5–8 / P5 2–3 / P6 3–5 / P7 4–6 / P8 2–3）。
+
+## 5. 数值契约与回归策略
+
+- 所有内核改动（FMA 单舍入、Winograd 变换、int8 requant）走既有
+  golden 预算验收，**预算不因性能放宽**；int8 舍入语义逐位复刻；
+- 每阶段三件套（golden / perf 全量表 / asm 抽查）+ 编译耗时预算；
+- ratio 门禁随里程碑单调收紧，历史表按 baseline-report 惯例留档。
+
+## 6. 风险与缓解
+
+| 风险 | 缓解 |
+|---|---|
+| vector.contract 路线在 clang -O3 仍爆炸（P2 主路线失效） | Spike 先行定界；备选路线 A1b+unroll 上界；编译耗时预算硬门禁兜底 |
+| i8 contract 无 VNNI 下降（LLVM 21 不识别） | 三档 spike（vpdpbusd / pmaddwd / widened auto-vec），档位收益递减但均可验收 |
+| Winograd 误差超模型 golden 预算 | 预算逐模型对账，过不了不改全局默认（保持 opt-in） |
+| int8 requant 语义偏差 | 复用 INT8 预量化对账方法；逐位复刻优先于融合强度 |
+| M×N 分块寄存器溢出（tile 过大） | tile 由 TargetVectorInfo 推导 + `--conv-tile-width` CLI 覆盖（既有解耦机制） |
+| perf 波动掩盖里程碑判定 | 重模型 cv≤0.1 已实证；门禁以重模型为主、轻模型放宽（baseline-report §4 结论） |
+| 双 OpenMP runtime（libgomp+libomp）线程扰动 | 既有两条腿线程控制已实证有效，不新增依赖 |
+
+## 7. 里程碑指标预测（按当前根因折算，验收时以实测为准）
+
+| 阶段完成 | 名单外 conv 网 | 名单内 rec/attention | int8 |
+|---|---|---|---|
+| P1 | 5× → 2.5–3.5× | 不变（标量） | 不变 |
+| P2 | — | 42.9× → ≤ 5× | 30× → ≤ 8× |
+| P3 | → 1.5–2× | → 3–4× | — |
+| P4 | — | — | → ≤ 3×（≈自身 FP32） |
+| P5+P6 | → 1.2–1.6× | → 2–3× | → ≤ 2.5× |
+| P7+P8（M3） | ≤ 1.1 | ≤ 1.5（attention 尾部） | ≤ 1.5 |

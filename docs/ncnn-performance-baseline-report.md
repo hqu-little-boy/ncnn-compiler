@@ -141,6 +141,10 @@ P0 后普通模型已改为 x86-64-v3 公平口径；下表旧数字仅用于保
 
 ## 5. 后续工作
 
+- 差距根因的分层归因与修复指向见姊妹篇
+  [`ncnn-performance-gap-analysis.md`](ncnn-performance-gap-analysis.md)
+  （2026-09-03：FMA 缺失、向量化名单重合、int8 无 VNNI 等证据）；
+  追平路线图见 [`ncnn-performance-parity-plan.md`](ncnn-performance-parity-plan.md)。
 - 以本文为基线，按 `NCNN_PERF_MAX_RATIO` 门禁做优化回归（阈值待各代表机型
   采集后定，建议轻模型从 6.0 起、重模型从 2.0 起试点）。
 - attention 路径与 int8 计算内核的优化立项；优化后重跑本报告更新基线。
