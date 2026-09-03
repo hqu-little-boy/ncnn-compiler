@@ -23,7 +23,8 @@ namespace {
 //    数十倍（3×640×640 DBNet：直接卷积 ~20s vs 改写后 >600s）。把
 //    scf.forall 区域内的静态 memref matmul 改写为显式向量内核——M 外层
 //    每行将 C 读入寄存器累加器，K 内层零存储往返做 broadcast(A[m,k]) ·
-//    B[k] 行累加，行末一次写回；行宽仅影响 LLVM 合法化拆分。
+//    B[k] 行 FMA 累加（vector.fma 单舍入），行末一次写回；行宽仅影响
+//    LLVM 合法化拆分。
 // 2) 恒等自拷贝循环消除：融合流水线在无激活时留下「load X 后 store 回
 //    X」的纯浪费嵌套，直接删除。
 // 3) 行级 generic 向量化：静态、全恒等映射、纯 arith/math body 的
@@ -515,9 +516,12 @@ class MatmulKernelNCNNPass final
     auto broadcast = builder.create<vector::BroadcastOp>(vectorType, aScalar);
     auto bRow = builder.create<vector::TransferReadOp>(
       vectorType, rhs, ValueRange{kIndex, columnStart}, std::nullopt);
-    auto product = builder.create<arith::MulFOp>(broadcast, bRow);
-    auto updated = builder.create<arith::AddFOp>(accumulator, product);
-    builder.create<scf::YieldOp>(ValueRange{updated});
+    // 单舍入 FMA：mul+add 分离会让 LLVM 侧因无 fastmath/contract 而无法
+    // 合成 vfmadd（每个 MAC 双指令、K 链延迟翻倍）；vector.fma 一步到位，
+    // 舍入语义与 ncnn 的 FMA 内核一致，差异由数值黄金预算吸收。
+    auto fused =
+      builder.create<vector::FMAOp>(vectorType, broadcast, bRow, accumulator);
+    builder.create<scf::YieldOp>(ValueRange{fused.getResult()});
 
     // 写回仍在 n 块循环体内（kLoop 之后）：每块行段独立累加并落回。
     builder.setInsertionPointAfter(kLoop);
