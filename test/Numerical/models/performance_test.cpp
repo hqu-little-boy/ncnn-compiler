@@ -94,6 +94,29 @@ int resolved_thread_count() {
   return threads;
 }
 
+// P0 per-class ratio 门禁默认值（NCNN_PERF_MAX_RATIO 未设置时生效）。
+// 阈值 = 2026-09-03 全量基线同类最差 ratio + 10–15% 头寸，随追平里程碑
+// 收紧（docs/ncnn-performance-parity-plan.md §1/§3-P0）：
+// - 常规模型（向量化 fp32 与编译爆炸名单内 fp32 rec 系；同类最差
+//   resnet34 5.00 / medium_rec 4.67）：6.0
+// - 名单内两个巨兽单列：server_rec 31.16→36.0、formula encoder 42.93→48.0
+// - int8（除 medium_rec_int8 外最差 small_rec_int8 11.36）：14.0
+// - medium_rec_int8 单列（29.84）：34.0
+// 单线程/自定线程实验（NCNN_PERF_THREADS pin）ratio 远大于 6T 口径，
+// 由 check_performance_gate 让位（除非显式设置 NCNN_PERF_MAX_RATIO）。
+double default_ratio_gate(const ModelSpec& spec) {
+  if (spec.reference_mode == ReferenceInferenceMode::Int8) {
+    return spec.name == "pp_ocrv6_medium_rec_int8" ? 34.0 : 14.0;
+  }
+  if (spec.name == "pp_ocrv5_server_rec") {
+    return 36.0;
+  }
+  if (spec.name == "pp_formulanet_plus_s_encoder") {
+    return 48.0;
+  }
+  return 6.0;
+}
+
 void run_model_benchmark(const ModelSpec& spec) {
   if (kUnderSanitizer) {
     GTEST_SKIP() << "performance measurements are meaningless under sanitizers";
@@ -175,7 +198,8 @@ void run_model_benchmark(const ModelSpec& spec) {
   emit_performance_report(spec.name, resolved_thread_count(), *policy, result);
   append_performance_json_record(
     spec.name, resolved_thread_count(), *policy, result);
-  EXPECT_TRUE(check_performance_gate(spec.name, result));
+  EXPECT_TRUE(
+    check_performance_gate(spec.name, result, default_ratio_gate(spec)));
 }
 
 TEST(PerformanceModel, SqueezeNetV11) {

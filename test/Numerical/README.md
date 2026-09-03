@@ -113,14 +113,15 @@ PERF model=resnet18 threads=8 warmup=10 iters=20 ncnn_ms=11.230 compiled_ms=9.87
 | `NCNN_PERF_THREADS` | 物理大核数 | 双侧统一线程数 |
 | `NCNN_PERF_WARMUP` | 轻 10 / 重（输入 ≥ 640x640x3）5 | 预热次数 |
 | `NCNN_PERF_ITERS` | 轻 20 / 重 10 | 计时迭代次数 |
-| `NCNN_PERF_MAX_RATIO` | 未设置 = 纯报告 | 设置后 `compiled_mean > x * ncnn_mean` 即失败，消息携带实测数字 |
+| `NCNN_PERF_MAX_RATIO` | per-class 默认门禁 | 默认走 `performance_test.cpp` 的逐类阈值表（2026-09-03 基线 + 头寸：常规 6.0 / server_rec 36 / formula 48 / int8 14 / medium_rec_int8 34），随追平里程碑收紧；显式设置正数 = 全局覆盖，`0` = 显式关闭全部门禁，非数字直接失败；`NCNN_PERF_THREADS` 被 pin（单线程/自定线程实验）且未设本变量时不判定，保持纯报告 |
 | `NCNN_PERF_JSON` | 未设置 = 关 | 逐模型追加一行 NDJSON 到该路径 |
 | `NCNN_PERF_SKIP_SANITY` | 关 | 跳过每模型一次的宽松数值 sanity（rtol=atol=5e-3） |
 
-门禁用法示例（建议先在代表机型采集基线后再定阈值，起点可参考 `1.5`）：
+门禁用法示例（per-class 阈值随追平计划收紧，临时放宽/收紧用全局覆盖）：
 
 ```bash
 NCNN_PERF_MAX_RATIO=1.5 ctest --test-dir compiler/build -R PerformanceModel.ResNet18
+NCNN_PERF_MAX_RATIO=0 NCNN_PERF_THREADS=1 ctest --test-dir compiler/build -R PerformanceModel.ResNet18
 NCNN_PERF_JSON=/tmp/perf.ndjson ctest --test-dir compiler/build -L performance
 ```
 

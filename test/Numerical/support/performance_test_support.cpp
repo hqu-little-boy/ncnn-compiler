@@ -377,26 +377,42 @@ void append_performance_json_record(std::string_view model,
 }
 
 ::testing::AssertionResult check_performance_gate(
-  std::string_view model, const PairBenchmarkResult& result) {
+  std::string_view model,
+  const PairBenchmarkResult& result,
+  double default_limit) {
   const char* raw_limit = std::getenv("NCNN_PERF_MAX_RATIO");
-  if (raw_limit == nullptr || *raw_limit == '\0') {
+  const bool has_env_limit = raw_limit != nullptr && *raw_limit != '\0';
+  // 逐类默认门禁只对 6 线程正式口径生效：NCNN_PERF_THREADS pin 的单线程
+  // /自定线程实验 ratio 量级完全不同，不设 env 时不判定，保持纯报告。
+  const char* raw_threads = std::getenv("NCNN_PERF_THREADS");
+  const bool threads_pinned = raw_threads != nullptr && *raw_threads != '\0';
+  if (!has_env_limit && (threads_pinned || !(default_limit > 0.0))) {
     return ::testing::AssertionSuccess();
   }
-  char* parse_end = nullptr;
-  const double maximum_ratio = std::strtod(raw_limit, &parse_end);
-  if (parse_end == raw_limit || *parse_end != '\0' ||
-      !std::isfinite(maximum_ratio)) {
-    return ::testing::AssertionFailure()
-           << "NCNN_PERF_MAX_RATIO='" << raw_limit << "' is not a number";
+  double maximum_ratio = default_limit;
+  const char* limit_source = "per-class default";
+  if (has_env_limit) {
+    char* parse_end = nullptr;
+    maximum_ratio = std::strtod(raw_limit, &parse_end);
+    if (parse_end == raw_limit || *parse_end != '\0' ||
+        !std::isfinite(maximum_ratio)) {
+      return ::testing::AssertionFailure()
+             << "NCNN_PERF_MAX_RATIO='" << raw_limit << "' is not a number";
+    }
+    limit_source = "NCNN_PERF_MAX_RATIO";
+    if (!(maximum_ratio > 0.0)) {
+      // 显式 0/负数 = 关闭门禁（含 per-class 默认）。
+      return ::testing::AssertionSuccess();
+    }
   }
   if (result.compiled.mean_ms <= maximum_ratio * result.ncnn.mean_ms) {
     return ::testing::AssertionSuccess();
   }
   return ::testing::AssertionFailure()
          << model << ": compiled " << result.compiled.mean_ms
-         << " ms exceeds gate " << maximum_ratio << " x ncnn "
-         << result.ncnn.mean_ms << " ms (measured ratio=" << result.ratio
-         << ", ncnn_min=" << result.ncnn.minimum_ms
+         << " ms exceeds gate " << maximum_ratio << " (" << limit_source
+         << ") x ncnn " << result.ncnn.mean_ms << " ms (measured ratio="
+         << result.ratio << ", ncnn_min=" << result.ncnn.minimum_ms
          << " ms, compiled_min=" << result.compiled.minimum_ms << " ms)";
 }
 

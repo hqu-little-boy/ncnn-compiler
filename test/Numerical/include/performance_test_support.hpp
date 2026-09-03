@@ -101,10 +101,16 @@ void append_performance_json_record(std::string_view model,
                                     const TimingPolicy& policy,
                                     const PairBenchmarkResult& result);
 
-// NCNN_PERF_MAX_RATIO 未设置 → 恒 Success（默认纯报告）；设置为正数 x 时，
-// compiled.mean_ms > x * ncnn.mean_ms 即 Failure，消息携带全部实测数字；
-// 变量存在但不是数字时直接 Failure（不许静默忽略错误配置）。
+// P0 per-class 门禁判定。default_limit 为该模型的类别阈值（≤0 = 该模型
+// 无默认门禁，纯报告）；NCNN_PERF_MAX_RATIO 显式设置时全局覆盖——正数
+// 生效、0/负数显式关闭全部门禁、非数字直接 Failure（不许静默忽略错误
+// 配置）。NCNN_PERF_THREADS 被 pin（单线程/自定线程实验）且未设 env 时
+// 不判定：实验口径 ratio 量级与 6 线程正式口径不可比。
+// compiled.mean_ms > limit * ncnn.mean_ms 即 Failure，消息携带实测数字
+// 与门禁来源。
 [[nodiscard]] ::testing::AssertionResult check_performance_gate(
-  std::string_view model, const PairBenchmarkResult& result);
+  std::string_view model,
+  const PairBenchmarkResult& result,
+  double default_limit);
 
 }  // namespace ncnn_compiler::test

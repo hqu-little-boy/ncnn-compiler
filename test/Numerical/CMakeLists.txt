@@ -109,7 +109,12 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     add_custom_command(
         OUTPUT ${generated_outputs}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${output_dir}
-        COMMAND $<TARGET_FILE:ncnn-compile>
+        # P0 编译耗时预算：经 timed_compile.cmake 透传执行并计时，
+        # 单 fixture 超 300s 发 WARNING（编译爆炸早期预警）。
+        COMMAND
+            ${CMAKE_COMMAND} -Dlabel=${name} -P
+            ${CMAKE_CURRENT_SOURCE_DIR}/support/timed_compile.cmake --
+            $<TARGET_FILE:ncnn-compile>
             --driver $<TARGET_FILE:ncnn-mlir-driver>
             --opt $<TARGET_FILE:ncnn-mlir-opt>
             --translate ${MLIR_TRANSLATE}
@@ -132,6 +137,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             ncnn-compile
             ncnn-mlir-driver
             ncnn-mlir-opt
+            ${CMAKE_CURRENT_SOURCE_DIR}/support/timed_compile.cmake
             ${CMAKE_SOURCE_DIR}/tools/ncnn-compile.cpp
             ${param_file}
             ${bin_file}
