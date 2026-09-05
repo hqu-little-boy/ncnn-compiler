@@ -411,8 +411,9 @@ void append_performance_json_record(std::string_view model,
   return ::testing::AssertionFailure()
          << model << ": compiled " << result.compiled.mean_ms
          << " ms exceeds gate " << maximum_ratio << " (" << limit_source
-         << ") x ncnn " << result.ncnn.mean_ms << " ms (measured ratio="
-         << result.ratio << ", ncnn_min=" << result.ncnn.minimum_ms
+         << ") x ncnn " << result.ncnn.mean_ms
+         << " ms (measured ratio=" << result.ratio
+         << ", ncnn_min=" << result.ncnn.minimum_ms
          << " ms, compiled_min=" << result.compiled.minimum_ms << " ms)";
 }
 

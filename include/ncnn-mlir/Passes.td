@@ -172,6 +172,17 @@ def MatmulKernelNCNNPass : Pass<"matmul-kernel-ncnn", "mlir::ModuleOp"> {
     this pass the generic matmul expansion degenerates to scalar loops,
     which dominates end-to-end latency on wide PP-family models.
   }];
+  let options = [
+    Option<"rowChunkLanes", "row-chunk-lanes", "unsigned", /*default=*/"8",
+           "Lane budget for the row-generic vectorization chunks (0 keeps "
+           "the historical whole-row form). Elements of up to 32 bits are "
+           "chunked at 4x this budget (still within the vector-math "
+           "splittable ABI; 64-bit elements at the budget itself), which "
+           "pins math ops to vector library calls and decouples LLVM "
+           "legalization size from the innermost extent; whole-row forms "
+           "were the compile-explosion mechanism on wide models "
+           "(docs/ncnn-performance-parity-plan.md §3-P2).">
+  ];
   let dependentDialects = [
     "arith::ArithDialect", "linalg::LinalgDialect", "memref::MemRefDialect",
     "scf::SCFDialect", "vector::VectorDialect"

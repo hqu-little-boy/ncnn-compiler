@@ -1,11 +1,14 @@
 // RUN: ncnn-mlir-opt --vectorize-ncnn=lanes=4 %s | FileCheck %s
 
 // 静态逐元素 generic 行级向量化：除最内维外的输出维组成
-// scf.forall(shared_outs) 网格（外层线程级并行形态），最内维整行
-// rank-1 向量 transfer（rank-1 连续 transfer 是 VectorToLLVM 的可靠
-// 下降形态）；结果行经 tensor.parallel_insert_slice 落回共享输出，
-// 各迭代写不相交切片；标量 linalg generic 消失。卷积的窗口仿射映射
-// 不满足前置条件，保持 Linalg 形式。
+// scf.forall(shared_outs) 网格（外层线程级并行形态），最内维按分块预算
+// （≤32 位元素 4×lanes）分块做 rank-1 向量 transfer（rank-1 连续
+// transfer 是 VectorToLLVM 的可靠下降形态；预算上限让 math op 处在
+// LowerVectorMathNCNN 可拆分 ABI 内，并把 LLVM 合法化代码量与行宽
+// 解耦——超宽整行是编译爆炸名单的机制）；结果行经
+// tensor.parallel_insert_slice 落回共享输出，各迭代写不相交切片；
+// 标量 linalg generic 消失。卷积的窗口仿射映射不满足前置条件，保持
+// Linalg 形式。
 
 func.func @relu(%arg0: tensor<6x8xf32>) -> tensor<6x8xf32> {
   %empty = tensor.empty() : tensor<6x8xf32>

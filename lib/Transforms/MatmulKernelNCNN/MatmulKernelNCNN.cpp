@@ -346,11 +346,28 @@ class MatmulKernelNCNNPass final
     const int64_t rank = outType.getRank();
     const ArrayRef<int64_t> shape = outType.getShape();
     Type elementType = outType.getElementType();
+    const int64_t rowWidth = shape.back();
+    // 行宽分块（同 VectorizeNCNN 的行级向量化）：整行向量在末维极宽的
+    // 模型上把 math op 推出 libmvec 等宽 ABI（被标量 convert-math-to-
+    // libm 逐 lane 拆成 extract/call/insert 风暴），并把 LLVM 合法化期
+    // 推向小时级——vector-mode=off 的应急路径同样必须安全。分块预算
+    // ≤32 位元素取 4×rowChunkLanes、64 位取 rowChunkLanes；行宽不超过
+    // 预算时保持整行形态；余数以标量 load/store 兜底。
+    const auto laneBudget = static_cast<int64_t>(rowChunkLanes);
+    // 分块预算：≤32 位元素取 4×lanes（LowerVectorMathNCNN 可拆分上限，
+    // math op 拆成 ≤4 段等宽向量库调用；i8/i16 行不再退化为 8 字节级
+    // SIMD）；64 位元素无向量数学库覆盖，保持 lanes 等宽。
+    const int64_t chunkBudget =
+      elementType.getIntOrFloatBitWidth() <= 32 ? 4 * laneBudget : laneBudget;
+    const int64_t chunkWidth =
+      (laneBudget > 1 && rowWidth > chunkBudget) ? chunkBudget : rowWidth;
+    const int64_t fullChunks = rowWidth / chunkWidth;
+    const int64_t tailWidth = rowWidth % chunkWidth;
 
     ImplicitLocOpBuilder builder(generic.getLoc(), rewriter);
     builder.setInsertionPoint(generic);
 
-    auto vectorType = VectorType::get({shape.back()}, elementType);
+    auto vectorType = VectorType::get({chunkWidth}, elementType);
 
     // leading dims 发射为 scf.parallel：保留原 generic 经
     // ConvertLinalgToParallelLoops 的 OpenMP 多线程语义（串行 scf.for
@@ -373,62 +390,125 @@ class MatmulKernelNCNNPass final
       builder.setInsertionPointToStart(parallel.getBody());
     }
 
-    SmallVector<Value> indices(rank, builder.create<arith::ConstantIndexOp>(0));
-    llvm::copy(parallelIndices, indices.begin());
+    Value zeroIndex = builder.create<arith::ConstantIndexOp>(0);
+    Value stepOneIndex = builder.create<arith::ConstantIndexOp>(1);
 
-    IRMapping mapping;
-    unsigned inputIndex = 0;
-    Block& block = generic.getRegion().front();
-    for (Value input : generic.getDpsInputs()) {
-      mapping.map(
-        block.getArgument(inputIndex),
-        builder.create<vector::TransferReadOp>(vectorType,
-                                               input,
-                                               indices,
-                                               std::nullopt,
-                                               SmallVector<bool>(1, true)));
-      ++inputIndex;
-    }
-    mapping.map(
-      block.getArgument(generic.getNumDpsInputs()),
-      builder.create<vector::TransferReadOp>(
-        vectorType, out, indices, std::nullopt, SmallVector<bool>(1, true)));
+    // 读写索引 = leading parallel 索引 + 最内维偏移。
+    auto rowIndices = [&](Value lastDimOffset) {
+      SmallVector<Value> indices(parallelIndices);
+      indices.push_back(lastDimOffset);
+      return indices;
+    };
 
-    for (Operation& statement : block.without_terminator()) {
-      if (auto constant = dyn_cast<arith::ConstantOp>(&statement)) {
+    // 提升一个分块：读入 chunkWidth 宽行段、向量化 body、写回。body
+    // 引用的外部标量值提升为分块宽 splat，并缓存复用。
+    auto emitChunk = [&](Value lastDimOffset) {
+      const SmallVector<Value> indices = rowIndices(lastDimOffset);
+      IRMapping mapping;
+      unsigned inputIndex = 0;
+      Block& block = generic.getRegion().front();
+      for (Value input : generic.getDpsInputs()) {
         mapping.map(
-          constant.getResult(),
-          builder.create<arith::ConstantOp>(vectorType, constant.getValue()));
-        continue;
+          block.getArgument(inputIndex),
+          builder.create<vector::TransferReadOp>(vectorType,
+                                                 input,
+                                                 indices,
+                                                 std::nullopt,
+                                                 SmallVector<bool>(1, true)));
+        ++inputIndex;
       }
-      SmallVector<Value> operands;
-      operands.reserve(statement.getNumOperands());
-      for (Value operand : statement.getOperands()) {
-        if (mapping.contains(operand)) {
-          operands.push_back(mapping.lookup(operand));
-        } else {
-          auto splat = builder.create<vector::SplatOp>(vectorType, operand);
-          mapping.map(operand, splat);
-          operands.push_back(splat);
+      mapping.map(
+        block.getArgument(generic.getNumDpsInputs()),
+        builder.create<vector::TransferReadOp>(
+          vectorType, out, indices, std::nullopt, SmallVector<bool>(1, true)));
+
+      for (Operation& statement : block.without_terminator()) {
+        if (auto constant = dyn_cast<arith::ConstantOp>(&statement)) {
+          mapping.map(
+            constant.getResult(),
+            builder.create<arith::ConstantOp>(vectorType, constant.getValue()));
+          continue;
+        }
+        SmallVector<Value> operands;
+        operands.reserve(statement.getNumOperands());
+        for (Value operand : statement.getOperands()) {
+          if (mapping.contains(operand)) {
+            operands.push_back(mapping.lookup(operand));
+          } else {
+            auto splat = builder.create<vector::SplatOp>(vectorType, operand);
+            mapping.map(operand, splat);
+            operands.push_back(splat);
+          }
+        }
+        OperationState state(statement.getLoc(), statement.getName());
+        state.addOperands(operands);
+        state.addTypes(
+          SmallVector<Type>(statement.getNumResults(), vectorType));
+        state.addAttributes(SmallVector<NamedAttribute>(
+          statement.getAttrs().begin(), statement.getAttrs().end()));
+        Operation* lifted = builder.create(state);
+        for (auto [oldResult, newResult] :
+             llvm::zip(statement.getResults(), lifted->getResults())) {
+          mapping.map(oldResult, newResult);
         }
       }
-      OperationState state(statement.getLoc(), statement.getName());
-      state.addOperands(operands);
-      state.addTypes(SmallVector<Type>(statement.getNumResults(), vectorType));
-      state.addAttributes(SmallVector<NamedAttribute>(
-        statement.getAttrs().begin(), statement.getAttrs().end()));
-      Operation* lifted = builder.create(state);
-      for (auto [oldResult, newResult] :
-           llvm::zip(statement.getResults(), lifted->getResults())) {
-        mapping.map(oldResult, newResult);
-      }
-    }
 
-    Value yielded = block.getTerminator()->getOperand(0);
-    auto rowWrite = builder.create<vector::TransferWriteOp>(
-      mapping.lookup(yielded), out, indices);
-    rowWrite.setInBoundsAttr(
-      builder.getBoolArrayAttr(SmallVector<bool>(1, true)));
+      Value yielded = block.getTerminator()->getOperand(0);
+      auto rowWrite = builder.create<vector::TransferWriteOp>(
+        mapping.lookup(yielded), out, indices);
+      rowWrite.setInBoundsAttr(
+        builder.getBoolArrayAttr(SmallVector<bool>(1, true)));
+    };
+
+    // 标量兜底一个尾元素：memref.load 提升为标量 body（clone 的 mapping
+    // 缺省映射让外部标量原样复用），结果直接 store 回。
+    auto emitTailElement = [&](Value lastDimOffset) {
+      const SmallVector<Value> indices = rowIndices(lastDimOffset);
+      IRMapping mapping;
+      unsigned inputIndex = 0;
+      Block& block = generic.getRegion().front();
+      for (Value input : generic.getDpsInputs()) {
+        mapping.map(block.getArgument(inputIndex),
+                    builder.create<memref::LoadOp>(input, indices));
+        ++inputIndex;
+      }
+      mapping.map(block.getArgument(generic.getNumDpsInputs()),
+                  builder.create<memref::LoadOp>(out, indices));
+      for (Operation& statement : block.without_terminator()) {
+        builder.clone(statement, mapping);
+      }
+      Value yielded = mapping.lookup(block.getTerminator()->getOperand(0));
+      builder.create<memref::StoreOp>(yielded, out, indices);
+    };
+
+    if (fullChunks > 1) {
+      Value fullBound = builder.create<arith::ConstantIndexOp>(fullChunks);
+      Value chunkWidthIndex =
+        builder.create<arith::ConstantIndexOp>(chunkWidth);
+      // 无 iter_args 的 scf.for 由 build 自动保证空 yield 终结符，body
+      // 内插入点从块首起，新 op 落在终结符之前。步长 1 遍历分块下标，
+      // 块内偏移由下标 × 分块宽给出。
+      auto chunkLoop =
+        builder.create<scf::ForOp>(zeroIndex, fullBound, stepOneIndex);
+      builder.setInsertionPointToStart(chunkLoop.getBody());
+      Value offset = builder.create<arith::MulIOp>(chunkLoop.getInductionVar(),
+                                                   chunkWidthIndex);
+      emitChunk(offset);
+      builder.setInsertionPointAfter(chunkLoop);
+    } else {
+      emitChunk(zeroIndex);
+    }
+    if (tailWidth > 0) {
+      Value tailBase =
+        builder.create<arith::ConstantIndexOp>(fullChunks * chunkWidth);
+      Value tailBound = builder.create<arith::ConstantIndexOp>(tailWidth);
+      auto tailLoop =
+        builder.create<scf::ForOp>(zeroIndex, tailBound, stepOneIndex);
+      builder.setInsertionPointToStart(tailLoop.getBody());
+      Value offset =
+        builder.create<arith::AddIOp>(tailBase, tailLoop.getInductionVar());
+      emitTailElement(offset);
+    }
 
     rewriter.eraseOp(generic);
   }

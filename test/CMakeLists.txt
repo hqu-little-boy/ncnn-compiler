@@ -91,7 +91,8 @@ add_test(NAME ncnn-compile-cli
         --param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/relu.param
         --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
         --static-baseline ${CMAKE_CURRENT_SOURCE_DIR}/Native/static_artifact_baseline.json
-        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/ncnn-compile-cli)
+        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/ncnn-compile-cli
+        --llvm-lib-dir ${LLVM_LIBRARY_DIR})
 set_tests_properties(ncnn-compile-cli PROPERTIES
     LABELS "native;integration;cli;static-baseline"
     RUN_SERIAL TRUE

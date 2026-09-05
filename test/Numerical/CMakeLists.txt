@@ -109,10 +109,14 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     add_custom_command(
         OUTPUT ${generated_outputs}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${output_dir}
-        # P0 编译耗时预算：经 timed_compile.cmake 透传执行并计时，
-        # 单 fixture 超 300s 发 WARNING（编译爆炸早期预警）。
+        # P0 编译耗时预算：经 timed_compile.cmake 透传执行并计时；
+        # P2 硬化：ncnn_add_model_fixture 置 ncnn_fixture_hard_budget=ON
+        # （超 300s 直接 FATAL_ERROR），operator/精度实验 fixture 保持
+        # WARNING 软告警（新慢件先观察一轮）。
         COMMAND
-            ${CMAKE_COMMAND} -Dlabel=${name} -P
+            ${CMAKE_COMMAND} -Dlabel=${name}
+            -Dbudget_seconds=${ncnn_fixture_budget}
+            -Dbudget_hard=${ncnn_fixture_hard_budget} -P
             ${CMAKE_CURRENT_SOURCE_DIR}/support/timed_compile.cmake --
             $<TARGET_FILE:ncnn-compile>
             --driver $<TARGET_FILE:ncnn-mlir-driver>
@@ -170,24 +174,27 @@ else()
     set(ncnn_model_vector_args VECTOR_MODE=fixed-width)
 endif()
 
-# 实测编译爆炸名单：以下模型在任意 vector lane 宽度（4/8/16）下
-# `clang -x ir -O3` 进入数十分钟至小时级编译（“超宽向量引发 LLVM 合法化期
-# 编译爆炸”警告在大 attention 模型上的实例化，与宽度无关，属代码生成问题，
-# 列入路线 P1）。名单内模型关闭 MLIR 显式行向量化，但仍显式传入与普通模型
-# 相同的 x86-64-v3 目标 ISA，避免性能对比退回 SSE2；其 scalar LLVM loop 的
-# auto-vectorization 由 clang 自行决定。
-set(ncnn_model_no_vector_overrides
-    pp_ocrv6_tiny_rec
-    pp_ocrv6_tiny_rec_int8
-    pp_ocrv5_mobile_rec
-    pp_ocrv5_mobile_rec_int8
-    pp_ocrv5_server_rec
-    pp_ocrv6_medium_rec
-    pp_ocrv6_medium_rec_int8
-    pp_ocrv6_small_rec
-    pp_ocrv6_small_rec_int8
-    pp_structrurev2_slanet_plus_cnn
-    pp_formulanet_plus_s_encoder)
+# 编译爆炸名单（P2 已清空）：2026-09-03 前下列 11 个模型在 MLIR 显式
+# 行向量化开启时 `clang -x ir -O3` 进入数十分钟至小时级编译，被迫整模
+# 关闭向量化（标量循环 + clang auto-vec），名单与 ratio ≥ 6× 全部重合。
+# P2 spike 定界出机制：VectorizeNCNN 整行向量取最内维 extent（CTC
+# logits 行 18385、特征行 37249+），math op 超出 libmvec 等宽 ABI 上限
+# 被逐 lane 拆成标量 libcall 风暴，叠加超宽向量 LLVM 合法化——行向量化
+# 分块到 lanes（vectorizeElementwiseRows）后根除（A/B：旧形态 clang
+# 600s 跑不完 → 新形态 22s，PP-OCRv5_server_rec 实测）。名单机制保留
+# 供未来应急：模型重新加入即回退"关闭 MLIR 向量化、仅保留 x86-64-v3
+# 标量 ISA 声明"的历史口径。
+set(ncnn_model_no_vector_overrides)
+
+# 单 fixture 硬预算覆盖（秒，默认 300，超时 FATAL_ERROR）。yolov5 大件
+# （640 输入、l/x 级参数量）的 clang -O3 成本由权重常量池主导——.ll 文本
+# 99% 以上是常量（P2 前后同量级，与代码生成形态无关），300s 对其过紧，
+# 给 900s；其余模型一律 300s（编译爆炸即小时级，300s 足以拦截）。
+set(ncnn_model_compile_budget_yolov5l 900)
+set(ncnn_model_compile_budget_yolov5x 900)
+set(ncnn_model_compile_budget_yolov5l_seg 900)
+set(ncnn_model_compile_budget_yolov5x_seg 900)
+set(ncnn_model_compile_budget_yolov5x_cls 900)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
     set(ncnn_model_scalar_args CLANG_ARG=-march=x86-64-v3)
@@ -202,6 +209,13 @@ function(ncnn_add_model_fixture name param_file bin_file)
     set(input_constraints ${ARGN})
     if(NOT "${input_shape}" STREQUAL "" AND input_constraints)
         list(REMOVE_AT input_constraints 0)
+    endif()
+    # P2 编译爆炸门禁硬化：模型级 fixture（perf 与 golden 共享产物）超
+    # 预算直接失败；函数作用域变量，operator/精度 fixture 不继承。
+    set(ncnn_fixture_hard_budget ON)
+    set(ncnn_fixture_budget 300)
+    if(DEFINED ncnn_model_compile_budget_${name})
+        set(ncnn_fixture_budget ${ncnn_model_compile_budget_${name}})
     endif()
     set(vector_args ${ncnn_model_vector_args})
     if("${name}" IN_LIST ncnn_model_no_vector_overrides)

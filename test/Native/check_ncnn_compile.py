@@ -1,6 +1,7 @@
 import argparse
 import ctypes
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -75,6 +76,12 @@ def main():
     parser.add_argument("--bin", required=True)
     parser.add_argument("--static-baseline", type=pathlib.Path, required=True)
     parser.add_argument("--work-dir", required=True)
+    parser.add_argument(
+        "--llvm-lib-dir",
+        type=pathlib.Path,
+        default=None,
+        help="LLVM shared-library directory injected as LD_LIBRARY_PATH for "
+        "the installed toolchain (install trees carry no build RPATH)")
     args = parser.parse_args()
 
     work_dir = pathlib.Path(args.work_dir)
@@ -881,6 +888,14 @@ def main():
     install_prefix = work_dir / "install"
     run(["cmake", "--install", args.build_dir, "--prefix", install_prefix])
     installed_output = work_dir / "installed"
+    # 安装树默认不带 RPATH（COMPILER_INSTALL_RPATH=OFF）：运行已安装的
+    # ncnn-compile 时注入 LLVM 库目录，安装产物才能解析 libMLIR 等共享库。
+    installed_env = dict(os.environ)
+    if args.llvm_lib_dir:
+        installed_env["LD_LIBRARY_PATH"] = (
+            f"{args.llvm_lib_dir}"
+            f"{os.pathsep}{installed_env.get('LD_LIBRARY_PATH', '')}"
+        ).rstrip(os.pathsep)
     run(
         [
             install_prefix / "bin" / "ncnn-compile",
@@ -892,7 +907,8 @@ def main():
             "-o",
             installed_output,
             "-O2",
-        ]
+        ],
+        env=installed_env,
     )
     assert_files(installed_output, {"libinstalled.so", "installed.h"})
 
