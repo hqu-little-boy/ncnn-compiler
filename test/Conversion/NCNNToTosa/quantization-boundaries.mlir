@@ -8,11 +8,13 @@ func.func @quantize(%input: tensor<2x3xf32>) -> tensor<2x3xi8> {
 
 // CHECK-LABEL: func.func @quantize
 // CHECK: linalg.generic
-// CHECK: math.floor
-// CHECK: math.ceil
-// CHECK: arith.constant -1.270000e+02 : f32
-// CHECK: arith.constant 1.270000e+02 : f32
-// CHECK: arith.fptosi {{.*}} : f32 to i8
+// CHECK: arith.minimumf
+// CHECK: arith.maximumf
+// CHECK: arith.select
+// CHECK: arith.fptosi {{.*}} : f32 to i32
+// CHECK: arith.minsi {{.*}} : i32
+// CHECK: arith.maxsi {{.*}} : i32
+// CHECK: arith.trunci {{.*}} : i32 to i8
 
 func.func @dequantize(%input: tensor<2x3xi32>) -> tensor<2x3xf32> {
   %scale = arith.constant dense<[0.5, 0.25]> : tensor<2xf32>
@@ -37,7 +39,8 @@ func.func @requantize(%input: tensor<2x3xi32>) -> tensor<2x3xi8> {
 // CHECK-LABEL: func.func @requantize
 // CHECK: arith.sitofp
 // CHECK: tosa.clamp
-// CHECK: arith.fptosi {{.*}} : f32 to i8
+// CHECK: arith.fptosi {{.*}} : f32 to i32
+// CHECK: arith.trunci {{.*}} : i32 to i8
 
 func.func @cast_round_trip(%input: tensor<2x3xf32>) -> tensor<2x3xf32> {
   %half = ncnn.cast %input {type_from = 1 : i64, type_to = 2 : i64} : (tensor<2x3xf32>) -> tensor<2x3xf16>
@@ -75,7 +78,8 @@ func.func @quantized_gemm(%input: tensor<?x4xf32>) -> tensor<?x3xf32> {
 // CHECK: math.absf
 // CHECK: arith.maximumf
 // CHECK: arith.divf
-// CHECK: arith.fptosi {{.*}} : f32 to i8
+// CHECK: arith.fptosi {{.*}} : f32 to i32
+// CHECK: arith.trunci {{.*}} : i32 to i8
 // CHECK: tosa.matmul
 // CHECK-SAME: -> tensor<1x?x3xi32>
 // CHECK: arith.sitofp

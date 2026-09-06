@@ -11,10 +11,12 @@ func.func @quantized_convolution(%input: tensor<2x3x3xf32>) -> tensor<3x3x3xf32>
 
 // LOWERING-LABEL: func.func @quantized_convolution
 // LOWERING: linalg.generic
-// LOWERING: math.floor
-// LOWERING: math.ceil
+// LOWERING: arith.minimumf
 // LOWERING: arith.maximumf
-// LOWERING: arith.fptosi {{.*}} : f32 to i8
+// LOWERING: arith.fptosi {{.*}} : f32 to i32
+// LOWERING: arith.minsi {{.*}} : i32
+// LOWERING: arith.maxsi {{.*}} : i32
+// LOWERING: arith.trunci {{.*}} : i32 to i8
 // LOWERING: %[[INPUT_ZERO:.*]] = "tosa.const"() <{values = dense<0> : tensor<1xi8>}>
 // LOWERING: %[[WEIGHT_ZERO:.*]] = "tosa.const"() <{values = dense<0> : tensor<1xi8>}>
 // LOWERING: %[[BIAS:.*]] = "tosa.const"() <{values = dense<0> : tensor<3xi32>}>
@@ -39,11 +41,12 @@ func.func @requantized_convolution(%input: tensor<2x3x3xi8>) -> tensor<3x3x3xi8>
 // LOWERING: tosa.conv2d
 // LOWERING: arith.sitofp
 // LOWERING: arith.mulf
-// LOWERING: math.floor
-// LOWERING: math.ceil
-// LOWERING: arith.constant -1.270000e+02 : f32
-// LOWERING: arith.constant 1.270000e+02 : f32
-// LOWERING: arith.fptosi {{.*}} : f32 to i8
+// LOWERING: arith.minimumf
+// LOWERING: arith.maximumf
+// LOWERING: arith.fptosi {{.*}} : f32 to i32
+// LOWERING: arith.minsi {{.*}} : i32
+// LOWERING: arith.maxsi {{.*}} : i32
+// LOWERING: arith.trunci {{.*}} : i32 to i8
 // LOWERING: return {{.*}} : tensor<3x3x3xi8>
 
 func.func @quantized_depthwise(%input: tensor<2x3x3xf32>) -> tensor<2x3x3xf32> {

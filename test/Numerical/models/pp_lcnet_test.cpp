@@ -206,17 +206,20 @@ TEST(NumericalModel, PPLCNetTextlineOriInt8ProducesStableSoftmax) {
 }
 
 TEST(NumericalModel, PPLCNetTextlineOriInt8PreservesIntegerTargetCode) {
+  // P4 后的 int8 目标代码形态：整数 MAC 保留（sext/mul i32 与 movsbl/
+  // imull），GEMM 内核走 row-dot 向量化（vpmulld/vpmaddwd）；逐层
+  // requant 链融合为单一 generic 后标量 sitofp i32 只余尾部散点。
   const std::string llvm_ir =
     read_text(PP_LCNET_TEXTLINE_ORI_INT8_LLVM_IR_PATH);
   EXPECT_GE(count_substring(llvm_ir, "sext i8"), 20U);
   EXPECT_GE(count_substring(llvm_ir, "mul i32"), 20U);
   EXPECT_GE(count_substring(llvm_ir, "fptosi float"), 20U);
-  EXPECT_GE(count_substring(llvm_ir, "sitofp i32"), 20U);
 
   const std::string assembly =
     read_text(PP_LCNET_TEXTLINE_ORI_INT8_ASSEMBLY_PATH);
   EXPECT_GE(count_substring(assembly, "movsbl"), 20U);
   EXPECT_GE(count_substring(assembly, "imull"), 20U);
+  EXPECT_GE(count_substring(assembly, "vpmulld"), 20U);
 }
 
 TEST(NumericalModel, ChineseOCRLiteAngleNetMatchesNcnn) {
