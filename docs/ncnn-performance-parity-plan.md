@@ -95,6 +95,41 @@
 >   P2 验收——验收口径相应修正为「无小时级爆炸；>300s 件数 ≤ 5 且
 >   全部 ≤ 700s（常量池主导）、其余全部 ≤ 300s」。
 
+> **执行状态（2026-09-06）**：P5 已落地（v2 建议的 P2 后穿插时点）。
+> - 实现落点：`VectorizeNCNN` 新增 `vectorizeDepthwiseConvRows`——
+>   multiplier=1 的 `linalg.depthwise_conv_2d_nhwc_hwcm`（全部 26 个
+>   fixture / 434 处 depthwise 的唯一形态）改写为 forall(n,oh,ow) 网格
+>   + C 维分块 rank-1 transfer：权重 [KH,KW,C,1] 折叠 [KH*KW,C] 行视图
+>   （常量权重由 canonicalizer 直接折叠）、init 折叠 4D 作累加种子，
+>   kh 外 kw 内逐窗口 `vector.fma` 累加（named op body
+>   acc=addf(mulf(in,w),acc) 的归约序；单舍入差异由数值预算吸收，P1
+>   同款取舍；标量尾逐位复刻 mulf+addf）；替换值 expand 回 5D 与下游
+>   collapse_shape 消费者在 canonicalizer 对消。分块预算沿用逐元素
+>   路径（f32 → 4×lanes），非 2 幂退 lanes、仍非 2 幂保持标量
+>   （vector<3> 宽度教训）；multiplier≠1 / 动态 shape 保持标量留 P8。
+> - asm 断言：formula_encoder vfmadd 564（P1 后）→ **3072**、
+>   vmovups 23965（行向量拷贝），server_det_static 3808；对照
+>   resnet18（无 depthwise）vfmadd 444 不变——无附带代码形变。
+> - lit：新增 `depthwise-vectorize.mlir`（2 正向 + multiplier≠1 /
+>   窄通道 / 动态 shape 3 负向守护），136/136。
+> - **全量实测（全新 /tmp 构建目录，437/437 过含 per-class 门禁，
+>   fixture 编译 ≤ 300s 零告警）**：对 P2 基线 **43/44 模型 ratio
+>   改善**（仅 server_rec +0.54 在噪声带内），全表 p50 3.42→2.84、
+>   max 33.41→31.93。det 系收益最大：medium_det 2.93→1.89（1.55×）、
+>   mobile_det_static 2.09→1.50（1.39×）、small_det 2.95→2.20、
+>   tiny_det 3.21→2.48；int8 rec 系同步受益（medium_rec_int8
+>   28.75→19.94、tiny_int8 8.31→5.08、small_int8 12.33→9.34——int8
+>   模型的 dw 层保持 f32，被本次改写覆盖）。公式系 33.41→31.93
+>   （1.05×）：formula_encoder 的 dw 仅占算力小头，v2 §3-P5
+>   「det/公式系 1.2–1.5×」的公式系预期未达、det 系达成——其单核
+>   差距主源仍是 matmul 微内核/im2col（P3/P6）。
+> - 1T 抽测（resnet18 / medium_det / mobile_det_static / formula）：
+>   compiled 多核扩展 2.7–5.9× 全面优于 ncnn 1.6–2.2×，「并行无罪」
+>   结论不变；formula 单核差距归 P3/P6。
+> - 构建注记：`cmake --build --parallel` 不带并行度时 make 走无界
+>   并行（实测 89 个并发编译），fixture 墙钟被超订挤爆 300s 预算
+>   门禁（resnet101 单独实测 118s）——全量构建须显式 `--parallel 16`。
+
 > 目标：44 模型 performance_tests 套件编译产物全面追平 vendored ncnn
 > （x86-64 AVX2/FMA 口径）。根因依据见姊妹篇
 > [`ncnn-performance-gap-analysis.md`](ncnn-performance-gap-analysis.md)
@@ -279,6 +314,13 @@ avxvnni `vpdpbusd` + LUT requant）。
 
 验收：formula_encoder 1T 单测中 depthwise 段 asm 出现行向量拷贝+FMA；
 全量表 det/公式系 1.2–1.5× 收益；golden 全绿。
+
+> **P5 执行状态附注（2026-09-06）**：已按本节路线落地
+> （`vectorizeDepthwiseConvRows`，见顶部执行状态块）。实测修正：det 系
+> 1.06–1.55×（medium_det 1.55× 最高）、int8 rec 系同步受益；公式系仅
+> 1.05×——formula_encoder 的 dw 占算力小头，1.2–1.5× 的公式系预期
+> 高估，其单核差距主源在 P3/P6。asm 验收达成：formula_encoder
+> vfmadd 564→3072 + 行向量拷贝，对照 resnet18 不变。
 
 ### P6 搬运削减：im2col 融合与布局折腾（3–5 天）
 

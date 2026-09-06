@@ -87,7 +87,7 @@ MLIR 显式行向量化）与 ratio 表 6×–43× 的全部 11 行一一重合�
 | 3 | int8 无 VNNI、标量 i32-MAC、逐层量化/反量化 pass | 全部 int8 行（6×–30×） | 量化卷积接入 strategy+专用 i8 内核（`vpdpbusd` 形态 = i8 dot（IR 需 `llvm.vp`/实验 vector dot 或 intrinsics 兜底）；量化/反量化融进卷积 epilogue |
 | 4 | matmul 微内核无 M 维寄存器分块，B 反复重读 | 全部走 GEMM 的层 | A1b 增加 M×N 寄存器 tile（如 4×blockWidth），A 面板驻留 |
 | 5 | 无 Winograd；3×3 s1 全部走 im2col+GEMM 或直接卷积 | conv 主导模型（resnet/yolo/det 系 2–5×） | 落地 `--conv-strategy=winograd`（数值预算待验证，F(6,3) 优先） |
-| 6 | depthwise conv 纯标量 generic | 含 depthwise 的全部模型（27–28 层/attention 系） | depthwise 专用行向量化（通道为 2 的幂时行连续，形态简单） |
+| 6 | ~~depthwise conv 纯标量 generic~~ **已修复（2026-09-06 P5）**：`vectorizeDepthwiseConvRows` 按 C 行 rank-1 transfer + vector.fma 改写 multiplier=1 形态，全表 p50 3.42→2.84、43/44 改善，det 系 1.06–1.55×（见 parity-plan 执行状态） | 含 depthwise 的全部模型（27–28 层/attention 系） | 已落地；multiplier≠1 变体留 P8 |
 | 7 | 数据搬运占比过高（im2col 物化、逐 op 布局转换、部分 lane 脚手架） | 全部模型 | im2col 融合进 matmul 主循环（gather-free 化）；MHA/attention 的非常量 transpose 运行时路径检查 |
 
 注：#1 是全局一行级修复、预期全表收益；#2 是当前最大单项；#3 独立成线。
