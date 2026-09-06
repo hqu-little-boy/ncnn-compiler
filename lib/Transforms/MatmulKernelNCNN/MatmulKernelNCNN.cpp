@@ -22,9 +22,12 @@ namespace {
 //    linalg.matmul 由通用下降展开为标量循环，PP 系大图模型单次推理劣化
 //    数十倍（3×640×640 DBNet：直接卷积 ~20s vs 改写后 >600s）。把
 //    scf.forall 区域内的静态 memref matmul 改写为显式向量内核——M 外层
-//    每行将 C 读入寄存器累加器，K 内层零存储往返做 broadcast(A[m,k]) ·
-//    B[k] 行 FMA 累加（vector.fma 单舍入），行末一次写回；行宽仅影响
-//    LLVM 合法化拆分。
+//    按 mTile 行一组将 C 行段读入寄存器 accumulator（M×N 寄存器分块），
+//    K 内层零存储往返：每轮只读一次 B[k] 行，与各行 A[m+i,k] 标量的
+//    broadcast 做 vector.fma（单舍入）独立累加，块末一次写回。B 行复用
+//    mTile 次且 K 循环持有 mTile 条相互独立的 FMA 链——单链内核的发射
+//    率被 FMA 延迟钉死，多链才能喂满端口；寄存器预算见
+//    kAccumulatorFloatBudget。
 // 2) 恒等自拷贝循环消除：融合流水线在无激活时留下「load X 后 store 回
 //    X」的纯浪费嵌套，直接删除。
 // 3) 行级 generic 向量化：静态、全恒等映射、纯 arith/math body 的
@@ -91,8 +94,15 @@ class MatmulKernelNCNNPass final
 
  private:
   // 行级向量宽度上限：relu 等逐元 epilogue 的最内维覆盖范围；超宽保持
-  // 标量。matmul 内核行分块另有 128 上限。
+  // 标量。matmul 内核的向量 accumulator 宽度由 accColumns（默认 16）与
+  // 其余数列块给出，天然有界。
   static constexpr int64_t kMaxRowWidth = 1024;
+
+  // matmul 内核 M×N 寄存器分块的 accumulator 浮点预算：tileRows ×
+  // accColumns ≤ 预算时，accumulator（默认 4×16 = 8 个 ymm）加 B 行与
+  // broadcast 瞬态可容纳于 16 个 ymm 之内，避免 LLVM 寄存器溢出把分块
+  // 的访存/延迟收益吃回去。
+  static constexpr int64_t kAccumulatorFloatBudget = 64;
 
   static SmallVector<Value> bufferOperands(linalg::LinalgOp linalgOp) {
     SmallVector<Value> operands;
@@ -554,59 +564,132 @@ class MatmulKernelNCNNPass final
     ImplicitLocOpBuilder builder(matmul.getLoc(), rewriter);
     builder.setInsertionPoint(matmul);
 
-    // 行分块：向量类型宽度封顶（超宽向量会引发 LLVM 合法化期的编译爆
-    // 炸），宽行拆成多个 n 块逐块计算。
-    const int64_t blockWidth = std::min<int64_t>(columns, 128);
-    const bool splitColumns = columns > blockWidth;
+    // M×N 寄存器分块（P3）：M 方向 tileRows 行 accumulator 驻留寄存器，
+    // B 行每轮 K 只读一次、复用 tileRows 次（各行 A 标量 broadcast），
+    // 并把 K 循环从单条 FMA 依赖链变为 tileRows 条独立链。列侧 accumulator
+    // 向量宽 accColumns，n 块循环按其步距覆盖 N（余数列块用窄向量）；
+    // 行侧满块步距 tileRows，余数行退单行单 accumulator 形态。寄存器
+    // 预算约束见 kAccumulatorFloatBudget；tileRows=1 时即历史单行内核
+    // （A/B 对照口径）。
+    const int64_t accColumns =
+      std::clamp<int64_t>(matmulAccColumns, 1, columns);
+    const int64_t tileRows = std::max<int64_t>(
+      1,
+      std::min<int64_t>(
+        {matmulMRows, rows, kAccumulatorFloatBudget / accColumns}));
 
-    auto vectorType = VectorType::get({blockWidth}, elementType);
+    const int64_t fullColumnBlocks = columns / accColumns;
+    const int64_t tailColumns = columns % accColumns;
+    const int64_t fullRowExtent = rows / tileRows * tileRows;
+
     auto zero = builder.create<arith::ConstantIndexOp>(0);
     auto one = builder.create<arith::ConstantIndexOp>(1);
-    auto depthBound = builder.create<arith::ConstantIndexOp>(depth);
-    auto rowBound = builder.create<arith::ConstantIndexOp>(rows);
 
-    // M 外层（可选 N 分块）：每块先把 C 读进寄存器累加器，K 内层纯 FMA
-    // 零存储往返，块末一次写回。A 按收缩维逐元素标量读取（列主序访问，
-    // 向量化无收益），broadcast 后与 B 子行相乘累加。
-    auto mLoop = builder.create<scf::ForOp>(zero, rowBound, one);
-    builder.setInsertionPointToStart(mLoop.getBody());
-    Value rowIndex = mLoop.getInductionVar();
-    Value columnStart = zero;
+    // 一段 rowCount 行 × 一个 n 块的内核体：C 行段读入 rowCount 个向量
+    // accumulator，K 循环内 B 行读一次、与各行 A 标量 broadcast 后
+    // vector.fma 独立累加，块末写回。行段与列块边界都是静态推导的界内
+    // 区域，transfer 全部标 inBounds——动态 n 块偏移下也下降为无掩码
+    // 的 vector.load/store。
+    auto emitTileBlock = [&](Value rowStart,
+                             int64_t rowCount,
+                             Value columnStart,
+                             int64_t blockColumns) {
+      auto vectorType = VectorType::get({blockColumns}, elementType);
+      SmallVector<Value> rowIndices;
+      rowIndices.reserve(rowCount);
+      for (int64_t i = 0; i < rowCount; ++i) {
+        rowIndices.push_back(
+          i == 0 ? rowStart
+                 : builder
+                     .create<arith::AddIOp>(
+                       rowStart, builder.create<arith::ConstantIndexOp>(i))
+                     .getResult());
+      }
 
-    std::optional<scf::ForOp> nLoop;
-    if (splitColumns) {
-      auto columnBound = builder.create<arith::ConstantIndexOp>(columns);
-      auto blockStep = builder.create<arith::ConstantIndexOp>(blockWidth);
-      nLoop = builder.create<scf::ForOp>(
-        zero, columnBound.getResult(), blockStep.getResult());
-      columnStart = nLoop->getInductionVar();
-      builder.setInsertionPointToStart(nLoop->getBody());
+      SmallVector<Value> accumulators;
+      for (int64_t i = 0; i < rowCount; ++i) {
+        accumulators.push_back(builder.create<vector::TransferReadOp>(
+          vectorType,
+          acc,
+          ValueRange{rowIndices[i], columnStart},
+          std::nullopt,
+          SmallVector<bool>(1, true)));
+      }
+      auto depthBound = builder.create<arith::ConstantIndexOp>(depth);
+      auto kLoop = builder.create<scf::ForOp>(
+        zero, depthBound, one, ValueRange(accumulators));
+      builder.setInsertionPointToStart(kLoop.getBody());
+      Value kIndex = kLoop.getInductionVar();
+      auto bRow =
+        builder.create<vector::TransferReadOp>(vectorType,
+                                               rhs,
+                                               ValueRange{kIndex, columnStart},
+                                               std::nullopt,
+                                               SmallVector<bool>(1, true));
+      // 单舍入 FMA：mul+add 分离会让 LLVM 侧因无 fastmath/contract 而无
+      // 法合成 vfmadd（每个 MAC 双指令、依赖链延迟翻倍）；vector.fma 一
+      // 步到位，舍入语义与 ncnn 的 FMA 内核一致，差异由数值黄金预算吸
+      // 收。各 accumulator 链相互独立，K 循环体的发射率不再被单链延迟
+      // 钉死。
+      SmallVector<Value> updated;
+      updated.reserve(rowCount);
+      for (int64_t i = 0; i < rowCount; ++i) {
+        auto aScalar = builder.create<memref::LoadOp>(
+          lhs, ValueRange{rowIndices[i], kIndex});
+        auto broadcast =
+          builder.create<vector::BroadcastOp>(vectorType, aScalar);
+        updated.push_back(builder.create<vector::FMAOp>(
+          vectorType, broadcast, bRow, kLoop.getRegionIterArgs()[i]));
+      }
+      builder.create<scf::YieldOp>(updated);
+
+      // 写回在 kLoop 之后：行段累加完毕一次落回。
+      builder.setInsertionPointAfter(kLoop);
+      for (int64_t i = 0; i < rowCount; ++i) {
+        auto rowWrite = builder.create<vector::TransferWriteOp>(
+          kLoop.getResult(i), acc, ValueRange{rowIndices[i], columnStart});
+        rowWrite.setInBoundsAttr(
+          builder.getBoolArrayAttr(SmallVector<bool>(1, true)));
+      }
+    };
+
+    // 一个 M 行段扫完整列块再扫列尾块。
+    auto emitRowBlock = [&](Value rowStart, int64_t rowCount) {
+      if (fullColumnBlocks > 1) {
+        auto columnBound =
+          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
+        auto columnStep = builder.create<arith::ConstantIndexOp>(accColumns);
+        auto columnLoop =
+          builder.create<scf::ForOp>(zero, columnBound, columnStep);
+        builder.setInsertionPointToStart(columnLoop.getBody());
+        emitTileBlock(
+          rowStart, rowCount, columnLoop.getInductionVar(), accColumns);
+        builder.setInsertionPointAfter(columnLoop);
+      } else {
+        emitTileBlock(rowStart, rowCount, zero, accColumns);
+      }
+      if (tailColumns > 0) {
+        auto tailStart =
+          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
+        emitTileBlock(rowStart, rowCount, tailStart, tailColumns);
+      }
+    };
+
+    if (fullRowExtent > 0) {
+      auto rowBound = builder.create<arith::ConstantIndexOp>(fullRowExtent);
+      auto rowStep = builder.create<arith::ConstantIndexOp>(tileRows);
+      auto rowLoop = builder.create<scf::ForOp>(zero, rowBound, rowStep);
+      builder.setInsertionPointToStart(rowLoop.getBody());
+      emitRowBlock(rowLoop.getInductionVar(), tileRows);
+      builder.setInsertionPointAfter(rowLoop);
     }
-
-    auto accumulatorInit = builder.create<vector::TransferReadOp>(
-      vectorType, acc, ValueRange{rowIndex, columnStart}, std::nullopt);
-    auto kLoop = builder.create<scf::ForOp>(
-      zero, depthBound, one, ValueRange{accumulatorInit.getResult()});
-    builder.setInsertionPointToStart(kLoop.getBody());
-    Value kIndex = kLoop.getInductionVar();
-    Value accumulator = kLoop.getRegionIterArgs()[0];
-
-    auto aScalar =
-      builder.create<memref::LoadOp>(lhs, ValueRange{rowIndex, kIndex});
-    auto broadcast = builder.create<vector::BroadcastOp>(vectorType, aScalar);
-    auto bRow = builder.create<vector::TransferReadOp>(
-      vectorType, rhs, ValueRange{kIndex, columnStart}, std::nullopt);
-    // 单舍入 FMA：mul+add 分离会让 LLVM 侧因无 fastmath/contract 而无法
-    // 合成 vfmadd（每个 MAC 双指令、K 链延迟翻倍）；vector.fma 一步到位，
-    // 舍入语义与 ncnn 的 FMA 内核一致，差异由数值黄金预算吸收。
-    auto fused =
-      builder.create<vector::FMAOp>(vectorType, broadcast, bRow, accumulator);
-    builder.create<scf::YieldOp>(ValueRange{fused.getResult()});
-
-    // 写回仍在 n 块循环体内（kLoop 之后）：每块行段独立累加并落回。
-    builder.setInsertionPointAfter(kLoop);
-    builder.create<vector::TransferWriteOp>(
-      kLoop.getResult(0), acc, ValueRange{rowIndex, columnStart}, std::nullopt);
+    if (const int64_t remainderRows = rows % tileRows) {
+      auto rowStart = builder.create<arith::ConstantIndexOp>(fullRowExtent);
+      auto rowBound = builder.create<arith::ConstantIndexOp>(rows);
+      auto rowLoop = builder.create<scf::ForOp>(rowStart, rowBound, one);
+      builder.setInsertionPointToStart(rowLoop.getBody());
+      emitRowBlock(rowLoop.getInductionVar(), 1);
+    }
 
     rewriter.eraseOp(matmul);
   }

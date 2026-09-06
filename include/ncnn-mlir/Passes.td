@@ -167,12 +167,27 @@ def MatmulKernelNCNNPass : Pass<"matmul-kernel-ncnn", "mlir::ModuleOp"> {
   let description = [{
     Rewrites static memref linalg.matmul ops inside scf.forall regions
     (the tiles produced by tile-matmul-forall) into explicit vector FMA
-    loop nests: the K loop streams one B row vector per iteration and the
-    M loop accumulates broadcast(A[m,k]) * B-row into C rows. Without
-    this pass the generic matmul expansion degenerates to scalar loops,
-    which dominates end-to-end latency on wide PP-family models.
+    loop nests: the K loop streams one B row vector per iteration and a
+    group of M rows keeps that many vector accumulators resident in
+    registers (MxN register blocking), each accumulating
+    broadcast(A[m+i,k]) * B-row via an independent FMA chain. Multiple
+    resident rows both reuse each B row and break the single FMA
+    dependency chain that otherwise pins the K loop issue rate to the
+    FMA latency. Without this pass the generic matmul expansion
+    degenerates to scalar loops, which dominates end-to-end latency on
+    wide PP-family models.
   }];
   let options = [
+    Option<"matmulMRows", "matmul-m-rows", "int64_t", /*default=*/"4",
+           "M-direction register tile rows of the matmul kernel (each row "
+           "keeps one vector accumulator across the K loop); clamped to the "
+           "M extent and the accumulator float budget; 1 restores the "
+           "legacy single-row kernel for A/B comparison">,
+    Option<"matmulAccColumns", "matmul-acc-columns", "int64_t",
+           /*default=*/"16",
+           "Vector accumulator width in columns for the matmul kernel; "
+           "N is swept in blocks of this width (remainder block uses a "
+           "narrower vector); clamped to the N extent">,
     Option<"rowChunkLanes", "row-chunk-lanes", "unsigned", /*default=*/"8",
            "Lane budget for the row-generic vectorization chunks (0 keeps "
            "the historical whole-row form). Elements of up to 32 bits are "
