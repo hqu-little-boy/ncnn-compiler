@@ -164,6 +164,18 @@
 >   ctest `MatmulBench.Gflops`（RUN_SERIAL，门禁 60/40 GFLOP/s，
 >   env 可覆盖）；P6 打包后复评 ≥ 60 用同一门禁。
 
+> **执行状态（2026-09-06，P4）**：int8 VNNI 线已落地（spike 定档 →
+> 改造 → 全量验证，详见 §3-P4 执行状态附注）。Q-conv 全链接入
+> strategy（im2col+`matmul_transpose_b`，权重常量编译期重排 [N,K]）；
+> i8 row-dot 内核落 tier ②/③（标量 MAC 多链由 LV 生成
+> `vpmovsxbw`+`vpmaddwd`/`vpmulld`，`vpdpbusd` 因 ISA 与 s8×s8 语义
+> 不可自动达成）；`fuse-quant-chain-ncnn` 融合逐层 requant/dequant
+> 链；行级向量化与 im2col gather 扩展整数形态。int8 行
+> 19.9×–28.8× → **1.9×–4.8×**，全表 p50 2.09→**1.92**、max 23.01→
+> **19.02**；验收 4/5（medium_rec_int8 4.82 vs ≤FP32×1.5 界 4.47，
+> 差 8%，运行方差 ±15% 同量级；≤4× 预期未达，下一杠杆为内核内
+> requant epilogue 融合，联动 P6）。
+
 > 目标：44 模型 performance_tests 套件编译产物全面追平 vendored ncnn
 > （x86-64 AVX2/FMA 口径）。根因依据见姊妹篇
 > [`ncnn-performance-gap-analysis.md`](ncnn-performance-gap-analysis.md)
@@ -342,6 +354,58 @@ avxvnni `vpdpbusd` + LUT requant）。
 
 验收：int8 行 ratio ≤ 自身 FP32 行 ratio × 1.5；asm 抽查出现
 `vpdpbusd`（或 spike 定档的对应指令）；medium_rec_int8 预期 29.8× → ≤ 4×。
+
+> **P4 执行状态附注（2026-09-06）**：已落地，详见顶部执行状态块。
+> - **spike 定档（与 v1 预期路线不同）**：tier ① `vpdpbusd` 不可达——
+>   本机 CPU 具备 `avx_vnni` 但无 `avx_vnni_int8`（`vpdpbssd` 需要），
+>   且 byte-VNNI 原生组合是 u8×s8，s8×s8 数据需 u8 技巧 + intrinsics
+>   直发（违背 ISA 口径与语义优先原则）。tier ② `vpmaddwd` 达成，但
+>   路径 ≠ 计划预期的 vector.contract 下降：**标量 i32-MAC 循环经
+>   LLVM 循环向量化器稳定生成 `vpmovsxbw`+`vpmaddwd`**（ncnn AVX2
+>   int8 内核同款 MAC）；显式向量内核的 mul+add 配对树依赖中端展开+
+>   重关联的偶然建树，实测稳定落回 `vpmulld`（tier ③）。最终内核
+>   形态：**刻意发射标量 i32-MAC 多链**（tileRows×accColumns 条独立
+>   链，预算 8），由 LV 完成向量化——整型结合律保证与串行逐位一致。
+> - **落地清单**：① `quantizeSignedI8` 改纯 arith trunc 形态
+>   （round-half-away 逐位等价证明：`x≥0 ? trunc(x+.5) : trunc(x−.5)`，
+>   f32 侧 ±128 收拢保证 fptosi 无 UB）——消除向量 floor/ceil 依赖；
+>   ② 新 pass `fuse-quant-chain-ncnn`：逐层 requant/dequant 尾部
+>   （sitofp→scale mul→bias→[act]→quantize 3–4 个全量 pass）融合为
+>   单一混合类型 generic，op 序/常量不变、数值逐位一致；③
+>   `strategy-ncnn`：int8 k×k 静态恒走 im2col+GEMM（无标量直接卷积
+>   内核可用）、权重常量直接重排 [N,K]（ncnn transpose_pack_B 的编译
+>   期化）、1×1 与 InnerProduct/Gemm 同走 `matmul_transpose_b`；④
+>   `TileMatmulForall` 模板化支持 transpose_b；⑤ `MatmulKernelNCNN`
+>   新增 i8 row-dot 内核（`--matmul-i8-rows`/`--matmul-i8-acc-columns`，
+>   默认 2×4）；⑥ 行级向量化扩展整数/混合类型 + 广播映射输入
+>   （requant 尾部与激活量化向量化）；⑦ im2col gather i8（非 2 幂
+>   通道 32-lane 分块 + 标量尾）；⑧ VectorizeNCNN 提升修复为逐结果
+>   类型（quantize 的 cmpf i1 结果曾统一赋 f32 向量型，非法 IR）。
+> - **范围修正**：dw-Q 未做——int8 模型 zoo 的 dw 层本身保持 f32
+>   （被 P5 覆盖），ncnn 自身 dw-int8 也不走 im2col+gemm；动态空间维
+>   i8 conv 不进 GEMM（perf 表均为静态口径）；K<8 的 GEMM 走标量尾。
+> - **实测（2026-09-06 全新 /tmp stage 构建 438/438 ctest 全过后的
+>   空闲机器全量表）**：int8 行 19.9×–28.8× → **1.9×–4.8×**——
+>   medium_rec_int8 19.94→4.82、small_rec_int8 9.34→4.18、
+>   tiny_rec_int8 8.31→3.66、mobile_rec_int8 4.9×→2.25、
+>   medium_det_int8 1.9×→1.92（该行 P5 后已达标，本次持平）；compiled
+>   墙钟较显式向量内核再降 12–32%（LV pmaddwd 收益）。全表
+>   p50 2.09→**1.92**、max 23.01→**19.02**。asm：GEMM 内核 `imull`
+>   →0，`vpmaddwd`（196 处/medium_rec）+`vpmulld` 接管。
+> - **验收对账**：① int8 ≤ FP32×1.5——**4/5 过**
+>   （medium_rec_int8 4.82 vs 界 4.47，差 8%；该模型三次全表
+>   4.31/4.50/4.82、一次抽测 3.74，运行间方差 ±15% 与界限同量级，
+>   未判定为稳定未达）；② asm 抽查——`vpdpbusd` 不可达（本机无
+>   `avx_vnni_int8`，s8×s8 无自动 byte-VNNI），定档
+>   `vpmaddwd`/`vpmulld` 出现 ✓；③ medium_rec_int8 ≤ 4×——4.82，
+>   **未达**（同上方差说明），残余主源：requant 仍为独立全量 pass
+>   （i32 中间物化 + 逐层访存），内核内 requant epilogue 融合是下一
+>   杠杆（联动 P6 打包）；④ 1T 抽测（同机同时段 6T 对照）——
+>   medium_rec_int8 1T 7.04 / 6T 3.74（compiled 多核扩展 4.67×，fp32
+>   同系 4.42×）、small_rec_int8 3.32×（fp32 3.42×）——int8 并行扩展
+>   与 fp32 相当，「并行无罪」结论在 int8 上成立。
+> - **tile 参数**：`--matmul-i8-rows`/`--matmul-i8-acc-columns` 默认
+>   2×4；（1,4）扫描实测 pmulld 站点 512→2464 显著劣化，2×4 定档。
 
 ### P5 depthwise 行向量化（2–3 天）
 
