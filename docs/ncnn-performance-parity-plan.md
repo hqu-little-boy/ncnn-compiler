@@ -130,6 +130,40 @@
 >   并行（实测 89 个并发编译），fixture 墙钟被超订挤爆 300s 预算
 >   门禁（resnet101 单独实测 118s）——全量构建须显式 `--parallel 16`。
 
+> **执行状态（2026-09-06，P3）**：matmul M×N 寄存器分块已落地。
+> - **内核改动**（`MatmulKernelNCNN.cpp`）：A1b 内核 M 方向按
+>   `tileRows=4` 行一组驻留向量 accumulator（K 循环 4 条独立 FMA 链，
+>   破除单链把发射率钉死在 FMA 延迟的瓶颈；B 行每轮 K 读一次复用 4
+>   次），列侧按 `accColumns=16` 分块扫 N（余数列块窄向量），寄存器
+>   预算 tileRows×accColumns ≤ 64 浮点（8 ymm，防溢出）。M 满块 +
+>   余数行退单行形态；transfer 全标 inBounds（动态 n 块偏移下也无掩
+>   码 load/store）。新增选项 `--matmul-m-rows`（=1 回 legacy 单行内
+>   核，A/B 口径）与 `--matmul-acc-columns`。
+> - **开场动作（隔离 bench 补测）**：FMA 后 legacy 单行内核实测
+>   36.7（K=576）/ 16.2（K=2304）GFLOP/s 1T——v1 §3-P1 的「18–26」
+>   是 FMA 前口径。参数扫描（9 组 M×N 组合，两组形状）确认 4×16 最
+>   优；checksum 全组合与 legacy 逐位一致。
+> - **实测（同机同时段 A/B，powersave 口径）**：隔离 bench 1T
+>   **117.7 / 60.6 GFLOP/s**（3.06×/3.48×）；resnet18 1T 端到端
+>   257.1→159.4ms（1.61×）、6T 72.2→51.3ms（ratio 3.41→2.65）；
+>   6T 抽测 vs 9/3 基线（机器状态漂移，方向参考）：server_rec
+>   31.16→22.60、efficientnet_b1 4.11→1.92、medium_det 3.26→1.75、
+>   resnet18 4.54→2.87。golden 抽查 4/4。验收 ① 达成、② 未达（前
+>   提被证伪，GEMM 占 1T ~25%，剩余在 P6），详见 §3-P3 附注。
+> - **全量表重测（2026-09-06 全新 /tmp 构建，438/438 ctest 全过，含
+>   per-class 门禁与新增 bench 门禁；47 perf = 44 实测 + 2 自跳 +
+>   1 陈旧注册）**：全表 p50 2.84→**2.09**、p90 6.92、max 31.93→
+>   **23.01**。大点：formula_encoder 31.93→**17.57**（GEMM 主导的
+>   编码器吃到 P3 全部收益，−45%）、server_rec →23.01、
+>   server_det_static →2.59；重模型（ncnn≥100ms）p50 **1.73**，
+>   M2 口径（≤1.5/中位 ≤1.3）逼近；yolov5n_seg 1.37、
+>   mobile_det_static 1.35、yolov5n 1.45 等已进 1.5 以内。int8 行
+>   原地（Q 路径不进 A1b，P4 范畴）。
+> - **bench 沉淀**：`test/Numerical/bench/matmul_bench.mlir`（浅 K
+>   576 / 深 K 2304 两形状）+ `support/matmul_bench_main.c` +
+>   ctest `MatmulBench.Gflops`（RUN_SERIAL，门禁 60/40 GFLOP/s，
+>   env 可覆盖）；P6 打包后复评 ≥ 60 用同一门禁。
+
 > 目标：44 模型 performance_tests 套件编译产物全面追平 vendored ncnn
 > （x86-64 AVX2/FMA 口径）。根因依据见姊妹篇
 > [`ncnn-performance-gap-analysis.md`](ncnn-performance-gap-analysis.md)
@@ -271,6 +305,19 @@ P3/P4/P5/P6，见执行状态 runtime 账目）；golden 全绿。**传递关系
 的 40%；ncnn sgemm 同形状对照 ≥ 100 作为差距标尺不变），P6 打包
 落地后复评 ≥ 60；resnet18 1T 端到端 ≥ 2× 于 P1 后水平（6T 口径按
 ~0.8 传导折扣预期 1.6–2.2×，不作线性外推）；golden 全绿。
+
+> **P3 执行状态附注（2026-09-06）**：已落地（M×N 寄存器分块 + 隔离
+> bench 沉淀，见顶部执行状态块）。验收对账：①隔离 bench ≥ 45
+> GFLOP/s **达成**（浅 K 117.7 / 深 K 60.6，两形状对 legacy 单行内核
+> 3.06×/3.48×，checksum 与 legacy 逐位一致——K 循环累加序未动）；
+> ②resnet18 1T 端到端 ≥ 2× **未达**（同机同时段 A/B 实测 1.61×：
+> legacy 257.1ms → 分块 159.4ms）——其前提「GEMM 主导 resnet18 1T」
+> 被实测证伪：分块后 GEMM 仅占 1T 墙钟 ~25%（1.82 GFLOP ÷ ~60–112
+> GFLOP/s ≈ 25–30ms），其余在 im2col 物化/epilogue/池化（P6 范畴），
+> 与 P2 runtime 账目修正同因。深 K（K≥2304，B tile 超 L2）实测 ~56
+> GFLOP/s 即本阶段无打包上限，≥ 60 复评留 P6。resnet18 6T ratio
+> 3.41→2.65（6T 预期 1.6–2.2× 的**绝对值口径**落空、方向达成）。
+> 传导折扣实测 ~0.68（1T 1.61× → 6T 1.41×），略低于 0.8 校准值。
 
 ### P4 int8 VNNI 线（6–10 天）——独立最差分支
 
