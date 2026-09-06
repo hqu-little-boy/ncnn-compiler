@@ -4,11 +4,13 @@
 #include <optional>
 #include <string>
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -255,15 +257,23 @@ class StrategyNCNNPass final
       return;
     }
     SmallVector<linalg::Conv2DNhwcHwcfOp> candidates;
+    SmallVector<linalg::MatmulOp> int8Matmuls;
     module.walk([&](func::FuncOp function) {
       function.walk([&](linalg::Conv2DNhwcHwcfOp convolution) {
         candidates.push_back(convolution);
       });
+      function.walk([&](linalg::MatmulOp matmul) {
+        // int8 InnerProduct/Gemm 路径（P4）：B 常量 [K,N] 转置物化为
+        // [N,K] 并改写 matmul_transpose_b，与卷积路径共用 row-dot 内核。
+        if (isInt8ConstantBMatmul(matmul)) {
+          int8Matmuls.push_back(matmul);
+        }
+      });
     });
-    if (candidates.empty()) {
-      return;
-    }
     IRRewriter rewriter(&getContext());
+    for (linalg::MatmulOp matmul : int8Matmuls) {
+      rewriteInt8Matmul(rewriter, matmul);
+    }
     for (linalg::Conv2DNhwcHwcfOp convolution : candidates) {
       rewriteConvolution(rewriter, convolution, *strategy);
     }
@@ -285,6 +295,99 @@ class StrategyNCNNPass final
                                 strideHeight * strideWidth * sizeof(float) * 2;
     return weightBytes > this->gemmL2Bytes.getValue() || inputChannels > 16 ||
            outputChannels > 16;
+  }
+
+  // 权重常量 [KH,KW,IC,OC] 直接重排为 [OC, KH·KW·IC] 的稠密常量（k 序
+  // kh,kw,ic 与 im2col gather 的折叠序一致），供整数路径的
+  // matmul_transpose_b 使用——B 面按 [N,K] 存放使内核沿 k 连续读取
+  // （ncnn transpose_pack_B 的编译期等价物）。权重非常量（不应出现，
+  // TosaToLinalg 已物化）返回空值，调用方回退。
+  std::optional<Value> buildTransposedWeightConstant(
+    RewriterBase& rewriter,
+    Location location,
+    Value weight,
+    int64_t kernelHeight,
+    int64_t kernelWidth,
+    int64_t inputChannels,
+    int64_t outputChannels) const {
+    auto constant = dyn_cast<arith::ConstantOp>(weight.getDefiningOp());
+    if (!constant) {
+      return std::nullopt;
+    }
+    auto elements = dyn_cast<DenseElementsAttr>(constant.getValueAttr());
+    if (!elements || !isa<::mlir::IntegerType>(elements.getElementType())) {
+      return std::nullopt;
+    }
+    const unsigned bitWidth = elements.getElementType().getIntOrFloatBitWidth();
+    const int64_t depthExtent = kernelHeight * kernelWidth * inputChannels;
+    SmallVector<APInt> transposed(outputChannels * depthExtent,
+                                  APInt(bitWidth, 0));
+    auto values = elements.getValues<APInt>();
+    int64_t sourceIndex = 0;
+    for (int64_t kh = 0; kh < kernelHeight; ++kh) {
+      for (int64_t kw = 0; kw < kernelWidth; ++kw) {
+        for (int64_t ic = 0; ic < inputChannels; ++ic) {
+          for (int64_t oc = 0; oc < outputChannels; ++oc) {
+            transposed[(oc * depthExtent) +
+                       ((kh * kernelWidth) * inputChannels) +
+                       (kw * inputChannels) + ic] = values[sourceIndex];
+            ++sourceIndex;
+          }
+        }
+      }
+    }
+    auto transposedType = RankedTensorType::get({outputChannels, depthExtent},
+                                                elements.getElementType());
+    return rewriter
+      .create<arith::ConstantOp>(
+        location,
+        transposedType,
+        DenseIntElementsAttr::get(transposedType, transposed))
+      .getResult();
+  }
+
+  // i8 linalg.matmul 且 B 为静态常量（InnerProduct/Gemm 权重）。
+  static bool isInt8ConstantBMatmul(linalg::MatmulOp matmul) {
+    if (!matmul.hasPureTensorSemantics() || matmul.getInputs().size() != 2 ||
+        matmul.getOutputs().size() != 1) {
+      return false;
+    }
+    auto rhsType = dyn_cast<RankedTensorType>(matmul.getInputs()[1].getType());
+    auto lhsType = dyn_cast<RankedTensorType>(matmul.getInputs()[0].getType());
+    auto accType = dyn_cast<RankedTensorType>(matmul.getResult(0).getType());
+    if (!rhsType || !lhsType || !accType || !rhsType.hasStaticShape() ||
+        rhsType.getRank() != 2 || !rhsType.getElementType().isInteger(8) ||
+        !lhsType.getElementType().isInteger(8) ||
+        !accType.getElementType().isInteger(32)) {
+      return false;
+    }
+    auto constant =
+      dyn_cast<arith::ConstantOp>(matmul.getInputs()[1].getDefiningOp());
+    auto elements =
+      constant ? dyn_cast<DenseElementsAttr>(constant.getValueAttr()) : nullptr;
+    return elements && matmul->getParentOfType<scf::ForallOp>() == nullptr &&
+           matmul->getParentOfType<scf::ForOp>() == nullptr;
+  }
+
+  // B 常量 [K,N] 直接重排为 [N,K]，matmul → matmul_transpose_b。
+  void rewriteInt8Matmul(RewriterBase& rewriter,
+                         linalg::MatmulOp matmul) const {
+    auto rhsType = cast<RankedTensorType>(matmul.getInputs()[1].getType());
+    const int64_t depth = rhsType.getShape()[0];
+    const int64_t columns = rhsType.getShape()[1];
+    auto weightNK = buildTransposedWeightConstant(
+      rewriter, matmul.getLoc(), matmul.getInputs()[1], 1, 1, depth, columns);
+    if (!weightNK) {
+      return;
+    }
+    rewriter.setInsertionPoint(matmul);
+    auto transposed = rewriter.create<linalg::MatmulTransposeBOp>(
+      matmul.getLoc(),
+      TypeRange{matmul.getResult(0).getType()},
+      ValueRange{matmul.getInputs()[0], *weightNK},
+      ValueRange{matmul.getOutputs().front()});
+    rewriter.replaceAllUsesWith(matmul.getResult(0), transposed.getResult(0));
+    rewriter.eraseOp(matmul);
   }
 
   void rewriteConvolution(RewriterBase& rewriter,
@@ -318,7 +421,10 @@ class StrategyNCNNPass final
                        convolution.getDilations().getValues<int64_t>());
 
     // 路径判定：1×1 s1 无条件走视图折叠（对齐 ncnn 的恒 GEMM 分支）；
-    // 其余 k×k 需要静态空间维（OH·OW 可知）且命中阈值或显式 gemm 策略。
+    // 其余 k×k 需要静态空间维且命中阈值或显式 gemm 策略。整数（int8
+    // 量化）卷积无直接卷积内核可用，任何 k×k 静态形状一律 im2col+GEMM
+    // （对齐 ncnn int8 主路径的算子形态）。
+    const bool integerElements = imageType.getElementType().isInteger(8);
     const bool unitKernelStrideOne = kernelHeight == 1 && kernelWidth == 1 &&
                                      strides[0] == 1 && strides[1] == 1;
     const bool staticSpatial = !ShapedType::isDynamic(imageShape[1]) &&
@@ -331,14 +437,14 @@ class StrategyNCNNPass final
       case ConvStrategy::Auto:
         useUnitView = unitKernelStrideOne;
         useIm2col = !unitKernelStrideOne && staticSpatial &&
-                    preferGemm(inputChannels,
-                               outputChannels,
-                               kernelHeight,
-                               kernelWidth,
-                               dilations[0],
-                               dilations[1],
-                               strides[0],
-                               strides[1]);
+                    (integerElements || preferGemm(inputChannels,
+                                                   outputChannels,
+                                                   kernelHeight,
+                                                   kernelWidth,
+                                                   dilations[0],
+                                                   dilations[1],
+                                                   strides[0],
+                                                   strides[1]));
         break;
       case ConvStrategy::Gemm:
         useUnitView = unitKernelStrideOne;
@@ -413,12 +519,37 @@ class StrategyNCNNPass final
 
     auto contractionOutputType =
       cast<RankedTensorType>(collapsedInit.getType());
-    auto matmul = rewriter.create<linalg::MatmulOp>(
-      location,
-      TypeRange{contractionOutputType},
-      ValueRange{contraction, collapsedWeight},
-      ValueRange{collapsedInit});
-    Value contracted = matmul.getResult(0);
+    // 整数路径：权重常量直接重排为 [N,K]（B 面转置物化），收缩走
+    // matmul_transpose_b——A1b 的 i8 row-dot 内核依赖 B 沿 k 连续。
+    // 浮点路径维持 [K,N] 折叠 + linalg.matmul（f32 内核沿 n 向量化）。
+    Value contracted;
+    if (integerElements) {
+      auto weightNK = buildTransposedWeightConstant(rewriter,
+                                                    location,
+                                                    convolution.getInputs()[1],
+                                                    kernelHeight,
+                                                    kernelWidth,
+                                                    inputChannels,
+                                                    outputChannels);
+      if (weightNK) {
+        contracted = rewriter
+                       .create<linalg::MatmulTransposeBOp>(
+                         location,
+                         TypeRange{contractionOutputType},
+                         ValueRange{contraction, *weightNK},
+                         ValueRange{collapsedInit})
+                       .getResult(0);
+      }
+    }
+    if (!contracted) {
+      contracted =
+        rewriter
+          .create<linalg::MatmulOp>(location,
+                                    TypeRange{contractionOutputType},
+                                    ValueRange{contraction, collapsedWeight},
+                                    ValueRange{collapsedInit})
+          .getResult(0);
+    }
 
     // epilogue 衔接（方案 a）：唯一用户是恒等逐元素 generic 时，把
     // consumer 整体搬进折叠二维域，expand_shape 推迟到其后，下游继续看

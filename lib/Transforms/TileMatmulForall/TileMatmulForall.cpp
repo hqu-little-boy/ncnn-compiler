@@ -65,7 +65,8 @@ int resultTypeRank(linalg::GenericOp generic) {
   return type ? static_cast<int>(type.getRank()) : -1;
 }
 
-bool findSoleIdentityElementwiseConsumer(linalg::MatmulOp matmul,
+template <typename MatmulOpT>
+bool findSoleIdentityElementwiseConsumer(MatmulOpT matmul,
                                          linalg::GenericOp& out) {
   auto users = matmul.getResult(0).getUsers();
   auto first = users.begin();
@@ -97,16 +98,17 @@ bool findSoleIdentityElementwiseConsumer(linalg::MatmulOp matmul,
   return true;
 }
 
-class TopLevelMatmulTile : public OpRewritePattern<linalg::MatmulOp> {
+template <typename MatmulOpT>
+class TopLevelMatmulTile : public OpRewritePattern<MatmulOpT> {
  public:
   TopLevelMatmulTile(MLIRContext* context,
                      int64_t rowTileSize,
                      int64_t columnTileSize)
-    : OpRewritePattern<linalg::MatmulOp>(context),
+    : OpRewritePattern<MatmulOpT>(context),
       rowTileSize(rowTileSize),
       columnTileSize(columnTileSize) {}
 
-  LogicalResult matchAndRewrite(linalg::MatmulOp matmul,
+  LogicalResult matchAndRewrite(MatmulOpT matmul,
                                 PatternRewriter& rewriter) const override {
     if (!isTopLevel(matmul.getOperation())) {
       return failure();
@@ -196,7 +198,11 @@ class TileMatmulForallPass final
 
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
-    patterns.add<TopLevelMatmulTile>(
+    patterns.add<TopLevelMatmulTile<linalg::MatmulOp>>(
+      &getContext(), tileRows.getValue(), tileColumns.getValue());
+    // int8 量化路径（P4）：strategy 产出的 matmul_transpose_b 同样切块，
+    // 使 i8 row-dot 内核（matmul-kernel-ncnn）可以接管 forall 内形态。
+    patterns.add<TopLevelMatmulTile<linalg::MatmulTransposeBOp>>(
       &getContext(), tileRows.getValue(), tileColumns.getValue());
     if (failed(
           applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {

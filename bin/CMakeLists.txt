@@ -20,6 +20,7 @@ set_target_properties(ncnn-mlir-opt PROPERTIES ${NCNN_EXEC_RPATH_PROPERTIES})
 target_link_libraries(ncnn-mlir-opt PRIVATE
     BufferizeNCNN
     RewriteLinalgCopies
+    FuseQuantChainNCNN
     GenerateCAPI
     NCNNDialect
     NCNNToFunc

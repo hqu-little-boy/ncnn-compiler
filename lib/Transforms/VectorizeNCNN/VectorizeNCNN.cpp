@@ -155,8 +155,13 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context,
         if (mapping.contains(value)) {
           return mapping.lookup(value);
         }
+        // 外部标量的类型跟随其自身元素类型（不一定等于输出元素类型）。
+        Type scalarType = isa<ShapedType>(value.getType())
+                            ? cast<ShapedType>(value.getType()).getElementType()
+                            : value.getType();
+        auto splatType = VectorType::get({chunkWidth}, scalarType);
         Value splat =
-          builder.create<vector::SplatOp>(location, chunkType, value);
+          builder.create<vector::SplatOp>(location, splatType, value);
         mapping.map(value, splat);
         return splat;
       };
@@ -186,10 +191,11 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context,
       for (Operation& operation : genericBlock.without_terminator()) {
         if (isa<arith::ConstantOp>(operation)) {
           auto constant = cast<arith::ConstantOp>(operation);
+          auto splatType = VectorType::get({chunkWidth}, constant.getType());
           Value splat = builder.create<arith::ConstantOp>(
             location,
-            chunkType,
-            DenseElementsAttr::get(chunkType, constant.getValue()));
+            splatType,
+            DenseElementsAttr::get(splatType, constant.getValue()));
           mapping.map(constant.getResult(), splat);
           continue;
         }
@@ -200,7 +206,11 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context,
         }
         OperationState state(location, operation.getName());
         state.addOperands(operands);
-        state.addTypes(SmallVector<Type>(operation.getNumResults(), chunkType));
+        // 逐结果类型向量化：body 可含谓词 op（如 quantize 的 cmpf 产出
+        // i1），统一赋行向量类型会产出非法 IR。
+        for (Type resultType : operation.getResultTypes()) {
+          state.addTypes(VectorType::get({chunkWidth}, resultType));
+        }
         state.addAttributes(SmallVector<NamedAttribute>(
           operation.getAttrs().begin(), operation.getAttrs().end()));
         Operation* lifted = builder.create(state);

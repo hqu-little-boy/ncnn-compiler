@@ -359,29 +359,41 @@ Value quantizeSignedI8(OpBuilder& builder,
       Type type = scaled.getType();
       Value zero = nested.create<arith::ConstantOp>(
         nestedLocation, nested.getFloatAttr(type, 0.0));
+      // round-half-away-from-zero 的纯 arith 形态：符号分支后 ±0.5 再截断
+      // （fptosi 向零截断，正数即 floor、负数即 ceil），与 floor/ceil
+      // select 形态对全部有限输入逐位等价；f32 侧先收拢到 ±128 保证
+      // fptosi 无未定义行为，i32 侧再收紧到 ncnn 的 ±127 饱和域。全程
+      // arith op 使 body 可被行级向量化提升，无需向量数学库覆盖 floor。
+      Value bound = nested.create<arith::ConstantOp>(
+        nestedLocation, nested.getFloatAttr(type, 128.0));
+      Value negativeBound = nested.create<arith::ConstantOp>(
+        nestedLocation, nested.getFloatAttr(type, -128.0));
       Value half = nested.create<arith::ConstantOp>(
         nestedLocation, nested.getFloatAttr(type, 0.5));
       Value negativeHalf = nested.create<arith::ConstantOp>(
         nestedLocation, nested.getFloatAttr(type, -0.5));
-      Value positive = nested.create<math::FloorOp>(
+      Value bounded = nested.create<arith::MaximumFOp>(
         nestedLocation,
-        nested.create<arith::AddFOp>(nestedLocation, scaled, half));
-      Value negative = nested.create<math::CeilOp>(
-        nestedLocation,
-        nested.create<arith::AddFOp>(nestedLocation, scaled, negativeHalf));
+        nested.create<arith::MinimumFOp>(nestedLocation, scaled, bound),
+        negativeBound);
       Value nonnegative = nested.create<arith::CmpFOp>(
         nestedLocation, arith::CmpFPredicate::OGE, scaled, zero);
-      Value rounded = nested.create<arith::SelectOp>(
-        nestedLocation, nonnegative, positive, negative);
-      Value minimum = nested.create<arith::ConstantOp>(
-        nestedLocation, nested.getFloatAttr(type, -127.0));
-      Value maximum = nested.create<arith::ConstantOp>(
-        nestedLocation, nested.getFloatAttr(type, 127.0));
-      Value clamped = nested.create<arith::MaximumFOp>(
+      Value shifted = nested.create<arith::SelectOp>(
         nestedLocation,
-        nested.create<arith::MinimumFOp>(nestedLocation, rounded, maximum),
-        minimum);
-      Value result = nested.create<arith::FPToSIOp>(
+        nonnegative,
+        nested.create<arith::AddFOp>(nestedLocation, bounded, half),
+        nested.create<arith::AddFOp>(nestedLocation, bounded, negativeHalf));
+      Value truncated = nested.create<arith::FPToSIOp>(
+        nestedLocation, nested.getI32Type(), shifted);
+      Value minimum = nested.create<arith::ConstantOp>(
+        nestedLocation, nested.getI32IntegerAttr(127));
+      Value maximum = nested.create<arith::ConstantOp>(
+        nestedLocation, nested.getI32IntegerAttr(-127));
+      Value clamped = nested.create<arith::MaxSIOp>(
+        nestedLocation,
+        nested.create<arith::MinSIOp>(nestedLocation, truncated, minimum),
+        maximum);
+      Value result = nested.create<arith::TruncIOp>(
         nestedLocation, nested.getI8Type(), clamped);
       nested.create<linalg::YieldOp>(nestedLocation, result);
     });

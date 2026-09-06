@@ -12,6 +12,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     FoldLinalgConstantTranspose
     FoldNCNNBatchNorm
     FuseLinalgEpilogue
+    FuseQuantChainNCNN
     GenerateCAPI
     LowerVectorMathNCNN
     MatmulKernelNCNN

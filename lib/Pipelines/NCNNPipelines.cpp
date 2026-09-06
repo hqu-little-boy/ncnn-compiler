@@ -35,6 +35,7 @@
 #include "ncnn-mlir/Transforms/FoldNCNNBatchNorm/FoldNCNNBatchNorm.hpp"
 #include "ncnn-mlir/Transforms/ForallizeDisjointTileLoops/ForallizeDisjointTileLoops.hpp"
 #include "ncnn-mlir/Transforms/FuseLinalgEpilogue/FuseLinalgEpilogue.hpp"
+#include "ncnn-mlir/Transforms/FuseQuantChainNCNN/FuseQuantChainNCNN.hpp"
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
 #include "ncnn-mlir/Transforms/LowerVectorMathNCNN/LowerVectorMathNCNN.hpp"
 #include "ncnn-mlir/Transforms/MatmulKernelNCNN/MatmulKernelNCNN.hpp"
@@ -76,6 +77,11 @@ void buildNCNNTosaToLinalgPipeline(
   passManager.addNestedPass<func::FuncOp>(createTosaToArithPass());
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());
+  // int8 requant/dequant 尾部收拢：sitofp→scale mul→bias→[act]→quantize
+  // 链融合为单一 generic（P4）。放在 strategy 之前，使量化卷积的
+  // requant 尾部与激活一样成为卷积结果之后的单个可折叠逐元素 consumer；
+  // 融合保持 op 顺序与常量不变，数值与链式形态逐位一致。
+  passManager.addPass(createFuseQuantChainNCNNPass());
   // 算子形态策略层（A1）：在 epilogue 融合与向量化之前把可改写卷积变为
   // matmul 形态，使计算大头进入投影映射的收缩主干；权重 collapse 由紧随
   // 其后的 canonicalizer 折叠为 .rodata 常量。

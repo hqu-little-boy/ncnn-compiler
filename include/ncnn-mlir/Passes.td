@@ -92,6 +92,27 @@ def StrategyNCNNPass
   ];
 }
 
+def FuseQuantChainNCNNPass
+    : Pass<"fuse-quant-chain-ncnn", "mlir::ModuleOp"> {
+  let summary = "Fuse quantize/dequantize elementwise chains into one generic";
+  let description = [{
+    Int8 lowering emits the per-layer requant/dequant tail as a chain of
+    separate elementwise ops on the full tensor (sitofp map, scale mul,
+    bias add, activation, requantize quantize). Each op used to stay an
+    independent full-tensor pass with mixed element types that the row
+    vectorizers reject. This pass inlines every single-use all-parallel
+    elementwise producer (linalg.generic or linalg.map) into its
+    elementwise consumer, collapsing the whole chain into one generic
+    whose body is pure arith/math and whose operands keep their affine
+    maps. Op order and constants are preserved, so numerics are
+    bit-identical to the chained form
+    (docs/ncnn-performance-parity-plan.md §3-P4).
+  }];
+  let dependentDialects = [
+    "arith::ArithDialect", "linalg::LinalgDialect", "math::MathDialect"
+  ];
+}
+
 def FuseLinalgEpiloguePass
     : Pass<"fuse-linalg-epilogue", "mlir::ModuleOp"> {
   let summary =
@@ -196,7 +217,17 @@ def MatmulKernelNCNNPass : Pass<"matmul-kernel-ncnn", "mlir::ModuleOp"> {
            "pins math ops to vector library calls and decouples LLVM "
            "legalization size from the innermost extent; whole-row forms "
            "were the compile-explosion mechanism on wide models "
-           "(docs/ncnn-performance-parity-plan.md §3-P2).">
+           "(docs/ncnn-performance-parity-plan.md §3-P2).">,
+    Option<"matmulI8Rows", "matmul-i8-rows", "int64_t", /*default=*/"2",
+           "M-direction register tile rows of the int8 row-dot kernel "
+           "(each (row, column) pair keeps one vector accumulator of K-pair "
+           "partial sums); clamped to the M extent and the int8 accumulator "
+           "budget">,
+    Option<"matmulI8AccColumns", "matmul-i8-acc-columns", "int64_t",
+           /*default=*/"4",
+           "Column-block width (outputs per tile) of the int8 row-dot "
+           "kernel; each output keeps a dedicated K-vector accumulator, "
+           "so tileRows x accColumns is bounded by the accumulator budget">
   ];
   let dependentDialects = [
     "arith::ArithDialect", "linalg::LinalgDialect", "memref::MemRefDialect",
