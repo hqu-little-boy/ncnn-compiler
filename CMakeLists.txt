@@ -140,17 +140,22 @@ ncnn_enable_first_party_warnings("${CMAKE_SOURCE_DIR}")
 # Format first-party sources and headers, including test support headers.
 file(GLOB_RECURSE NCNN_FORMAT_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/lib/*.cpp"
+    "${CMAKE_SOURCE_DIR}/lib/*.c"
     "${CMAKE_SOURCE_DIR}/include/*.h"
     "${CMAKE_SOURCE_DIR}/include/*.hpp"
+    "${CMAKE_SOURCE_DIR}/include/*.c"
     "${CMAKE_SOURCE_DIR}/bin/*.cpp"
     "${CMAKE_SOURCE_DIR}/bin/*.h"
     "${CMAKE_SOURCE_DIR}/bin/*.hpp"
+    "${CMAKE_SOURCE_DIR}/bin/*.c"
     "${CMAKE_SOURCE_DIR}/tools/*.cpp"
     "${CMAKE_SOURCE_DIR}/tools/*.h"
     "${CMAKE_SOURCE_DIR}/tools/*.hpp"
+    "${CMAKE_SOURCE_DIR}/tools/*.c"
     "${CMAKE_SOURCE_DIR}/test/*.cpp"
     "${CMAKE_SOURCE_DIR}/test/*.h"
-    "${CMAKE_SOURCE_DIR}/test/*.hpp")
+    "${CMAKE_SOURCE_DIR}/test/*.hpp"
+    "${CMAKE_SOURCE_DIR}/test/*.c")
 list(FILTER NCNN_FORMAT_SOURCES EXCLUDE REGEX
     "/([^/]*build[^/]*|third_party|generated)/")
 

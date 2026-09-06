@@ -2728,3 +2728,49 @@ gtest_discover_tests(performance_tests
         LABELS performance
         TIMEOUT 1800
         RUN_SERIAL TRUE)
+
+# ── P3 隔离 matmul bench：A1b 内核微基准 ──────────────────────────────
+# test/Numerical/bench/matmul_bench.mlir 的两个 forall 分块 matmul
+# （浅 K 576 / 深 K 2304）经 matmul-kernel-ncnn + memref-to-llvm（1T
+# 串行口径）降到本机目标码，由 support/matmul_bench_main.c 计时并按
+# GFLOP/s 门禁判定。门禁默认值高于 P1 单行内核实测基线（36.7 / 16.2）、
+# 低于 P3 M×N 分块内核实测（~104–112 / ~55）留 ≥25% 余量；慢机经
+# MATMUL_BENCH_MIN_GFLOPS_SHALLOW / _DEEP 下调。验收口径见
+# docs/ncnn-performance-parity-plan.md §3-P3。
+set(matmul_bench_dir ${CMAKE_CURRENT_BINARY_DIR}/matmul_bench)
+set(matmul_bench_kernel_ir ${matmul_bench_dir}/matmul_bench_kernel.mlir)
+set(matmul_bench_llvm_ir ${matmul_bench_dir}/matmul_bench_llvm.mlir)
+set(matmul_bench_ll ${matmul_bench_dir}/matmul_bench.ll)
+set(matmul_bench_obj ${matmul_bench_dir}/matmul_bench.o)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
+    set(ncnn_matmul_bench_clang_args -march=x86-64-v3)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    set(ncnn_matmul_bench_clang_args -march=native)
+else()
+    set(ncnn_matmul_bench_clang_args)
+endif()
+add_custom_command(
+    OUTPUT ${matmul_bench_obj}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${matmul_bench_dir}
+    COMMAND $<TARGET_FILE:ncnn-mlir-opt> --matmul-kernel-ncnn
+            ${CMAKE_CURRENT_SOURCE_DIR}/bench/matmul_bench.mlir
+            -o ${matmul_bench_kernel_ir}
+    COMMAND $<TARGET_FILE:ncnn-mlir-opt>
+            "--ncnn-memref-to-llvm-pipeline=threads=1 vector-lowering=true"
+            ${matmul_bench_kernel_ir} -o ${matmul_bench_llvm_ir}
+    COMMAND ${MLIR_TRANSLATE} --mlir-to-llvmir ${matmul_bench_llvm_ir}
+            -o ${matmul_bench_ll}
+    COMMAND ${CLANG} -O3 -Wno-override-module
+            ${ncnn_matmul_bench_clang_args} -fPIC -c ${matmul_bench_ll}
+            -o ${matmul_bench_obj}
+    DEPENDS ncnn-mlir-opt
+            ${CMAKE_CURRENT_SOURCE_DIR}/bench/matmul_bench.mlir
+            ${CMAKE_CURRENT_SOURCE_DIR}/support/matmul_bench_main.c
+    VERBATIM)
+add_executable(matmul_bench_driver
+    ${matmul_bench_obj}
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/matmul_bench_main.c)
+add_test(NAME MatmulBench.Gflops COMMAND matmul_bench_driver)
+set_property(TEST MatmulBench.Gflops PROPERTY LABELS matmul-bench)
+set_property(TEST MatmulBench.Gflops PROPERTY RUN_SERIAL TRUE)
+set_property(TEST MatmulBench.Gflops PROPERTY TIMEOUT 300)

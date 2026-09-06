@@ -5,7 +5,8 @@ import lit.formats
 config.name = "ncnn-mlir"
 config.test_format = lit.formats.ShTest(False)
 config.suffixes = [".mlir"]
-config.excludes = ["Runtime"]
+# bench/ 下是 cmake 构建输入（matmul bench 的内核源），不是 lit 用例。
+config.excludes = ["Runtime", "bench"]
 
 # 路径变量由 lit.site.cfg.py（CMake 生成）注入。
 config.substitutions.append(("%FileCheck", config.filecheck))
