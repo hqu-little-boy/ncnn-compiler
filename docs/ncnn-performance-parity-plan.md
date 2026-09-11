@@ -176,6 +176,43 @@
 > 差 8%，运行方差 ±15% 同量级；≤4× 预期未达，下一杠杆为内核内
 > requant epilogue 融合，联动 P6）。
 
+> **执行状态（2026-09-11，P6）**：搬运削减三线已落地（热点基线
+> SIGUSR2 采样器实测驱动：resnet18 im2col gather 22.4%、medium_rec
+> MHA batch_matmul 标量链 29%）。
+> - **P6-A im2col 物化消除**：`MatmulKernelNCNN` 新增 `probeIm2colSource`
+>   （gather→collapse→alloc 链探测，穿透 M 向 subview 与 tile-and-fuse
+>   多副本共享 alloc；源图支配 matmul 位置的 SSA 守卫——yolov5 系在
+>   无守卫时炸 dominance，即取到别层 pad 缓冲的教训）；`kernelize` K
+>   循环改外层 kp（窗口位置 kh·KW+kw）×内层 ic（通道）双层直取源图窗
+>   口，k = kp·IC + ic 与折叠 [[0,1],[2,3,4]] 展平严格一致（FMA 累加
+>   链数值逐位不变）；gather/collapse/alloc 链判死删除。K 序不变 +
+>   单舍入 FMA 同 P1 语义。非 2 幂通道（IC=3 首层）同样融合（宽容匹
+>   配，整行向量化 2 幂宽度限制对直取无意义）——B5 遗留的非 2 幂
+>   gather 标量形态根除。
+> - **P6-C MHA 批量收缩内核化**：batch=1 的 `linalg.batch_matmul`
+>   canonical 化（StrategyNCNN `rewriteUnitBatchMatmul`，[[0,1],[2]]
+>   折叠成普通 matmul 进 TileMatmulForall+A1b 路径，medium_rec 44 个
+>   全中）；batch>1（heads=8 scores/context）新增
+>   `kernelizeBatchMatmul`：forall(b) 网格 + 逐批 [b] 面板 rank-reduced
+>   subview + A1b 形态内核（替代通用下降的标量 mul+add 逐 k 读写回 C
+>   链）。MHA QKV/scores/context 全部进向量内核。
+> - **实测**（stage 全新 /tmp 构建 438/438 ctest 全过 + perf 全表）：
+>   全表 p50 2.84→**1.92**、p90 **3.77**、max 31.93→**19.19**；重模型
+>   （ncnn≥100ms）p50 **1.72**——**M2 口径（≤1.5/中位 ≤1.3）已逼
+>   近**。大点：server_rec 23.01→19.19、formula_encoder 17.57→14.61
+>   （−17%）、squeezenet 3.61→2.76、medium_rec 4.67→2.25（compiled
+>   133→80ms，−40%，vfmadd 1386→1930、标量 MAC 站点 329→117）、
+>   resnet18 2.87→2.40、resnet50 ~1.81、efficientnet_b1 1.92→1.95、
+>   yolov5m 1.45、yolov5s 1.28、mobile_det 1.09、mobile_rec 1.16——
+>   8 个模型进 1.5 以内。medium_rec 单测 4.67→2.59/全表 2.25（机器
+>   漂移带内）；golden 全绿（含 attention pipeline 覆盖）；SIGUSR2
+>   复测 im2col gather 热点 **0%**（验收 <10% 达成）。MHA
+>   splitHeads 转置物化（copy 类残余 ~16%）未消解，批量内核已接管
+>   收缩热点，转置消解评估移入 P8 收尾审计。
+> - **范围修正**：部分 yolov5 层的 im2col 链源图（pad）不支配 matmul
+>   位置（拓扑序），融合按支配守卫正确跳过、保持原向量化 gather 路
+>   径——这些层留给后续 pass 重排研究，不阻塞验收。
+
 > 目标：44 模型 performance_tests 套件编译产物全面追平 vendored ncnn
 > （x86-64 AVX2/FMA 口径）。根因依据见姊妹篇
 > [`ncnn-performance-gap-analysis.md`](ncnn-performance-gap-analysis.md)
