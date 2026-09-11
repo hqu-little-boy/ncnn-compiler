@@ -1,5 +1,6 @@
 #include "ncnn-mlir/Transforms/MatmulKernelNCNN/MatmulKernelNCNN.hpp"
 
+#include "llvm/ADT/SmallPtrSet.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -37,6 +38,11 @@ namespace {
 // 4) im2col gather 向量化：窗口映射 (0, sh*d0+dh*d2, sw*d1+dw*d3, d4)
 //    的纯转发拷贝改写为四层循环 + 整 IC 行 transfer_read/write，消除
 //    通用下降的逐元素 div/mod 标量循环。
+// 5) im2col 物化消除（P6 搬运削减）：A 面板由 im2col gather 独占填充
+//    且唯一被折叠后的 matmul 消费时，内核 K 循环改为按窗口映射直取
+//    源图（gather-free）——M×K 物化拷贝与中间缓冲整体消失。K 遍历序
+//    （kh, kw, ic 字典序）与折叠 [[0,1],[2,3,4]] 展平严格一致，FMA 累
+//    加链数值逐位不变。
 class MatmulKernelNCNNPass final
   : public impl::MatmulKernelNCNNPassBase<MatmulKernelNCNNPass> {
  public:
@@ -46,6 +52,7 @@ class MatmulKernelNCNNPass final
     ModuleOp module = getOperation();
     SmallVector<linalg::MatmulOp> matmuls;
     SmallVector<linalg::MatmulTransposeBOp> int8Matmuls;
+    SmallVector<linalg::BatchMatmulOp> batches;
     SmallVector<linalg::GenericOp> rowGenerics;
     SmallVector<linalg::GenericOp> gathers;
     SmallVector<scf::ForOp> selfCopyLoops;
@@ -56,6 +63,15 @@ class MatmulKernelNCNNPass final
         // matmul 内核仅针对 forall 分块形态；未切分的保持通用下降。
         if (inForall && isKernelizable(matmul)) {
           matmuls.push_back(matmul);
+        }
+        return;
+      }
+      if (auto batch = dyn_cast<linalg::BatchMatmulOp>(operation)) {
+        // P6-C：MHA 的 scores/context（heads 批维）不被裁剪或降维，
+        // 通用下降成标量 mul+add + 逐 k 读写回的 C（medium_rec 29% 热
+        // 点）。静态形状的批量收缩改为 b 外层循环 + 逐批 A1b 内核。
+        if (batch.hasPureBufferSemantics() && isKernelizableBatch(batch)) {
+          batches.push_back(batch);
         }
         return;
       }
@@ -81,8 +97,8 @@ class MatmulKernelNCNNPass final
         }
       }
     });
-    if (matmuls.empty() && int8Matmuls.empty() && rowGenerics.empty() &&
-        selfCopyLoops.empty() && gathers.empty()) {
+    if (matmuls.empty() && int8Matmuls.empty() && batches.empty() &&
+        rowGenerics.empty() && selfCopyLoops.empty() && gathers.empty()) {
       return;
     }
 
@@ -91,17 +107,66 @@ class MatmulKernelNCNNPass final
     for (scf::ForOp loop : selfCopyLoops) {
       rewriter.eraseOp(loop);
     }
+    // P6-A：将被融合进 matmul 内核的 gather 先跳过（kernelize 直取源图
+    // 后连 chain 带删除）；其余照旧改写为向量化窗口拷贝。融合判定就是
+    // probe 的唯一消费/几何吻合条件，与 kernelize 内部一致。M/N 双切
+    // 时同一 gather 服务多个 tile——各 tile 都在 fusedGathers 里才安全。
+    llvm::SmallPtrSet<Operation*, 16> fusedGathers;
+    SmallVector<Im2colGeometry> fusedChains;
+    for (linalg::MatmulOp matmul : matmuls) {
+      if (const std::optional<Im2colGeometry> im2col = probeIm2colSource(
+            matmul.getInputs()[0],
+            cast<MemRefType>(matmul.getInputs()[0].getType()).getShape()[0],
+            cast<MemRefType>(matmul.getInputs()[0].getType()).getShape()[1],
+            matmul.getOperation())) {
+        fusedGathers.insert(im2col->gather);
+        fusedChains.push_back(*im2col);
+      }
+    }
     for (linalg::GenericOp generic : gathers) {
+      if (fusedGathers.contains(generic.getOperation())) {
+        continue;
+      }
       gatherToParallelVectorCopy(rewriter, generic);
     }
     for (linalg::GenericOp generic : rowGenerics) {
+      // 融合目标 gather 不能被行级向量化抢先改写（窄通道 IC<8 的 gather
+      // 不满足 isIm2colGatherCopy 的整行宽度下限，会落入本列表）。
+      if (fusedGathers.contains(generic.getOperation())) {
+        continue;
+      }
       vectorizeRowGeneric(rewriter, generic);
     }
     for (linalg::MatmulOp matmul : matmuls) {
       kernelize(rewriter, matmul);
     }
+    for (linalg::BatchMatmulOp batch : batches) {
+      kernelizeBatchMatmul(rewriter, batch);
+    }
     for (linalg::MatmulTransposeBOp transposed : int8Matmuls) {
       kernelizeInt8RowDot(rewriter, transposed);
+    }
+    // P6-A 收尾：全部融合内核就位后，物化缓冲生产链（gather → collapse
+    // → alloc）成为死代码，逆序删除。tile-and-fuse 的副本对（共享 alloc
+    // 的多份 gather/collapse）各自随其 matmul 失活；alloc 在其全部用户
+    // 都死后才删。同一 gather 服务多个 tile 时去重后只删一次。
+    llvm::SmallPtrSet<Operation*, 16> deleted;
+    for (Im2colGeometry& chain : fusedChains) {
+      if (deleted.contains(chain.gather)) {
+        continue;
+      }
+      deleted.insert(chain.gather);
+      if (chain.gather->use_empty()) {
+        rewriter.eraseOp(chain.gather);
+      }
+      if (chain.collapse->use_empty()) {
+        rewriter.eraseOp(chain.collapse);
+      }
+    }
+    for (Im2colGeometry& chain : fusedChains) {
+      if (chain.alloc->use_empty()) {
+        rewriter.eraseOp(chain.alloc);
+      }
     }
   }
 
@@ -121,7 +186,6 @@ class MatmulKernelNCNNPass final
   // （8 个 k-对），tileRows × accColumns ≤ 预算即 8 个 ymm；k 向量宽
   // 8 lane（vpmaddwd 一条指令消费 8 个 i16 乘积）。
   static constexpr int64_t kInt8AccumulatorBudget = 8;
-  static constexpr int64_t kInt8ChunkLanes = 8;
 
   // i8 im2col gather 的非 2 幂通道分块宽（32 字节 = 一个 ymm）。
   static constexpr int64_t kGatherChunkLanes = 32;
@@ -189,6 +253,26 @@ class MatmulKernelNCNNPass final
     // matmul_transpose_b 语义：C[M,N] = A[M,K] · B[N,K]ᵀ，B 的行数是 N。
     return rhsDepth == depth && rhsRows == accType.getShape()[1] &&
            accType.getShape()[0] == rows;
+  }
+
+  // P6-C 批量收缩内核形态：[B,M,K]×[B,K,N]→[B,M,N] 全静态 f32。逐批
+  // 视图（memref.subview 取 [b] 面）后与 A1b 内核同型。
+  static bool isKernelizableBatch(linalg::BatchMatmulOp batch) {
+    for (Value operand : batch->getOperands()) {
+      const auto type = dyn_cast<MemRefType>(operand.getType());
+      if (!type || !type.hasStaticShape() || type.getRank() != 3 ||
+          !isa<FloatType>(type.getElementType())) {
+        return false;
+      }
+    }
+    const auto aType = cast<MemRefType>(batch.getInputs()[0].getType());
+    const auto bType = cast<MemRefType>(batch.getInputs()[1].getType());
+    const auto cType = cast<MemRefType>(batch.getOutputs().front().getType());
+    return bType.getShape()[0] == aType.getShape()[0] &&
+           cType.getShape()[0] == aType.getShape()[0] &&
+           bType.getShape()[1] == aType.getShape()[2] &&
+           cType.getShape()[1] == aType.getShape()[1] &&
+           cType.getShape()[2] == bType.getShape()[2];
   }
 
   // 静态、输出恒等映射、纯 arith/math body 的 memref generic 可行向
@@ -364,6 +448,207 @@ class MatmulKernelNCNNPass final
       return true;
     }
     return isa<IntegerType>(inputType.getElementType()) && channels >= 8;
+  }
+
+  // P6 im2col 物化消除的窗口几何：源图 4D 静态形状 + 步长/膨胀。K 遍
+  // 历序按折叠 [[0,1],[2,3,4]] 展平 = (kh, kw, ic) 字典序，k =
+  // kh·(KW·IC) + kw·IC + ic。
+  struct Im2colGeometry {
+    Value source;
+    linalg::GenericOp gather;
+    memref::CollapseShapeOp collapse;
+    memref::AllocOp alloc;
+    // forall M 向切分时的行偏移（subview 产出）；无 subview 时为空。
+    Value rowOffset;
+    int64_t outputHeight = 0;
+    int64_t outputWidth = 0;
+    int64_t kernelHeight = 0;
+    int64_t kernelWidth = 0;
+    int64_t channels = 0;
+    int64_t strideHeight = 1;
+    int64_t strideWidth = 1;
+    int64_t dilationHeight = 1;
+    int64_t dilationWidth = 1;
+  };
+
+  // OpFoldResult 是常量 index 且等于给定值。
+  static bool isConstantIndex(OpFoldResult candidate, int64_t value) {
+    auto attribute = dyn_cast_if_present<Attribute>(candidate);
+    if (!attribute) {
+      return false;
+    }
+    auto integer = dyn_cast<IntegerAttr>(attribute);
+    return integer && integer.getValue() == value;
+  }
+
+  // A 面板来源探测：matmul 的 A 为 collapse_shape(alloc)，alloc 的唯一
+  // 写者是 im2col 窗口 gather generic（与向量化路径同形态），collapse 结
+  // 果只被本 matmul 消费，且折叠序 [[0,1],[2,3,4]] 与 K 展平序一致、行
+  // 数/深度与窗口几何吻合。返回窗口几何与待删的 gather/collapse/alloc
+  // 三件套；不满足任一条件返回 nullopt（内核保持常规形态）。宽容版匹
+  // 配：不要求通道 2 幂（整行向量化的宽度限制对直取路径无意义，内核逐
+  // k 标量取数）。
+  static std::optional<Im2colGeometry> probeIm2colSource(
+    Value lhs, int64_t rows, int64_t depth, Operation* matmulAnchor) {
+    // forall 同时切 M/N 维时 A 是 collapse 的 M 向 subview（tile 行偏移
+    // 动态、列偏移 0、形状 [rows, depth]）——穿透后融合，行号加回 tile
+    // 偏移。
+    Value rowOffset;
+    if (auto subview = lhs.getDefiningOp<memref::SubViewOp>()) {
+      auto source = subview.getSource();
+      if (source.getDefiningOp<memref::CollapseShapeOp>() == nullptr) {
+        return std::nullopt;
+      }
+      const auto sourceType = dyn_cast<MemRefType>(source.getType());
+      const auto viewType = dyn_cast<MemRefType>(subview.getType());
+      if (!sourceType || !viewType || !viewType.hasStaticShape() ||
+          viewType.getRank() != 2 || viewType.getShape()[0] != rows ||
+          viewType.getShape()[1] != depth) {
+        return std::nullopt;
+      }
+      auto offsets = subview.getMixedOffsets();
+      auto sizes = subview.getMixedSizes();
+      auto strides = subview.getMixedStrides();
+      if (offsets.size() != 2 || sizes.size() != 2 || strides.size() != 2) {
+        return std::nullopt;
+      }
+      // K 向偏移/步距必须恒 0/1（K 不在切分维度）；M 向步距 1。
+      if (!isConstantIndex(strides[1], 1) || !isConstantIndex(strides[0], 1) ||
+          !isConstantIndex(offsets[1], 0)) {
+        return std::nullopt;
+      }
+      if (auto offset = offsets[0].dyn_cast<Value>()) {
+        rowOffset = offset;
+      } else if (!isConstantIndex(offsets[0], 0)) {
+        return std::nullopt;
+      }
+      lhs = source;
+    }
+    auto collapse = lhs.getDefiningOp<memref::CollapseShapeOp>();
+    if (!collapse) {
+      return std::nullopt;
+    }
+    // 折叠序必须把 (oh, ow) 并为行维、(kh, kw, ic) 并为 K 维。
+    SmallVector<ReassociationIndices> reassociation =
+      llvm::to_vector(collapse.getReassociationIndices());
+    if (reassociation.size() != 2 ||
+        reassociation[0] != ReassociationIndices{0, 1} ||
+        reassociation[1] != ReassociationIndices{2, 3, 4}) {
+      return std::nullopt;
+    }
+    // collapse 结果的消费限制：A 是 collapse 本体时只允许被本 matmul
+    // 消费；A 是 M 向 subview 时允许 collapse 被多个 tile subview 切
+    // （各 tile 独立融合，全链删除由各 tile 的删除共同完成——gather/
+    // collapse/alloc 只在最后一个消费者融合后变死代码，见 kernelize
+    // 收尾的条件删除）。
+    if (rowOffset == nullptr && !lhs.hasOneUse()) {
+      return std::nullopt;
+    }
+    auto alloc = collapse.getSrc().getDefiningOp<memref::AllocOp>();
+    if (!alloc) {
+      return std::nullopt;
+    }
+    const auto windowType = dyn_cast<MemRefType>(collapse.getSrc().getType());
+    if (!windowType || !windowType.hasStaticShape() ||
+        windowType.getRank() != 5) {
+      return std::nullopt;
+    }
+    // alloc 的消费限制：仅允许 gather 的 outs 与 collapse（无别名外
+    // 泄）。tile-and-fuse 会把 gather/collapse 对按 M tile 复制多份共享
+    // 同一 alloc——每份 collapse 找到自己的 gather 即可；副本清单记入
+    // geometry，kernelize 后统一判死删除。多份 gather 写同一 alloc 时按
+    // 「紧邻本 collapse 之前」的那一份配对（各副本链在 IR 中依次成对
+    // 出现，取错会拿到别层的源图——融合内核直取的 pad 缓冲不支配
+    // matmul 位置，yolov5 系实测在此炸 dominance）。
+    SmallVector<Operation*> users(alloc->getUsers().begin(),
+                                  alloc->getUsers().end());
+    linalg::GenericOp gather;
+    for (Operation* user : users) {
+      auto generic = dyn_cast<linalg::GenericOp>(user);
+      if (generic && generic.getDpsInits().front() == collapse.getSrc() &&
+          generic->isBeforeInBlock(collapse)) {
+        if (!gather || gather->isBeforeInBlock(generic)) {
+          gather = generic;
+        }
+      }
+    }
+    if (!gather) {
+      return std::nullopt;
+    }
+    // gather 形态：窗口映射 (0, sh*oh+dh*kh, sw*ow+dw*kw, ic) 纯转发。
+    if (!gather.hasPureBufferSemantics() || gather.getNumDpsInputs() != 1 ||
+        gather.getNumDpsInits() != 1 || gather.getNumLoops() != 5) {
+      return std::nullopt;
+    }
+    SmallVector<AffineMap> maps = gather.getIndexingMapsArray();
+    if (maps.size() != 2 || !maps[1].isIdentity()) {
+      return std::nullopt;
+    }
+    Value input = gather.getDpsInputs().front();
+    const auto inputType = dyn_cast<MemRefType>(input.getType());
+    if (!inputType || !inputType.hasStaticShape() || inputType.getRank() != 4 ||
+        windowType.getElementType() != inputType.getElementType() ||
+        !isa<FloatType>(inputType.getElementType())) {
+      return std::nullopt;
+    }
+    MLIRContext* context = gather.getContext();
+    auto constantZero = dyn_cast<AffineConstantExpr>(maps[0].getResult(0));
+    if (!constantZero || constantZero.getValue() != 0) {
+      return std::nullopt;
+    }
+    if (maps[0].getResult(3) !=
+        getAffineDimExpr(gather.getNumLoops() - 1, context)) {
+      return std::nullopt;
+    }
+    Im2colGeometry geometry;
+    geometry.source = input;
+    geometry.gather = gather;
+    geometry.collapse = collapse;
+    geometry.alloc = alloc;
+    geometry.rowOffset = rowOffset;
+    // 源图必须支配 matmul 位置（融合内核在 matmul 处直取源图；tile-
+    // and-fuse 复制的 gather 副本链可能指向别的层的 pad 缓冲——IR 位置
+    // 在 matmul 之后，直取会违反 SSA 支配）。
+    if (Operation* sourceDefiner = input.getDefiningOp()) {
+      if (!sourceDefiner->isBeforeInBlock(matmulAnchor)) {
+        return std::nullopt;
+      }
+    }
+    // 几何吻合校验用全局行数：A 为 collapse 本体时 rows 即全局；M 向
+    // subview 时 rows 是 tile 行数，全局 = OH·OW（TileMatmulForall 的
+    // 切分尺寸恒为维度因子，rows 整除全局行数且偏移为其倍数）。
+    const int64_t globalRows = rowOffset != nullptr
+                                 ? geometry.outputHeight * geometry.outputWidth
+                                 : rows;
+    if (!extractStrideDilation(maps[0].getResult(1),
+                               0,
+                               2,
+                               geometry.strideHeight,
+                               geometry.dilationHeight) ||
+        !extractStrideDilation(maps[0].getResult(2),
+                               1,
+                               3,
+                               geometry.strideWidth,
+                               geometry.dilationWidth)) {
+      return std::nullopt;
+    }
+    const ArrayRef<int64_t> windowShape = windowType.getShape();
+    geometry.outputHeight = windowShape[0];
+    geometry.outputWidth = windowShape[1];
+    geometry.kernelHeight = windowShape[2];
+    geometry.kernelWidth = windowShape[3];
+    geometry.channels = windowShape[4];
+    if (inputType.getShape()[3] != geometry.channels ||
+        geometry.kernelHeight < 1 || geometry.kernelWidth < 1 ||
+        geometry.channels < 1 || geometry.outputHeight < 1 ||
+        geometry.outputWidth < 1 ||
+        geometry.kernelHeight * geometry.kernelWidth * geometry.channels !=
+          depth ||
+        geometry.outputHeight * geometry.outputWidth != globalRows ||
+        (rowOffset != nullptr && globalRows % rows != 0)) {
+      return std::nullopt;
+    }
+    return geometry;
   }
 
   // im2col gather → scf.parallel + 整 IC 行向量拷贝。并行维度沿用原
@@ -770,6 +1055,14 @@ class MatmulKernelNCNNPass final
     const int64_t columns = rhsType.getShape()[1];
     Type elementType = accType.getElementType();
 
+    // P6-A：A 面板由 im2col gather 独占物化时，内核直取源图窗口（gather-
+    // free），M×K 物化缓冲与拷贝整体消除。probe 内部校验行数/深度与窗口
+    // 几何吻合；失败返回 nullopt，内核保持从未物化缓冲读 A 的常规形态。
+    const std::optional<Im2colGeometry> im2col =
+      probeIm2colSource(lhs, rows, depth, matmul.getOperation());
+    const bool fused = im2col.has_value();
+
+
     ImplicitLocOpBuilder builder(matmul.getLoc(), rewriter);
     builder.setInsertionPoint(matmul);
 
@@ -824,39 +1117,142 @@ class MatmulKernelNCNNPass final
           std::nullopt,
           SmallVector<bool>(1, true)));
       }
-      auto depthBound = builder.create<arith::ConstantIndexOp>(depth);
-      auto kLoop = builder.create<scf::ForOp>(
-        zero, depthBound, one, ValueRange(accumulators));
-      builder.setInsertionPointToStart(kLoop.getBody());
-      Value kIndex = kLoop.getInductionVar();
-      auto bRow =
-        builder.create<vector::TransferReadOp>(vectorType,
-                                               rhs,
-                                               ValueRange{kIndex, columnStart},
-                                               std::nullopt,
-                                               SmallVector<bool>(1, true));
+
       // 单舍入 FMA：mul+add 分离会让 LLVM 侧因无 fastmath/contract 而无
       // 法合成 vfmadd（每个 MAC 双指令、依赖链延迟翻倍）；vector.fma 一
       // 步到位，舍入语义与 ncnn 的 FMA 内核一致，差异由数值黄金预算吸
       // 收。各 accumulator 链相互独立，K 循环体的发射率不再被单链延迟
       // 钉死。
-      SmallVector<Value> updated;
-      updated.reserve(rowCount);
-      for (int64_t i = 0; i < rowCount; ++i) {
-        auto aScalar = builder.create<memref::LoadOp>(
-          lhs, ValueRange{rowIndices[i], kIndex});
-        auto broadcast =
-          builder.create<vector::BroadcastOp>(vectorType, aScalar);
-        updated.push_back(builder.create<vector::FMAOp>(
-          vectorType, broadcast, bRow, kLoop.getRegionIterArgs()[i]));
-      }
-      builder.create<scf::YieldOp>(updated);
+      // P6-A 融合时 A 标量直取源图窗口：k 拆 (kh, kw, ic) 由外层 kp
+      // (kh·KW+kw) 与内层 ic 两层静态界循环给出——k = kp·IC + ic 与折叠
+      // [[2,3,4]] 展平严格一致，FMA 累加链数值与常规内核逐位相同；行
+      // m 拆 (oh, ow) 的小除法在 rowCount 个行上每行一次（行段首），循
+      // 环内无除法。
+      auto emitKBody = [&](Value kIndex,
+                           Value windowRowPart,
+                           Value windowColumnPart,
+                           Value channelIndex,
+                           SmallVector<Value> regionIterArgs) {
+        auto bRow = builder.create<vector::TransferReadOp>(
+          vectorType,
+          rhs,
+          ValueRange{kIndex, columnStart},
+          std::nullopt,
+          SmallVector<bool>(1, true));
+        SmallVector<Value> updated;
+        updated.reserve(rowCount);
+        for (int64_t i = 0; i < rowCount; ++i) {
+          Value aScalar;
+          if (!fused) {
+            aScalar = builder.create<memref::LoadOp>(
+              lhs, ValueRange{rowIndices[i], kIndex});
+          } else {
+            // 窗口行/列 = sh·oh + dh·kh、sw·ow + dw·kw；oh/ow 由全局
+            // 行号对 [OH, OW] 降维——M 向 forall 切分时行号 = tile 偏移
+            // + 段内索引。
+            Value m = rowIndices[i];
+            if (im2col->rowOffset != nullptr) {
+              m = builder.create<arith::AddIOp>(im2col->rowOffset, m);
+            }
+            Value oh = builder.create<arith::DivSIOp>(
+              m, builder.create<arith::ConstantIndexOp>(im2col->outputWidth));
+            Value ow = builder.create<arith::RemSIOp>(
+              m, builder.create<arith::ConstantIndexOp>(im2col->outputWidth));
+            Value windowRow = builder.create<arith::AddIOp>(
+              builder.create<arith::MulIOp>(
+                builder.create<arith::ConstantIndexOp>(im2col->strideHeight),
+                oh),
+              builder.create<arith::MulIOp>(
+                builder.create<arith::ConstantIndexOp>(im2col->dilationHeight),
+                windowRowPart));
+            Value windowColumn = builder.create<arith::AddIOp>(
+              builder.create<arith::MulIOp>(
+                builder.create<arith::ConstantIndexOp>(im2col->strideWidth),
+                ow),
+              builder.create<arith::MulIOp>(
+                builder.create<arith::ConstantIndexOp>(im2col->dilationWidth),
+                windowColumnPart));
+            aScalar = builder.create<memref::LoadOp>(
+              im2col->source,
+              ValueRange{zero, windowRow, windowColumn, channelIndex});
+          }
+          auto broadcast =
+            builder.create<vector::BroadcastOp>(vectorType, aScalar);
+          updated.push_back(builder.create<vector::FMAOp>(
+            vectorType, broadcast, bRow, regionIterArgs[i]));
+        }
+        return updated;
+      };
 
       // 写回在 kLoop 之后：行段累加完毕一次落回。
-      builder.setInsertionPointAfter(kLoop);
+      SmallVector<Value> results;
+      if (!fused) {
+        auto depthBound = builder.create<arith::ConstantIndexOp>(depth);
+        auto kLoop = builder.create<scf::ForOp>(
+          zero, depthBound, one, ValueRange(accumulators));
+        builder.setInsertionPointToStart(kLoop.getBody());
+        SmallVector<Value> updated =
+          emitKBody(kLoop.getInductionVar(),
+                    Value(),
+                    Value(),
+                    Value(),
+                    SmallVector<Value>(kLoop.getRegionIterArgs().begin(),
+                                       kLoop.getRegionIterArgs().end()));
+        builder.create<scf::YieldOp>(updated);
+        for (auto result : kLoop.getResults()) {
+          results.push_back(result);
+        }
+        builder.setInsertionPointAfter(kLoop);
+      } else {
+        // 外层 kp 扫 KH·KW 个窗口位置，内层 ic 扫 IC 个通道；
+        // k = kp·IC + ic 对齐折叠展平。kp 的 (kh, kw) 拆解用 div/mod——
+        // 界 KH·KW 与 KW 都是编译期常量，IC 段内无除法；LLVM 循环反转
+        // 后大宗是地址递推。
+        auto kpBound = builder.create<arith::ConstantIndexOp>(
+          im2col->kernelHeight * im2col->kernelWidth);
+        auto outer = builder.create<scf::ForOp>(
+          zero, kpBound, one, ValueRange(accumulators));
+        builder.setInsertionPointToStart(outer.getBody());
+        Value kp = outer.getInductionVar();
+        Value windowRowPart = builder.create<arith::DivSIOp>(
+          kp, builder.create<arith::ConstantIndexOp>(im2col->kernelWidth));
+        Value windowColumnPart = builder.create<arith::RemSIOp>(
+          kp, builder.create<arith::ConstantIndexOp>(im2col->kernelWidth));
+        auto kpOffset = builder.create<arith::MulIOp>(
+          kp, builder.create<arith::ConstantIndexOp>(im2col->channels));
+        auto icBound = builder.create<arith::ConstantIndexOp>(im2col->channels);
+        auto outerIterArgs = outer.getRegionIterArgs();
+        auto inner = builder.create<scf::ForOp>(
+          zero,
+          icBound,
+          one,
+          SmallVector<Value>(outerIterArgs.begin(), outerIterArgs.end()));
+        builder.setInsertionPointToStart(inner.getBody());
+        Value kIndex =
+          builder.create<arith::AddIOp>(kpOffset, inner.getInductionVar());
+        auto innerIterArgs = inner.getRegionIterArgs();
+        SmallVector<Value> updated = emitKBody(
+          kIndex,
+          windowRowPart,
+          windowColumnPart,
+          inner.getInductionVar(),
+          SmallVector<Value>(innerIterArgs.begin(), innerIterArgs.end()));
+        // 内层 ic 循环的 yield：插入点移到内层 body 末尾（在自动生成的
+        // 空 yield 之前插入新值版本——scf.for 的 body 构建器自带空
+        // yield 终结符，显式 yield 前插其后）。
+        builder.setInsertionPoint(inner.getBody(), inner.getBody()->end());
+        builder.create<scf::YieldOp>(updated);
+        builder.setInsertionPoint(outer.getBody(), outer.getBody()->end());
+        builder.create<scf::YieldOp>(SmallVector<Value>(
+          inner.getResults().begin(), inner.getResults().end()));
+        for (int64_t i = 0; i < rowCount; ++i) {
+          results.push_back(outer.getResult(i));
+        }
+        builder.setInsertionPointAfter(outer);
+      }
       for (int64_t i = 0; i < rowCount; ++i) {
         auto rowWrite = builder.create<vector::TransferWriteOp>(
-          kLoop.getResult(i), acc, ValueRange{rowIndices[i], columnStart});
+          results[i], acc, ValueRange{rowIndices[i], columnStart});
         rowWrite.setInBoundsAttr(
           builder.getBoolArrayAttr(SmallVector<bool>(1, true)));
       }
@@ -892,7 +1288,7 @@ class MatmulKernelNCNNPass final
       emitRowBlock(rowLoop.getInductionVar(), tileRows);
       builder.setInsertionPointAfter(rowLoop);
     }
-    if (const int64_t remainderRows = rows % tileRows) {
+    if (rows % tileRows) {
       auto rowStart = builder.create<arith::ConstantIndexOp>(fullRowExtent);
       auto rowBound = builder.create<arith::ConstantIndexOp>(rows);
       auto rowLoop = builder.create<scf::ForOp>(rowStart, rowBound, one);
@@ -901,6 +1297,167 @@ class MatmulKernelNCNNPass final
     }
 
     rewriter.eraseOp(matmul);
+  }
+
+  // P6-C 批量收缩内核：[B,M,K]×[B,K,N]→[B,M,N] 改写为 forall(b) 网格
+  // + 逐批 A1b 形态内核（M 行段 × N 列块、K 单链 FMA、寄存器 accumulator
+  // 常驻——与 kernelize 同构，A/B/C 面板经 [b] 子视图取得）。批维互
+  // 不依赖，forall 提供与卷积路径一致的 OpenMP 并行；K 归约保持在单
+  // 批单 tile 内，累加顺序与逐批标量串行一致。
+  void kernelizeBatchMatmul(IRRewriter& rewriter,
+                            linalg::BatchMatmulOp batch) const {
+    Value lhs = batch.getInputs()[0];
+    Value rhs = batch.getInputs()[1];
+    Value acc = batch.getOutputs().front();
+    const auto lhsType = cast<MemRefType>(lhs.getType());
+    const auto rhsType = cast<MemRefType>(rhs.getType());
+    const auto accType = cast<MemRefType>(acc.getType());
+    const int64_t batchCount = lhsType.getShape()[0];
+    const int64_t rows = lhsType.getShape()[1];
+    const int64_t depth = lhsType.getShape()[2];
+    const int64_t columns = rhsType.getShape()[2];
+    Type elementType = accType.getElementType();
+
+    ImplicitLocOpBuilder builder(batch.getLoc(), rewriter);
+    builder.setInsertionPoint(batch);
+
+    const int64_t accColumns =
+      std::clamp<int64_t>(matmulAccColumns, 1, columns);
+    const int64_t tileRows = std::max<int64_t>(
+      1,
+      std::min<int64_t>(
+        {matmulMRows, rows, kAccumulatorFloatBudget / accColumns}));
+    const int64_t fullColumnBlocks = columns / accColumns;
+    const int64_t tailColumns = columns % accColumns;
+    const int64_t fullRowExtent = rows / tileRows * tileRows;
+
+    auto zero = builder.create<arith::ConstantIndexOp>(0);
+    auto one = builder.create<arith::ConstantIndexOp>(1);
+
+    // forall(b)：批维并行（对齐卷积路径 forall 的 OpenMP 语义）。
+    SmallVector<OpFoldResult> batchBounds{builder.getIndexAttr(batchCount)};
+    auto forall = builder.create<scf::ForallOp>(
+      batch.getLoc(), batchBounds, ValueRange{}, std::nullopt);
+    builder.setInsertionPointToStart(forall.getBody());
+    Value bIndex = forall.getInductionVar(0);
+
+    // [b] 面板视图（静态偏移、零拷贝）：先 subview 取 [1,inner0,inner1]
+    // 切片（批维偏移动态、stride 1），再 collapse 折掉批维；collapsed 类
+    // 型由 computeCollapsedType 推断（保留 strided 布局）。
+    auto slice2D = [&](Value panel, int64_t inner0, int64_t inner1) {
+      SmallVector<OpFoldResult> offsets{
+        bIndex, builder.getIndexAttr(0), builder.getIndexAttr(0)};
+      SmallVector<OpFoldResult> sizes{builder.getIndexAttr(1),
+                                      builder.getIndexAttr(inner0),
+                                      builder.getIndexAttr(inner1)};
+      SmallVector<OpFoldResult> strides{builder.getIndexAttr(1),
+                                        builder.getIndexAttr(1),
+                                        builder.getIndexAttr(1)};
+      auto sliced = builder.create<memref::SubViewOp>(
+        batch.getLoc(), panel, offsets, sizes, strides);
+      SmallVector<ReassociationIndices> groups{{0, 1}, {2}};
+      auto collapsedType = memref::CollapseShapeOp::computeCollapsedType(
+        cast<MemRefType>(sliced.getType()), groups);
+      return builder.create<memref::CollapseShapeOp>(
+        batch.getLoc(), collapsedType, sliced.getResult(), groups);
+    };
+    Value lhsPanel = slice2D(lhs, rows, depth);
+    Value rhsPanel = slice2D(rhs, depth, columns);
+    Value accPanel = slice2D(acc, rows, columns);
+
+    // 以下与 kernelize 的行段 × 列块 × K 结构一致（A 直读 [b] 面板）。
+    auto emitTileBlock = [&](Value rowStart,
+                             int64_t rowCount,
+                             Value columnStart,
+                             int64_t blockColumns) {
+      auto vectorType = VectorType::get({blockColumns}, elementType);
+      SmallVector<Value> rowIndices;
+      rowIndices.reserve(rowCount);
+      for (int64_t i = 0; i < rowCount; ++i) {
+        rowIndices.push_back(
+          i == 0 ? rowStart
+                 : builder
+                     .create<arith::AddIOp>(
+                       rowStart, builder.create<arith::ConstantIndexOp>(i))
+                     .getResult());
+      }
+      SmallVector<Value> accumulators;
+      for (int64_t i = 0; i < rowCount; ++i) {
+        accumulators.push_back(builder.create<vector::TransferReadOp>(
+          vectorType,
+          accPanel,
+          ValueRange{rowIndices[i], columnStart},
+          std::nullopt,
+          SmallVector<bool>(1, true)));
+      }
+      auto depthBound = builder.create<arith::ConstantIndexOp>(depth);
+      auto kLoop = builder.create<scf::ForOp>(
+        zero, depthBound, one, ValueRange(accumulators));
+      builder.setInsertionPointToStart(kLoop.getBody());
+      Value kIndex = kLoop.getInductionVar();
+      auto bRow =
+        builder.create<vector::TransferReadOp>(vectorType,
+                                               rhsPanel,
+                                               ValueRange{kIndex, columnStart},
+                                               std::nullopt,
+                                               SmallVector<bool>(1, true));
+      SmallVector<Value> updated;
+      updated.reserve(rowCount);
+      for (int64_t i = 0; i < rowCount; ++i) {
+        auto aScalar = builder.create<memref::LoadOp>(
+          lhsPanel, ValueRange{rowIndices[i], kIndex});
+        auto broadcast =
+          builder.create<vector::BroadcastOp>(vectorType, aScalar);
+        updated.push_back(builder.create<vector::FMAOp>(
+          vectorType, broadcast, bRow, kLoop.getRegionIterArgs()[i]));
+      }
+      builder.create<scf::YieldOp>(updated);
+
+      builder.setInsertionPointAfter(kLoop);
+      for (int64_t i = 0; i < rowCount; ++i) {
+        auto rowWrite = builder.create<vector::TransferWriteOp>(
+          kLoop.getResult(i), accPanel, ValueRange{rowIndices[i], columnStart});
+        rowWrite.setInBoundsAttr(
+          builder.getBoolArrayAttr(SmallVector<bool>(1, true)));
+      }
+    };
+    auto emitRowBlock = [&](Value rowStart, int64_t rowCount) {
+      if (fullColumnBlocks > 1) {
+        auto columnBound =
+          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
+        auto columnStep = builder.create<arith::ConstantIndexOp>(accColumns);
+        auto columnLoop =
+          builder.create<scf::ForOp>(zero, columnBound, columnStep);
+        builder.setInsertionPointToStart(columnLoop.getBody());
+        emitTileBlock(
+          rowStart, rowCount, columnLoop.getInductionVar(), accColumns);
+        builder.setInsertionPointAfter(columnLoop);
+      } else {
+        emitTileBlock(rowStart, rowCount, zero, accColumns);
+      }
+      if (tailColumns > 0) {
+        auto tailStart =
+          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
+        emitTileBlock(rowStart, rowCount, tailStart, tailColumns);
+      }
+    };
+    if (fullRowExtent > 0) {
+      auto rowBound = builder.create<arith::ConstantIndexOp>(fullRowExtent);
+      auto rowStep = builder.create<arith::ConstantIndexOp>(tileRows);
+      auto rowLoop = builder.create<scf::ForOp>(zero, rowBound, rowStep);
+      builder.setInsertionPointToStart(rowLoop.getBody());
+      emitRowBlock(rowLoop.getInductionVar(), tileRows);
+      builder.setInsertionPointAfter(rowLoop);
+    }
+    if (rows % tileRows) {
+      auto rowStart = builder.create<arith::ConstantIndexOp>(fullRowExtent);
+      auto rowBound = builder.create<arith::ConstantIndexOp>(rows);
+      auto rowLoop = builder.create<scf::ForOp>(rowStart, rowBound, one);
+      builder.setInsertionPointToStart(rowLoop.getBody());
+      emitRowBlock(rowLoop.getInductionVar(), 1);
+    }
+
+    rewriter.eraseOp(batch);
   }
 
   // int8 row-dot 内核（P4）：B 已按 [N,K] 物化（strategy 的常量转置）。
@@ -918,7 +1475,6 @@ class MatmulKernelNCNNPass final
     Value rhs = matmul.getInputs()[1];
     Value acc = matmul.getOutputs().front();
     const auto lhsType = cast<MemRefType>(lhs.getType());
-    const auto rhsType = cast<MemRefType>(rhs.getType());
     const auto accType = cast<MemRefType>(acc.getType());
     const int64_t rows = lhsType.getShape()[0];
     const int64_t depth = lhsType.getShape()[1];
@@ -1052,7 +1608,7 @@ class MatmulKernelNCNNPass final
       emitRowBlock(rowLoop.getInductionVar(), tileRows);
       builder.setInsertionPointAfter(rowLoop);
     }
-    if (const int64_t remainderRows = rows % tileRows) {
+    if (rows % tileRows) {
       auto rowStart = builder.create<arith::ConstantIndexOp>(fullRowExtent);
       auto rowBound = builder.create<arith::ConstantIndexOp>(rows);
       auto rowLoop = builder.create<scf::ForOp>(rowStart, rowBound, one);

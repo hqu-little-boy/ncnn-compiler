@@ -258,6 +258,7 @@ class StrategyNCNNPass final
     }
     SmallVector<linalg::Conv2DNhwcHwcfOp> candidates;
     SmallVector<linalg::MatmulOp> int8Matmuls;
+    SmallVector<linalg::BatchMatmulOp> unitBatches;
     module.walk([&](func::FuncOp function) {
       function.walk([&](linalg::Conv2DNhwcHwcfOp convolution) {
         candidates.push_back(convolution);
@@ -269,14 +270,76 @@ class StrategyNCNNPass final
           int8Matmuls.push_back(matmul);
         }
       });
+      // P6-C：MHA 静态路径的 batch=1 batch_matmul 语义上就是普通
+      // matmul——通用下降把它展开成标量 mul+add 循环且逐 k 读写回 C，
+      // clang 无法向量化（medium_rec 实测 29% 热点）。B 折叠后进入
+      // TileMatmulForall + A1b 内核的既有路径。
+      function.walk([&](linalg::BatchMatmulOp batch) {
+        auto aType = dyn_cast<RankedTensorType>(batch.getInputs()[0].getType());
+        if (aType && aType.hasStaticShape() && aType.getShape()[0] == 1 &&
+            batch.hasPureTensorSemantics()) {
+          unitBatches.push_back(batch);
+        }
+      });
     });
     IRRewriter rewriter(&getContext());
+    for (linalg::BatchMatmulOp batch : unitBatches) {
+      rewriteUnitBatchMatmul(rewriter, batch);
+    }
     for (linalg::MatmulOp matmul : int8Matmuls) {
       rewriteInt8Matmul(rewriter, matmul);
     }
     for (linalg::Conv2DNhwcHwcfOp convolution : candidates) {
       rewriteConvolution(rewriter, convolution, *strategy);
     }
+  }
+
+  // [1,M,K]×[1,K,N] → [M,K]×[K,N] 的 linalg.matmul（前后配 collapse/
+  // expand 视图，纯视图零拷贝）。B 维静态为 1 时 batch_matmul 的结果与
+  // 折叠后 matmul 逐位一致（batch 维唯一）。
+  void rewriteUnitBatchMatmul(RewriterBase& rewriter,
+                              linalg::BatchMatmulOp batch) const {
+    Location location = batch.getLoc();
+    const auto aType = cast<RankedTensorType>(batch.getInputs()[0].getType());
+    const auto bType = cast<RankedTensorType>(batch.getInputs()[1].getType());
+    const auto cType =
+      cast<RankedTensorType>(batch.getOutputs().front().getType());
+    const int64_t rows = aType.getShape()[1];
+    const int64_t depth = aType.getShape()[2];
+    const int64_t columns = bType.getShape()[2];
+    if (bType.getShape()[0] != 1 || cType.getShape()[0] != 1 ||
+        cType.getShape()[1] != rows || cType.getShape()[2] != columns) {
+      return;
+    }
+    rewriter.setInsertionPoint(batch);
+    // rank-3 输入折掉 B 维：[[0,1],[2]]（维度全部成组）。
+    SmallVector<ReassociationIndices> dropBatch{{0, 1}, {2}};
+    Value collapsedA = rewriter.create<tensor::CollapseShapeOp>(
+      location,
+      RankedTensorType::get({rows, depth}, aType.getElementType()),
+      batch.getInputs()[0],
+      dropBatch);
+    Value collapsedB = rewriter.create<tensor::CollapseShapeOp>(
+      location,
+      RankedTensorType::get({depth, columns}, bType.getElementType()),
+      batch.getInputs()[1],
+      dropBatch);
+    Value collapsedC = rewriter.create<tensor::CollapseShapeOp>(
+      location,
+      RankedTensorType::get({rows, columns}, cType.getElementType()),
+      batch.getOutputs().front(),
+      dropBatch);
+    Value contracted =
+      rewriter
+        .create<linalg::MatmulOp>(location,
+                                  TypeRange{collapsedC.getType()},
+                                  ValueRange{collapsedA, collapsedB},
+                                  ValueRange{collapsedC})
+        .getResult(0);
+    Value expanded = rewriter.create<tensor::ExpandShapeOp>(
+      location, cType, contracted, dropBatch);
+    rewriter.replaceAllUsesWith(batch.getResult(0), expanded);
+    rewriter.eraseOp(batch);
   }
 
  private:
