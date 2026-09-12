@@ -229,6 +229,11 @@
 >   + Int8Codegen）绿灯。medium_rec_int8 实测 5.04（4.82 漂移带内，
 >   该模型残余在 dw 层与通道侧而非 requant——P4 附注的"联动 P6"杠杆
 >   落地，瓶颈判定更新为 dw-int8/通道侧）。
+> - **P7 后全量基线（同日全新 stage 树 48/48 ctest 全过 + JSON 重测）**：
+>   全表 p50 **1.72**、max 19.41（server_rec）；重模型（ncnn≥100ms）
+>   p50 **1.63**；11/44 进 1.5 以内、4/44 进 1.25 以内、1/44 追平
+>   （mobile_det_static **0.83× 反超**）。剩余差距的分层归因与对应
+>   办法见 §8。
 
 > 目标：44 模型 performance_tests 套件编译产物全面追平 vendored ncnn
 > （x86-64 AVX2/FMA 口径）。根因依据见姊妹篇
@@ -619,3 +624,70 @@ P0 ─→ P1 ─→ P2 ─→ P3 ─→ P4（复用 P3 骨架）
 v2 校准注：P1 实测显示内核收益向 6T ratio 的传导折扣约 0.8（resnet34
 预测 1.3–2×、实测 1.28×），P3 行据此放宽；P5 提前后其收益将部分并入
 P2/P3 验收时的实测值。本表为预测，验收以实测为准。
+
+## 8. P7 后剩余差距分层归因与对策（2026-09-12 定稿）
+
+数据口径：P7 + requant 融合落地后、全新 stage 树全量重测（44 模型，
+6 线程正式口径，JSON 留档）。当前全表 p50 **1.72**、重模型 p50 **1.63**、
+11/44 进 1.5 以内、1/44 反超（mobile_det_static 0.83×）。
+
+### 8.1 分布带与里程碑对账
+
+| 分布带 | 模型数 | 代表 | 对应里程碑口径 |
+|---|---|---|---|
+| 已追平/反超（≤1.1） | 1 | mobile_det_static 0.83× | M3 单点达标 |
+| 1.1–1.5 | 10 | yolov5m_seg 1.19、yolov5s 1.25、mobile_rec 1.14 | M2 达标带 |
+| 1.6–2.2 | ~20 | resnet 1.61–2.22、efficientnet 1.67–1.92、yolov5 大件 1.63–1.74、det 系 1.66–2.07 | M2 未达的主因（重模型 p50 1.63 vs 界 1.5） |
+| 3.0–3.8 | 6 | int8 rec 三件 3.46–3.70、tiny_rec 3.57、anglenet 3.01 | 独立战线（int8/小开销） |
+| >10 | 2 | server_rec 19.41、formula_encoder 13.81 | 表尾巨兽（attention 链） |
+
+M2 口径对账：13 个重模型 6 个达标（≤1.5），缺口 ≈ 重模型 p50 从 1.63
+压到 1.5（−8%）。M3 口径：远未达，走 P7 附注的降级路径。
+
+### 8.2 差距源 → 对策（按优先级）
+
+**A. conv 系 1.6–2.2 带（约 20 模型，M2 收尾的关键面）**
+- 归因：GEMM 本体已由 P3 微内核接管（60+ GFLOP/s），残余在 im2col
+  gather 残留层（P6 支配守卫跳过的 yolov5 层）、epilogue 未融合段与
+  池化/激活的中间物化；ncnn 侧的对照优势是其 pack 面板 sgemm。
+- 对策（两选一，代价/收益对账后定）：
+  1. **接受降级口径**（P7 附注路线）：例外清单 ≤1.25 逐模型对账
+     （resnet/yolo 系大部分已落在 1.2–1.75，对账即收尾）；
+  2. **Winograd pack 化复活**（4–6 人天）：pack-A/pack-B 物化 +
+     专用变换内核（ncnn conv3x3s1_winograd63 同款结构），预期把
+     conv 段从 ~2× 拉向 1.3× 量级；P7 的变换/矩阵基建直接复用，
+     不确定性集中在 pack 后的 L2 行为。
+
+**B. server_rec / formula_encoder 巨兽（19.4×/13.8×）**
+- 归因：attention 链的 MHA 转置物化（P6 残余 ~16% copy）+ CTC/解码
+  段的长序列 matmul + 非 conv 段（LSTM/reshape 链）未被任何内核 pass
+  覆盖；ncnn 侧这批模型同样不是 F(6,3) 受益者，差距主体在 IR 形态。
+- 对策：P6 遗留的 MHA splitHeads 转置消解（consumer 形态并入相邻
+  matmul 映射或 fused softmax 输出直产转置布局）；CTC 段 SIGUSR2
+  采样定位后按热点逐个接入内核 pass。预估 3–5 人天（不含验证）。
+
+**C. int8 rec 三件（3.46–3.70×）**
+- 归因：requant 融合已落地（本表 int8 行较 P4 收敛），残余在
+  **dw-int8 层**（ncnn 的 dw-int8 走专用内核；我们的 dw 层保持 f32
+  被 P5 覆盖，但 int8 模型的激活量化链在 dw 前后的 cast 未折叠）与
+  通道侧 cast/gather。
+- 对策：dw-Q 变体接入 P5 的 vectorizeDepthwiseConvRows（i8 输入、
+  i8×i8→i32 行向量 MAC，沿用 P4 的 tier② 定档）；激活量化 cast 的
+  producer 折叠进 dw 输出。预估 2–3 人天。
+
+**D. 小模型固定开销（anglenet 3.01×、tiny_rec 3.57×）**
+- 归因：ncnn 0.8ms 级模型的 ratio 被固定开销放大——每 run 的
+  malloc/dealloc 链（One-Shot Bufferize 逐 tensor 分配）+ 多 pass
+  的中间物化。
+- 对策：P8 收尾既定项——arena 化 / entry 级 hoist 静态分配；
+  tiny_rec 的 3.57× 还含 conv 段（并入 A 线）。预估 2 人天。
+
+### 8.3 收益叠加后的口径预测
+
+| 对策线完成后 | 预期 |
+|---|---|
+| A1 降级口径对账 | M3 降级宣告（conv 系例外清单 ≤1.25） |
+| A2 pack 化 + B + C + D | 重模型 p50 → ~1.3、中位 → ~1.2；server_rec/formula → ≤3× 量级 |
+
+预测过 §1 的 0.8 传导折扣；验收以实测为准。建议排序：B（单点收益
+最大）→ C（独立且便宜）→ D → A2（可选，决定 M3 走标准还是降级）。
