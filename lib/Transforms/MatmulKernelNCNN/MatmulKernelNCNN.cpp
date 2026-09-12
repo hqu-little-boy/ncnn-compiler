@@ -9,7 +9,6 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Pass/PassRegistry.h"
 
 namespace mlir::ncnn {
 
@@ -171,10 +170,10 @@ class MatmulKernelNCNNPass final
   }
 
  private:
-  // 行级向量宽度上限：relu 等逐元 epilogue 的最内维覆盖范围；超宽保持
-  // 标量。matmul 内核的向量 accumulator 宽度由 accColumns（默认 16）与
-  // 其余数列块给出，天然有界。
-  static constexpr int64_t kMaxRowWidth = 1024;
+  // 逐元素行向量化的宽度上限：relu 等逐元 epilogue 的最内维覆盖范围；
+  // 超宽保持标量。matmul 内核的向量 accumulator 宽度由 accColumns（默认
+  // 16）与其余数列块给出，天然有界，不受此限制。
+  static constexpr int64_t kMaxElementwiseRowWidth = 1024;
 
   // matmul 内核 M×N 寄存器分块的 accumulator 浮点预算：tileRows ×
   // accColumns ≤ 预算时，accumulator（默认 4×16 = 8 个 ymm）加 B 行与
@@ -209,7 +208,7 @@ class MatmulKernelNCNNPass final
     }
     for (Value operand : {matmul.getInputs()[1], matmul.getOutputs().front()}) {
       const auto type = dyn_cast<MemRefType>(operand.getType());
-      if (!isStaticF32Matrix(type) || type.getShape()[1] > kMaxRowWidth) {
+      if (!isStaticF32Matrix(type)) {
         return false;
       }
     }
@@ -243,9 +242,6 @@ class MatmulKernelNCNNPass final
       return false;
     }
     // N 是写回行宽；K 无上限（row-dot 内核沿 k 向量化，代码量与 K 无关）。
-    if (accType.getShape()[1] > kMaxRowWidth) {
-      return false;
-    }
     const int64_t rows = lhsType.getShape()[0];
     const int64_t depth = lhsType.getShape()[1];
     const int64_t rhsRows = rhsType.getShape()[0];
@@ -278,7 +274,7 @@ class MatmulKernelNCNNPass final
       return false;
     }
     const auto maps = generic.getIndexingMapsArray();
-    if (maps.size() != generic.getNumDpsInputs() + 1U) {
+    if (maps.size() != static_cast<size_t>(generic.getNumDpsInputs() + 1U)) {
       return false;
     }
     // 主输入（acc）须恒等；其余输入全常量（逐张量标量）。
@@ -349,7 +345,7 @@ class MatmulKernelNCNNPass final
       return false;
     }
     const int64_t width = outType.getShape().back();
-    if (width < 2 || width > kMaxRowWidth) {
+    if (width < 2 || width > kMaxElementwiseRowWidth) {
       return false;
     }
     const unsigned loops = generic.getNumLoops();
@@ -500,7 +496,7 @@ class MatmulKernelNCNNPass final
     // 整行向量形态要求通道数是 2 的幂（≥8）——对任意元素类型成立；
     // i8 通道行只有 1 字节/元素，非 2 幂通道改走 32-lane 分块 + 标量尾
     // （P4：int8 im2col gather 的行宽普遍非 2 幂，如 IC=24/40/240）。
-    if (channels >= 8 && channels <= kMaxRowWidth &&
+    if (channels >= 8 && channels <= kMaxElementwiseRowWidth &&
         (channels & (channels - 1)) == 0) {
       return true;
     }
@@ -735,10 +731,11 @@ class MatmulKernelNCNNPass final
     // 拷贝计划：通道行 2 幂 ≥8 时整行一个向量；i8 非 2 幂通道按
     // kGatherChunkLanes 分块 + 标量尾。行内 IC 段连续，源/目标最内维
     // 偏移同步推进。
-    const int64_t wholeRow = (channels >= 8 && channels <= kMaxRowWidth &&
-                              (channels & (channels - 1)) == 0)
-                               ? channels
-                               : 0;
+    const int64_t wholeRow =
+      (channels >= 8 && channels <= kMaxElementwiseRowWidth &&
+       (channels & (channels - 1)) == 0)
+        ? channels
+        : 0;
     const int64_t chunkWidth = wholeRow != 0 ? wholeRow : kGatherChunkLanes;
     const int64_t fullChunks = wholeRow != 0 ? 1 : channels / kGatherChunkLanes;
     const int64_t tailWidth = wholeRow != 0 ? 0 : channels % kGatherChunkLanes;
@@ -1531,9 +1528,7 @@ class MatmulKernelNCNNPass final
   // load（FuseQuantChain 保证这些是常量广播的逐张量 scale/bias）。
   Value emitRequantValue(ImplicitLocOpBuilder& builder,
                          linalg::GenericOp epilogue,
-                         Value accValue,
-                         Value rowIndex,
-                         Value columnIndex) const {
+                         Value accValue) const {
     Block& block = epilogue->getRegion(0).front();
     IRMapping mapping;
     mapping.map(block.getArgument(0), accValue);
@@ -1678,11 +1673,8 @@ class MatmulKernelNCNNPass final
           if (requantEpilogue) {
             // requant 内联：主值 = 本 tile 的 i32 和；其余输入按常量
             // 下标 load（循环不变，逐 (i,j) 重复 load 会被 LICM 折叠）。
-            Value quantized = emitRequantValue(builder,
-                                               requantEpilogue,
-                                               result,
-                                               rowIndices[i],
-                                               columnIndices[j]);
+            Value quantized =
+              emitRequantValue(builder, requantEpilogue, result);
             builder.create<memref::StoreOp>(
               quantized,
               requantEpilogue.getOutputs().front(),
