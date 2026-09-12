@@ -213,6 +213,23 @@
 >   位置（拓扑序），融合按支配守卫正确跳过、保持原向量化 gather 路
 >   径——这些层留给后续 pass 重排研究，不阻塞验收。
 
+> **执行状态（2026-09-12，P7 + P4 遗留 requant 融合）**：
+> - **P7 Winograd F(6,3)**：机制与数值契约落地（`--conv-strategy=winograd`
+>   opt-in，operator 级 + resnet18 全主干双 golden 通过，rtol 1e-3/atol
+>   1e-4）；性能验收**未达**（resnet18 变体实测 69.8ms vs 基线 35.5ms，
+>   1.97× 劣化）——通用 tile 形态的 3 次 transpose 搬运吃掉算术强度
+>   收益，且 ncnn 对该批模型实际不选 F(6,3)（`test_prefer_winograd63`
+>   对 IC≥64 false）。按 §3-P7 v2 失败退路：保持 opt-in 默认关闭，
+>   conv 系 M3 走降级口径（例外清单 ≤1.25）。详见 §3-P7 执行状态附注。
+> - **P4 遗留 requant epilogue 融合**（medium_rec_int8 ≤4 目标的下一
+>   杠杆）：`kernelizeInt8RowDot` 的写回段内联 requant generic（acc
+>   唯一用户、恒等主值 + 常量广播 scale/bias 的 FuseQuantChain 产物形
+>   态）——i32 中间物化与独立全量 pass 同时消失，asm 见 vcvtdq2ps
+>   692 处 + vcvttps2dq 217 处进入向量代码。数值 golden（Int8 完整链
+>   + Int8Codegen）绿灯。medium_rec_int8 实测 5.04（4.82 漂移带内，
+>   该模型残余在 dw 层与通道侧而非 requant——P4 附注的"联动 P6"杠杆
+>   落地，瓶颈判定更新为 dw-int8/通道侧）。
+
 > 目标：44 模型 performance_tests 套件编译产物全面追平 vendored ncnn
 > （x86-64 AVX2/FMA 口径）。根因依据见姊妹篇
 > [`ncnn-performance-gap-analysis.md`](ncnn-performance-gap-analysis.md)
@@ -504,6 +521,39 @@ avxvnni `vpdpbusd` + LUT requant）。
 
 验收：预算内模型 auto 走 Winograd，resnet18/yolov5 系 3×3 段 ≥ 1.5×
 于 P3 后水平；golden 全绿且误差在已对账预算内。
+
+> **P7 执行状态附注（2026-09-12）**：机制与数值契约落地，性能验收
+> **未达**——按 v2 失败退路处理，Winograd 保持 opt-in 默认关闭，conv
+> 系走 M3 降级口径（例外清单对账，见下）。
+> - **机制落地**：`--conv-strategy=winograd`（显式 opt-in）对 3×3 s1
+>   d1 且 IC>8||OC>8 的静态批 1 实例改写为：pad 到 tile 网格 → 输入
+>   变换两段 8-tap 全展开 generic（B/Bᵀ）→ 编译期权重变换常量
+>   [64,OC,IC]（G·w·Gᵀ 两段折叠）→ 中心 `linalg.batch_matmul`
+>   [64,OC,IC]×[64,IC,T]（命中 P6-C kernelizeBatchMatmul 的
+>   forall(b)+A1b 内核，复用 P3 微内核）→ 输出变换两段（Aᵀ/A）→
+>   裁剪 + bias 补加（conv init 逐元素）。判据外实例回退常规 dispatch
+>   （显式策略不比 auto 更少优化）。
+> - **数值契约达成**：operator 级 `ConvolutionWinogradMatchesReference`
+>   （rtol 1e-3/atol 1e-4）与 resnet18 全主干
+>   `ResNet18WinogradMatchesNcnn` 双 golden 通过；f32 相对误差 ~1e-3
+>   量级（有理插值点 ±1/±2/±1/2/∞，spike f64 验证矩阵恒等式 2.5e-13）。
+> - **性能验收未达（关键实测）**：resnet18 winograd 变体（全主干改写）
+>   实测 69.8ms vs 基线（im2col 路径）35.5ms——**1.97× 劣化**，与
+>   计划预期的 ≥1.5× 收益相反。归因：(1) 变换段虽已向量化（直线展开
+>   形态，产物 19544 vmulps/23856 vaddps vs 归约形态的 52 vmulss），
+>   但 F(6,3) 通用 tile 形态的 3 次数据搬运 transpose（Y 布局重排）
+>   未消解，算术强度提升被搬运吃掉；(2) ncnn 的 Winograd 优势来自
+>   pack 面板 + 专用 AVX2 内核 + MHA 式 L2 分块调度，其 dispatch 判据
+>   `test_prefer_winograd63` 对 IC≥64 返回 **false**（本机 ncnn 对
+>   resnet18 主干实际不选 F(6,3)，走 sgemm + 打包）——即"ncnn 默认
+>   Winograd"的前提在这批主力模型上本就不成立（计划根因描述过强）。
+> - **编译预算**：直线展开形态 IR 体积大（.so 282MB vs 基线 47MB），
+>   resnet18_winograd 单 fixture 编译 ~8 分钟，预算覆盖表单列 900s。
+> - **决策**：按 v2 退路——`--conv-strategy=winograd` 保持 opt-in（机制
+>   与数值契约已沉淀，供后续 pack 化/专用内核研究复用），auto 不翻
+>   默认；conv 系 M3 口径走降级路径（例外清单 ≤1.25 逐模型对账）。
+>   后续若要复活 Winograd 收益，需 ncnn 同款 pack-A/pack-B 物化 +
+>   专用变换内核（P3/P6 微内核架构内的专项，预估 4–6 人天）。
 
 ### P8 收尾与追平宣告（2–3 天）
 

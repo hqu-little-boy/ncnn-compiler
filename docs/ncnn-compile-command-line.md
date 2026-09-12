@@ -327,7 +327,7 @@ ncnn-compile model.param --conv-strategy=auto
 | `auto`（默认） | 1×1 s1 无条件折叠为 matmul；其余 k×k 仅静态空间维且命中 ncnn `prefer_sgemm` 启发式时走 im2col+matmul |
 | `gemm` | 静态实例强制走 GEMM 形态（跳过阈值判断） |
 | `conv` | 关闭全部改写，保留直接卷积 |
-| `winograd` | 预留开关位，当前等价于 `conv`（Winograd 数值预算未验证） |
+| `winograd` | P7：3×3 s1 d1 且 IC>8 或 OC>8 的静态批 1 实例改写为 F(6,3)（输入/权重/输出变换 + 中心 batch_matmul，ncnn conv3x3s1_winograd63 同款矩阵）；判据外实例回退常规 dispatch。数值契约：f32 相对误差 ~1e-3 量级（有理插值点），对拍容差 rtol=1e-3/atol=1e-4（operator 级守护 `ConvolutionWinogradMatchesReference`），模型级启用须逐模型对账 golden 预算；`auto` 默认不启用（预算验证后另行翻默认） |
 
 `--conv-gemm-l2-bytes` 覆盖启发式中的 L2 缓存字节预算（默认 `524288`，即 512 KiB）。
 数值上 im2col 路径改变累加顺序（ULP 级差异），由全量数值黄金测试按既定预算验收。
