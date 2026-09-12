@@ -59,6 +59,130 @@ std::optional<ConvStrategy> parseStrategy(StringRef strategy) {
   return std::nullopt;
 }
 
+// Winograd F(6,3)（P7）：ncnn conv3x3s1_winograd63 的编译期化。3×3 s1
+// 卷积改写为 输入变换 → 批量 GEMM → 输出变换 三段，算术强度从每权重
+// 1 次 MAC/输出提升到 36/输出。矩阵抄录自 vendored ncnn
+// convolution_3x3_winograd.h（G=ktm、Bᵀ=itm、Aᵀ=otm，interpolation 点
+// ±1, ±2, ±1/2, ∞ 的有理系数）。数值上变换改变累加结构（不再是逐 k 串
+// 行 FMA 链），f32 相对误差 ~1e-3 量级，由逐模型数值预算对账把关
+// （docs/ncnn-performance-parity-plan.md §3-P7：预算过不了的模型不启
+// 用，不做全局默认）。
+namespace winograd63 {
+
+// G（kernel transform，ktm[8][3]）。
+constexpr float kG[8][3] = {{1.0F, 0.0F, 0.0F},
+                            {-2.0F / 9, -2.0F / 9, -2.0F / 9},
+                            {-2.0F / 9, 2.0F / 9, -2.0F / 9},
+                            {1.0F / 90, 1.0F / 45, 2.0F / 45},
+                            {1.0F / 90, -1.0F / 45, 2.0F / 45},
+                            {1.0F / 45, 1.0F / 90, 1.0F / 180},
+                            {1.0F / 45, -1.0F / 90, 1.0F / 180},
+                            {0.0F, 0.0F, 1.0F}};
+
+// Bᵀ（input transform，itm[8][8]）。
+constexpr float kBt[8][8] = {
+  {1.0F, 0.0F, -5.25F, 0.0F, 5.25F, 0.0F, -1.0F, 0.0F},
+  {0.0F, 1.0F, 1.0F, -4.25F, -4.25F, 1.0F, 1.0F, 0.0F},
+  {0.0F, -1.0F, 1.0F, 4.25F, -4.25F, -1.0F, 1.0F, 0.0F},
+  {0.0F, 0.5F, 0.25F, -2.5F, -1.25F, 2.0F, 1.0F, 0.0F},
+  {0.0F, -0.5F, 0.25F, 2.5F, -1.25F, -2.0F, 1.0F, 0.0F},
+  {0.0F, 2.0F, 4.0F, -2.5F, -5.0F, 0.5F, 1.0F, 0.0F},
+  {0.0F, -2.0F, 4.0F, 2.5F, -5.0F, -0.5F, 1.0F, 0.0F},
+  {0.0F, -1.0F, 0.0F, 5.25F, 0.0F, -5.25F, 0.0F, 1.0F}};
+
+// Aᵀ（output transform，otm[6][8]）。
+constexpr float kAt[6][8] = {
+  {1.0F, 1.0F, 1.0F, 1.0F, 1.0F, 32.0F, 32.0F, 0.0F},
+  {0.0F, 1.0F, -1.0F, 2.0F, -2.0F, 16.0F, -16.0F, 0.0F},
+  {0.0F, 1.0F, 1.0F, 4.0F, 4.0F, 8.0F, 8.0F, 0.0F},
+  {0.0F, 1.0F, -1.0F, 8.0F, -8.0F, 4.0F, -4.0F, 0.0F},
+  {0.0F, 1.0F, 1.0F, 16.0F, 16.0F, 2.0F, 2.0F, 0.0F},
+  {0.0F, 1.0F, -1.0F, 32.0F, -32.0F, 1.0F, -1.0F, 1.0F}};
+
+constexpr int64_t kAlpha = 8;   // 变换域边长（tile 6 + 界 2）
+constexpr int64_t kTile = 6;    // 输出 tile 边长
+constexpr int64_t kBatch = 64;  // 变换域批数 α²
+
+// ncnn dispatch 判据的编译期化（convolution_x86.cpp:640）：3×3 s1 d1 且
+// IC>8 或 OC>8 才值得 Winograd——小通道层的变换开销吃不掉 GEMM 收益。
+bool eligible(int64_t kernelHeight,
+              int64_t kernelWidth,
+              int64_t dilationHeight,
+              int64_t dilationWidth,
+              int64_t strideHeight,
+              int64_t strideWidth,
+              int64_t inputChannels,
+              int64_t outputChannels) {
+  return kernelHeight == 3 && kernelWidth == 3 && dilationHeight == 1 &&
+         dilationWidth == 1 && strideHeight == 1 && strideWidth == 1 &&
+         (inputChannels > 8 || outputChannels > 8);
+}
+
+// 编译期权重变换：G·w·Gᵀ 折叠 [64, OC, IC] 常量（ncnn create_pipeline
+// 预变换的编译期等价物）。输入 [3,3,IC,OC]（MLIR 布局，kh-major），
+// 输出批维最外与 batch_matmul 的 A 面板一致（行内 oc*IC+ic）。
+DenseFPElementsAttr transformWeight(RankedTensorType weightType,
+                                    DenseFPElementsAttr weights) {
+  const int64_t inputChannels = weightType.getShape()[2];
+  const int64_t outputChannels = weightType.getShape()[3];
+  const int64_t depth = inputChannels * outputChannels;
+  const llvm::fltSemantics& semantics =
+    cast<FloatType>(weightType.getElementType()).getFloatSemantics();
+  SmallVector<APFloat> transformed(kBatch * depth, APFloat(semantics));
+  auto values = weights.getValues<APFloat>();
+  // 先行段（kw 方向）：W1[kh][jp][ic][oc] = Σ_kw G[jp][kw]·w[kh][kw][ic][oc]
+  SmallVector<APFloat> stage1(3 * kAlpha * depth, APFloat(semantics));
+  auto at1 = [&](int64_t kh, int64_t jp, int64_t index) -> APFloat& {
+    return stage1[(((kh * kAlpha) + jp) * depth) + index];
+  };
+  int64_t sourceIndex = 0;
+  for (int64_t kh = 0; kh < 3; ++kh) {
+    for (int64_t kw = 0; kw < 3; ++kw) {
+      for (int64_t ic = 0; ic < inputChannels; ++ic) {
+        for (int64_t oc = 0; oc < outputChannels; ++oc) {
+          const APFloat& value = values[sourceIndex++];
+          for (int64_t jp = 0; jp < kAlpha; ++jp) {
+            const float coefficient = kG[jp][kw];
+            if (coefficient != 0.0F) {
+              APFloat product(value);
+              product.multiply(APFloat(coefficient),
+                               llvm::APFloat::rmNearestTiesToEven);
+              APFloat& slot = at1(kh, jp, (ic * outputChannels) + oc);
+              slot.add(product, llvm::APFloat::rmNearestTiesToEven);
+            }
+          }
+        }
+      }
+    }
+  }
+  // 再列段（kh 方向）：V[i·8+jp][oc][ic] = Σ_kh G[i][kh]·W1[kh][jp][ic][oc]
+  for (int64_t kh = 0; kh < 3; ++kh) {
+    for (int64_t jp = 0; jp < kAlpha; ++jp) {
+      for (int64_t ic = 0; ic < inputChannels; ++ic) {
+        for (int64_t oc = 0; oc < outputChannels; ++oc) {
+          const APFloat& value = at1(kh, jp, (ic * outputChannels) + oc);
+          for (int64_t i = 0; i < kAlpha; ++i) {
+            const float coefficient = kG[i][kh];
+            if (coefficient != 0.0F) {
+              APFloat product(value);
+              product.multiply(APFloat(coefficient),
+                               llvm::APFloat::rmNearestTiesToEven);
+              APFloat& slot = transformed[(((i * kAlpha) + jp) * depth) +
+                                          ((oc * inputChannels) + ic)];
+              slot.add(product, llvm::APFloat::rmNearestTiesToEven);
+            }
+          }
+        }
+      }
+    }
+  }
+  auto transformedType = RankedTensorType::get(
+    {kBatch, outputChannels, inputChannels}, weightType.getElementType());
+  return DenseFPElementsAttr::get(transformedType, transformed);
+}
+
+}  // namespace winograd63
+
 bool isLiftableElementwiseBody(linalg::GenericOp consumer) {
   Region& region = consumer->getRegion(0);
   if (!region.hasOneBlock()) {
@@ -453,6 +577,450 @@ class StrategyNCNNPass final
     rewriter.eraseOp(matmul);
   }
 
+  // P7 Winograd F(6,3) 改写。IR 结构（全部 tensor 层，向量化/并行化由
+  // 既有后续 pass 接管）：
+  //   1. pad 图像到 tile 网格 [1, TH·6+2, TW·6+2, IC]（tile 对齐余量 +
+  //      右/下各 2 的变换窗口越界；输入已含 TosaToLinalg 显式 pad）；
+  //   2. 输入变换两段 generic（8-tap 全展开直线 body）：U = Bᵀ·(d·B)，
+  //      iterator (th, tw, i, jp, c) 全 parallel、c 最内——归约形态每内
+  //      层迭代只有 1 MAC 无法向量化（实测 vmovss 16k 条、resnet18
+  //      winograd 变体 129ms vs 基线 32ms），展开后 8 次 mul+add 由
+  //      clang auto-vec 命中；
+  //   3. 中心 linalg.batch_matmul [64,OC,IC]×[64,IC,T]→[64,OC,T]——
+  //      命中 P6-C kernelizeBatchMatmul 的 forall(b)+A1b 形态内核
+  //      （复用 P3 M×N 寄存器分块微内核）；
+  //   4. 输出变换两段 generic（同展开形态），[TH,6,TW,6,OC] 交错空间
+  //      布局（collapse {{0,1},{2,3},{4}} 直接折出 [TH·6,TW·6,OC]）；
+  //   5. 折回裁剪到 [1,OH,OW,OC]，与 conv init（逐通道 bias）逐元素加。
+  // 数值：f32 全链，相对 ncnn 直接卷积 ~1e-3 量级（F(6,3) 有理插值点），
+  // 数值契约由启用侧的 golden 预算承担（默认不启用，见 dispatch）。
+  bool rewriteWinograd(RewriterBase& rewriter,
+                       linalg::Conv2DNhwcHwcfOp convolution) const {
+    using winograd63::kAlpha;
+    using winograd63::kAt;
+    using winograd63::kBatch;
+    using winograd63::kBt;
+    using winograd63::kTile;
+    auto imageType =
+      dyn_cast<RankedTensorType>(convolution.getInputs()[0].getType());
+    auto weightType =
+      dyn_cast<RankedTensorType>(convolution.getInputs()[1].getType());
+    auto resultType =
+      dyn_cast<RankedTensorType>(convolution.getResult(0).getType());
+    if (!imageType || !weightType || !resultType || imageType.getRank() != 4 ||
+        weightType.getRank() != 4 || resultType.getRank() != 4 ||
+        !imageType.hasStaticShape() || !resultType.hasStaticShape() ||
+        !weightType.hasStaticShape()) {
+      return false;
+    }
+    const ArrayRef<int64_t> imageShape = imageType.getShape();
+    const ArrayRef<int64_t> resultShape = resultType.getShape();
+    const int64_t inputChannels = weightType.getShape()[2];
+    const int64_t outputChannels = weightType.getShape()[3];
+    const int64_t batches = imageShape[0];
+    const int64_t outputHeight = resultShape[1];
+    const int64_t outputWidth = resultShape[2];
+    if (batches != 1 || inputChannels < 1 || outputChannels < 1) {
+      // tile 域以 N=1 折叠展开；批维实例回退既有路径。
+      return false;
+    }
+    auto weightConstant =
+      dyn_cast<arith::ConstantOp>(convolution.getInputs()[1].getDefiningOp());
+    auto weightElements =
+      weightConstant
+        ? dyn_cast<DenseFPElementsAttr>(weightConstant.getValueAttr())
+        : nullptr;
+    if (!weightElements) {
+      return false;
+    }
+
+    const int64_t tileRows = (outputHeight + kTile - 1) / kTile;
+    const int64_t tileColumns = (outputWidth + kTile - 1) / kTile;
+    const int64_t paddedHeight = (tileRows * kTile) + 2;
+    const int64_t paddedWidth = (tileColumns * kTile) + 2;
+    const int64_t tiles = tileRows * tileColumns;
+    const int64_t inputHeight = imageShape[1];
+    const int64_t inputWidth = imageShape[2];
+
+    Location location = convolution.getLoc();
+    rewriter.setInsertionPoint(convolution);
+    MLIRContext* context = rewriter.getContext();
+    const auto elementType = imageType.getElementType();
+    auto zeroScalar = [&]() {
+      return rewriter
+        .create<arith::ConstantOp>(location,
+                                   rewriter.getFloatAttr(elementType, 0.0))
+        .getResult();
+    };
+    auto dim = [&](int64_t position) {
+      return getAffineDimExpr(position, context);
+    };
+    auto zeroInit = [&](ArrayRef<int64_t> shape) {
+      return rewriter
+        .create<linalg::FillOp>(location,
+                                ValueRange{zeroScalar()},
+                                ValueRange{rewriter.create<tensor::EmptyOp>(
+                                  location, shape, elementType)})
+        .getResult(0);
+    };
+
+    // 1. pad 到 tile 网格。
+    auto pad = tensor::PadOp::create(
+      rewriter,
+      location,
+      RankedTensorType::get({1, paddedHeight, paddedWidth, inputChannels},
+                            elementType),
+      convolution.getInputs()[0],
+      SmallVector<OpFoldResult>(4, rewriter.getIndexAttr(0)),
+      SmallVector<OpFoldResult>{
+        rewriter.getIndexAttr(0),
+        rewriter.getIndexAttr(paddedHeight - inputHeight),
+        rewriter.getIndexAttr(paddedWidth - inputWidth),
+        rewriter.getIndexAttr(0)},
+      zeroScalar());
+    // 批维折掉变 [PH, PW, IC]（纯视图），供 affine 投影消费。
+    Value inputRows = rewriter.create<tensor::CollapseShapeOp>(
+      location,
+      RankedTensorType::get({paddedHeight, paddedWidth, inputChannels},
+                            elementType),
+      pad,
+      SmallVector<ReassociationIndices>{{0, 1}, {2}, {3}});
+
+    // 2. 输入变换两段，8-tap 全展开直线 body（Σ_k input_k·coeff[k]，
+    //    系数为 body 标量字面常量），iterator 全 parallel、c 最内维。
+    //    发射器 transformRows：对输出行 r 逐行发射一个 generic——行维
+    //    （source 的 rowDim 维）以常量 row 出现在所有 tap 投影中，从迭
+    //    代空间完全移除；K 个 tap 各占一个 operand 槽（linalg generic
+    //    one-map-per-operand，同一 source 重复 K 次），输出域 = 去掉
+    //    rowDim 维的 outputDomain，assemble 时 insert_slice 拼回。
+    //    rowTapMaps(row) 返回 K 个 4 维 map（迭代器 = outputDomain 去
+    //    rowDim 维，c 最内）；输出的恒等投影由本发射器补齐。
+    auto transformRows =
+      [&](Value source,
+          ArrayRef<int64_t> outputDomain,
+          int64_t rows,
+          unsigned rowDim,
+          const std::function<SmallVector<AffineMap>(int64_t)>& rowTapMaps,
+          const std::function<ArrayRef<float>(int64_t)>& coefficientsForRow)
+      -> Value {
+      Value assembled =
+        rewriter.create<tensor::EmptyOp>(location, outputDomain, elementType)
+          .getResult();
+      SmallVector<int64_t> rowDomain(outputDomain);
+      rowDomain.erase(rowDomain.begin() + static_cast<std::ptrdiff_t>(rowDim));
+      const auto iteratorCount = static_cast<unsigned>(rowDomain.size());
+      for (int64_t row = 0; row < rows; ++row) {
+        SmallVector<AffineMap> maps = rowTapMaps(row);
+        maps.push_back(
+          AffineMap::getMultiDimIdentityMap(iteratorCount, context));
+        auto outputType = RankedTensorType::get(rowDomain, elementType);
+        auto init = zeroInit(rowDomain);
+        SmallVector<Value> tapOperands(maps.size() - 1, source);
+        auto generic = rewriter.create<linalg::GenericOp>(
+          location,
+          TypeRange{outputType},
+          tapOperands,
+          ValueRange{init},
+          maps,
+          SmallVector<utils::IteratorType>(iteratorCount,
+                                           utils::IteratorType::parallel),
+          [&, row](OpBuilder& bodyBuilder,
+                   Location bodyLocation,
+                   ValueRange bodyValues) {
+            ArrayRef<float> coefficients = coefficientsForRow(row);
+            Value accumulator;
+            for (auto [tap, coefficient] : llvm::enumerate(coefficients)) {
+              auto product = bodyBuilder.create<arith::MulFOp>(
+                bodyLocation,
+                bodyValues[tap],
+                bodyBuilder.create<arith::ConstantOp>(
+                  bodyLocation,
+                  bodyBuilder.getFloatAttr(elementType, coefficient)));
+              accumulator = tap == 0 ? product.getResult()
+                                     : bodyBuilder
+                                         .create<arith::AddFOp>(
+                                           bodyLocation, accumulator, product)
+                                         .getResult();
+            }
+            bodyBuilder.create<linalg::YieldOp>(bodyLocation, accumulator);
+          });
+        SmallVector<OpFoldResult> offsets(outputDomain.size(),
+                                          rewriter.getIndexAttr(0));
+        offsets[rowDim] = rewriter.getIndexAttr(row);
+        SmallVector<OpFoldResult> sizes;
+        for (std::size_t dimension = 0; dimension < outputDomain.size();
+             ++dimension) {
+          sizes.push_back(rewriter.getIndexAttr(
+            dimension == rowDim ? 1 : outputDomain[dimension]));
+        }
+        SmallVector<OpFoldResult> strides(outputDomain.size(),
+                                          rewriter.getIndexAttr(1));
+        assembled = rewriter
+                      .create<tensor::InsertSliceOp>(location,
+                                                     generic->getResult(0),
+                                                     assembled,
+                                                     offsets,
+                                                     sizes,
+                                                     strides)
+                      ->getResult(0);
+      }
+      return assembled;
+    };
+
+    // 2a. 第一段（行方向）：M1[th,tw,i,jp,c] = Σ_j B[j,jp]·d[th·6+i,
+    //     tw·6+k, c]。tap k 投影 d[(th·6+i), (tw·6+k), c]；输出行 jp 的
+    //     系数 = B[:,jp] = kBt[jp,:]（B = kBtᵀ，bRowMajor 转置序）。
+    const auto inputDomain = SmallVector<int64_t>{
+      tileRows, tileColumns, kAlpha, kAlpha, inputChannels};
+    // B（bRowMajor）行主序 B[j][jp] = kBt[jp][j]；输出行 jp 的 tap 系
+    // 数 = B 的第 jp 列（k 序）。
+    SmallVector<float> bColumnsFlat(kAlpha * kAlpha);
+    for (int64_t jp = 0; jp < kAlpha; ++jp) {
+      for (int64_t k = 0; k < kAlpha; ++k) {
+        bColumnsFlat[(jp * kAlpha) + k] = kBt[jp][k];
+      }
+    }
+    Value stage1 = transformRows(
+      inputRows,
+      inputDomain,
+      kAlpha,
+      3,
+      [&](int64_t) {
+        SmallVector<AffineMap> maps;
+        for (int64_t tap = 0; tap < kAlpha; ++tap) {
+          maps.push_back(
+            AffineMap::get(4,
+                           0,
+                           {(dim(0) * 6) + dim(2), (dim(1) * 6) + tap, dim(3)},
+                           context));
+        }
+        return maps;
+      },
+      [&](int64_t row) {
+        return ArrayRef<float>(bColumnsFlat.data() + (row * kAlpha), kAlpha);
+      });
+    // 2b. 第二段（列方向）：U[i',jp',c] = Σ_i Bt[i',i]·M1[i, jp', c]。
+    //     tap k 投影 M1[th, tw, k, jp', c]；输出行 i' 的系数 = kBt[i',:]。
+    SmallVector<float> btRowsFlat(kAlpha * kAlpha);
+    for (int64_t row = 0; row < kAlpha; ++row) {
+      for (int64_t column = 0; column < kAlpha; ++column) {
+        btRowsFlat[(row * kAlpha) + column] = kBt[row][column];
+      }
+    }
+    Value inputTransformed = transformRows(
+      stage1,
+      inputDomain,
+      kAlpha,
+      2,
+      [&](int64_t) {
+        SmallVector<AffineMap> maps;
+        for (int64_t tap = 0; tap < kAlpha; ++tap) {
+          maps.push_back(AffineMap::get(4,
+                                        0,
+                                        {dim(0),
+                                         dim(1),
+                                         getAffineConstantExpr(tap, context),
+                                         dim(2),
+                                         dim(3)},
+                                        context));
+        }
+        return maps;
+      },
+      [&](int64_t row) {
+        return ArrayRef<float>(btRowsFlat.data() + (row * kAlpha), kAlpha);
+      });
+
+    // 3. 中心 batch_matmul：U 折叠 [T,64,IC] → transpose [64,IC,T] →
+    //    与常量 V [64,OC,IC] 批量收缩 → Y [64,OC,T]。
+    Value uTiles = rewriter.create<tensor::CollapseShapeOp>(
+      location,
+      RankedTensorType::get({tiles, kBatch, inputChannels}, elementType),
+      inputTransformed,
+      SmallVector<ReassociationIndices>{{0, 1}, {2, 3}, {4}});
+    Value uInit = rewriter.create<tensor::EmptyOp>(
+      location,
+      RankedTensorType::get({kBatch, inputChannels, tiles}, elementType)
+        .getShape(),
+      elementType);
+    Value uBatched = rewriter
+                       .create<linalg::TransposeOp>(
+                         location, uTiles, uInit, ArrayRef<int64_t>{1, 2, 0})
+                       ->getResult(0);
+    Value weightTransformed =
+      rewriter
+        .create<arith::ConstantOp>(
+          location,
+          winograd63::transformWeight(
+            weightType, cast<DenseFPElementsAttr>(weightElements)))
+        .getResult();
+    // linalg 收缩语义：outs 是初始累加器，必须零填充（tensor.empty 未
+    // 初始化会把堆内存并进结果）。
+    Value yInit = zeroInit(SmallVector<int64_t>{kBatch, outputChannels, tiles});
+    Value yBatched = rewriter
+                       .create<linalg::BatchMatmulOp>(
+                         location,
+                         TypeRange{RankedTensorType::get(
+                           {kBatch, outputChannels, tiles}, elementType)},
+                         ValueRange{weightTransformed, uBatched},
+                         ValueRange{yInit})
+                       .getResult(0);
+
+    // 4. 输出变换两段（8-tap 展开形态，输出域交错布局）。Y [64,OC,T]
+    //    → [T,OC,64] 转置 → expand [TH,TW,OC,8,8] → 转置换轴到
+    //    [TH,TW,i,j,OC]。
+    Value yTiled = rewriter.create<tensor::EmptyOp>(
+      location,
+      RankedTensorType::get({tiles, outputChannels, kBatch}, elementType)
+        .getShape(),
+      elementType);
+    Value ySwapped = rewriter
+                       .create<linalg::TransposeOp>(
+                         location, yBatched, yTiled, ArrayRef<int64_t>{2, 1, 0})
+                       ->getResult(0);
+    Value ySpatial = rewriter.create<tensor::ExpandShapeOp>(
+      location,
+      RankedTensorType::get(
+        {tileRows, tileColumns, outputChannels, kAlpha, kAlpha}, elementType),
+      ySwapped,
+      SmallVector<ReassociationIndices>{{0, 1}, {2}, {3, 4}});
+    Value yChannelInnerInit = rewriter.create<tensor::EmptyOp>(
+      location,
+      RankedTensorType::get(
+        {tileRows, tileColumns, kAlpha, kAlpha, outputChannels}, elementType)
+        .getShape(),
+      elementType);
+    Value yTiles =
+      rewriter
+        .create<linalg::TransposeOp>(location,
+                                     ySpatial,
+                                     yChannelInnerInit,
+                                     ArrayRef<int64_t>{0, 1, 3, 4, 2})
+        ->getResult(0);
+
+    // 4a. 列段：P[th,tw,i,c,oc] = Σ_jp Y[i,jp,oc]·At[c,jp]（kAt 行主
+    //     序 [6,8]）。输出域 [TH,6,TW,6,OC] 交错（含 tw 维在 c 前）。
+    //     注意本段的输出域 = 最终交错布局（列段直接产 [TH,c,TW? …]：
+    //     行段再换轴代价更高，改为列段产 [TH,TW,i,c,oc]、行段产交错）。
+    const auto outputMidDomain = SmallVector<int64_t>{
+      tileRows, tileColumns, kAlpha, kTile, outputChannels};
+    // 空间交错布局 [TH, r, TW, c, OC]：collapse {{0,1},{2,3},{4}} 直接
+    // 折出 [TH·6, TW·6, OC]（无中间 transpose）。
+    const auto outputDomain =
+      SmallVector<int64_t>{tileRows, kTile, tileColumns, kTile, outputChannels};
+    SmallVector<float> atRowMajor(kTile * kAlpha);
+    for (int64_t r = 0; r < kTile; ++r) {
+      for (int64_t c = 0; c < kAlpha; ++c) {
+        atRowMajor[(r * kAlpha) + c] = kAt[r][c];
+      }
+    }
+    Value outputStage1 = transformRows(
+      yTiles,
+      outputMidDomain,
+      kTile,
+      3,
+      [&](int64_t) {
+        SmallVector<AffineMap> maps;
+        for (int64_t tap = 0; tap < kAlpha; ++tap) {
+          maps.push_back(AffineMap::get(4,
+                                        0,
+                                        {dim(0),
+                                         dim(1),
+                                         dim(2),
+                                         getAffineConstantExpr(tap, context),
+                                         dim(3)},
+                                        context));
+        }
+        return maps;
+      },
+      [&](int64_t row) {
+        return ArrayRef<float>(atRowMajor.data() + (row * kAlpha), kAlpha);
+      });
+    // 4b. 行段：O[th,r,tw,c,oc] = Σ_i P[th,tw,i,c,oc]·At[r,i]（kAt
+    //     行主序）。输出域 [TH,6,TW,6,OC]，rowDim=1（r 维）从迭代空
+    // 间移除，迭代器 (th, tw, c, oc)；P 投影 [th, tw, tap, c, oc]（5
+    // 结果，P 域 [TH,TW,8,6,OC]）。
+    Value outputTransformed = transformRows(
+      outputStage1,
+      outputDomain,
+      kTile,
+      1,
+      [&](int64_t) {
+        SmallVector<AffineMap> maps;
+        for (int64_t tap = 0; tap < kAlpha; ++tap) {
+          maps.push_back(AffineMap::get(4,
+                                        0,
+                                        {dim(0),
+                                         dim(1),
+                                         getAffineConstantExpr(tap, context),
+                                         dim(2),
+                                         dim(3)},
+                                        context));
+        }
+        return maps;
+      },
+      [&](int64_t row) {
+        return ArrayRef<float>(atRowMajor.data() + (row * kAlpha), kAlpha);
+      });
+
+    // 5. 折回 [1, TH·6, TW·6, OC] 后裁剪到 [1, OH, OW, OC]。
+    Value outputRows = rewriter.create<tensor::CollapseShapeOp>(
+      location,
+      RankedTensorType::get(
+        {(tileRows * kTile), (tileColumns * kTile), outputChannels},
+        elementType),
+      outputTransformed,
+      SmallVector<ReassociationIndices>{{0, 1}, {2, 3}, {4}});
+    Value outputExpanded = rewriter.create<tensor::ExpandShapeOp>(
+      location,
+      RankedTensorType::get(
+        {1, (tileRows * kTile), (tileColumns * kTile), outputChannels},
+        elementType),
+      outputRows,
+      SmallVector<ReassociationIndices>{{0, 1}, {2}, {3}});
+    auto trimmed = rewriter.create<tensor::ExtractSliceOp>(
+      location,
+      RankedTensorType::get({1, outputHeight, outputWidth, outputChannels},
+                            elementType),
+      outputExpanded,
+      SmallVector<OpFoldResult>(4, rewriter.getIndexAttr(0)),
+      SmallVector<OpFoldResult>{rewriter.getIndexAttr(1),
+                                rewriter.getIndexAttr(outputHeight),
+                                rewriter.getIndexAttr(outputWidth),
+                                rewriter.getIndexAttr(outputChannels)},
+      SmallVector<OpFoldResult>(4, rewriter.getIndexAttr(1)),
+      std::nullopt);
+    // bias 补加：conv 的 init operand 含逐通道 bias（NCNNToTosa 以广播
+    // 填充进入 conv 的 outs）。中心 GEMM 域是变换域不含空间维，在空间
+    // 折叠恢复后与 init 逐元素相加（等价于直接卷积的 acc+bias 语义）。
+    Value convInit = convolution.getDpsInitOperand(0)->get();
+    Value biased =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          TypeRange{trimmed->getResult(0).getType()},
+          ValueRange{trimmed->getResult(0), convInit},
+          ValueRange{rewriter.create<tensor::EmptyOp>(
+            location,
+            SmallVector<int64_t>{1, outputHeight, outputWidth, outputChannels},
+            elementType)},
+          SmallVector<AffineMap>{AffineMap::getMultiDimIdentityMap(4, context),
+                                 AffineMap::getMultiDimIdentityMap(4, context),
+                                 AffineMap::getMultiDimIdentityMap(4, context)},
+          SmallVector<utils::IteratorType>(4, utils::IteratorType::parallel),
+          [&](OpBuilder& bodyBuilder,
+              Location bodyLocation,
+              ValueRange bodyValues) {
+            auto sum = bodyBuilder.create<arith::AddFOp>(
+              bodyLocation, bodyValues[0], bodyValues[1]);
+            bodyBuilder.create<linalg::YieldOp>(bodyLocation, sum.getResult());
+          })
+        ->getResult(0);
+    // 类型一致（conv 输出即裁剪目标形状），CastOp 在 canonicalize 折叠。
+    rewriter.replaceOpWithNewOp<tensor::CastOp>(
+      convolution, resultType, biased);
+    return true;
+  }
+
   void rewriteConvolution(RewriterBase& rewriter,
                           linalg::Conv2DNhwcHwcfOp convolution,
                           ConvStrategy strategy) const {
@@ -482,6 +1050,27 @@ class StrategyNCNNPass final
     llvm::append_range(strides, convolution.getStrides().getValues<int64_t>());
     llvm::append_range(dilations,
                        convolution.getDilations().getValues<int64_t>());
+
+    // P7 Winograd：显式 winograd 策略对判据内实例优先改写（opt-in，
+    // 数值预算逐模型对账后由启用侧决定）；判据 = ncnn convolution_x86
+    // 的 3×3 s1 d1 且 IC>8 || OC>8。判据外实例回退常规 dispatch。
+    if (strategy == ConvStrategy::Winograd &&
+        !imageType.getElementType().isInteger(8) &&
+        winograd63::eligible(kernelHeight,
+                             kernelWidth,
+                             dilations[0],
+                             dilations[1],
+                             strides[0],
+                             strides[1],
+                             inputChannels,
+                             outputChannels) &&
+        !ShapedType::isDynamic(imageShape[0]) && imageShape[0] == 1 &&
+        !ShapedType::isDynamic(imageShape[1]) &&
+        !ShapedType::isDynamic(imageShape[2])) {
+      if (rewriteWinograd(rewriter, convolution)) {
+        return;
+      }
+    }
 
     // 路径判定：1×1 s1 无条件走视图折叠（对齐 ncnn 的恒 GEMM 分支）；
     // 其余 k×k 需要静态空间维且命中阈值或显式 gemm 策略。整数（int8
@@ -514,10 +1103,23 @@ class StrategyNCNNPass final
         useIm2col = !unitKernelStrideOne && staticSpatial;
         break;
       case ConvStrategy::Conv:
-      case ConvStrategy::Winograd:
-        // Winograd 仅预留开关位：F(6,3) 改变累加结构，数值预算单独验证
-        // 前保持直接卷积路径。
+        // 直接卷积：保持 linalg.conv_2d_nhwc_hwcf 原路径。
         return;
+      case ConvStrategy::Winograd:
+        // 判据外实例（非 3×3 s1 d1、批维非 1、动态空间维、int8）在
+        // rewriteWinograd 守卫中未被改写时落回常规 dispatch：显式
+        // 策略不比 auto 更少优化。
+        useUnitView = unitKernelStrideOne;
+        useIm2col = !unitKernelStrideOne && staticSpatial &&
+                    (integerElements || preferGemm(inputChannels,
+                                                   outputChannels,
+                                                   kernelHeight,
+                                                   kernelWidth,
+                                                   dilations[0],
+                                                   dilations[1],
+                                                   strides[0],
+                                                   strides[1]));
+        break;
     }
     if (!useUnitView && !useIm2col) {
       return;

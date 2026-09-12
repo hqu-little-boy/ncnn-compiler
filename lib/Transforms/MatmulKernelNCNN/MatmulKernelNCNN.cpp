@@ -255,6 +255,63 @@ class MatmulKernelNCNNPass final
            accType.getShape()[0] == rows;
   }
 
+  // P4 遗留（requant epilogue 融合）的可融合判据：acc（i32 [M,N]）
+  // 的唯一用户是静态 memref generic，输出 i8、主输入对 acc 恒等映射、
+  // 其余输入全常量广播（逐张量 scale/bias——FuseQuantChain 的产物形
+  // 态），body 纯 arith/math。
+  static bool isFusableRequantEpilogue(linalg::GenericOp generic,
+                                       linalg::MatmulTransposeBOp matmul) {
+    if (!generic.hasPureBufferSemantics() || generic.getNumDpsInits() != 1 ||
+        generic.getNumResults() != 0) {
+      return false;
+    }
+    Value out = generic.getOutputs().front();
+    const auto outType = dyn_cast<MemRefType>(out.getType());
+    if (!outType || !outType.hasStaticShape() ||
+        !outType.getElementType().isInteger(8)) {
+      return false;
+    }
+    Value acc = matmul.getOutputs().front();
+    const auto accType = cast<MemRefType>(acc.getType());
+    // 输出与 acc 同形（requant 逐元素）。
+    if (outType.getShape() != accType.getShape()) {
+      return false;
+    }
+    const auto maps = generic.getIndexingMapsArray();
+    if (maps.size() != generic.getNumDpsInputs() + 1U) {
+      return false;
+    }
+    // 主输入（acc）须恒等；其余输入全常量（逐张量标量）。
+    if (!maps[0].isIdentity()) {
+      return false;
+    }
+    for (unsigned index = 1; index < generic.getNumDpsInputs(); ++index) {
+      if (!llvm::all_of(maps[index].getResults(), [](AffineExpr result) {
+            return isa<AffineConstantExpr>(result);
+          })) {
+        return false;
+      }
+    }
+    // body 纯 arith/math。
+    Region& region = generic->getRegion(0);
+    if (!region.hasOneBlock()) {
+      return false;
+    }
+    Block& block = region.front();
+    auto yield = dyn_cast<linalg::YieldOp>(block.getTerminator());
+    if (!yield || yield.getValues().size() != 1) {
+      return false;
+    }
+    for (Operation& operation : block.without_terminator()) {
+      const StringRef dialect =
+        operation.getName().getDialect()->getNamespace();
+      if (dialect != "arith" && dialect != "math") {
+        return false;
+      }
+    }
+    return true;
+  }
+
   // P6-C 批量收缩内核形态：[B,M,K]×[B,K,N]→[B,M,N] 全静态 f32。逐批
   // 视图（memref.subview 取 [b] 面）后与 A1b 内核同型。
   static bool isKernelizableBatch(linalg::BatchMatmulOp batch) {
@@ -1469,6 +1526,37 @@ class MatmulKernelNCNNPass final
   // vpmulld——本机无 avx_vnni_int8，s8×s8 也无 vpdpbusd 下降，tier 定
   // 档见 docs/ncnn-performance-parity-plan.md §3-P4）。整数加法结合律
   // 保证任何归约序与串行 i32-MAC 逐位一致。
+  // requant 内联求值：把 epilogue body 以 acc 标量为主实参克隆进当前
+  // 插入点——block 参数 #0 接 i32 和，其余参数按常量下标从各自 memref
+  // load（FuseQuantChain 保证这些是常量广播的逐张量 scale/bias）。
+  Value emitRequantValue(ImplicitLocOpBuilder& builder,
+                         linalg::GenericOp epilogue,
+                         Value accValue,
+                         Value rowIndex,
+                         Value columnIndex) const {
+    Block& block = epilogue->getRegion(0).front();
+    IRMapping mapping;
+    mapping.map(block.getArgument(0), accValue);
+    SmallVector<Value> epilogueInputs;
+    llvm::append_range(epilogueInputs, epilogue.getDpsInputs());
+    for (auto [index, input] :
+         llvm::enumerate(ArrayRef<Value>(epilogueInputs).drop_front())) {
+      AffineMap map = epilogue.getIndexingMapsArray()[index + 1];
+      SmallVector<Value> indices;
+      for (AffineExpr result : map.getResults()) {
+        indices.push_back(builder.create<arith::ConstantIndexOp>(
+          cast<AffineConstantExpr>(result).getValue()));
+      }
+      mapping.map(block.getArgument(index + 1),
+                  builder.create<memref::LoadOp>(input, indices));
+    }
+    for (Operation& operation : block.without_terminator()) {
+      builder.clone(operation, mapping);
+    }
+    auto yield = cast<linalg::YieldOp>(block.getTerminator());
+    return mapping.lookup(yield.getValues().front());
+  }
+
   void kernelizeInt8RowDot(IRRewriter& rewriter,
                            linalg::MatmulTransposeBOp matmul) const {
     Value lhs = matmul.getInputs()[0];
@@ -1479,6 +1567,21 @@ class MatmulKernelNCNNPass final
     const int64_t rows = lhsType.getShape()[0];
     const int64_t depth = lhsType.getShape()[1];
     const int64_t columns = accType.getShape()[1];
+
+    // int8 requant epilogue 融合（P4 遗留 / parity-plan §3-P4 附注）：
+    // matmul 的 i32 累加缓冲唯一用户是 requant generic（恒等主值 +
+    // 常量广播 scale/bias 的 FuseQuantChain 产物）时，量化尾部内联进
+    // 内核写回——K 归约在单 tile 内完整，i32 中间物化与独立全量 pass
+    // 同时消失。数值逐位不变（body op 序/常量照抄，仅执行位置从
+    // 独立循环移入写回点）。
+    linalg::GenericOp requantEpilogue;
+    if (acc.hasOneUse()) {
+      if (auto user = dyn_cast<linalg::GenericOp>(*acc.getUsers().begin())) {
+        if (isFusableRequantEpilogue(user, matmul)) {
+          requantEpilogue = user;
+        }
+      }
+    }
 
     ImplicitLocOpBuilder builder(matmul.getLoc(), rewriter);
     builder.setInsertionPoint(matmul);
@@ -1571,10 +1674,23 @@ class MatmulKernelNCNNPass final
       builder.setInsertionPointAfter(kLoop);
       for (int64_t i = 0; i < rowCount; ++i) {
         for (int64_t j = 0; j < blockColumns; ++j) {
-          builder.create<memref::StoreOp>(
-            kLoop.getResult(flatIndex(i, j)),
-            acc,
-            ValueRange{rowIndices[i], columnIndices[j]});
+          Value result = kLoop.getResult(flatIndex(i, j));
+          if (requantEpilogue) {
+            // requant 内联：主值 = 本 tile 的 i32 和；其余输入按常量
+            // 下标 load（循环不变，逐 (i,j) 重复 load 会被 LICM 折叠）。
+            Value quantized = emitRequantValue(builder,
+                                               requantEpilogue,
+                                               result,
+                                               rowIndices[i],
+                                               columnIndices[j]);
+            builder.create<memref::StoreOp>(
+              quantized,
+              requantEpilogue.getOutputs().front(),
+              ValueRange{rowIndices[i], columnIndices[j]});
+          } else {
+            builder.create<memref::StoreOp>(
+              result, acc, ValueRange{rowIndices[i], columnIndices[j]});
+          }
         }
       }
     };
@@ -1616,6 +1732,10 @@ class MatmulKernelNCNNPass final
       emitRowBlock(rowLoop.getInductionVar(), 1);
     }
 
+    // 融合的 epilogue 全量被内核写回覆盖，独立 pass 删除。
+    if (requantEpilogue) {
+      rewriter.eraseOp(requantEpilogue);
+    }
     rewriter.eraseOp(matmul);
   }
 };
