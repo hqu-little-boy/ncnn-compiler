@@ -232,6 +232,24 @@ TEST(PerformanceModel, ResNet18) {
   });
 }
 
+// P7 Winograd 验收行：--conv-strategy=winograd 编译的 resnet18 变体，
+// 与 ncnn 直接卷积参考（同参数）对比。该行不计入 44 模型正式口径
+// （ncnn 侧无 Winograd 开关差异），用于 P7 §3 的 3×3 段收益对账。
+TEST(PerformanceModel, ResNet18Winograd) {
+  run_model_benchmark(ModelSpec{
+    .name = "resnet18_winograd",
+    .param_path = RESNET18_PARAM_PATH,
+    .bin_path = RESNET18_BIN_PATH,
+    .library_path = RESNET18_WINOGRAD_LIBRARY_PATH,
+    .symbol = "resnet18_winograd",
+    .input_blob = "in0",
+    .output_blobs = {"out0"},
+    .input_shape = TensorShape(224, 224, 3),
+    .output_element_counts = {1000},
+    .seed = 0x52183518U,
+  });
+}
+
 TEST(PerformanceModel, ResNet34) {
   run_model_benchmark(ModelSpec{
     .name = "resnet34",

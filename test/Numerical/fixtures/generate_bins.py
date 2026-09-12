@@ -14,6 +14,7 @@ sizes = {
     "convolution_asymmetric_stride": (12, 0),
     "convolution_same_upper": (18, 0),
     "convolution_same_lower": (18, 0),
+    "convolution_winograd": (4608, 32),
     "convolution_fp16_storage": (18, 2),
     "convolution_depthwise": (18, 2),
     "convolution_depthwise_fp16_storage": (18, 2),
@@ -81,6 +82,10 @@ elif case in ("convolution_depthwise_7x7", "convolution_depthwise_9x9"):
     bias = [rng.uniform(-0.01, 0.01) for _ in range(bias_count)]
 elif case.startswith("convolution_depthwise") or case.startswith("inner_product"):
     rng = random.Random(0x4E434E4E if case.startswith("convolution_depthwise") else 0x49505052)
+    weights = [rng.uniform(-0.25, 0.25) for _ in range(kernel_count)]
+    bias = [rng.uniform(-0.1, 0.1) for _ in range(bias_count)]
+elif case == "convolution_winograd":
+    rng = random.Random(0x574E4F47)
     weights = [rng.uniform(-0.25, 0.25) for _ in range(kernel_count)]
     bias = [rng.uniform(-0.1, 0.1) for _ in range(bias_count)]
 else:

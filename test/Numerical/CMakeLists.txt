@@ -54,6 +54,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             list(APPEND precision_args --vector-mode ${CMAKE_MATCH_1})
         elseif(argument MATCHES "^VECTOR_MATH=(.+)$")
             list(APPEND precision_args --vector-math ${CMAKE_MATCH_1})
+        elseif(argument MATCHES "^CONV_STRATEGY=(.+)$")
+            list(APPEND precision_args --conv-strategy ${CMAKE_MATCH_1})
         elseif(argument MATCHES "^INPUT_SHAPE=(.+)$")
             list(APPEND additional_input_shapes ${CMAKE_MATCH_1})
         elseif(argument STREQUAL "EMIT_IR")
@@ -195,6 +197,10 @@ set(ncnn_model_compile_budget_yolov5x 900)
 set(ncnn_model_compile_budget_yolov5l_seg 900)
 set(ncnn_model_compile_budget_yolov5x_seg 900)
 set(ncnn_model_compile_budget_yolov5x_cls 900)
+# P7 Winograd 变体：变换段直线展开形态的 IR 体积大于归约形态，
+# 224 输入全主干实测 ~8 分钟——暂列 900s（与常量池大件同档），
+# 向量化收益验证后回头压缩（展开 tap 数或行分组）。
+set(ncnn_model_compile_budget_resnet18_winograd 900)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
     set(ncnn_model_scalar_args CLANG_ARG=-march=x86-64-v3)
@@ -270,6 +276,7 @@ set(convolution_asymmetric_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_
 set(convolution_asymmetric_stride_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_asymmetric_stride.bin)
 set(convolution_same_upper_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_upper.bin)
 set(convolution_same_lower_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_same_lower.bin)
+set(convolution_winograd_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_winograd.bin)
 set(convolution_fp16_storage_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_fp16_storage.bin)
 set(convolution_depthwise_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise.bin)
 set(convolution_depthwise_fp16_storage_bin ${CMAKE_CURRENT_BINARY_DIR}/fixtures/convolution_depthwise_fp16_storage.bin)
@@ -295,6 +302,7 @@ foreach(convolution_case IN ITEMS
         convolution_asymmetric_stride
         convolution_same_upper
         convolution_same_lower
+        convolution_winograd
         convolution_fp16_storage)
     execute_process(
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/generate_bins.py
@@ -376,6 +384,15 @@ ncnn_add_compiled_fixture(
     ${convolution_bin}
     ""
     VECTOR_MODE=fixed-width)
+# P7 Winograd 守护夹具：3×3 s1、IC=16/OC=32（判据内）走 F(6,3) 改写；
+# 数值契约由专用 golden 对拍（supported_ops_test ConvolutionWinograd）承担，
+# 容差 1e-3 量级（F(6,3) 有理插值点的 f32 误差上界，spike 实测定档）。
+ncnn_add_compiled_fixture(
+    convolution_winograd
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_winograd.param
+    ${convolution_winograd_bin}
+    ""
+    CONV_STRATEGY=winograd)
 ncnn_add_compiled_fixture(
     convolution_no_bias
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/convolution_no_bias.param
@@ -925,6 +942,15 @@ ncnn_add_model_fixture(
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.param
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.bin
     3x224x224)
+# P7 Winograd 验收变体：resnet18 主干全为 3×3 s1 conv（IC/OC 16-512 判据
+# 内），--conv-strategy=winograd 全量改写 F(6,3)；数值预算与性能 A/B 都
+# 以该 fixture 为口径（同名 golden 见 resnet18_winograd_test.cpp）。
+ncnn_add_model_fixture(
+    resnet18_winograd
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.param
+    ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.bin
+    3x224x224
+    CONV_STRATEGY=winograd)
 ncnn_add_model_fixture(
     resnet34
     ${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.param
@@ -1516,6 +1542,7 @@ set(numerical_fixture_targets
     compile_int8_complete_chain
     compile_convolution_scalar
     compile_convolution_vector_fixed
+    compile_convolution_winograd
     compile_convolution_no_bias
     compile_convolution_dilated
     compile_convolution_asymmetric
@@ -1776,6 +1803,7 @@ add_executable(numerical_tests
     operators/int8_ops_test.cpp
     models/squeezenet_test.cpp
     models/resnet18_test.cpp
+    models/resnet18_winograd_test.cpp
     models/resnet34_test.cpp
     models/resnet50_test.cpp
     models/resnet101_test.cpp
@@ -1917,6 +1945,8 @@ target_compile_definitions(numerical_tests PRIVATE
     REDUCTION_MEAN_KEEPDIMS_COEFF_LIBRARY_PATH="${reduction_mean_keepdims_coeff_LIBRARY}"
     CONVOLUTION_LIBRARY_PATH="${convolution_scalar_LIBRARY}"
     CONVOLUTION_VECTOR_FIXED_LIBRARY_PATH="${convolution_vector_fixed_LIBRARY}"
+    CONVOLUTION_WINOGRAD_BIN_PATH="${convolution_winograd_bin}"
+    CONVOLUTION_WINOGRAD_LIBRARY_PATH="${convolution_winograd_LIBRARY}"
     RELU_LIBRARY_PATH="${relu_scalar_LIBRARY}"
     RELU_LEAKY_LIBRARY_PATH="${relu_leaky_LIBRARY}"
     POOLING_LIBRARY_PATH="${pooling_scalar_LIBRARY}"
@@ -1975,6 +2005,7 @@ target_compile_definitions(numerical_tests PRIVATE
     RESNET18_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.param"
     RESNET18_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.bin"
     RESNET18_LIBRARY_PATH="${resnet18_LIBRARY}"
+    RESNET18_WINOGRAD_LIBRARY_PATH="${resnet18_winograd_LIBRARY}"
     RESNET34_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.param"
     RESNET34_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.bin"
     RESNET34_LIBRARY_PATH="${resnet34_LIBRARY}"
@@ -2149,7 +2180,7 @@ add_dependencies(numerical_tests compile_sigmoid)
 add_dependencies(numerical_tests compile_sigmoid_vector_fixed)
 add_dependencies(numerical_tests compile_sigmoid_vector_lmv)
 add_dependencies(numerical_tests compile_sigmoid_vector_sleef)
-add_dependencies(numerical_tests compile_resnet18)
+add_dependencies(numerical_tests compile_resnet18 compile_resnet18_winograd)
 add_dependencies(numerical_tests compile_resnet34)
 add_dependencies(numerical_tests compile_resnet50)
 add_dependencies(numerical_tests compile_resnet101)
@@ -2542,6 +2573,7 @@ target_compile_definitions(performance_tests PRIVATE
     RESNET18_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.param"
     RESNET18_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet18.ncnn.bin"
     RESNET18_LIBRARY_PATH="${resnet18_LIBRARY}"
+    RESNET18_WINOGRAD_LIBRARY_PATH="${resnet18_winograd_LIBRARY}"
     RESNET34_PARAM_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.param"
     RESNET34_BIN_PATH="${CMAKE_SOURCE_DIR}/../yolov5_v7.0_models/resnet34.ncnn.bin"
     RESNET34_LIBRARY_PATH="${resnet34_LIBRARY}"

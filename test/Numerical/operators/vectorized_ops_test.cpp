@@ -78,6 +78,34 @@ TEST(NumericalOperator, ConvolutionVectorizedOpenMPMatchesScalarBitwise) {
   EXPECT_TRUE(compare_values(vectorized_output, scalar_output, 0.0F));
 }
 
+// P7 Winograd F(6,3) 守护：3×3 s1、IC=16/OC=32（判据内）经 strategy-ncnn
+// 改写为 变换→batch_matmul→逆变换。变换改变累加结构，f32 相对误差
+// ~1e-3 量级（有理插值点 ±1/±2/±1/2/∞ 的系数上界，spike 实测定档），
+// 数值契约对齐 ncnn FP32 参考 rtol=1e-3 / atol=1e-4，不要求与标量
+// 产物逐位一致（对照 conv→matmul 路径的 0.0F 口径）。
+TEST(NumericalOperator, ConvolutionWinogradMatchesReference) {
+  const TensorShape shape(9, 9, 16);
+  const ReferenceModel reference(fixture_path("convolution_winograd"),
+                                 CONVOLUTION_WINOGRAD_BIN_PATH,
+                                 "data",
+                                 "output",
+                                 shape);
+  const auto inputElements = shape.element_count();
+  ASSERT_TRUE(inputElements.has_value()) << inputElements.error();
+  const std::vector<float> input =
+    make_random_input(*inputElements, 0x574E4F47U);
+  const auto expected = run_ncnn_reference(reference, input);
+  ASSERT_TRUE(expected.has_value()) << expected.error();
+
+  CompiledModel winograd(CONVOLUTION_WINOGRAD_LIBRARY_PATH,
+                         "convolution_winograd");
+  ASSERT_TRUE(winograd.valid()) << winograd.error();
+  std::vector<float> output(9 * 9 * 32);
+  ASSERT_EQ(winograd.run(input, output), 0);
+
+  EXPECT_TRUE(compare_values(output, *expected, 1.0e-3F, 1.0e-4F));
+}
+
 // 向量数学后端守护（--vector-math）：sigmoid 的 exp 经 libmvec /
 // vendored SLEEF 向量调用，属近似实现。数值契约改为对齐 ncnn FP32 参考
 // 容差（1e-6），不再要求与标量产物逐位一致；两后端之间也只比对参考。
