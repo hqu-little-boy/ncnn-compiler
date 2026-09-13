@@ -1,5 +1,6 @@
 // RUN: ncnn-mlir-opt --convert-ncnn-to-tosa %s | FileCheck %s
 // RUN: ncnn-mlir-opt --convert-ncnn-to-tosa %s | mlir-opt-21 --tosa-validate
+// RUN: ncnn-mlir-opt --convert-ncnn-to-tosa %s | ncnn-mlir-opt --ncnn-tosa-to-linalg-pipeline | ncnn-mlir-opt '--ncnn-linalg-to-memref-pipeline=vector-tail=true' | FileCheck %s --check-prefix=KERNEL
 
 func.func @swish_layer_norm(%input: tensor<2x4xf32>) -> tensor<2x4xf32> {
   %gamma = arith.constant dense<1.0> : tensor<4xf32>
@@ -85,3 +86,16 @@ func.func @dynamic_self_attention(%input: tensor<?x4xf32>) -> tensor<?x4xf32> {
 // CHECK: tensor.collapse_shape
 // CHECK-NOT: tosa.matmul
 // CHECK-NOT: ncnn.multi_head_attention
+
+// Static MHA is lowered to two batch matmuls (score and context), then the
+// buffer pipeline reaches the bounded batch kernel.  Dynamic MHA deliberately
+// remains on generic contractions because its sequence dimensions are dynamic.
+// KERNEL-LABEL: func.func @self_attention
+// KERNEL: scf.forall
+// KERNEL: vector.fma
+// KERNEL: vector.fma
+// KERNEL-NOT: linalg.batch_matmul
+// KERNEL-LABEL: func.func @dynamic_self_attention
+// KERNEL: linalg.generic
+// KERNEL-NOT: scf.forall
+// KERNEL-NOT: vector.fma

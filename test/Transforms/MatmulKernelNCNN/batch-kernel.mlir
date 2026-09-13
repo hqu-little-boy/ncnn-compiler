@@ -43,3 +43,24 @@ module {
     return
   }
 }
+
+// -----
+
+// Static MHA score/context shapes can have a wide sequence dimension.  The
+// batch kernel must keep the same bounded N panels as ordinary matmul.
+// CHECK-LABEL: func.func @batch_wide
+// CHECK: scf.forall {{.*}} in (8)
+// CHECK: vector.transfer_read
+// CHECK: vector<16xf32>
+// CHECK: vector<1xf32>
+// CHECK-NOT: vector<2049xf32>
+// CHECK-NOT: linalg.batch_matmul
+module {
+  func.func @batch_wide(%a: memref<8x40x24xf32>, %b: memref<8x24x2049xf32>,
+                        %c: memref<8x40x2049xf32>) {
+    linalg.batch_matmul ins(%a, %b : memref<8x40x24xf32>,
+                                    memref<8x24x2049xf32>)
+                        outs(%c : memref<8x40x2049xf32>)
+    return
+  }
+}
