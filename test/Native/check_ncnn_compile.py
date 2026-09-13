@@ -236,6 +236,51 @@ def main():
             f"{sorted(present_forbidden_text)}"
         )
 
+    plan_outputs = []
+    for suffix in ("one", "two"):
+        plan_output = work_dir / f"relu-plan-{suffix}"
+        run(
+            [
+                args.compiler,
+                args.param,
+                "--bin",
+                args.bin,
+                "--model-name",
+                "relu_plan",
+                "--output-dir",
+                plan_output,
+                "--emit-manifest",
+                "--emit-execution-plan",
+                "--threads=1",
+                "--vector-width=0",
+                "-O0",
+            ]
+        )
+        assert_files(
+            plan_output,
+            {"librelu_plan.so", "relu_plan.h", "relu_plan.json", "relu_plan.plan.json"},
+        )
+        plan_outputs.append(plan_output)
+
+    plan_path = plan_outputs[0] / "relu_plan.plan.json"
+    plan = json.loads(plan_path.read_text())
+    if plan.get("schema_version") != 1 or plan.get("kind") != "ncnn.model_execution_plan":
+        raise RuntimeError(f"unexpected execution-plan header: {plan}")
+    if plan.get("model") != "relu_plan" or plan.get("target", {}).get("triple") != native_target:
+        raise RuntimeError(f"execution plan lacks target provenance: {plan}")
+    required_plan_sections = {
+        "functions", "operations", "buffers", "regions", "summary", "diagnostics"
+    }
+    if not required_plan_sections.issubset(plan):
+        raise RuntimeError(f"execution plan lacks required sections: {plan}")
+    plan_text = plan_path.read_text()
+    if "/tmp" in plan_text:
+        raise RuntimeError("execution plan contains a staging path")
+    if plan_path.read_bytes() != (
+        plan_outputs[1] / "relu_plan.plan.json"
+    ).read_bytes():
+        raise RuntimeError("execution plan is not deterministic")
+
     sparse_param = work_dir / "sparse_input_shapes.param"
     sparse_bin = work_dir / "sparse_input_shapes.bin"
     sparse_param.write_text(

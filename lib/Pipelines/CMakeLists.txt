@@ -13,6 +13,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     FoldNCNNBatchNorm
     FuseLinalgEpilogue
     FuseQuantChainNCNN
+    EmitModelPlan
     GenerateCAPI
     LowerVectorMathNCNN
     MatmulKernelNCNN

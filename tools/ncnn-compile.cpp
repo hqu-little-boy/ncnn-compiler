@@ -195,6 +195,10 @@ llvm::cl::opt<bool> g_emit_manifest(
   "emit-manifest",
   llvm::cl::desc("Emit the JSON ABI manifest"),
   llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_emit_execution_plan(
+  "emit-execution-plan",
+  llvm::cl::desc("Emit a deterministic JSON execution-plan manifest"),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<bool> g_verify_execution(
   "verify-execution",
   llvm::cl::desc("Build and run an ABI smoke harness"),
@@ -1331,7 +1335,8 @@ bool is_generated_output(const fs::path& path, std::string_view model_name) {
   return fixed.contains(name) ||
          name == "lib" + std::string(model_name) + ".so" ||
          name == std::string(model_name) + ".h" ||
-         name == std::string(model_name) + ".json";
+         name == std::string(model_name) + ".json" ||
+         name == std::string(model_name) + ".plan.json";
 }
 
 struct OutputDirectoryState {
@@ -2156,6 +2161,8 @@ int main(int argc, char** argv) {
   const fs::path object = staging.path() / "model.o";
   const fs::path assembly = staging.path() / "model.s";
   const fs::path manifest_path = staging.path() / (model_name + ".json");
+  const fs::path execution_plan_path =
+    staging.path() / (model_name + ".plan.json");
   const fs::path header = staging.path() / (model_name + ".h");
   const fs::path exports = staging.path() / "exports.map";
   const fs::path library = staging.path() / ("lib" + model_name + ".so");
@@ -2220,6 +2227,15 @@ int main(int argc, char** argv) {
     }
     if (vector_tail) {
       linalgOptions.push_back("vector-tail=true");
+    }
+    if (g_emit_execution_plan) {
+      linalgOptions.push_back("execution-plan-path=" +
+                              execution_plan_path.string());
+      linalgOptions.push_back("execution-plan-model=" + model_name);
+      linalgOptions.push_back("execution-plan-target-triple=" +
+                              effective_target_triple);
+      linalgOptions.push_back("execution-plan-threads=" +
+                              std::to_string(effective_threads));
     }
     if (!linalgOptions.empty()) {
       std::string joined;
@@ -2670,6 +2686,11 @@ int main(int argc, char** argv) {
   }
   if (g_emit_manifest) {
     if (auto result = publish(manifest_path); !result) {
+      return fail(result.error());
+    }
+  }
+  if (g_emit_execution_plan) {
+    if (auto result = publish(execution_plan_path); !result) {
       return fail(result.error());
     }
   }

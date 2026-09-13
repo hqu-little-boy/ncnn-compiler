@@ -1,6 +1,7 @@
 #include "performance_test_support.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -33,6 +34,44 @@ parse_optional_integer_environment(const char* variable_name) {
       std::format("{}='{}' is not an integer", variable_name, raw));
   }
   return std::optional<int>(static_cast<int>(value));
+}
+
+std::string escape_json(std::string_view value) {
+  std::string escaped;
+  escaped.reserve(value.size());
+  for (const unsigned char character : value) {
+    switch (character) {
+      case '\b':
+        escaped += "\\b";
+        break;
+      case '\f':
+        escaped += "\\f";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\\':
+        escaped += "\\\\";
+        break;
+      default:
+        if (character < 0x20U) {
+          escaped += std::format("\\u{:04x}", character);
+        } else {
+          escaped.push_back(static_cast<char>(character));
+        }
+        break;
+    }
+  }
+  return escaped;
 }
 
 std::expected<ncnn::Mat, std::string> make_reference_input_mat(
@@ -205,6 +244,73 @@ std::expected<TimingPolicy, std::string> resolve_timing_policy(
   return default_policy;
 }
 
+std::expected<PerformanceMode, std::string> resolve_performance_mode() {
+  const char* raw = std::getenv("NCNN_PERF_MODE");
+  if (raw == nullptr || *raw == '\0' || std::strcmp(raw, "end_to_end") == 0) {
+    return PerformanceMode::EndToEnd;
+  }
+  if (std::strcmp(raw, "prepared") == 0) {
+    return PerformanceMode::Prepared;
+  }
+  if (std::strcmp(raw, "allocation_audit") == 0) {
+    return PerformanceMode::AllocationAudit;
+  }
+  return std::unexpected(std::format(
+    "NCNN_PERF_MODE='{}' must be one of end_to_end, prepared, allocation_audit",
+    raw));
+}
+
+std::string_view performance_mode_name(PerformanceMode mode) {
+  switch (mode) {
+    case PerformanceMode::EndToEnd:
+      return "end_to_end";
+    case PerformanceMode::Prepared:
+      return "prepared";
+    case PerformanceMode::AllocationAudit:
+      return "allocation_audit";
+  }
+  return "unknown";
+}
+
+PerformanceMetadata make_performance_metadata(PerformanceMode mode) {
+  switch (mode) {
+    case PerformanceMode::EndToEnd:
+      return PerformanceMetadata{};
+    case PerformanceMode::Prepared:
+      return PerformanceMetadata{
+        .mode = mode,
+        .status = "unsupported",
+        .setup = "not_collected",
+        .gate_eligible = false,
+        .prepared_runner = "not_supported",
+        .allocation_source = "not_collected",
+        .runtime_counters = "not_collected",
+        .reason = "Extractor reuse/reset is not implemented",
+      };
+    case PerformanceMode::AllocationAudit:
+      return PerformanceMetadata{
+        .mode = mode,
+        .status = "unsupported",
+        .setup = "not_collected",
+        .gate_eligible = false,
+        .prepared_runner = "not_supported",
+        .allocation_source = "not_collected",
+        .runtime_counters = "not_collected",
+        .reason = "Runtime allocation counters are not implemented",
+      };
+  }
+  return PerformanceMetadata{
+    .mode = mode,
+    .status = "unsupported",
+    .setup = "not_collected",
+    .gate_eligible = false,
+    .prepared_runner = "not_supported",
+    .allocation_source = "not_collected",
+    .runtime_counters = "not_collected",
+    .reason = "Unknown performance mode",
+  };
+}
+
 std::expected<TimingStats, std::string> time_repeated_inference(
   const std::function<int()>& inference, const TimingPolicy& policy) {
   for (int iteration = 0; iteration < policy.warmup_iterations; ++iteration) {
@@ -325,15 +431,18 @@ int NcnnBenchRunner::run(std::span<const ReferenceInput> inputs,
 void emit_performance_report(std::string_view model,
                              int threads,
                              const TimingPolicy& policy,
-                             const PairBenchmarkResult& result) {
+                             const PairBenchmarkResult& result,
+                             const PerformanceMetadata& metadata) {
   const double coefficient_of_variation =
     std::max(result.ncnn.coefficient_of_variation,
              result.compiled.coefficient_of_variation);
   std::println(
-    "PERF model={} threads={} warmup={} iters={} "
+    "PERF model={} mode={} status={} threads={} warmup={} iters={} "
     "ncnn_ms={:.3f} compiled_ms={:.3f} ratio={:.3f} "
-    "ncnn_min_ms={:.3f} compiled_min_ms={:.3f} cv={:.4f}",
+    "ncnn_min_ms={:.3f} compiled_min_ms={:.3f} cv={:.4f} setup={}",
     model,
+    performance_mode_name(metadata.mode),
+    metadata.status,
     threads,
     policy.warmup_iterations,
     policy.timed_iterations,
@@ -342,29 +451,64 @@ void emit_performance_report(std::string_view model,
     result.ratio,
     result.ncnn.minimum_ms,
     result.compiled.minimum_ms,
-    coefficient_of_variation);
+    coefficient_of_variation,
+    metadata.setup);
 }
 
-void append_performance_json_record(std::string_view model,
-                                    int threads,
-                                    const TimingPolicy& policy,
-                                    const PairBenchmarkResult& result) {
+void emit_performance_diagnostic_report(std::string_view model,
+                                        int threads,
+                                        const TimingPolicy& policy,
+                                        const PerformanceMetadata& metadata) {
+  std::println(
+    "PERF model={} mode={} status={} threads={} warmup={} iters={} "
+    "gate_eligible={} setup={} reason={}",
+    model,
+    performance_mode_name(metadata.mode),
+    metadata.status,
+    threads,
+    policy.warmup_iterations,
+    policy.timed_iterations,
+    metadata.gate_eligible,
+    metadata.setup,
+    metadata.reason);
+}
+
+std::expected<void, std::string> append_performance_json_record(
+  std::string_view model,
+  int threads,
+  const TimingPolicy& policy,
+  const PairBenchmarkResult& result,
+  const PerformanceMetadata& metadata) {
   const char* path = std::getenv("NCNN_PERF_JSON");
   if (path == nullptr || *path == '\0') {
-    return;
+    return {};
   }
-  // 模型名均为 [A-Za-z0-9_] 标识符，无需 JSON 转义。
   std::ofstream stream(path, std::ios::app);
+  if (!stream) {
+    return std::unexpected(std::format(
+      "cannot open NCNN_PERF_JSON '{}': {}", path, std::strerror(errno)));
+  }
   stream << std::format(
-    R"({{"model":"{}","threads":{},"warmup":{},"iterations":{},)"
+    R"({{"model":"{}","mode":"{}","status":"{}","threads":{},)"
+    R"("warmup":{},"iterations":{},"setup":{{"ncnn":"{}","compiled":"{}"}},)"
+    R"("diagnostics":{{"gate_eligible":{},"prepared_runner":"{}",)"
+    R"("allocation_source":"{}","runtime_counters":"{}"}},)"
     R"("ncnn_mean_ms":{:.3f},"ncnn_min_ms":{:.3f},"ncnn_median_ms":{:.3f},)"
     R"("compiled_mean_ms":{:.3f},"compiled_min_ms":{:.3f},)"
     R"("compiled_median_ms":{:.3f},"cv":{:.4f},"ratio":{:.3f}}})"
     "\n",
-    model,
+    escape_json(model),
+    escape_json(performance_mode_name(metadata.mode)),
+    escape_json(metadata.status),
     threads,
     policy.warmup_iterations,
     policy.timed_iterations,
+    escape_json(metadata.setup),
+    "shared_library_loaded_before_timing",
+    metadata.gate_eligible,
+    escape_json(metadata.prepared_runner),
+    escape_json(metadata.allocation_source),
+    escape_json(metadata.runtime_counters),
     result.ncnn.mean_ms,
     result.ncnn.minimum_ms,
     result.ncnn.median_ms,
@@ -374,6 +518,52 @@ void append_performance_json_record(std::string_view model,
     std::max(result.ncnn.coefficient_of_variation,
              result.compiled.coefficient_of_variation),
     result.ratio);
+  if (!stream) {
+    return std::unexpected(std::format(
+      "cannot write NCNN_PERF_JSON '{}': {}", path, std::strerror(errno)));
+  }
+  return {};
+}
+
+std::expected<void, std::string> append_performance_json_diagnostic(
+  std::string_view model,
+  int threads,
+  const TimingPolicy& policy,
+  const PerformanceMetadata& metadata) {
+  const char* path = std::getenv("NCNN_PERF_JSON");
+  if (path == nullptr || *path == '\0') {
+    return {};
+  }
+  std::ofstream stream(path, std::ios::app);
+  if (!stream) {
+    return std::unexpected(std::format(
+      "cannot open NCNN_PERF_JSON '{}': {}", path, std::strerror(errno)));
+  }
+  stream << std::format(
+    R"({{"model":"{}","mode":"{}","status":"{}","threads":{},)"
+    R"("warmup":{},"iterations":{},"setup":{{"ncnn":"{}","compiled":"{}"}},)"
+    R"("diagnostics":{{"gate_eligible":{},"prepared_runner":"{}",)"
+    R"("allocation_source":"{}","runtime_counters":"{}","reason":"{}"}},)"
+    R"("ncnn_mean_ms":null,"compiled_mean_ms":null,"ratio":null}})"
+    "\n",
+    escape_json(model),
+    escape_json(performance_mode_name(metadata.mode)),
+    escape_json(metadata.status),
+    threads,
+    policy.warmup_iterations,
+    policy.timed_iterations,
+    escape_json(metadata.setup),
+    "not_timed",
+    metadata.gate_eligible,
+    escape_json(metadata.prepared_runner),
+    escape_json(metadata.allocation_source),
+    escape_json(metadata.runtime_counters),
+    escape_json(metadata.reason));
+  if (!stream) {
+    return std::unexpected(std::format(
+      "cannot write NCNN_PERF_JSON '{}': {}", path, std::strerror(errno)));
+  }
+  return {};
 }
 
 ::testing::AssertionResult check_performance_gate(

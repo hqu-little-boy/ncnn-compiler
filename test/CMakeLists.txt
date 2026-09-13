@@ -32,6 +32,13 @@ else()
     message(STATUS "lit 或 FileCheck 未找到，跳过 .mlir lit 测试")
 endif()
 
+add_test(NAME perf-json-summary
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_perf_json_summary.py)
+set_tests_properties(perf-json-summary PROPERTIES
+    LABELS "performance;tooling"
+    RUN_SERIAL TRUE
+    TIMEOUT 30)
+
 # repeated-call-memory 测试暂时屏蔽，当前阶段不做多次调用稳定性测试。
 # set(REPEATED_CALL_ARGS
 #     --mlir-opt ${MLIR_OPT}

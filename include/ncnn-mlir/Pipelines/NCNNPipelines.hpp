@@ -47,6 +47,26 @@ struct NCNNLinalgToMemRefPipelineOptions
       "Downstream memref-to-llvm will run the vector lowering tail; "
       "gates passes that emit vector dialect ops"),
     llvm::cl::init(false)};
+  Option<std::string> executionPlanPath{
+    *this,
+    "execution-plan-path",
+    llvm::cl::desc("Optional deterministic execution-plan JSON output path"),
+    llvm::cl::init("")};
+  Option<std::string> executionPlanModel{
+    *this,
+    "execution-plan-model",
+    llvm::cl::desc("Model name recorded in the execution plan"),
+    llvm::cl::init("")};
+  Option<std::string> executionPlanTargetTriple{
+    *this,
+    "execution-plan-target-triple",
+    llvm::cl::desc("Target triple recorded in the execution plan"),
+    llvm::cl::init("")};
+  Option<unsigned> executionPlanThreads{
+    *this,
+    "execution-plan-threads",
+    llvm::cl::desc("Effective threads recorded in the execution plan"),
+    llvm::cl::init(1)};
 };
 
 struct NCNNMemRefToLLVMPipelineOptions

@@ -31,6 +31,7 @@
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 #include "ncnn-mlir/Conversion/NCNNToTosa/NCNNToTosa.hpp"
 #include "ncnn-mlir/Transforms/BufferizeNCNN/BufferizeNCNN.hpp"
+#include "ncnn-mlir/Transforms/EmitModelPlan/EmitModelPlan.hpp"
 #include "ncnn-mlir/Transforms/FoldLinalgConstantTranspose/FoldLinalgConstantTranspose.hpp"
 #include "ncnn-mlir/Transforms/FoldNCNNBatchNorm/FoldNCNNBatchNorm.hpp"
 #include "ncnn-mlir/Transforms/ForallizeDisjointTileLoops/ForallizeDisjointTileLoops.hpp"
@@ -148,6 +149,17 @@ void buildNCNNLinalgToMemRefPipeline(
                                                  deallocationOptions);
   passManager.addPass(createVerifyBufferizedModelPass());
   passManager.addPass(createVerifyModelShapeContractsPass());
+  if (!options.executionPlanPath.empty()) {
+    EmitModelPlanPassOptions planOptions;
+    planOptions.path = options.executionPlanPath;
+    planOptions.model = options.executionPlanModel;
+    planOptions.targetTriple = options.executionPlanTargetTriple;
+    planOptions.threads = options.executionPlanThreads;
+    planOptions.vectorLanes = options.vectorLanes;
+    planOptions.vectorScalable = options.vectorScalable;
+    planOptions.vectorTail = options.vectorTail;
+    passManager.addPass(createEmitModelPlanPass(planOptions));
+  }
 }
 
 void buildNCNNMemRefToLLVMPipeline(OpPassManager& passManager) {

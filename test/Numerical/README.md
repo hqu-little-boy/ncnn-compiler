@@ -103,7 +103,7 @@ LLVM 小时级编译爆炸，关闭该层 vector mode 但仍统一传入 `-march
 每模型一行机器可 grep 的报告：
 
 ```
-PERF model=resnet18 threads=8 warmup=10 iters=20 ncnn_ms=11.230 compiled_ms=9.874 ratio=0.879 ncnn_min_ms=11.012 compiled_min_ms=9.701 cv=0.031
+PERF model=resnet18 mode=end_to_end status=measured threads=8 warmup=10 iters=20 ncnn_ms=11.230 compiled_ms=9.874 ratio=0.879 ncnn_min_ms=11.012 compiled_min_ms=9.701 cv=0.031 setup=ncnn_extractor_and_io_per_iteration
 ```
 
 ### 环境变量
@@ -114,7 +114,8 @@ PERF model=resnet18 threads=8 warmup=10 iters=20 ncnn_ms=11.230 compiled_ms=9.87
 | `NCNN_PERF_WARMUP` | 轻 10 / 重（输入 ≥ 640x640x3）5 | 预热次数 |
 | `NCNN_PERF_ITERS` | 轻 20 / 重 10 | 计时迭代次数 |
 | `NCNN_PERF_MAX_RATIO` | per-class 默认门禁 | 默认走 `performance_test.cpp` 的逐类阈值表（2026-09-03 基线 + 头寸：常规 6.0 / server_rec 36 / formula 48 / int8 14 / medium_rec_int8 34），随追平里程碑收紧；显式设置正数 = 全局覆盖，`0` = 显式关闭全部门禁，非数字直接失败；`NCNN_PERF_THREADS` 被 pin（单线程/自定线程实验）且未设本变量时不判定，保持纯报告 |
-| `NCNN_PERF_JSON` | 未设置 = 关 | 逐模型追加一行 NDJSON 到该路径 |
+| `NCNN_PERF_MODE` | `end_to_end` | `end_to_end` 计时包含每轮 ncnn Extractor/I/O；`prepared` 与 `allocation_audit` 当前只输出 unsupported 诊断，不参与门禁 |
+| `NCNN_PERF_JSON` | 未设置 = 关 | 逐模型追加一行带 mode/status/setup/diagnostics 的 NDJSON；旧记录缺少 mode 时按 `end_to_end` 汇总 |
 | `NCNN_PERF_SKIP_SANITY` | 关 | 跳过每模型一次的宽松数值 sanity（rtol=atol=5e-3） |
 
 门禁用法示例（per-class 阈值随追平计划收紧，临时放宽/收紧用全局覆盖）：
@@ -123,7 +124,12 @@ PERF model=resnet18 threads=8 warmup=10 iters=20 ncnn_ms=11.230 compiled_ms=9.87
 NCNN_PERF_MAX_RATIO=1.5 ctest --test-dir compiler/build -R PerformanceModel.ResNet18
 NCNN_PERF_MAX_RATIO=0 NCNN_PERF_THREADS=1 ctest --test-dir compiler/build -R PerformanceModel.ResNet18
 NCNN_PERF_JSON=/tmp/perf.ndjson ctest --test-dir compiler/build -L performance
+python3 tools/perf_json_summary.py /tmp/perf.ndjson --gate 1.5
 ```
+
+`perf_json_summary.py` 按 `(model, mode)` 汇总；旧 NDJSON 没有 `mode` 时按
+`end_to_end` 兼容。`--gate 0` 关闭汇总门禁，正数只检查 `status=measured` 且
+`gate_eligible=true` 的 `end_to_end` 记录。
 
 ### 覆盖范围
 

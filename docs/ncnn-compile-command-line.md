@@ -114,6 +114,7 @@ ncnn-compile model.param --model-name=image_classifier
 - 动态库名 `libimage_classifier.so`。
 - 默认输出目录名 `image_classifier/`。
 - 使用 `--emit-manifest` 时的文件名 `image_classifier.json`。
+- 使用 `--emit-execution-plan` 时的文件名 `image_classifier.plan.json`。
 
 模型名会被转换为合法的 C 标识符。例如：
 
@@ -439,7 +440,38 @@ driver 仍会继续完成动态库编译、链接和产物审计。
   -o model.tosa.mlir
 ```
 
-### 4.2 `--emit-manifest`
+### 4.2 `--emit-execution-plan`
+
+显式请求一个只读的、确定性的执行计划 manifest。该文件独立于 ABI manifest，描述最终
+bufferized IR 中可直接观察到的 operation、region、内部 allocation、静态字节数以及
+copy/transpose/matmul/vector/parallel 摘要：
+
+```bash
+ncnn-compile model.param \
+  --emit-manifest \
+  --emit-execution-plan \
+  --output-dir=dist/model
+```
+
+输出目录额外包含：
+
+```text
+dist/model/
+├── model.h
+├── model.json          # typed C ABI manifest
+├── model.plan.json     # execution-plan manifest
+└── libmodel.so
+```
+
+`model.plan.json` 的 `schema_version` 当前为 `1`，`kind` 为
+`ncnn.model_execution_plan`。动态 shape、未知 element size、整数溢出以及无法从静态 IR
+证明的 peak workspace 均使用 `null` 和 diagnostics 记录，绝不填充为零。`runtime_counters`
+和 `prepared_runner` 明确标记为未采集/不支持；本选项不会合并 allocation、重写 alias、
+改变 layout/kernel 选择、注入 runtime，也不会修改公共 C ABI。
+
+不指定该选项时不会生成 plan 文件，现有产物、ABI manifest、导出符号和运行时行为保持不变。
+
+### 4.3 `--emit-manifest`
 
 将 JSON ABI manifest 发布到输出目录：
 

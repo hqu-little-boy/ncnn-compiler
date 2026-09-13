@@ -235,6 +235,36 @@ def MatmulKernelNCNNPass : Pass<"matmul-kernel-ncnn", "mlir::ModuleOp"> {
   ];
 }
 
+def EmitModelPlanPass : Pass<"emit-ncnn-execution-plan", "mlir::ModuleOp"> {
+  let summary = "Emit a deterministic static ncnn execution-plan manifest";
+  let description = [{
+    Read-only audit of the final bufferized module. The pass emits an execution
+    plan manifest without changing IR, ownership, allocation, layout, or the
+    public C ABI. Runtime allocation counters and peak workspace remain
+    explicitly unknown unless proven by the input IR.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "linalg::LinalgDialect", "memref::MemRefDialect",
+    "omp::OpenMPDialect", "scf::SCFDialect", "vector::VectorDialect"
+  ];
+  let options = [
+    Option<"path", "path", "std::string", "",
+           "Output execution-plan JSON path">,
+    Option<"model", "model", "std::string", "",
+           "Model name in the execution plan">,
+    Option<"targetTriple", "target-triple", "std::string", "",
+           "Target triple recorded in the execution plan">,
+    Option<"threads", "threads", "unsigned", "1",
+           "Effective OpenMP worker thread count">,
+    Option<"vectorLanes", "vector-lanes", "unsigned", "0",
+           "Fixed vector lane count">,
+    Option<"vectorScalable", "vector-scalable", "bool", "false",
+           "Whether vectors are scalable">,
+    Option<"vectorTail", "vector-tail", "bool", "false",
+           "Whether the vector lowering tail is enabled">
+  ];
+}
+
 def VerifyBufferizedModelPass
     : Pass<"verify-bufferized-model", "mlir::ModuleOp"> {
   let summary = "Verify the bufferized ncnn entry point and its buffer ownership";

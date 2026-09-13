@@ -35,6 +35,31 @@ struct TimingPolicy final {
 [[nodiscard]] std::expected<TimingPolicy, std::string> resolve_timing_policy(
   TimingPolicy default_policy);
 
+enum class PerformanceMode {
+  EndToEnd,
+  Prepared,
+  AllocationAudit,
+};
+
+[[nodiscard]] std::expected<PerformanceMode, std::string>
+resolve_performance_mode();
+
+[[nodiscard]] std::string_view performance_mode_name(PerformanceMode mode);
+
+struct PerformanceMetadata final {
+  PerformanceMode mode = PerformanceMode::EndToEnd;
+  std::string_view status = "measured";
+  std::string_view setup = "ncnn_extractor_and_io_per_iteration";
+  bool gate_eligible = true;
+  std::string_view prepared_runner = "not_used";
+  std::string_view allocation_source = "not_collected";
+  std::string_view runtime_counters = "not_collected";
+  std::string_view reason;
+};
+
+[[nodiscard]] PerformanceMetadata make_performance_metadata(
+  PerformanceMode mode);
+
 struct TimingStats final {
   double mean_ms = 0.0;
   double minimum_ms = 0.0;
@@ -92,14 +117,30 @@ struct PairBenchmarkResult final {
 void emit_performance_report(std::string_view model,
                              int threads,
                              const TimingPolicy& policy,
-                             const PairBenchmarkResult& result);
+                             const PairBenchmarkResult& result,
+                             const PerformanceMetadata& metadata = {});
+
+// 输出一个不参与 ratio 门禁的能力诊断记录。
+void emit_performance_diagnostic_report(std::string_view model,
+                                        int threads,
+                                        const TimingPolicy& policy,
+                                        const PerformanceMetadata& metadata);
 
 // NCNN_PERF_JSON 已设置时向该文件追加一行 NDJSON；未设置时为空操作。
 // 全部性能测试 RUN_SERIAL 执行，追加写安全。
-void append_performance_json_record(std::string_view model,
-                                    int threads,
-                                    const TimingPolicy& policy,
-                                    const PairBenchmarkResult& result);
+[[nodiscard]] std::expected<void, std::string> append_performance_json_record(
+  std::string_view model,
+  int threads,
+  const TimingPolicy& policy,
+  const PairBenchmarkResult& result,
+  const PerformanceMetadata& metadata = {});
+
+// 将未实现的 benchmark mode 写为 status=unsupported 的 NDJSON 记录。
+[[nodiscard]] std::expected<void, std::string>
+append_performance_json_diagnostic(std::string_view model,
+                                   int threads,
+                                   const TimingPolicy& policy,
+                                   const PerformanceMetadata& metadata);
 
 // P0 per-class 门禁判定。default_limit 为该模型的类别阈值（≤0 = 该模型
 // 无默认门禁，纯报告）；NCNN_PERF_MAX_RATIO 显式设置时全局覆盖——正数

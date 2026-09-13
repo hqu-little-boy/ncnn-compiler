@@ -121,6 +121,21 @@ void run_model_benchmark(const ModelSpec& spec) {
   if (kUnderSanitizer) {
     GTEST_SKIP() << "performance measurements are meaningless under sanitizers";
   }
+
+  const auto mode = resolve_performance_mode();
+  ASSERT_TRUE(mode.has_value()) << mode.error();
+  const int threads = resolved_thread_count();
+  auto policy = resolve_timing_policy(default_timing_policy(spec));
+  ASSERT_TRUE(policy.has_value()) << policy.error();
+  if (*mode != PerformanceMode::EndToEnd) {
+    const PerformanceMetadata metadata = make_performance_metadata(*mode);
+    emit_performance_diagnostic_report(spec.name, threads, *policy, metadata);
+    const auto json_result =
+      append_performance_json_diagnostic(spec.name, threads, *policy, metadata);
+    ASSERT_TRUE(json_result.has_value()) << json_result.error();
+    GTEST_SKIP() << metadata.reason;
+  }
+
   const auto input_elements = spec.input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
@@ -128,10 +143,8 @@ void run_model_benchmark(const ModelSpec& spec) {
 
   CompiledModel compiled(spec.library_path, spec.symbol);
   ASSERT_TRUE(compiled.valid()) << compiled.error();
-  NcnnBenchRunner runner(spec.param_path,
-                         spec.bin_path,
-                         resolved_thread_count(),
-                         spec.reference_mode);
+  NcnnBenchRunner runner(
+    spec.param_path, spec.bin_path, threads, spec.reference_mode);
   ASSERT_TRUE(runner.valid()) << runner.error();
 
   const bool two_outputs = spec.output_element_counts[1] != 0;
@@ -180,9 +193,6 @@ void run_model_benchmark(const ModelSpec& spec) {
     }
   }
 
-  auto policy = resolve_timing_policy(default_timing_policy(spec));
-  ASSERT_TRUE(policy.has_value()) << policy.error();
-
   PairBenchmarkResult result;
   const auto ncnn_stats = time_repeated_inference(reference_inference, *policy);
   ASSERT_TRUE(ncnn_stats.has_value()) << ncnn_stats.error();
@@ -195,9 +205,12 @@ void run_model_benchmark(const ModelSpec& spec) {
                    ? result.compiled.mean_ms / result.ncnn.mean_ms
                    : 0.0;
 
-  emit_performance_report(spec.name, resolved_thread_count(), *policy, result);
-  append_performance_json_record(
-    spec.name, resolved_thread_count(), *policy, result);
+  const PerformanceMetadata metadata =
+    make_performance_metadata(PerformanceMode::EndToEnd);
+  emit_performance_report(spec.name, threads, *policy, result, metadata);
+  const auto json_result = append_performance_json_record(
+    spec.name, threads, *policy, result, metadata);
+  ASSERT_TRUE(json_result.has_value()) << json_result.error();
   EXPECT_TRUE(
     check_performance_gate(spec.name, result, default_ratio_gate(spec)));
 }
