@@ -1,6 +1,6 @@
 # ncnn 性能追平计划（v2）
 
-> **v2 修订（2026-09-05，计划评审后）**：
+> **v2 初版修订（2026-09-05，计划评审后；执行状态补记至 2026-09-13）**：
 > ① §1 增补 **M3 降级口径**（P7 Winograd 预算否决命中主力重模型时的
 >    退路），消除「≤1.1 依赖 Winograd + 预算一票否决」的内在张力；
 > ② P2 范围扩至名单外慢件（efficientnet_b1/b2/b3 实测 1–2h/件），
@@ -21,7 +21,7 @@
 >   保持 0（Q 路径不进 A1b，P4 处理）。原计划中"VectorizeNCNN/FuseLinalg
 >   加 contract fastmath"经核实**无落点**——两 pass 不自产累加 op（clone
 >   继承源 flags），全工具链唯一自产 MAC 链就是 A1b；linalg named op 的
->   body 由 linalg 自动生成，contract 注入留待 P3/P5 内核工作时一并处理。
+>   body 由 linalg 自动生成；contract 注入未在 P3/P5 落地，当前不作为既有能力。
 > - P0：per-class 门禁表（performance_test.cpp `default_ratio_gate`，
 >   `NCNN_PERF_MAX_RATIO` 未设时生效、显式设置全局覆盖、0=显式关闭、
 >   NCNN_PERF_THREADS pin 时让位）；fixture 编译计时包装
@@ -38,7 +38,8 @@
 > - P0 附带发现：efficientnet_b1/b2/b3 单 fixture `clang -x ir -O3`
 >   实测 60 分钟–2 小时级（RSS ~340MB 缓慢爬升，慢性非爆炸；17 个
 >   fixture 超 300s 预算触发 WARNING），是 P2 编译爆炸根除的现行样本；
->   FMA 是否为诱因待 P2 一行回退 A/B 排查。
+>   当时待排查的“FMA 是否为诱因”已由 P2 spike 排除，爆炸根因是无界
+>   行向量化 IR 及其 math lowering。
 
 > **执行状态（2026-09-05）**：P2 已落地（spike 定界 → 修复 → 全量验证，
 > 详见 §3-P2 执行状态附注）。
@@ -106,14 +107,17 @@
 >   同款取舍；标量尾逐位复刻 mulf+addf）；替换值 expand 回 5D 与下游
 >   collapse_shape 消费者在 canonicalizer 对消。分块预算沿用逐元素
 >   路径（f32 → 4×lanes），非 2 幂退 lanes、仍非 2 幂保持标量
->   （vector<3> 宽度教训）；multiplier≠1 / 动态 shape 保持标量留 P8。
+>   （vector<3> 宽度教训）；multiplier≠1 / 动态 shape 保持标量，P8 仅作
+>   audit-only 评估，未进入默认生产路径。
 > - asm 断言：formula_encoder vfmadd 564（P1 后）→ **3072**、
 >   vmovups 23965（行向量拷贝），server_det_static 3808；对照
 >   resnet18（无 depthwise）vfmadd 444 不变——无附带代码形变。
 > - lit：新增 `depthwise-vectorize.mlir`（2 正向 + multiplier≠1 /
 >   窄通道 / 动态 shape 3 负向守护），136/136。
-> - **全量实测（全新 /tmp 构建目录，437/437 过含 per-class 门禁，
->   fixture 编译 ≤ 300s 零告警）**：对 P2 基线 **43/44 模型 ratio
+> - **全量实测（全新 /tmp 构建目录，437/437 过含 per-class 门禁；该次
+>   默认路径 stage 的已测 fixture 均在 300s 内）**：这次结果不覆盖 P2 登记
+>   的常量池 900s 例外件，也不覆盖 P7 opt-in Winograd 的约 8 分钟 fixture；
+>   对 P2 基线 **43/44 模型 ratio
 >   改善**（仅 server_rec +0.54 在噪声带内），全表 p50 3.42→2.84、
 >   max 33.41→31.93。det 系收益最大：medium_det 2.93→1.89（1.55×）、
 >   mobile_det_static 2.09→1.50（1.39×）、small_det 2.95→2.20、
@@ -192,10 +196,11 @@
 > - **P6-C MHA 批量收缩内核化**：batch=1 的 `linalg.batch_matmul`
 >   canonical 化（StrategyNCNN `rewriteUnitBatchMatmul`，[[0,1],[2]]
 >   折叠成普通 matmul 进 TileMatmulForall+A1b 路径，medium_rec 44 个
->   全中）；batch>1（heads=8 scores/context）新增
+>   全中）；静态 batch>1（heads=8 scores/context）新增
 >   `kernelizeBatchMatmul`：forall(b) 网格 + 逐批 [b] 面板 rank-reduced
 >   subview + A1b 形态内核（替代通用下降的标量 mul+add 逐 k 读写回 C
->   链）。MHA QKV/scores/context 全部进向量内核。
+>   链）。静态 MHA 的 QKV/scores/context 进入向量内核；动态序列维仍走
+>   generic contraction。
 > - **实测**（stage 全新 /tmp 构建 438/438 ctest 全过 + perf 全表）：
 >   全表 p50 2.84→**1.92**、p90 **3.77**、max 31.93→**19.19**；重模型
 >   （ncnn≥100ms）p50 **1.72**——**M2 口径（≤1.5/中位 ≤1.3）已逼
@@ -238,8 +243,9 @@
 > 目标：44 模型 performance_tests 套件编译产物全面追平 vendored ncnn
 > （x86-64 AVX2/FMA 口径）。根因依据见姊妹篇
 > [`ncnn-performance-gap-analysis.md`](ncnn-performance-gap-analysis.md)
-> （2026-09-03 定案：并行无罪、内核有罪——零 FMA、向量化名单=最差名单、
-> int8 无 VNNI/pass 覆盖、搬运:算术 19:1–80:1）。
+> （2026-09-03 历史基线定案：并行无罪、内核有罪——零 FMA、向量化名单=最差
+> 名单、当时尚无原生 VNNI/pass 覆盖、搬运:算术 19:1–80:1；P4 后受限
+> int8 row-dot/requant 已落地，但原生 `vpdpbusd` 选择仍不可达）。
 > 本文按根因给出阶段化路线、验收口径与风险。
 
 ---
@@ -253,22 +259,25 @@
 | M1（P1–P3 后） | 常规 conv 网 | 全部 ≤ 2.0，中位数 ≤ 1.5 |
 | M2（P4–P6 后） | 全表 | 重模型（ncnn ≥ 100ms）≤ 1.5，中位数 ≤ 1.3 |
 | M3（P7–P8 后） | 全表 | 重模型 ≤ 1.1，轻模型 ≤ 1.25（含计时噪声带），中位数 ≤ 1.0 |
-| M3 降级口径 | 全表 | 仅当 P7 预算否决命中主力重模型时启用：启用 Winograd 的重模型 ≤ 1.1，预算未过的重模型 ≤ 1.25 并进例外清单逐模型对账，中位数 ≤ 1.0 不变。M3 宣告时必须声明走标准口径还是降级口径 |
+| M3 降级口径 | 全表 | 仅当 P7 的性能或编译预算门禁未能覆盖主力重模型时启用：Winograd 继续 opt-in/default-off，不把未通过性能门禁的变体算作默认覆盖；已通过主力路径门禁的重模型 ≤ 1.1，未过门禁的重模型 ≤ 1.25 并进例外清单逐模型对账，中位数 ≤ 1.0 不变。M3 宣告时必须声明走标准口径还是降级口径 |
 
 - 门禁落地：`NCNN_PERF_MAX_RATIO` 升级为按类阈值表（P0），ctest 内强制，
   轻模型阈值宽、重模型严（与 baseline-report §4 的 cv 观察一致）。
-- **编译时长预算**：单 fixture `clang -x ir -O3` 段 ≤ 5 分钟、整包重建
-  不劣于当前（防止修复劣化重蹈"编译爆炸名单"覆辙）。P0 起在 fixture
-  构建记录编译耗时并在超预算时告警。
+- **编译时长预算**：普通 fixture 的 `clang -x ir -O3` 段 ≤ 5 分钟；
+  已明确登记的例外（包括 P2 常量池主导件和 P7 opt-in Winograd fixture）
+  可单独使用 900 秒预算，整包重建不劣于当前（防止修复劣化重蹈"编译爆炸
+  名单"覆辙）。P0 起在 fixture 构建记录编译耗时并在超出对应预算时告警或
+  失败。
 - 每阶段验收固定三件套：① 全量数值黄金 ctest 绿（预算不放宽）；
-  ② `NCNN_PERF_JSON` 全量表重测并更新 baseline-report；③ 静态 asm
-  抽查（objdump 断言目标指令出现/消失）。
+  ② 声称性能收益的生产/性能阶段执行 `NCNN_PERF_JSON` 全量表重测并更新
+  baseline-report；仅改测试或文档、且明确声明 regression-only 的阶段须记录
+  不做 ratio 重测；③ 静态 asm 抽查（objdump 断言目标指令出现/消失）。
 - 第四件（v2 增补）：验收时对 3 个代表模型补 1T 抽测复核并行扩展。
   P1 实测校准：内核收益向 6T ratio 的传导折扣约 0.8（resnet34 预测
   1.3–2×、实测 1.28×）——后续里程碑的 6T 预测与门禁评估一律先过该
   折扣，不得把单核收益线性外推到墙钟。
 
-## 2. 现状锚点（2026-09-03）
+## 2. 历史基线锚点（2026-09-03；当前状态见顶部执行块与 §8）
 
 | 分层 | 现值 | 主根因（对应 §3 阶段） |
 |---|---|---|
@@ -295,9 +304,9 @@ contract 处理 → 全产物 0 条 `vfmadd*`，MAC 指令数与依赖链延迟�
 
 - `MatmulKernelNCNN`：K 内层 `mul+add` 直接发射 **`vector::FMAOp`**
   （单舍入，与 ncnn FMA 内核舍入语义一致，数值预算可吸收）；
-- `VectorizeNCNN`/`FuseLinalgEpilogue` 生成的累加型 arith op 链：设置
-  arith fastmath `<contract>`（MLIR 21 arith 原生支持），保留 LLVM 合约
-  自由度；仅限累加路径，逐元素单舍入 op 不动；
+- 原计划曾要求 `VectorizeNCNN`/`FuseLinalgEpilogue` 生成的累加型 arith op
+  链设置 arith fastmath `<contract>`；执行核实两 pass 不自产累加 op，故该项
+  未落地，当前不把它写成既有能力；仅 A1b 的 `vector::FMAOp` 路径已落地；
 - lit：断言 A1b 产物出现 `vector.fma`；asm 抽查：resnet18/公式产物
   `vfmadd*` 计数 > 0、`vmulps` 显著下降。
 
@@ -326,13 +335,11 @@ efficientnet 类深窄 conv 网，编译耗时预算约束将持续空转。
   ③ A1b 显式内核落地后（名单制定在先）爆炸是否已自然缓解；
   ④ efficientnet 系慢性编译与上述机制是否同源（同时回答 v1 遗留的
   一行回退 A/B：FMA 是否为诱因）。
-- **主修路线**：matmul 形态改走 **canonical tiling + `vector.contract`**
-  （`scf::tileUsingSCF` 切 M/N tile → vector.contract；A3 的
-  TileMatmulForall/ForallizeDisjointTileLoops 基建已就绪），其 LLVM
-  下降产出规整紧凑代码，绕开行向量化直线爆炸；行向量化保留给逐元素
-  generic。
-- **备选路线**：保留 A1b 手写内核 + 收敛行宽/unroll 上界（按 spike 结论
-  定界），P1 的 vector.fma 直接受益。
+- **原计划主修路线（后经 spike 否决）**：matmul 形态改走
+  **canonical tiling + `vector.contract`**（`scf::tileUsingSCF` 切 M/N
+  tile → vector.contract）；行向量化保留给逐元素 generic。
+- **原计划备选路线（实际落地）**：保留 A1b 手写内核 + 收敛行宽/unroll
+  上界（按 spike 结论定界），P1 的 vector.fma 直接受益。
 - 名单收敛：按模型逐个移出 override，编译耗时预算内放行。
 - **预算门禁硬化（v2）**：`timed_compile.cmake` 对已定界慢件（17 个
   超时件 + 11 override 模型）改为硬失败；新慢件先软告警观察一轮再
@@ -509,23 +516,27 @@ avxvnni `vpdpbusd` + LUT requant）。
 
 ### P7 Winograd（4–6 天，含数值预算验证）
 
-根因：ncnn 对 3×3 s1 默认 Winograd（resnet/yolo/det 类主力），本工具链
-仅留开关位。M3 目标下 conv 系从 1.3–2× 再往 1.1× 走基本绕不开。
+根因（原计划假设，已由 P7 实测修正）：曾假定 ncnn 对 3×3 s1 默认
+Winograd（resnet/yolo/det 类主力），本工具链仅留开关位；P7 实测显示本机
+ncnn 对 IC≥64 的主力实例并不选择 F(6,3)，因此该假设不能作为当前事实。
+M3 目标下 conv 系从 1.3–2× 再往 1.1× 走仍需另有可证明的内核收益。
 
-- `strategy-ncnn` 落地 `winograd`：F(6×6,3×3)（ncnn 同款）——输入/权重
-  变换为 generic（可向量化），中心 matmul 复用 P3 微内核，逆变换同；
-- dispatch 启发式编译期化：3×3 s1 且 OC·IC 超阈值（复刻 ncnn
-  convolution.winograd 判据），CLI `--conv-strategy=winograd` 保持默认
-  off，预算验证通过后翻 auto 默认；
+- **原计划（后经 P7 性能实测修正）**：`strategy-ncnn` 落地
+  `winograd`：F(6×6,3×3)（ncnn 同款）——输入/权重变换为 generic（可
+  向量化），中心 matmul 复用 P3 微内核，逆变换同；
+- **原计划 dispatch 假设（未翻为当前默认）**：3×3 s1 且 OC·IC 超阈值
+  （复刻 ncnn convolution.winograd 判据），CLI `--conv-strategy=winograd`
+  保持默认 off；原计划的“预算验证通过后翻 auto 默认”因 P7 性能未达而作废；
 - **数值预算先行**：F(6,3) 误差上界逐模型对账（复用 golden 预算机制，
   参考 ExpandStridedMetadata 教训——预算过不了就只对宽松预算模型启用，
   不做全局默认）。
-- **失败退路（v2）**：若预算否决命中 resnet/yolo/det 主力重模型，
-  M3 转降级口径（§1）——该批模型进例外清单（≤ 1.25）+ 逐模型对账
-  报告作为本阶段产出；不得为过预算放宽 golden 或降低变换精度。
+- **失败退路（v2）**：若性能或编译预算门禁未覆盖 resnet/yolo/det
+  主力重模型，M3 转降级口径（§1）——该批模型进例外清单（≤ 1.25）+
+  逐模型对账报告作为本阶段产出；不得为过预算放宽 golden 或降低变换精度。
 
-验收：预算内模型 auto 走 Winograd，resnet18/yolov5 系 3×3 段 ≥ 1.5×
-于 P3 后水平；golden 全绿且误差在已对账预算内。
+原计划验收（P7 性能门禁未达）：预算内模型 auto 走 Winograd，
+resnet18/yolov5 系 3×3 段 ≥ 1.5×于 P3 后水平；golden 全绿且误差在已
+对账预算内。
 
 > **P7 执行状态附注（2026-09-12）**：机制与数值契约落地，性能验收
 > **未达**——按 v2 失败退路处理，Winograd 保持 opt-in 默认关闭，conv
@@ -560,14 +571,53 @@ avxvnni `vpdpbusd` + LUT requant）。
 >   后续若要复活 Winograd 收益，需 ncnn 同款 pack-A/pack-B 物化 +
 >   专用变换内核（P3/P6 微内核架构内的专项，预估 4–6 人天）。
 
-### P8 收尾与追平宣告（2–3 天）
+### P8 收尾状态（截至 2026-09-13，尚未宣告 M3）
 
-- 小模型固定开销审计：每 run 的 malloc/free 链（One-Shot Bufferize +
-  deallocation 逐 tensor 分配）——arena 化/entry 级 hoist 评估，
-  anglenet 级亚 5ms 模型轻模型门禁的最后一公里；
-- per-class 阈值收紧到 M3 口径（或 §1 降级口径），门禁转强制；
-- baseline-report 全量重测更新、gap-analysis 附修复后对照；
-- 文档沉淀：support-status §6 优化矩阵更新，本计划标注完成态。
+P8 按“先低风险可证明收益，再做隔离审计”的顺序执行；没有把未经
+数值、生命周期或性能门禁证明的路径写成默认优化。
+
+- **P8-1 wide-N 矩阵内核（已落地，提交 `16abe60`）**：
+  `MatmulKernelNCNN` 不再把逐元素行宽上限 1024 错用于浮点
+  `linalg.matmul` 的 RHS/输出 N 维（本轮以 f32 fixture 验证），也不再用于
+  int8 row-dot accumulator
+  的 N 维；`accColumns`、寄存器预算、尾块路径保持有界。新增 f32
+  `N=2049`、int8 `N=2051` lit，确认不会生成完整 N 宽向量。
+- **P8-2 静态/动态 MHA 守护（已落地，提交 `9720c4a`）**：
+  新增 standalone raw memref `N=2049` 的 `linalg.batch_matmul` bounded-panel
+  回归；另为 `N=3` 的静态 self-attention fixture 增加
+  TOSA→Linalg→buffer pipeline smoke guard，确认该 fixture 进入向量化
+  batch-kernel 形态。检查没有逐个证明 score/context 两个 op，也没有覆盖
+  长序列 MHA；动态序列仍保留 generic contraction。没有删除
+  `splitHeads`/key/context transpose，也不宣称动态 MHA 已内核化。
+- **P8-3 f32 depthwise multiplier>1（audit-only）**：继续保留
+  multiplier=1 的生产向量路径和 multiplier=2 的负向 lit。现有改写把
+  `[KH,KW,C,1]`、`[N,OH,OW,C,1]` 折叠为 C 连续行；multiplier>1 的
+  HWCM 逻辑布局要求 multiplier 轴专门向量化或显式重排，不能只放宽
+  matcher，否则会产生错误的输入 lane 或越界访问。当前 importer/端到端
+  契约也不足以宣称 multiplier>1 的 NCNN 支持。
+- **P8-4 int8 depthwise/cast（audit-only）**：未满足 i8×i8→i32
+  named-op 类型契约、逐位 rounding/zero-point/bias 顺序和端到端 importer
+  证明前不改默认 lowering；继续沿用 P4 的 row-dot/requant 语义。
+- **P8-5 小模型 arena/entry hoist（audit-only）**：One-Shot Bufferize、
+  `BufferResultsToOutParams(hoistStaticAllocs=true)`、deallocation pipeline
+  和 verifier 已存在；在没有线程安全、生命周期、并发调用和收益证据前，
+  不引入改变 public C ABI 的全局 arena。
+- **P8-6 pack-A/pack-B 与 Winograd（audit-only）**：P7 Winograd 继续
+  opt-in/default-off；没有新的 pack 实验达到代码尺寸、编译时间、checksum
+  和代表模型性能的联合门禁，因此不扩大 dispatch。
+
+P8-1/2 的最终独立提交门禁均在全新 `/tmp` Release 树完成：
+format_check、全局 tidy、完整并行构建、三个 numerical target 和完整 ctest
+均通过；最终各为 441 个 ctest、0 失败，2 个已知 int8 性能项按既有条件
+跳过。P8-1 初次 stage0 兼容性尝试使用旧 binary 运行新增 wide-N lit，曾因旧
+FileCheck 类型期望失败；随后修正为 strided subview 类型，并在全新 stage 树
+重建、重跑通过。该兼容性修复过程不作为最终通过次数隐藏。验收证明回归和
+安全边界成立，不等同于新的全量 ratio 基线；
+M3 仍按 P7 附注的降级口径处理，待后续性能基线重测后再宣告。
+
+后续收尾工作：更新 support-status §6、baseline-report 与 gap-analysis
+的 P8 对照，并在新的性能实测完成后决定是否形成 M3 例外清单；在此之前
+不提交预测收益。
 
 ## 4. 依赖与排序
 
@@ -599,10 +649,10 @@ P0 ─→ P1 ─→ P2 ─→ P3 ─→ P4（复用 P3 骨架）
 
 | 风险 | 缓解 |
 |---|---|
-| vector.contract 路线在 clang -O3 仍爆炸（P2 主路线失效） | Spike 先行定界；备选路线 A1b+unroll 上界；编译耗时预算门禁兜底（v2 对定界慢件硬化为硬失败） |
-| 编译爆炸面大于 11 模型名单（efficientnet 系名单外 1–2h/件实测） | P2 spike 扩围定界（含 FMA 一行回退 A/B）；超 300s fixture 数收敛目标 ≤ 3 |
+| ~~vector.contract 路线在 clang -O3 仍爆炸（P2 主路线失效）~~ **已由 P2 spike 否决** | 实际采用 lanes 分块 + 标量尾；继续用编译耗时预算门禁防止无界向量回归 |
+| 编译爆炸面大于 11 模型名单（efficientnet 系名单外 1–2h/件实测） | P2 spike 扩围定界（含 FMA 一行回退 A/B）；普通超 300s fixture 数收敛目标 ≤ 5，登记的常量池与 opt-in Winograd 例外按 900s 单独对账 |
 | 内核收益向 6T ratio 传导打折（多核下内存带宽共享上限） | 每阶段验收附 1T 抽测复核并行扩展；6T 预测一律过 ~0.8 传导折扣（P1 校准） |
-| M3 依赖 Winograd 而预算否决命中主力重模型 | §1 M3 降级口径：例外清单 ≤ 1.25 + 逐模型对账；不为过预算放宽 golden |
+| M3 依赖 Winograd，而 P7 性能或编译预算门禁未覆盖主力重模型 | §1 M3 降级口径：例外清单 ≤ 1.25 + 逐模型对账；不为过预算放宽 golden |
 | i8 contract 无 VNNI 下降（LLVM 21 不识别） | 三档 spike（vpdpbusd / pmaddwd / widened auto-vec），档位收益递减但均可验收 |
 | Winograd 误差超模型 golden 预算 | 预算逐模型对账，过不了不改全局默认（保持 opt-in） |
 | int8 requant 语义偏差 | 复用 INT8 预量化对账方法；逐位复刻优先于融合强度 |
@@ -625,7 +675,7 @@ v2 校准注：P1 实测显示内核收益向 6T ratio 的传导折扣约 0.8（
 预测 1.3–2×、实测 1.28×），P3 行据此放宽；P5 提前后其收益将部分并入
 P2/P3 验收时的实测值。本表为预测，验收以实测为准。
 
-## 8. P7 后剩余差距分层归因与对策（2026-09-12 定稿）
+## 8. P7 后剩余差距分层归因与对策（2026-09-12 基线；P8 状态补记至 2026-09-13）
 
 数据口径：P7 + requant 融合落地后、全新 stage 树全量重测（44 模型，
 6 线程正式口径，JSON 留档）。当前全表 p50 **1.72**、重模型 p50 **1.63**、
@@ -637,7 +687,8 @@ P2/P3 验收时的实测值。本表为预测，验收以实测为准。
 |---|---|---|---|
 | 已追平/反超（≤1.1） | 1 | mobile_det_static 0.83× | M3 单点达标 |
 | 1.1–1.5 | 10 | yolov5m_seg 1.19、yolov5s 1.25、mobile_rec 1.14 | M2 达标带 |
-| 1.6–2.2 | ~20 | resnet 1.61–2.22、efficientnet 1.67–1.92、yolov5 大件 1.63–1.74、det 系 1.66–2.07 | M2 未达的主因（重模型 p50 1.63 vs 界 1.5） |
+| 1.6–2.3 | ~20 | resnet 1.61–2.22、efficientnet 1.67–1.92、yolov5 大件 1.63–1.74、det 系 1.66–2.07 | M2 未达的主因（重模型 p50 1.63 vs 界 1.5） |
+| 2.3–3.0 / 3.8–10 | ~5 | 其余中间带模型 | 非主力尾部，需按模型单独归因 |
 | 3.0–3.8 | 6 | int8 rec 三件 3.46–3.70、tiny_rec 3.57、anglenet 3.01 | 独立战线（int8/小开销） |
 | >10 | 2 | server_rec 19.41、formula_encoder 13.81 | 表尾巨兽（attention 链） |
 
@@ -646,17 +697,18 @@ M2 口径对账：13 个重模型 6 个达标（≤1.5），缺口 ≈ 重模型
 
 ### 8.2 差距源 → 对策（按优先级）
 
-**A. conv 系 1.6–2.2 带（约 20 模型，M2 收尾的关键面）**
+**A. conv 系 1.6–2.3 带（约 20 模型，M2 收尾的关键面）**
 - 归因：GEMM 本体已由 P3 微内核接管（60+ GFLOP/s），残余在 im2col
   gather 残留层（P6 支配守卫跳过的 yolov5 层）、epilogue 未融合段与
   池化/激活的中间物化；ncnn 侧的对照优势是其 pack 面板 sgemm。
 - 对策（两选一，代价/收益对账后定）：
   1. **接受降级口径**（P7 附注路线）：例外清单 ≤1.25 逐模型对账
      （resnet/yolo 系大部分已落在 1.2–1.75，对账即收尾）；
-  2. **Winograd pack 化复活**（4–6 人天）：pack-A/pack-B 物化 +
-     专用变换内核（ncnn conv3x3s1_winograd63 同款结构），预期把
-     conv 段从 ~2× 拉向 1.3× 量级；P7 的变换/矩阵基建直接复用，
-     不确定性集中在 pack 后的 L2 行为。
+  2. **Winograd pack 化复活（候选，当前未实施）**（4–6 人天）：
+     pack-A/pack-B 物化 + 专用变换内核（ncnn conv3x3s1_winograd63 同款
+     结构）；预期把 conv 段从 ~2× 拉向 1.3× 量级，但必须先通过代码尺寸、
+     编译时间、checksum 和代表模型性能的联合门禁；P7 的变换/矩阵基建可
+     复用，不确定性集中在 pack 后的 L2 行为。
 
 **B. server_rec / formula_encoder 巨兽（19.4×/13.8×）**
 - 归因：attention 链的 MHA 转置物化（P6 残余 ~16% copy）+ CTC/解码
@@ -671,18 +723,23 @@ M2 口径对账：13 个重模型 6 个达标（≤1.5），缺口 ≈ 重模型
   **dw-int8 层**（ncnn 的 dw-int8 走专用内核；我们的 dw 层保持 f32
   被 P5 覆盖，但 int8 模型的激活量化链在 dw 前后的 cast 未折叠）与
   通道侧 cast/gather。
-- 对策：dw-Q 变体接入 P5 的 vectorizeDepthwiseConvRows（i8 输入、
-  i8×i8→i32 行向量 MAC，沿用 P4 的 tier② 定档）；激活量化 cast 的
-  producer 折叠进 dw 输出。预估 2–3 人天。
+- 候选审计项（当前未实施）：dw-Q 变体接入 P5 的
+  `vectorizeDepthwiseConvRows`（i8 输入、i8×i8→i32 行向量 MAC，沿用
+  P4 的 tier② 定档）；激活量化 cast 的 producer 折叠进 dw 输出。必须先
+  补齐 named-op 类型契约、逐位 golden 和 importer 端到端证明。
 
 **D. 小模型固定开销（anglenet 3.01×、tiny_rec 3.57×）**
 - 归因：ncnn 0.8ms 级模型的 ratio 被固定开销放大——每 run 的
   malloc/dealloc 链（One-Shot Bufferize 逐 tensor 分配）+ 多 pass
   的中间物化。
-- 对策：P8 收尾既定项——arena 化 / entry 级 hoist 静态分配；
-  tiny_rec 的 3.57× 还含 conv 段（并入 A 线）。预估 2 人天。
+- 对策（候选审计项，当前 audit-only）：评估 arena 化 / entry 级 hoist
+  静态分配；在生命周期、线程安全、并发调用和收益均得到证明前不改默认
+  ownership。tiny_rec 的 3.57× 还含 conv 段（并入 A 线）。
 
-### 8.3 收益叠加后的口径预测
+### 8.3 原计划收益预测（未作为验收结论）
+
+下表保留原 P8 立项时的假设，P8-1/2 完成后尚未重新测量，不能视为
+实际收益或 M3 结论。
 
 | 对策线完成后 | 预期 |
 |---|---|
@@ -691,3 +748,21 @@ M2 口径对账：13 个重模型 6 个达标（≤1.5），缺口 ≈ 重模型
 
 预测过 §1 的 0.8 传导折扣；验收以实测为准。建议排序：B（单点收益
 最大）→ C（独立且便宜）→ D → A2（可选，决定 M3 走标准还是降级）。
+
+### 8.4 P8 实际结论（2026-09-13）
+
+P8-1 的生产改动只放宽了错误的 eligibility 门控，未改变分块内核的
+寄存器预算；P8-2 为 raw memref batch matmul 增加 N=2049 的 bounded-panel 回归，
+并为 N=3 的静态 self-attention pipeline 增加 batch-kernel smoke guard；
+dynamic self-attention 仍按设计保留 generic fallback。该阶段没有新增
+server_rec 长 logits 数值覆盖、splitHeads/key/context transpose 对照或
+6T ratio 重测，因此只构成 pipeline/regression guard，不是长序列 MHA 的
+端到端性能验收。两阶段均通过完整回归，但不能从 441/441 ctest 的通过率
+推导性能收益。
+
+实际达成项是：长 N 不再被 1024 门控误拒、静态 MHA 的既有 batch kernel
+有明确守护、动态 MHA/layout transpose 没有被未经证明地改写。未达成项是
+M3 标准口径、int8 depthwise、multiplier>1 depthwise、arena 复用以及
+pack 化；它们均保留为 audit/no-go，而不是默认生产特性。后续若重新开启
+其中任一项，必须先补齐数值 golden、类型/生命周期证明、编译预算和新的
+全量 ratio 基线。

@@ -1045,9 +1045,10 @@ accumulation 算”的报告偏差。
 
 答案：当前 CI 宿主只有 x86-64 sapphire rapids，AVX-VNNI 存在但 AVX512-VNNI
 不存在。`ncnn-compile --precision=int8` 在这两个 host 上都生成 INT32 accumulation，
-差异主要来自 loop unroll 和 L1 cache。我们把 INT8 VNNI 选型标记为 `P8` 路线图，不在
-阶段七硬塞跑分；阶段七的“目标代码生成”以**指令级静态检查**和 **IR 端 capability**
-为验收点。
+差异主要来自 loop unroll 和 L1 cache。P4 已落地受限的 int8 row-dot/requant
+路径；仍未落地的是面向原生 `vpdpbusd` 的 VNNI 选型与指令生成，继续作为 `P8`
+路线图审计项，不在阶段七硬塞跑分；阶段七的“目标代码生成”以**指令级静态检查**
+和 **IR 端 capability**为验收点。
 
 ### 11.11 一次跨架构的 FP16 静态验证具体跑什么？
 
