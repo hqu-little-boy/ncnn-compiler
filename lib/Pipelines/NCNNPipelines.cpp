@@ -38,6 +38,7 @@
 #include "ncnn-mlir/Transforms/FuseLinalgEpilogue/FuseLinalgEpilogue.hpp"
 #include "ncnn-mlir/Transforms/FuseQuantChainNCNN/FuseQuantChainNCNN.hpp"
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"
+#include "ncnn-mlir/Transforms/InstrumentNCNNProfile/InstrumentNCNNProfile.hpp"
 #include "ncnn-mlir/Transforms/LowerVectorMathNCNN/LowerVectorMathNCNN.hpp"
 #include "ncnn-mlir/Transforms/MatmulKernelNCNN/MatmulKernelNCNN.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
@@ -158,7 +159,11 @@ void buildNCNNLinalgToMemRefPipeline(
     planOptions.vectorLanes = options.vectorLanes;
     planOptions.vectorScalable = options.vectorScalable;
     planOptions.vectorTail = options.vectorTail;
+    planOptions.codegenIdentity = options.executionPlanCodegenIdentity;
     passManager.addPass(createEmitModelPlanPass(planOptions));
+  }
+  if (options.profileInstrumentation) {
+    passManager.addPass(createInstrumentNCNNProfilePass());
   }
 }
 

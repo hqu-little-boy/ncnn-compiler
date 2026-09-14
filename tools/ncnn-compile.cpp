@@ -203,6 +203,10 @@ llvm::cl::opt<bool> g_verify_execution(
   "verify-execution",
   llvm::cl::desc("Build and run an ABI smoke harness"),
   llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_profile(
+  "profile",
+  llvm::cl::desc("Instrument the generated library for diagnostic profiling"),
+  llvm::cl::cat(g_category));
 
 llvm::cl::opt<std::string> g_driver("driver",
                                     llvm::cl::init(""),
@@ -841,6 +845,42 @@ int run(const std::vector<std::string>& command,
     }
   }
   return manifest;
+}
+
+[[nodiscard]] std::string hex_encode(std::string_view value) {
+  constexpr char digits[] = "0123456789abcdef";
+  std::string result;
+  result.reserve(value.size() * 2);
+  for (const unsigned char character : value) {
+    result.push_back(digits[character >> 4]);
+    result.push_back(digits[character & 0x0f]);
+  }
+  return result;
+}
+
+[[nodiscard]] std::expected<std::string, std::string> read_execution_plan_hash(
+  const fs::path& path) {
+  auto buffer = llvm::MemoryBuffer::getFile(path.string());
+  if (!buffer) {
+    return std::unexpected(std::format("cannot read execution plan '{}': {}",
+                                       path.string(),
+                                       buffer.getError().message()));
+  }
+  auto value = llvm::json::parse((*buffer)->getBuffer());
+  if (!value) {
+    return std::unexpected(std::format("invalid execution plan '{}': {}",
+                                       path.string(),
+                                       llvm::toString(value.takeError())));
+  }
+  auto* object = value->getAsObject();
+  if (object == nullptr) {
+    return std::unexpected("execution plan must be a JSON object");
+  }
+  auto hash = object->getString("plan_hash");
+  if (!hash || hash->empty()) {
+    return std::unexpected("execution plan has no plan_hash");
+  }
+  return hash->str();
 }
 
 [[nodiscard]] std::expected<std::size_t, std::string> element_count(
@@ -1714,6 +1754,37 @@ validate_output_directory(const fs::path& output_dir,
   return write_file(path, code);
 }
 
+std::string build_codegen_identity(std::string_view target_triple,
+                                   unsigned effective_threads,
+                                   std::string_view resolved_vector_math,
+                                   std::string_view vector_math_abi,
+                                   unsigned vector_math_lanes) {
+  std::string result =
+    "target=" + std::string(target_triple) + "|march=" + g_march +
+    "|mcpu=" + g_mcpu + "|mtune=" + g_mtune + "|precision=" + g_precision +
+    "|fp16-accumulator=" + g_fp16_accumulator +
+    "|allow-fallback=" + std::to_string(g_allow_fallback.getValue()) +
+    "|optimization=" + g_optimization +
+    "|vector-width=" + std::to_string(g_vector_width) +
+    "|vector-mode=" + g_vector_mode +
+    "|vector-math=" + std::string(resolved_vector_math) +
+    "|vector-math-abi=" + std::string(vector_math_abi) +
+    "|vector-math-lanes=" + std::to_string(vector_math_lanes) +
+    "|sysroot=" + g_sysroot + "|conv-strategy=" + g_conv_strategy +
+    "|conv-gemm-l2-bytes=" + std::to_string(g_conv_gemm_l2_bytes) +
+    "|threads=" + std::to_string(effective_threads);
+  for (const std::string& feature : g_target_features) {
+    result += "|target-feature=" + feature;
+  }
+  for (const std::string& argument : g_clang_args) {
+    result += "|clang-arg=" + argument;
+  }
+  for (const std::string& argument : g_linker_args) {
+    result += "|linker-arg=" + argument;
+  }
+  return result;
+}
+
 std::vector<std::string> normalize_arguments(int argc, char** argv) {
   std::vector<std::string> result;
   result.reserve(argc);
@@ -2160,12 +2231,42 @@ int main(int argc, char** argv) {
   const fs::path llvm_ir = staging.path() / "model.ll";
   const fs::path object = staging.path() / "model.o";
   const fs::path assembly = staging.path() / "model.s";
+  const fs::path profile_object = staging.path() / "profile_runtime.o";
+#ifdef NCNN_PROFILE_RUNTIME_SOURCE
+  fs::path profile_runtime_source = NCNN_PROFILE_RUNTIME_SOURCE;
+#else
+  fs::path profile_runtime_source;
+#endif
+#ifdef NCNN_PROFILE_RUNTIME_RELATIVE_PATH
+  if (g_profile && !fs::is_regular_file(profile_runtime_source)) {
+    std::error_code executable_error;
+    const fs::path executable =
+      fs::read_symlink("/proc/self/exe", executable_error);
+    if (!executable_error) {
+      const fs::path installed_source =
+        executable.parent_path() / NCNN_PROFILE_RUNTIME_RELATIVE_PATH;
+      if (fs::is_regular_file(installed_source)) {
+        profile_runtime_source = installed_source;
+      }
+    }
+  }
+#endif
   const fs::path manifest_path = staging.path() / (model_name + ".json");
   const fs::path execution_plan_path =
     staging.path() / (model_name + ".plan.json");
   const fs::path header = staging.path() / (model_name + ".h");
   const fs::path exports = staging.path() / "exports.map";
   const fs::path library = staging.path() / ("lib" + model_name + ".so");
+  // A diagnostic profile is only joinable when its matching static plan is
+  // published alongside the library, so profiling implicitly emits the plan.
+  const bool emit_execution_plan = g_emit_execution_plan || g_profile;
+  const std::string codegen_identity =
+    build_codegen_identity(effective_target_triple,
+                           effective_threads,
+                           resolved_vector_math,
+                           vector_math_abi,
+                           vector_math_lanes);
+  const std::string codegen_identity_transport = hex_encode(codegen_identity);
 
   std::vector<std::string> driver_command{
     driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()};
@@ -2228,7 +2329,10 @@ int main(int argc, char** argv) {
     if (vector_tail) {
       linalgOptions.push_back("vector-tail=true");
     }
-    if (g_emit_execution_plan) {
+    if (g_profile) {
+      linalgOptions.push_back("profile-instrumentation=true");
+    }
+    if (emit_execution_plan) {
       linalgOptions.push_back("execution-plan-path=" +
                               execution_plan_path.string());
       linalgOptions.push_back("execution-plan-model=" + model_name);
@@ -2236,6 +2340,8 @@ int main(int argc, char** argv) {
                               effective_target_triple);
       linalgOptions.push_back("execution-plan-threads=" +
                               std::to_string(effective_threads));
+      linalgOptions.push_back("execution-plan-codegen-identity=" +
+                              codegen_identity_transport);
     }
     if (!linalgOptions.empty()) {
       std::string joined;
@@ -2262,8 +2368,17 @@ int main(int argc, char** argv) {
         {opt_path, capi_option, memref_ir.string(), "-o", capi_ir.string()})) {
     return status;
   }
+  std::string execution_plan_hash;
+  if (g_profile) {
+    auto hash = read_execution_plan_hash(execution_plan_path);
+    if (!hash) {
+      return fail(hash.error());
+    }
+    execution_plan_hash = *hash;
+  }
   std::string llvm_pipeline = "--ncnn-memref-to-llvm-pipeline=";
   const bool uses_openmp = effective_threads != 1;
+  const bool uses_sleef = resolved_vector_math == "sleef";
   llvm_pipeline += "threads=" + std::to_string(effective_threads);
   if (!vector_active) {
     llvm_pipeline += " vector-size=" + std::to_string(g_vector_width / 32);
@@ -2338,6 +2453,33 @@ int main(int argc, char** argv) {
                  {"-c", llvm_bitcode.string(), "-o", object.string()});
   if (int status = run(compile)) {
     return status;
+  }
+  if (g_profile) {
+    if (profile_runtime_source.empty() ||
+        !fs::is_regular_file(profile_runtime_source)) {
+      return fail("diagnostic profile runtime source is unavailable");
+    }
+    std::vector<std::string> profile_compile{
+      clang_path,
+      "-std=c11",
+      "-fPIC",
+      "-O2",
+      "-DNCNN_PROFILE_DEFAULT_MODEL=\"" + model_name + "\"",
+      "-DNCNN_PROFILE_DEFAULT_TARGET=\"" + effective_target_triple + "\"",
+      "-DNCNN_PROFILE_DEFAULT_THREADS=\"" + std::to_string(effective_threads) +
+        "\"",
+      "-DNCNN_PROFILE_DEFAULT_PLAN_HASH=\"" + execution_plan_hash + "\"",
+      "-DNCNN_PROFILE_DEFAULT_BUILD_IDENTITY=\"" + execution_plan_hash + "\""};
+    profile_compile.insert(
+      profile_compile.end(), target_args.begin(), target_args.end());
+    profile_compile.insert(
+      profile_compile.end(), codegen_args.begin(), codegen_args.end());
+    profile_compile.insert(
+      profile_compile.end(),
+      {"-c", profile_runtime_source.string(), "-o", profile_object.string()});
+    if (int status = run(profile_compile)) {
+      return status;
+    }
   }
   std::vector<std::string> assemble = {clang_path, "-x", "ir", optimization};
   assemble.insert(assemble.end(), target_args.begin(), target_args.end());
@@ -2451,8 +2593,11 @@ int main(int argc, char** argv) {
     clang_path, "-shared", "-nostdlib", optimization};
   link.insert(link.end(), target_args.begin(), target_args.end());
   link.push_back(object.string());
+  if (g_profile) {
+    link.push_back(profile_object.string());
+  }
   link.push_back(builtins_path);
-  if (!sleef_archive.empty()) {
+  if (uses_sleef) {
     // SLEEF 静态档案在目标对象之后、系统库之前：符号由 version script
     // 保持 local，导出面不变。
     link.push_back(sleef_archive.string());
@@ -2485,24 +2630,34 @@ int main(int argc, char** argv) {
     return fail(text.error());
   }
   const std::set<std::string> undefined = symbols(*text);
-  const std::set<std::string> allowed = {"ceilf",
-                                         "erfcf",
-                                         "erff",
-                                         "expf",
-                                         "floorf",
-                                         "free",
-                                         "malloc",
-                                         "memcpy",
-                                         "memset",
-                                         "powf",
-                                         "tanhf"};
+  const std::set<std::string> common_allowed = {"ceilf",
+                                                "erfcf",
+                                                "erff",
+                                                "expf",
+                                                "floorf",
+                                                "free",
+                                                "malloc",
+                                                "memcpy",
+                                                "memset",
+                                                "powf",
+                                                "tanhf"};
+  const std::set<std::string> profile_allowed = {"clock_gettime",
+                                                 "fclose",
+                                                 "fopen",
+                                                 "fputc",
+                                                 "fputs",
+                                                 "fprintf",
+                                                 "fwrite",
+                                                 "getenv",
+                                                 "__tls_get_addr"};
   const auto is_allowed_undefined = [&](const std::string& symbol) {
     // SLEEF 静态档案的分发器运行需要这两个 libc 例程（计时与对齐分配）。
     static const std::set<std::string> sleef_allowed = {"clock_gettime",
                                                         "posix_memalign"};
-    return allowed.contains(symbol) ||
+    return common_allowed.contains(symbol) ||
+           (g_profile && profile_allowed.contains(symbol)) ||
            (uses_libmvec && symbol.starts_with("_ZGV")) ||
-           (!sleef_archive.empty() && sleef_allowed.contains(symbol)) ||
+           (uses_sleef && sleef_allowed.contains(symbol)) ||
            (uses_openmp && symbol.starts_with("__kmpc_")) ||
            (uses_address_sanitizer && symbol.starts_with("__asan_")) ||
            (uses_undefined_sanitizer && symbol.starts_with("__ubsan_")) ||
@@ -2689,7 +2844,7 @@ int main(int argc, char** argv) {
       return fail(result.error());
     }
   }
-  if (g_emit_execution_plan) {
+  if (emit_execution_plan) {
     if (auto result = publish(execution_plan_path); !result) {
       return fail(result.error());
     }

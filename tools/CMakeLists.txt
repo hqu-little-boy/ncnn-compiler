@@ -27,10 +27,14 @@ target_link_libraries(ncnn-compile PRIVATE
 # 运行期按此目录定位 vendored SLEEF 静态档案（构建树内直接可用；安装布局
 # 由 ../lib 相对定位兜底）。
 target_compile_definitions(ncnn-compile PRIVATE
-    NCNN_SLEEF_ARCHIVE_DIR="$<TARGET_FILE_DIR:sleef>")
+    NCNN_SLEEF_ARCHIVE_DIR="$<TARGET_FILE_DIR:sleef>"
+    NCNN_PROFILE_RUNTIME_SOURCE="${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_runtime.c"
+    NCNN_PROFILE_RUNTIME_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/profile_runtime.c")
 add_dependencies(ncnn-compile sleef)
 install(TARGETS ncnn-compile RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES $<TARGET_FILE:sleef> DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(FILES ${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_runtime.c
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/ncnn-mlir)
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/compile_ncnn_model.py

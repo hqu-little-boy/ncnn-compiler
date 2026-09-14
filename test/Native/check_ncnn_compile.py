@@ -268,6 +268,10 @@ def main():
         raise RuntimeError(f"unexpected execution-plan header: {plan}")
     if plan.get("model") != "relu_plan" or plan.get("target", {}).get("triple") != native_target:
         raise RuntimeError(f"execution plan lacks target provenance: {plan}")
+    if not plan.get("plan_hash") or plan.get("build_identity") != plan.get("plan_hash"):
+        raise RuntimeError(f"execution plan lacks build identity: {plan}")
+    if not plan.get("codegen_identity"):
+        raise RuntimeError(f"execution plan lacks codegen identity: {plan}")
     required_plan_sections = {
         "functions", "operations", "buffers", "regions", "summary", "diagnostics"
     }
@@ -280,6 +284,68 @@ def main():
         plan_outputs[1] / "relu_plan.plan.json"
     ).read_bytes():
         raise RuntimeError("execution plan is not deterministic")
+
+    variant_output = work_dir / "relu-plan-o1"
+    run(
+        [
+            args.compiler,
+            args.param,
+            "--bin",
+            args.bin,
+            "--model-name",
+            "relu_plan",
+            "--output-dir",
+            variant_output,
+            "--emit-manifest",
+            "--emit-execution-plan",
+            "--threads=1",
+            "--vector-width=0",
+            "-O1",
+        ]
+    )
+    variant_plan = json.loads(
+        (variant_output / "relu_plan.plan.json").read_text()
+    )
+    if variant_plan.get("plan_hash") == plan.get("plan_hash"):
+        raise RuntimeError("code-generation variants share a plan hash")
+
+    profile_output = work_dir / "relu-profile"
+    run(
+        [
+            args.compiler,
+            args.param,
+            "--bin",
+            args.bin,
+            "--model-name",
+            "relu_profile",
+            "--output-dir",
+            profile_output,
+            "--emit-manifest",
+            "--profile",
+            "--threads=1",
+            "--vector-width=0",
+            "-O0",
+        ]
+    )
+    assert_files(
+        profile_output,
+        {
+            "librelu_profile.so",
+            "relu_profile.h",
+            "relu_profile.json",
+            "relu_profile.plan.json",
+        },
+    )
+    profile_defined = run(
+        [args.nm, "-D", "--defined-only", profile_output / "librelu_profile.so"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    profile_exports = sorted(
+        line.split()[-1] for line in profile_defined.splitlines() if line.split()
+    )
+    if profile_exports != ["relu_profile"]:
+        raise RuntimeError("profile artifact changed public exports")
 
     sparse_param = work_dir / "sparse_input_shapes.param"
     sparse_bin = work_dir / "sparse_input_shapes.bin"

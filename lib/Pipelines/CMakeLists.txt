@@ -14,6 +14,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     FuseLinalgEpilogue
     FuseQuantChainNCNN
     EmitModelPlan
+    InstrumentNCNNProfile
     GenerateCAPI
     LowerVectorMathNCNN
     MatmulKernelNCNN

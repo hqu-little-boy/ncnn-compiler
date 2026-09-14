@@ -464,14 +464,60 @@ dist/model/
 ```
 
 `model.plan.json` 的 `schema_version` 当前为 `1`，`kind` 为
-`ncnn.model_execution_plan`。动态 shape、未知 element size、整数溢出以及无法从静态 IR
-证明的 peak workspace 均使用 `null` 和 diagnostics 记录，绝不填充为零。`runtime_counters`
-和 `prepared_runner` 明确标记为未采集/不支持；本选项不会合并 allocation、重写 alias、
-改变 layout/kernel 选择、注入 runtime，也不会修改公共 C ABI。
+`ncnn.model_execution_plan`。`plan_hash` 是静态 plan 与实际 code-generation identity 的
+确定性摘要，`build_identity` 当前等于该摘要；`codegen_identity` 以 hex 编码保存原始
+code-generation 参数，避免通过 pipeline 选项传输时被空格拆分。动态 shape、未知 element
+size、整数溢出以及无法从静态 IR 证明的 peak workspace 均使用 `null` 和 diagnostics 记录，
+绝不填充为零。静态 plan 的
+`runtime_counters` 始终是 `not_collected`，`prepared_runner` 标记为
+`available_in_performance_harness`；本选项不会合并 allocation、重写 alias、改变
+layout/kernel 选择、注入 runtime，也不会修改公共 C ABI。数值性能 harness 可另行以
+`NCNN_PERF_MODE=prepared` 复用已加载 Net/Extractor，或以
+`NCNN_PERF_MODE=allocation_audit` 输出 ncnn 专用分配审计；两者均不进入 end-to-end
+ratio 门禁。
 
 不指定该选项时不会生成 plan 文件，现有产物、ABI manifest、导出符号和运行时行为保持不变。
 
-### 4.3 `--emit-manifest`
+### 4.3 `--profile`
+
+显式构建带诊断回调的动态库，并自动发布与本次生成代码匹配的 execution plan：
+
+```bash
+ncnn-compile model.param \\
+  --profile \\
+  --emit-manifest \\
+  --output-dir=dist/model
+```
+
+输出目录除头文件、ABI manifest 和动态库外，还包含 `model.plan.json`。运行时只有设置
+`NCNN_PROFILE_PATH` 才会写出 profile sidecar；`NCNN_PROFILE_MODEL`、
+`NCNN_PROFILE_PLAN_HASH`、`NCNN_PROFILE_TARGET` 和 `NCNN_PROFILE_THREADS` 可用于覆盖
+sidecar 的环境元数据，未设置时使用编译期默认值；`NCNN_PROFILE_BUILD_IDENTITY` 可覆盖
+build identity。`NCNN_PROFILE_MODE` 必须与待 join 的 perf 行一致（例如 prepared 示例需设置
+`NCNN_PROFILE_MODE=prepared`）。profile 文件的 `kind` 为
+`ncnn.model_execution_profile`，聚合语义为 `process-cumulative`，并记录 invocation 次数、
+operation/parallel/allocation/copy 事件、峰值 live bytes、顶层 wall-time、事件不匹配和
+容量溢出。插桩只覆盖可安全识别的显式回调点；未覆盖或无法证明的时间保持 `null`/unknown，
+不能解读为零开销或完整硬件计数器。
+
+`--profile` 不改变 typed bare-pointer 公共 C ABI，但会改变内部动态库内容并增加诊断开销。
+instrumented 时间只能用于 `perf_attribution_report.py` 的诊断归因，不能写入或替代正式
+end-to-end ratio 门禁。归因工具严格校验 model、plan hash、build identity、target、threads、
+mode 和 schema；其中 build identity 是包含 code-generation identity 的 plan hash。典型用法为：
+
+```bash
+python3 tools/perf_attribution_report.py \\
+  --perf=perf.ndjson \\
+  --plan=dist/model/model.plan.json \\
+  --profile=profile.json \\
+  --mode=prepared \\
+  --output=dist/model/attribution.json
+```
+
+不指定 `--profile` 时，默认流水线不插入回调、不链接 profile runtime，也不会额外发布 plan
+文件。
+
+### 4.4 `--emit-manifest`
 
 将 JSON ABI manifest 发布到输出目录：
 
