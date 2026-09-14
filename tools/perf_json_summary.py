@@ -64,6 +64,11 @@ def _normalise_record(record: Any, line_number: int) -> dict[str, Any]:
   normalised["mode"] = mode
   normalised["status"] = status
   normalised["gate_eligible"] = gate_eligible
+  for field in ("target", "plan_hash", "build_identity"):
+    value = record.get(field)
+    if value is not None and (not isinstance(value, str) or not value):
+      raise ValueError(
+        f"line {line_number}: {field} must be a non-empty string or null")
 
   measured = status == "measured"
   _number(record, "ratio", required=measured)
@@ -87,7 +92,19 @@ def load_rows(path: str | None) -> dict[RowKey, dict[str, Any]]:
           normalised = _normalise_record(record, line_number)
         except (json.JSONDecodeError, ValueError) as error:
           raise ValueError(f"{path}:{line_number}: {error}") from error
-        rows[(normalised["model"], normalised["mode"])] = normalised
+        key = (normalised["model"], normalised["mode"])
+        previous = rows.get(key)
+        if previous is not None:
+          identity_fields = ("target", "plan_hash", "build_identity")
+          previous_identity = tuple(previous.get(field) for field in identity_fields)
+          current_identity = tuple(normalised.get(field) for field in identity_fields)
+          if (previous_identity != current_identity and
+              (any(value is not None for value in previous_identity) or
+               any(value is not None for value in current_identity))):
+            raise ValueError(
+              f"{path}:{line_number}: conflicting build identities for "
+              f"model={key[0]!r}, mode={key[1]!r}")
+        rows[key] = normalised
   except OSError as error:
     raise ValueError(f"cannot read {path}: {error}") from error
   return rows

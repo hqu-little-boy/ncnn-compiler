@@ -38,6 +38,20 @@ set_tests_properties(perf-json-summary PROPERTIES
     LABELS "performance;tooling"
     RUN_SERIAL TRUE
     TIMEOUT 30)
+add_test(NAME perf-attribution
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_perf_attribution.py)
+set_tests_properties(perf-attribution PROPERTIES
+    LABELS "performance;tooling"
+    RUN_SERIAL TRUE
+    TIMEOUT 30)
+add_test(NAME profile-runtime
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_profile_runtime.py
+            --cc ${CLANG}
+            --runtime ${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_runtime.c)
+set_tests_properties(profile-runtime PROPERTIES
+    LABELS "performance;runtime;tooling"
+    RUN_SERIAL TRUE
+    TIMEOUT 30)
 
 # repeated-call-memory 测试暂时屏蔽，当前阶段不做多次调用稳定性测试。
 # set(REPEATED_CALL_ARGS

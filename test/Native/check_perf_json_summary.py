@@ -94,6 +94,20 @@ def main() -> int:
     if result.returncode == 0 or "ratio" not in result.stderr:
       raise RuntimeError("malformed measured record was accepted")
 
+    conflict = root / "conflict.ndjson"
+    first = measured("same", "prepared", 1.0)
+    first.update({
+      "target": "x86_64-pc-linux-gnu",
+      "plan_hash": "one",
+      "build_identity": "one",
+    })
+    second = dict(first)
+    second["target"] = "aarch64-unknown-linux-gnu"
+    write_records(conflict, [first, second])
+    result = run_summary(conflict)
+    if result.returncode == 0 or "conflicting build identities" not in result.stderr:
+      raise RuntimeError("conflicting performance identities were overwritten")
+
   return 0
 
 
