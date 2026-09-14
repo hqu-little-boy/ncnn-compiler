@@ -19,6 +19,10 @@
 // CHECK-COUNT-8: arith.muli {{.*}} : i32
 // CHECK: scf.yield
 // CHECK-COUNT-8: memref.store {{.*}} : memref<8x8xi32, strided<[8, 1], offset: ?>>
+// CHECK: ncnn.contract = "selected"
+// CHECK: ncnn.kernel = "int8_row_dot"
+// CHECK: ncnn.packing = "prepacked_transpose_b"
+// CHECK: ncnn.parallel = "outer_tile+inner_simd"
 // CHECK-NOT: linalg.matmul
 module {
   func.func @tiled_i8(%im2col: memref<4096x72xi8>, %weight: memref<8x72xi8>,

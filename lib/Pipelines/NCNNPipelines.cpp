@@ -2,6 +2,8 @@
 
 #include <optional>
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -23,9 +25,12 @@
 #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/Transforms/Passes.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
@@ -50,9 +55,68 @@
 #include "ncnn-mlir/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.hpp"
 #include "ncnn-mlir/Transforms/VerifyModelShapeContracts/VerifyModelShapeContracts.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
+#include "ncnn-mlir/Transforms/VerifyNoNestedOpenMP/VerifyNoNestedOpenMP.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoTosaOps/VerifyNoTosaOps.hpp"
 
 namespace mlir::ncnn {
+
+namespace {
+
+// Linalg-to-parallel-loops does not distinguish an operation already enclosed
+// by a tile forall from a top-level residual operation.  Lower the former to
+// serial scf.for loops first so the subsequent SCF-to-OpenMP conversion emits
+// one team for the outer tile boundary instead of a nested team per tile.
+class ConvertNestedLinalgToLoopsPass final
+  : public PassWrapper<ConvertNestedLinalgToLoopsPass,
+                       OperationPass<ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertNestedLinalgToLoopsPass)
+
+  StringRef getArgument() const final {
+    return "convert-nested-linalg-to-loops";
+  }
+  StringRef getDescription() const final {
+    return "Lower nested Linalg and reductions to serial loops";
+  }
+
+  void runOnOperation() final {
+    SmallVector<linalg::LinalgOp> nestedOps;
+    getOperation().walk([&](linalg::LinalgOp op) {
+      // Linalg reductions lower to a parallel loop for the reduction's
+      // elementwise body in addition to their outer loop.  Keep the whole
+      // reduction serial when the threaded pipeline will provide the single
+      // outer team; this also avoids a hidden nested team for top-level
+      // reductions.
+      if (isa<linalg::ReduceOp>(op) || op->getParentOfType<scf::ForallOp>() ||
+          op->getParentOfType<scf::ParallelOp>() ||
+          op->getParentOfType<omp::ParallelOp>()) {
+        nestedOps.push_back(op);
+      }
+    });
+
+    IRRewriter rewriter(&getContext());
+    for (linalg::LinalgOp op : nestedOps) {
+      if (!llvm::all_of(op->getOperands(), [](Value value) {
+            return isa<MemRefType>(value.getType());
+          })) {
+        op.emitError()
+          << "nested Linalg operation must be bufferized before OpenMP "
+             "lowering";
+        signalPassFailure();
+        return;
+      }
+      rewriter.setInsertionPoint(op);
+      if (failed(linalg::linalgOpToLoops(rewriter, op))) {
+        op.emitError() << "failed to lower nested Linalg operation to loops";
+        signalPassFailure();
+        return;
+      }
+      rewriter.eraseOp(op);
+    }
+  }
+};
+
+}  // namespace
 
 void buildNCNNToTosaPipeline(OpPassManager& passManager) {
   passManager.addPass(createConvertNCNNModelToFuncPass());
@@ -175,11 +239,10 @@ void buildNCNNMemRefToLLVMPipeline(
   OpPassManager& passManager, const NCNNMemRefToLLVMPipelineOptions& options) {
   if (options.threads != 1) {
     // 并行化发射：张量级 tile-matmul-forall / forallize-disjoint-tile-
-    // loops 已产出分块 forall；本处对残余 linalg（含 forall 区域内的
-    // 分块 matmul）用上游全域并行化降为 scf.parallel 后统一进 OpenMP。
-    // 区域内产生的嵌套 omp 团队在 libomp 默认非嵌套语义下自动串行化，
-    // 正确性与 K 归约序不受影响；其彻底消除待区域内部改走显式循环后
-    // （后续迭代）完成。
+    // loops 已产出分块 forall；残余顶层 linalg 仍可用上游全域并行化，
+    // 而 tile 区域与 reduction 先改成串行 scf.for，保证整个算子只
+    // 进入一个 OpenMP team。
+    passManager.addPass(std::make_unique<ConvertNestedLinalgToLoopsPass>());
     passManager.addPass(createConvertLinalgToParallelLoopsPass());
     passManager.addPass(createForallToParallelLoopPass());
     ConvertSCFToOpenMPPassOptions openmpOptions;
@@ -187,6 +250,7 @@ void buildNCNNMemRefToLLVMPipeline(
       openmpOptions.numThreads = options.threads;
     }
     passManager.addPass(createConvertSCFToOpenMPPass(openmpOptions));
+    passManager.addPass(createVerifyNoNestedOpenMPPass());
   } else {
     // 串行回退：threads=1 时 forall 无并行语义承载，先归一为 scf.for，
     // 再进入既有的 affine 向量化或标量循环下降。

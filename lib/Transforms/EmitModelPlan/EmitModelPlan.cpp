@@ -25,6 +25,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
 
@@ -198,6 +199,7 @@ class EmitModelPlanPass final
     JsonArray operations;
     JsonArray buffers;
     JsonArray regions;
+    JsonArray contracts;
     JsonArray unknown_fields;
     JsonObject summary;
     std::int64_t allocation_count = 0;
@@ -208,6 +210,11 @@ class EmitModelPlanPass final
     std::int64_t batch_matmul_count = 0;
     std::int64_t vector_fma_count = 0;
     std::int64_t parallel_region_count = 0;
+    std::int64_t kernel_contract_count = 0;
+    std::int64_t kernel_contract_fallback_count = 0;
+    std::int64_t nested_openmp_count = 0;
+    std::int64_t packed_buffer_bytes = 0;
+    bool packed_buffer_bytes_unknown = false;
     std::optional<std::int64_t> static_buffer_bytes = 0;
     std::optional<std::int64_t> static_peak_live_bytes;
     bool peak_workspace_unknown = false;
@@ -224,7 +231,7 @@ class EmitModelPlanPass final
     JsonArray static_liveness;
     JsonArray provenance;
     std::string plan_hash_input =
-      "static-v1|" + model + "|" + targetTriple + "|" +
+      "static-v1|layout-kernel-v1|" + model + "|" + targetTriple + "|" +
       std::to_string(threads) + "|" + std::to_string(vectorLanes) + "|" +
       std::to_string(vectorScalable.getValue()) + "|" +
       std::to_string(vectorTail.getValue()) + "|codegen=" + codegenIdentity;
@@ -479,6 +486,76 @@ class EmitModelPlanPass final
         if (auto name = operation->getAttrOfType<StringAttr>("ncnn.name")) {
           plan_hash_input += "|source-name=" + name.getValue().str();
         }
+
+        const bool has_contract = operation->hasAttr(contract::kContract) ||
+                                  operation->hasAttr(contract::kKernel) ||
+                                  operation->hasAttr(contract::kPacking) ||
+                                  operation->hasAttr(contract::kFallback);
+        auto make_contract = [&]() {
+          JsonObject result;
+          auto copy_string = [&](StringRef attribute, StringRef field) {
+            if (auto value = operation->getAttrOfType<StringAttr>(attribute)) {
+              result[field.str()] = value.getValue().str();
+            }
+          };
+          auto copy_integer = [&](StringRef attribute, StringRef field) {
+            if (auto value = operation->getAttrOfType<IntegerAttr>(attribute)) {
+              result[field.str()] = value.getInt();
+            }
+          };
+          copy_string(contract::kLayout, "layout");
+          copy_string(contract::kInputLayout, "input_layout");
+          copy_string(contract::kWeightLayout, "weight_layout");
+          copy_string(contract::kOutputLayout, "output_layout");
+          copy_string(contract::kPacking, "packing");
+          copy_integer(contract::kPackFactor, "pack_factor");
+          copy_integer(contract::kPackBytes, "pack_bytes");
+          copy_integer(contract::kUnpackBytes, "unpack_bytes");
+          copy_integer(contract::kTileM, "tile_m");
+          copy_integer(contract::kTileN, "tile_n");
+          copy_integer(contract::kTileK, "tile_k");
+          copy_string(contract::kKernel, "kernel");
+          copy_string(contract::kParallel, "parallel");
+          copy_integer(contract::kSimdLanes, "simd_lanes");
+          copy_integer(contract::kSimdChunk, "simd_chunk");
+          copy_string(contract::kFma, "fma");
+          copy_string(contract::kTail, "tail");
+          copy_string(contract::kAlignment, "alignment");
+          copy_string(contract::kAlias, "alias");
+          copy_string(contract::kContract, "status");
+          copy_string(contract::kFallback, "fallback_reason");
+          return result;
+        };
+        if (has_contract) {
+          ++kernel_contract_count;
+          if (auto status =
+                operation->getAttrOfType<StringAttr>(contract::kContract);
+              status && status.getValue() == "fallback") {
+            ++kernel_contract_fallback_count;
+          }
+          if (auto packing =
+                operation->getAttrOfType<StringAttr>(contract::kPacking);
+              packing && packing.getValue() != "unpacked" &&
+              packing.getValue() != "none") {
+            if (auto bytes =
+                  operation->getAttrOfType<IntegerAttr>(contract::kPackBytes)) {
+              if (!packed_buffer_bytes_unknown && bytes.getInt() > 0 &&
+                  packed_buffer_bytes <=
+                    std::numeric_limits<std::int64_t>::max() - bytes.getInt()) {
+                packed_buffer_bytes += bytes.getInt();
+              } else {
+                packed_buffer_bytes_unknown = true;
+              }
+            } else {
+              packed_buffer_bytes_unknown = true;
+            }
+          }
+          JsonObject contract_entry = make_contract();
+          contract_entry["id"] = operation_id;
+          contract_entry["operation"] = kind;
+          contract_entry["function"] = function_name;
+          contracts.push_back(std::move(contract_entry));
+        }
         JsonObject operation_object;
         operation_object["id"] = operation_id;
         operation_object["profile_id"] = profileId(operation_id);
@@ -514,6 +591,9 @@ class EmitModelPlanPass final
         }
         operation_object["operand_types"] = std::move(operand_types);
         operation_object["result_types"] = std::move(result_types);
+        if (has_contract) {
+          operation_object["kernel_contract"] = make_contract();
+        }
         operations.push_back(std::move(operation_object));
 
         if (isa<memref::AllocOp>(*operation)) {
@@ -576,6 +656,10 @@ class EmitModelPlanPass final
         if (isa<scf::ForallOp, scf::ParallelOp, omp::ParallelOp>(*operation)) {
           ++parallel_region_count;
         }
+        if (isa<omp::ParallelOp>(*operation) &&
+            operation->getParentOfType<omp::ParallelOp>() != nullptr) {
+          ++nested_openmp_count;
+        }
         if (kind.find("transpose") != std::string::npos) {
           ++transpose_count;
         }
@@ -602,6 +686,18 @@ class EmitModelPlanPass final
     summary["batch_matmul_count"] = batch_matmul_count;
     summary["vector_fma_count"] = vector_fma_count;
     summary["parallel_region_count"] = parallel_region_count;
+    summary["kernel_contract_count"] = kernel_contract_count;
+    summary["kernel_contract_fallback_count"] = kernel_contract_fallback_count;
+    summary["nested_openmp_count"] = nested_openmp_count;
+    if (packed_buffer_bytes_unknown) {
+      summary["packed_buffer_bytes"] = nullptr;
+      add_unknown("packed_buffer_bytes_unknown");
+    } else {
+      summary["packed_buffer_bytes"] = packed_buffer_bytes;
+    }
+    if (nested_openmp_count > 0) {
+      add_unknown("nested_openmp_present");
+    }
     if (static_buffer_bytes) {
       summary["static_buffer_bytes"] = *static_buffer_bytes;
     } else {
@@ -639,6 +735,7 @@ class EmitModelPlanPass final
     JsonObject root;
     root["schema_version"] = 1;
     root["plan_revision"] = "static-v1";
+    root["contract_revision"] = "layout-kernel-v1";
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen
     // hash, so profile/performance rows cannot join across code-generation
@@ -651,6 +748,7 @@ class EmitModelPlanPass final
     root["target"] = std::move(target);
     root["functions"] = std::move(functions);
     root["operations"] = std::move(operations);
+    root["contracts"] = std::move(contracts);
     root["buffers"] = std::move(buffers);
     root["regions"] = std::move(regions);
     root["static_liveness"] = std::move(static_liveness);

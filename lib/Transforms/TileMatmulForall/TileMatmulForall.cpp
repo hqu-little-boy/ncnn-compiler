@@ -16,6 +16,7 @@
 #include "mlir/Interfaces/TilingInterface.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
 
@@ -207,7 +208,65 @@ class TileMatmulForallPass final
     if (failed(
           applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
+      return;
     }
+
+    // Record the outer tile contract while the linalg op is still present.
+    // MatmulKernelNCNN consumes this boundary later and upgrades it to the
+    // combined outer-tile plus inner-SIMD contract.
+    getOperation().walk([&](scf::ForallOp forall) {
+      linalg::MatmulOp matmul;
+      linalg::MatmulTransposeBOp int8Matmul;
+      forall.walk([&](Operation* operation) {
+        if (!matmul && !int8Matmul) {
+          if (auto candidate = dyn_cast<linalg::MatmulOp>(operation)) {
+            matmul = candidate;
+          } else if (auto candidate =
+                       dyn_cast<linalg::MatmulTransposeBOp>(operation)) {
+            int8Matmul = candidate;
+          }
+        }
+      });
+      if (!matmul && !int8Matmul) {
+        return;
+      }
+      const auto output =
+        matmul ? matmul.getOutputs().front() : int8Matmul.getOutputs().front();
+      const auto outputType = dyn_cast<ShapedType>(output.getType());
+      if (!outputType || !outputType.hasRank() || outputType.getRank() != 2) {
+        return;
+      }
+      const auto input =
+        matmul ? matmul.getInputs().front() : int8Matmul.getInputs().front();
+      const auto inputType = dyn_cast<ShapedType>(input.getType());
+      const bool isInt8 = int8Matmul != nullptr;
+      if (!outputType.hasStaticShape() || !inputType || !inputType.hasRank() ||
+          inputType.getRank() != 2 || !inputType.hasStaticShape()) {
+        contract::annotateFallback(forall.getOperation(), "dynamic_shape");
+        return;
+      }
+      const int64_t tileM = outputType.getShape()[0];
+      const int64_t tileN = outputType.getShape()[1];
+      const int64_t tileK =
+        inputType && inputType.hasRank() && inputType.getRank() == 2
+          ? inputType.getShape()[1]
+          : 0;
+      contract::annotateTile(forall.getOperation(),
+                             isInt8 ? "int8_row_dot" : "f32_matmul",
+                             "identity",
+                             isInt8 ? "packed_nk" : "row_major_kxn",
+                             "identity",
+                             tileM,
+                             tileN,
+                             tileK,
+                             "outer_tile",
+                             "bounded_panel");
+      contract::annotatePacking(forall.getOperation(),
+                                isInt8 ? "prepacked_transpose_b" : "unpacked",
+                                1,
+                                0,
+                                0);
+    });
   }
 };
 

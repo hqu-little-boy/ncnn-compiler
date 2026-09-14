@@ -30,6 +30,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     VerifyNoNCNNOps
     VerifyNoTosaOps
     VerifyNoSCFForall
+    VerifyNoNestedOpenMP
     MLIRFuncDialect
     MLIRBufferizationPipelines
     MLIRBufferizationTransforms

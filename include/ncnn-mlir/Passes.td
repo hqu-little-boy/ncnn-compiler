@@ -306,6 +306,12 @@ def VerifyNoSCFForallPass : Pass<"verify-no-scf-forall", "mlir::ModuleOp"> {
   let dependentDialects = ["scf::SCFDialect"];
 }
 
+def VerifyNoNestedOpenMPPass
+    : Pass<"verify-no-nested-openmp", "mlir::ModuleOp"> {
+  let summary = "Fail if an OpenMP parallel region is nested in another team";
+  let dependentDialects = ["omp::OpenMPDialect"];
+}
+
 def TileMatmulForallPass : Pass<"tile-matmul-forall", "mlir::ModuleOp"> {
   let summary =
     "Tile top-level static matmuls into scf.forall grids along M/N";

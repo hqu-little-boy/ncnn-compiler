@@ -19,6 +19,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
 
@@ -65,6 +66,7 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context,
     const int64_t rank = generic.getNumLoops();
     if (rank == 0 || generic.getNumResults() != 1 ||
         generic.getNumDpsInits() != 1 ||
+        generic->getParentOfType<scf::ForallOp>() != nullptr ||
         llvm::any_of(generic.getIndexingMapsArray(), [rankDims](AffineMap map) {
           return !map.isIdentity() || map.getNumDims() != rankDims;
         })) {
@@ -340,6 +342,22 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context,
     }
     auto forall = rewriter.create<scf::ForallOp>(
       location, upperBounds, ValueRange{resultBuffer}, std::nullopt);
+    contract::annotateTile(forall.getOperation(),
+                           "elementwise_simd",
+                           "identity",
+                           "identity",
+                           "identity",
+                           1,
+                           rowWidth,
+                           0,
+                           "outer_tile+inner_simd",
+                           tailWidth > 0 ? "scalar_tail" : "none");
+    contract::annotatePacking(forall.getOperation(), "unpacked", 1, 0, 0);
+    contract::setInteger(forall.getOperation(), contract::kSimdLanes, lanes);
+    contract::setInteger(
+      forall.getOperation(), contract::kSimdChunk, chunkWidth);
+    contract::setString(
+      forall.getOperation(), contract::kFma, "vector_elementwise");
 
     Block* body = &forall.getRegion().front();
     Value sharedOut = body->getArgument(gridRank);
@@ -415,7 +433,8 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     auto initType =
       dyn_cast<RankedTensorType>(op.getDpsInitOperand(0)->get().getType());
     if (!inputType || !weightType || !initType || !inputType.hasStaticShape() ||
-        !weightType.hasStaticShape() || !initType.hasStaticShape()) {
+        !weightType.hasStaticShape() || !initType.hasStaticShape() ||
+        op->getParentOfType<scf::ForallOp>() != nullptr) {
       return;
     }
     if (!inputType.getElementType().isF32() || inputType.getRank() != 4 ||
@@ -736,6 +755,21 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     upperBounds.push_back(rewriter.getIndexAttr(outputWidth));
     auto forall = rewriter.create<scf::ForallOp>(
       location, upperBounds, ValueRange{resultBuffer}, std::nullopt);
+    contract::annotateTile(forall.getOperation(),
+                           "depthwise_simd",
+                           "nhwc",
+                           "hwcm",
+                           "nhwc",
+                           1,
+                           channels,
+                           kernelHeight * kernelWidth,
+                           "outer_tile+inner_simd",
+                           tailWidth > 0 ? "scalar_tail" : "none");
+    contract::annotatePacking(forall.getOperation(), "unpacked", 1, 0, 0);
+    contract::setInteger(forall.getOperation(), contract::kSimdLanes, lanes);
+    contract::setInteger(
+      forall.getOperation(), contract::kSimdChunk, chunkWidth);
+    contract::setString(forall.getOperation(), contract::kFma, "vector.fma");
 
     Block* body = &forall.getRegion().front();
     Value sharedOut = body->getArgument(3);
@@ -789,6 +823,17 @@ class VectorizeNCNNPass final
   void runOnOperation() final {
     ModuleOp module = getOperation();
     const unsigned lanes = this->lanes.getValue();
+    if (this->scalable.getValue()) {
+      // The implementation below intentionally emits fixed-width vectors.  Do
+      // not silently claim scalable-vector support while producing fixed IR.
+      module.walk([&](Operation* operation) {
+        if (isa<linalg::GenericOp, linalg::DepthwiseConv2DNhwcHwcmOp>(
+              operation)) {
+          contract::annotateFallback(operation, "unsupported_scalable_vector");
+        }
+      });
+      return;
+    }
     if (lanes == 0) {
       return;
     }

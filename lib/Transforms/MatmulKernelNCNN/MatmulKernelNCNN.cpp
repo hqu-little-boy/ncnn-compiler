@@ -9,6 +9,7 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
 
@@ -890,29 +891,51 @@ class MatmulKernelNCNNPass final
         builder.create<memref::LoadOp>(input, constantIndices));
     }
 
-    // leading dims 发射为 scf.parallel：保留原 generic 经
-    // ConvertLinalgToParallelLoops 的 OpenMP 多线程语义（串行 scf.for
-    // 链会在大图 epilogue 上丢失全部并行度）。
-    SmallVector<Value> parallelIndices(rank - 1);
-    if (rank > 1) {
-      SmallVector<Value> lowerBounds;
-      SmallVector<Value> upperBounds;
-      SmallVector<Value> steps;
-      for (int64_t dimension = 0; dimension < rank - 1; ++dimension) {
-        lowerBounds.push_back(
-          builder.create<arith::ConstantIndexOp>(0).getResult());
-        upperBounds.push_back(
-          builder.create<arith::ConstantIndexOp>(shape[dimension]).getResult());
-        steps.push_back(builder.create<arith::ConstantIndexOp>(1).getResult());
-      }
-      auto parallel = builder.create<scf::ParallelOp>(
-        generic.getLoc(), lowerBounds, upperBounds, steps);
-      llvm::copy(parallel.getInductionVars(), parallelIndices.begin());
-      builder.setInsertionPointToStart(parallel.getBody());
+    // Top-level generics may use scf.parallel so the later SCF-to-OpenMP
+    // conversion can distribute their leading dimensions.  A generic already
+    // inside a tile forall must instead use nested serial scf.for loops;
+    // otherwise it would create a second OpenMP team inside the outer one.
+    const bool nestedInForall =
+      generic->getParentOfType<scf::ForallOp>() != nullptr;
+    if (auto forall = generic->getParentOfType<scf::ForallOp>()) {
+      contract::setString(
+        forall.getOperation(), contract::kParallel, "outer_tile+inner_simd");
+      contract::setInteger(
+        forall.getOperation(), contract::kSimdChunk, chunkWidth);
+      contract::setString(
+        forall.getOperation(), contract::kFma, "vector.transfer_elementwise");
     }
-
+    SmallVector<Value> parallelIndices(rank - 1);
+    SmallVector<scf::ForOp> serialLoops;
     Value zeroIndex = builder.create<arith::ConstantIndexOp>(0);
     Value stepOneIndex = builder.create<arith::ConstantIndexOp>(1);
+    if (rank > 1) {
+      if (nestedInForall) {
+        for (int64_t dimension = 0; dimension < rank - 1; ++dimension) {
+          Value upperBound =
+            builder.create<arith::ConstantIndexOp>(shape[dimension]);
+          auto loop =
+            builder.create<scf::ForOp>(zeroIndex, upperBound, stepOneIndex);
+          serialLoops.push_back(loop);
+          parallelIndices[dimension] = loop.getInductionVar();
+          builder.setInsertionPointToStart(loop.getBody());
+        }
+      } else {
+        SmallVector<Value> lowerBounds;
+        SmallVector<Value> upperBounds;
+        SmallVector<Value> steps;
+        for (int64_t dimension = 0; dimension < rank - 1; ++dimension) {
+          lowerBounds.push_back(zeroIndex);
+          upperBounds.push_back(
+            builder.create<arith::ConstantIndexOp>(shape[dimension]));
+          steps.push_back(stepOneIndex);
+        }
+        auto parallel = builder.create<scf::ParallelOp>(
+          generic.getLoc(), lowerBounds, upperBounds, steps);
+        llvm::copy(parallel.getInductionVars(), parallelIndices.begin());
+        builder.setInsertionPointToStart(parallel.getBody());
+      }
+    }
 
     // 输出行模式的读写索引 = 该输入映射作用在 [并行索引..., 最内维偏移]
     // 上的仿射求值。
@@ -1068,6 +1091,9 @@ class MatmulKernelNCNNPass final
       emitTailElement(offset);
     }
 
+    for (scf::ForOp loop : llvm::reverse(serialLoops)) {
+      builder.setInsertionPointAfter(loop);
+    }
     rewriter.eraseOp(generic);
   }
 
@@ -1137,6 +1163,24 @@ class MatmulKernelNCNNPass final
     const int64_t fullColumnBlocks = columns / accColumns;
     const int64_t tailColumns = columns % accColumns;
     const int64_t fullRowExtent = rows / tileRows * tileRows;
+
+    if (auto forall = matmul->getParentOfType<scf::ForallOp>()) {
+      contract::annotateTile(
+        forall.getOperation(),
+        "f32_mxn_fma",
+        fused ? "nhwc_gather_free" : "identity",
+        "row_major_kxn",
+        "identity",
+        tileRows,
+        accColumns,
+        depth,
+        "outer_tile+inner_simd",
+        tailColumns > 0 || rows % tileRows != 0 ? "scalar_tail" : "none");
+      contract::annotatePacking(forall.getOperation(), "unpacked", 1, 0, 0);
+      contract::setInteger(
+        forall.getOperation(), contract::kSimdChunk, accColumns);
+      contract::setString(forall.getOperation(), contract::kFma, "vector.fma");
+    }
 
     auto zero = builder.create<arith::ConstantIndexOp>(0);
     auto one = builder.create<arith::ConstantIndexOp>(1);
@@ -1392,6 +1436,21 @@ class MatmulKernelNCNNPass final
     SmallVector<OpFoldResult> batchBounds{builder.getIndexAttr(batchCount)};
     auto forall = builder.create<scf::ForallOp>(
       batch.getLoc(), batchBounds, ValueRange{}, std::nullopt);
+    contract::annotateTile(
+      forall.getOperation(),
+      "batch_f32_mxn_fma",
+      "batched_identity",
+      "batched_row_major_kxn",
+      "batched_identity",
+      tileRows,
+      accColumns,
+      depth,
+      "outer_batch+inner_simd",
+      tailColumns > 0 || rows % tileRows != 0 ? "scalar_tail" : "none");
+    contract::annotatePacking(forall.getOperation(), "unpacked", 1, 0, 0);
+    contract::setInteger(
+      forall.getOperation(), contract::kSimdChunk, accColumns);
+    contract::setString(forall.getOperation(), contract::kFma, "vector.fma");
     builder.setInsertionPointToStart(forall.getBody());
     Value bIndex = forall.getInductionVar(0);
 
@@ -1593,6 +1652,26 @@ class MatmulKernelNCNNPass final
     const int64_t fullColumnBlocks = columns / accColumns;
     const int64_t tailColumns = columns % accColumns;
     const int64_t fullRowExtent = rows / tileRows * tileRows;
+
+    if (auto forall = matmul->getParentOfType<scf::ForallOp>()) {
+      contract::annotateTile(
+        forall.getOperation(),
+        "int8_row_dot",
+        "identity",
+        "packed_nk",
+        "identity",
+        tileRows,
+        accColumns,
+        depth,
+        "outer_tile+inner_simd",
+        tailColumns > 0 || rows % tileRows != 0 ? "scalar_tail" : "none");
+      contract::annotatePacking(
+        forall.getOperation(), "prepacked_transpose_b", 1, 0, 0);
+      contract::setInteger(
+        forall.getOperation(), contract::kSimdChunk, accColumns);
+      contract::setString(
+        forall.getOperation(), contract::kFma, "llvm_auto_vectorized_mac");
+    }
 
     auto zero = builder.create<arith::ConstantIndexOp>(0);
     auto one = builder.create<arith::ConstantIndexOp>(1);
