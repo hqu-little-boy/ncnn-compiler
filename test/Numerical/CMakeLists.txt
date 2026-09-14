@@ -73,7 +73,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     set(output_dir ${CMAKE_CURRENT_BINARY_DIR}/generated/${name})
     set(library ${output_dir}/lib${name}.so)
     set(generated_outputs
-        ${library} ${output_dir}/${name}.h ${output_dir}/${name}.json)
+        ${library} ${output_dir}/${name}.h ${output_dir}/${name}.json
+        ${output_dir}/${name}.plan.json)
     if(emit_ir)
         list(APPEND generated_outputs
              ${output_dir}/model.ncnn.mlir
@@ -139,6 +140,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             ${sanitizer_args}
             --output-dir ${output_dir}
             --emit-manifest
+            --emit-execution-plan
         DEPENDS
             ncnn-compile
             ncnn-mlir-driver

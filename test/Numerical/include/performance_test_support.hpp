@@ -2,8 +2,10 @@
 
 #include "numerical_test_support.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -55,7 +57,21 @@ struct PerformanceMetadata final {
   std::string_view allocation_source = "not_collected";
   std::string_view runtime_counters = "not_collected";
   std::string_view reason;
+  std::string target;
+  std::string plan_revision = "static-v1";
+  std::string plan_hash;
+  std::string build_identity;
 };
+
+struct PerformanceIdentity final {
+  std::string target;
+  std::string plan_revision;
+  std::string plan_hash;
+  std::string build_identity;
+};
+
+[[nodiscard]] std::expected<PerformanceIdentity, std::string>
+read_performance_identity(std::string_view plan_path);
 
 [[nodiscard]] PerformanceMetadata make_performance_metadata(
   PerformanceMode mode);
@@ -69,9 +85,12 @@ struct TimingStats final {
 };
 
 // 对一次完整推理闭包计时：先 warmup_iterations 次预热（每次都必须返回 0），
-// 再做 timed_iterations 次计时采样，统计均值/最小/中位/标准差/变异系数。
+// 可在预热结束后执行一次 hook，再做 timed_iterations 次计时采样，统计均值/最小/
+// 中位/标准差/变异系数。hook 不属于计时区间。
 [[nodiscard]] std::expected<TimingStats, std::string> time_repeated_inference(
-  const std::function<int()>& inference, const TimingPolicy& policy);
+  const std::function<int()>& inference,
+  const TimingPolicy& policy,
+  const std::function<void()>& before_timed = {});
 
 // 复用已加载 ncnn::Net 的参考运行器（pimpl，避免在头文件暴露 ncnn 类型）。
 // opt 块与 run_ncnn_reference 的对应推理路径逐字对齐（FP32 或 Int8），仅追加
@@ -104,10 +123,49 @@ class NcnnBenchRunner final {
   Impl* impl_;
 };
 
+// Prepared ncnn runner：Net/Extractor、输入 Mat 和 blob 名称均在构造阶段
+// 准备；run() 只做 extractor reset、输入绑定和前向/输出拷贝，不重建 Net。
+// 它与 NcnnBenchRunner 保持独立，确保 end_to_end 的历史口径不变。
+struct AllocationAuditStats final {
+  std::uint64_t allocation_count = 0;
+  std::uint64_t allocation_bytes = 0;
+  std::uint64_t deallocation_count = 0;
+  std::uint64_t deallocation_bytes = 0;
+  std::uint64_t peak_live_bytes = 0;
+  bool bytes_known = true;
+};
+
+class NcnnPreparedBenchRunner final {
+ public:
+  NcnnPreparedBenchRunner(
+    std::string_view param_path,
+    std::string_view bin_path,
+    int num_threads,
+    std::span<const ReferenceInput> inputs,
+    std::span<const std::string_view> output_blob_names,
+    ReferenceInferenceMode mode = ReferenceInferenceMode::Float32,
+    bool collect_allocation_audit = false);
+  ~NcnnPreparedBenchRunner();
+
+  NcnnPreparedBenchRunner(const NcnnPreparedBenchRunner&) = delete;
+  NcnnPreparedBenchRunner& operator=(const NcnnPreparedBenchRunner&) = delete;
+
+  [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] std::string_view error() const noexcept;
+  [[nodiscard]] int run(std::span<std::vector<float>> outputs) const;
+  void reset_allocation_audit() const;
+  [[nodiscard]] AllocationAuditStats allocation_audit() const;
+
+ private:
+  struct Impl;
+  Impl* impl_;
+};
+
 struct PairBenchmarkResult final {
   TimingStats ncnn;
   TimingStats compiled;
   double ratio = 0.0;  // compiled.mean_ms / ncnn.mean_ms
+  std::optional<AllocationAuditStats> ncnn_allocation;
 };
 
 // 固定格式单行报告，机器可 grep：

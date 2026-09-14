@@ -27,7 +27,7 @@ cmake --build compiler/build \
 
 静态标签只需构建 `numerical_tests`；`numerical-dynamic` 标签同时包含动态算子和动态模型，
 运行整个标签前必须同时构建上面的两个动态 target。对应 target 会通过 CMake 依赖重建其
-`generated/` 下的模型 `.so`、头文件和 manifest，然后才能运行相应的 `ctest -R ...` 或
+`generated/` 下的模型 `.so`、头文件、manifest 和 execution-plan sidecar，然后才能运行相应的 `ctest -R ...` 或
 `ctest -L ...`。尤其在修改
 `ncnn-compile`、driver、opt、pipeline、模型 `.param/.bin` 或 fixture 参数后，直接运行
 CTest 会静默复用陈旧产物，可能得到完全错误的数值、动态依赖和性能结果。完整说明及单个
@@ -95,8 +95,12 @@ LLVM 小时级编译爆炸，关闭该层 vector mode 但仍统一传入 `-march
 `set_omp_num_threads` 固定；编译产物侧链接同一 libomp 实例，主线程上的设置对其
 同样生效（另设 `OMP_NUM_THREADS` 兜底独立 OpenMP 运行时副本）。每个模型先预热
 再计时（`steady_clock`），报告均值/最小/中位/变异系数。ncnn 参考的 opt 块与数值
-金标逐字一致（FP32 CPU 路径），每次迭代新建 Extractor——该开销计入上游运行时成本，
-与 benchncnn 计时体一致。所有测试 `RUN_SERIAL` 独占 CPU。
+金标逐字一致（FP32 CPU 路径），end-to-end 模式每次迭代新建 Extractor——该开销计入
+上游运行时成本，与 benchncnn 计时体一致。`prepared`/`allocation_audit` 模式在计时前
+加载 Net、创建并探测 Extractor、准备输入和输出；计时调用通过干净 Extractor 状态的
+复制赋值复用已加载对象。`allocation_audit` 额外以 ncnn 专用 `CountingAllocator` 统计
+准备后的分配/释放和峰值 live bytes；这些诊断结果不参与正式 ratio 门禁。所有测试
+`RUN_SERIAL` 独占 CPU。
 
 ### 输出格式
 
@@ -114,8 +118,8 @@ PERF model=resnet18 mode=end_to_end status=measured threads=8 warmup=10 iters=20
 | `NCNN_PERF_WARMUP` | 轻 10 / 重（输入 ≥ 640x640x3）5 | 预热次数 |
 | `NCNN_PERF_ITERS` | 轻 20 / 重 10 | 计时迭代次数 |
 | `NCNN_PERF_MAX_RATIO` | per-class 默认门禁 | 默认走 `performance_test.cpp` 的逐类阈值表（2026-09-03 基线 + 头寸：常规 6.0 / server_rec 36 / formula 48 / int8 14 / medium_rec_int8 34），随追平里程碑收紧；显式设置正数 = 全局覆盖，`0` = 显式关闭全部门禁，非数字直接失败；`NCNN_PERF_THREADS` 被 pin（单线程/自定线程实验）且未设本变量时不判定，保持纯报告 |
-| `NCNN_PERF_MODE` | `end_to_end` | `end_to_end` 计时包含每轮 ncnn Extractor/I/O；`prepared` 与 `allocation_audit` 当前只输出 unsupported 诊断，不参与门禁 |
-| `NCNN_PERF_JSON` | 未设置 = 关 | 逐模型追加一行带 mode/status/setup/diagnostics 的 NDJSON；旧记录缺少 mode 时按 `end_to_end` 汇总 |
+| `NCNN_PERF_MODE` | `end_to_end` | `end_to_end` 每轮新建 ncnn Extractor 并计入 I/O；`prepared` 复用已加载 Net/Extractor，`allocation_audit` 在相同 prepared 口径下额外输出 ncnn 分配/释放/峰值 live bytes；后两者均为 measured 诊断且不参与门禁 |
+| `NCNN_PERF_JSON` | 未设置 = 关 | 逐模型追加一行带 mode/status/setup/diagnostics 的 NDJSON；已测量行还带 `target`、`plan_revision`、`plan_hash` 和 `build_identity`，其中 build identity 是包含 code-generation identity 的 plan hash；旧记录缺少 mode 时按 `end_to_end` 汇总 |
 | `NCNN_PERF_SKIP_SANITY` | 关 | 跳过每模型一次的宽松数值 sanity（rtol=atol=5e-3） |
 
 门禁用法示例（per-class 阈值随追平计划收紧，临时放宽/收紧用全局覆盖）：
@@ -128,8 +132,9 @@ python3 tools/perf_json_summary.py /tmp/perf.ndjson --gate 1.5
 ```
 
 `perf_json_summary.py` 按 `(model, mode)` 汇总；旧 NDJSON 没有 `mode` 时按
-`end_to_end` 兼容。`--gate 0` 关闭汇总门禁，正数只检查 `status=measured` 且
-`gate_eligible=true` 的 `end_to_end` 记录。
+`end_to_end` 兼容。同一输入文件中若同一 `(model, mode)` 出现多个完整且冲突的
+`target`/`plan_hash`/`build_identity`，工具会拒绝静默覆盖。`--gate 0` 关闭汇总门禁，
+正数只检查 `status=measured` 且 `gate_eligible=true` 的 `end_to_end` 记录。
 
 ### 覆盖范围
 

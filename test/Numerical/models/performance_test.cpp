@@ -13,7 +13,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -127,14 +129,6 @@ void run_model_benchmark(const ModelSpec& spec) {
   const int threads = resolved_thread_count();
   auto policy = resolve_timing_policy(default_timing_policy(spec));
   ASSERT_TRUE(policy.has_value()) << policy.error();
-  if (*mode != PerformanceMode::EndToEnd) {
-    const PerformanceMetadata metadata = make_performance_metadata(*mode);
-    emit_performance_diagnostic_report(spec.name, threads, *policy, metadata);
-    const auto json_result =
-      append_performance_json_diagnostic(spec.name, threads, *policy, metadata);
-    ASSERT_TRUE(json_result.has_value()) << json_result.error();
-    GTEST_SKIP() << metadata.reason;
-  }
 
   const auto input_elements = spec.input_shape.element_count();
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
@@ -143,9 +137,11 @@ void run_model_benchmark(const ModelSpec& spec) {
 
   CompiledModel compiled(spec.library_path, spec.symbol);
   ASSERT_TRUE(compiled.valid()) << compiled.error();
-  NcnnBenchRunner runner(
-    spec.param_path, spec.bin_path, threads, spec.reference_mode);
-  ASSERT_TRUE(runner.valid()) << runner.error();
+  const std::filesystem::path plan_path =
+    std::filesystem::path(spec.library_path).parent_path() /
+    (std::string(spec.name) + ".plan.json");
+  auto performance_identity = read_performance_identity(plan_path.string());
+  ASSERT_TRUE(performance_identity.has_value()) << performance_identity.error();
 
   const bool two_outputs = spec.output_element_counts[1] != 0;
   std::vector<float> first_output(spec.output_element_counts[0]);
@@ -166,14 +162,38 @@ void run_model_benchmark(const ModelSpec& spec) {
     std::vector<float>(spec.output_element_counts[1])};
   const auto reference_buffers =
     std::span(reference_outputs).first(two_outputs ? 2U : 1U);
+
+  std::unique_ptr<NcnnBenchRunner> end_to_end_runner;
+  std::unique_ptr<NcnnPreparedBenchRunner> prepared_runner;
+  if (*mode == PerformanceMode::EndToEnd) {
+    end_to_end_runner = std::make_unique<NcnnBenchRunner>(
+      spec.param_path, spec.bin_path, threads, spec.reference_mode);
+    ASSERT_TRUE(end_to_end_runner->valid()) << end_to_end_runner->error();
+  } else {
+    prepared_runner = std::make_unique<NcnnPreparedBenchRunner>(
+      spec.param_path,
+      spec.bin_path,
+      threads,
+      std::span(&reference_input, 1),
+      reference_names,
+      spec.reference_mode,
+      *mode == PerformanceMode::AllocationAudit);
+    ASSERT_TRUE(prepared_runner->valid()) << prepared_runner->error();
+  }
+
   auto reference_inference = [&]() -> int {
-    return runner.run(
-      std::span(&reference_input, 1), reference_names, reference_buffers);
+    if (end_to_end_runner) {
+      return end_to_end_runner->run(
+        std::span(&reference_input, 1), reference_names, reference_buffers);
+    }
+    return prepared_runner->run(reference_buffers);
   };
 
   // 宽松数值兜底：只拦"计时了错误产物"这类粗错，精确容差归 golden 测试管。
   if (sanity_check_enabled()) {
-    ASSERT_EQ(reference_inference(), 0) << runner.error();
+    ASSERT_EQ(reference_inference(), 0)
+      << (end_to_end_runner ? end_to_end_runner->error()
+                            : prepared_runner->error());
     ASSERT_EQ(compiled_inference(), 0);
     if (spec.verify_against_reference) {
       EXPECT_TRUE(
@@ -194,9 +214,17 @@ void run_model_benchmark(const ModelSpec& spec) {
   }
 
   PairBenchmarkResult result;
-  const auto ncnn_stats = time_repeated_inference(reference_inference, *policy);
+  const auto ncnn_stats =
+    time_repeated_inference(reference_inference, *policy, [&] {
+      if (*mode == PerformanceMode::AllocationAudit) {
+        prepared_runner->reset_allocation_audit();
+      }
+    });
   ASSERT_TRUE(ncnn_stats.has_value()) << ncnn_stats.error();
   result.ncnn = *ncnn_stats;
+  if (*mode == PerformanceMode::AllocationAudit) {
+    result.ncnn_allocation = prepared_runner->allocation_audit();
+  }
   const auto compiled_stats =
     time_repeated_inference(compiled_inference, *policy);
   ASSERT_TRUE(compiled_stats.has_value()) << compiled_stats.error();
@@ -205,14 +233,19 @@ void run_model_benchmark(const ModelSpec& spec) {
                    ? result.compiled.mean_ms / result.ncnn.mean_ms
                    : 0.0;
 
-  const PerformanceMetadata metadata =
-    make_performance_metadata(PerformanceMode::EndToEnd);
+  PerformanceMetadata metadata = make_performance_metadata(*mode);
+  metadata.target = performance_identity->target;
+  metadata.plan_revision = performance_identity->plan_revision;
+  metadata.plan_hash = performance_identity->plan_hash;
+  metadata.build_identity = performance_identity->build_identity;
   emit_performance_report(spec.name, threads, *policy, result, metadata);
   const auto json_result = append_performance_json_record(
     spec.name, threads, *policy, result, metadata);
   ASSERT_TRUE(json_result.has_value()) << json_result.error();
-  EXPECT_TRUE(
-    check_performance_gate(spec.name, result, default_ratio_gate(spec)));
+  if (metadata.gate_eligible) {
+    EXPECT_TRUE(
+      check_performance_gate(spec.name, result, default_ratio_gate(spec)));
+  }
 }
 
 TEST(PerformanceModel, SqueezeNetV11) {
