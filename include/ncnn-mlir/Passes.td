@@ -261,7 +261,22 @@ def EmitModelPlanPass : Pass<"emit-ncnn-execution-plan", "mlir::ModuleOp"> {
     Option<"vectorScalable", "vector-scalable", "bool", "false",
            "Whether vectors are scalable">,
     Option<"vectorTail", "vector-tail", "bool", "false",
-           "Whether the vector lowering tail is enabled">
+           "Whether the vector lowering tail is enabled">,
+    Option<"codegenIdentity", "codegen-identity", "std::string", "",
+           "Canonical code-generation identity included in the plan hash">
+  ];
+}
+
+def InstrumentNCNNProfilePass : Pass<"instrument-ncnn-profile", "mlir::ModuleOp"> {
+  let summary = "Instrument an opt-in diagnostic execution profile";
+  let description = [{
+    Add private profiling calls around bufferized operations without changing
+    the public C ABI. The pass is diagnostic-only and must be followed by the
+    profile runtime at link time.
+  }];
+  let dependentDialects = [
+    "arith::ArithDialect", "func::FuncDialect", "memref::MemRefDialect",
+    "omp::OpenMPDialect", "scf::SCFDialect"
   ];
 }
 

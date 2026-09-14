@@ -67,6 +67,16 @@ struct NCNNLinalgToMemRefPipelineOptions
     "execution-plan-threads",
     llvm::cl::desc("Effective threads recorded in the execution plan"),
     llvm::cl::init(1)};
+  Option<bool> profileInstrumentation{
+    *this,
+    "profile-instrumentation",
+    llvm::cl::desc("Insert private diagnostic execution-profile callbacks"),
+    llvm::cl::init(false)};
+  Option<std::string> executionPlanCodegenIdentity{
+    *this,
+    "execution-plan-codegen-identity",
+    llvm::cl::desc("Canonical code-generation identity included in the plan"),
+    llvm::cl::init("")};
 };
 
 struct NCNNMemRefToLLVMPipelineOptions

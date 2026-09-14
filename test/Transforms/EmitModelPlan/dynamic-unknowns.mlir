@@ -17,8 +17,8 @@ module {
 // CHECK-NEXT: null,
 // CHECK-NEXT: 4
 // CHECK-NEXT: ],
+// CHECK: "prepared_runner": "available_in_performance_harness"
 // CHECK: "runtime_counters_not_collected"
-// CHECK: "prepared_runner_not_supported"
 // CHECK: "kind": "ncnn.model_execution_plan"
 // CHECK: "model": "dynamic_plan"
 // CHECK: "allocation_count": 1
