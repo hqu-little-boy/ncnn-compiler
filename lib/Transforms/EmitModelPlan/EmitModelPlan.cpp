@@ -213,6 +213,13 @@ class EmitModelPlanPass final
     std::int64_t kernel_contract_count = 0;
     std::int64_t kernel_contract_fallback_count = 0;
     std::int64_t nested_openmp_count = 0;
+    std::int64_t workspace_slot_count = 0;
+    std::int64_t workspace_reused_allocation_count = 0;
+    std::int64_t workspace_fallback_count = 0;
+    std::int64_t workspace_slot_bytes = 0;
+    bool workspace_slot_bytes_unknown = false;
+    std::set<std::string> workspace_slot_ids;
+    std::set<std::string> workspace_fallback_reasons;
     std::int64_t packed_buffer_bytes = 0;
     bool packed_buffer_bytes_unknown = false;
     std::optional<std::int64_t> static_buffer_bytes = 0;
@@ -231,8 +238,9 @@ class EmitModelPlanPass final
     JsonArray static_liveness;
     JsonArray provenance;
     std::string plan_hash_input =
-      "static-v1|layout-kernel-v1|" + model + "|" + targetTriple + "|" +
-      std::to_string(threads) + "|" + std::to_string(vectorLanes) + "|" +
+      "static-v1|layout-kernel-v1|workspace-slot-v1|" + model + "|" +
+      targetTriple + "|" + std::to_string(threads) + "|" +
+      std::to_string(vectorLanes) + "|" +
       std::to_string(vectorScalable.getValue()) + "|" +
       std::to_string(vectorTail.getValue()) + "|codegen=" + codegenIdentity;
 
@@ -380,6 +388,39 @@ class EmitModelPlanPass final
                             lifetime.firstUse && lifetime.lastUse &&
                             lifetime.deallocation && !lifetime.aliasUnknown;
         lifetime_object["status"] = proven ? "proven" : "unknown";
+        auto allocation_op = cast<memref::AllocOp>(allocation);
+        auto copy_workspace_string = [&](StringRef attribute, StringRef field) {
+          if (auto value =
+                allocation_op->getAttrOfType<StringAttr>(attribute)) {
+            lifetime_object[field.str()] = value.getValue().str();
+          }
+        };
+        auto copy_workspace_integer = [&](StringRef attribute,
+                                          StringRef field) {
+          if (auto value =
+                allocation_op->getAttrOfType<IntegerAttr>(attribute)) {
+            lifetime_object[field.str()] = value.getInt();
+          }
+        };
+        copy_workspace_string("ncnn.workspace_reuse_status",
+                              "workspace_reuse_status");
+        copy_workspace_string("ncnn.workspace_fallback_reason",
+                              "workspace_fallback_reason");
+        copy_workspace_string("ncnn.workspace_slot_owner",
+                              "workspace_slot_owner");
+        copy_workspace_string("ncnn.workspace_slot_thread_visibility",
+                              "workspace_slot_thread_visibility");
+        copy_workspace_integer("ncnn.workspace_slot", "workspace_slot");
+        copy_workspace_integer("ncnn.workspace_slot_lifetime_begin",
+                               "workspace_slot_lifetime_begin");
+        copy_workspace_integer("ncnn.workspace_slot_lifetime_end",
+                               "workspace_slot_lifetime_end");
+        copy_workspace_integer("ncnn.workspace_slot_bytes",
+                               "workspace_slot_bytes");
+        copy_workspace_integer("ncnn.workspace_slot_alignment",
+                               "workspace_slot_alignment");
+        copy_workspace_integer("ncnn.workspace_reuse_count",
+                               "workspace_reuse_count");
         if (!proven) {
           add_unknown("buffer_liveness_unknown");
         }
@@ -615,6 +656,77 @@ class EmitModelPlanPass final
               lifetime->second.deallocation && !lifetime->second.aliasUnknown;
             buffer["liveness_status"] = proven ? "proven" : "unknown";
           }
+          if (auto status = alloc->getAttrOfType<StringAttr>(
+                "ncnn.workspace_reuse_status")) {
+            buffer["workspace_reuse_status"] = status.getValue().str();
+            if (status.getValue() == "fallback") {
+              ++workspace_fallback_count;
+              if (auto reason = alloc->getAttrOfType<StringAttr>(
+                    "ncnn.workspace_fallback_reason")) {
+                workspace_fallback_reasons.insert(reason.getValue().str());
+              }
+            }
+          }
+          if (auto slot =
+                alloc->getAttrOfType<IntegerAttr>("ncnn.workspace_slot")) {
+            buffer["workspace_slot"] = slot.getInt();
+            const std::string slotId =
+              function_name + "/" + std::to_string(slot.getInt());
+            if (workspace_slot_ids.insert(slotId).second) {
+              ++workspace_slot_count;
+              if (auto bytes = alloc->getAttrOfType<IntegerAttr>(
+                    "ncnn.workspace_slot_bytes")) {
+                if (!workspace_slot_bytes_unknown && bytes.getInt() >= 0 &&
+                    workspace_slot_bytes <=
+                      std::numeric_limits<std::int64_t>::max() -
+                        bytes.getInt()) {
+                  workspace_slot_bytes += bytes.getInt();
+                } else {
+                  workspace_slot_bytes_unknown = true;
+                }
+              } else {
+                workspace_slot_bytes_unknown = true;
+              }
+            }
+          }
+          auto copy_buffer_workspace_string = [&](StringRef attribute,
+                                                  StringRef field) {
+            if (auto value = alloc->getAttrOfType<StringAttr>(attribute)) {
+              buffer[field.str()] = value.getValue().str();
+            }
+          };
+          auto copy_buffer_workspace_integer = [&](StringRef attribute,
+                                                   StringRef field) {
+            if (auto value = alloc->getAttrOfType<IntegerAttr>(attribute)) {
+              buffer[field.str()] = value.getInt();
+            }
+          };
+          copy_buffer_workspace_string("ncnn.workspace_slot_owner",
+                                       "workspace_slot_owner");
+          copy_buffer_workspace_string("ncnn.workspace_slot_thread_visibility",
+                                       "workspace_slot_thread_visibility");
+          copy_buffer_workspace_integer("ncnn.workspace_slot_lifetime_begin",
+                                        "workspace_slot_lifetime_begin");
+          copy_buffer_workspace_integer("ncnn.workspace_slot_lifetime_end",
+                                        "workspace_slot_lifetime_end");
+          if (auto bytes = alloc->getAttrOfType<IntegerAttr>(
+                "ncnn.workspace_slot_bytes")) {
+            buffer["workspace_slot_bytes"] = bytes.getInt();
+          }
+          if (auto alignment = alloc->getAttrOfType<IntegerAttr>(
+                "ncnn.workspace_slot_alignment")) {
+            buffer["workspace_slot_alignment"] = alignment.getInt();
+          }
+          if (auto reuseCount = alloc->getAttrOfType<IntegerAttr>(
+                "ncnn.workspace_reuse_count")) {
+            buffer["workspace_reuse_count"] = reuseCount.getInt();
+            if (reuseCount.getInt() > 1 &&
+                workspace_reused_allocation_count <=
+                  std::numeric_limits<std::int64_t>::max() -
+                    (reuseCount.getInt() - 1)) {
+              workspace_reused_allocation_count += reuseCount.getInt() - 1;
+            }
+          }
           if (!size.bytes) {
             static_buffer_bytes = std::nullopt;
           } else if (static_buffer_bytes &&
@@ -689,6 +801,17 @@ class EmitModelPlanPass final
     summary["kernel_contract_count"] = kernel_contract_count;
     summary["kernel_contract_fallback_count"] = kernel_contract_fallback_count;
     summary["nested_openmp_count"] = nested_openmp_count;
+    summary["workspace_slot_count"] = workspace_slot_count;
+    summary["workspace_reused_allocation_count"] =
+      workspace_reused_allocation_count;
+    summary["workspace_fallback_count"] = workspace_fallback_count;
+    if (workspace_slot_bytes_unknown) {
+      summary["workspace_slot_bytes"] = nullptr;
+      summary["workspace_slot_bytes_known"] = false;
+    } else {
+      summary["workspace_slot_bytes"] = workspace_slot_bytes;
+      summary["workspace_slot_bytes_known"] = true;
+    }
     if (packed_buffer_bytes_unknown) {
       summary["packed_buffer_bytes"] = nullptr;
       add_unknown("packed_buffer_bytes_unknown");
@@ -729,13 +852,18 @@ class EmitModelPlanPass final
     JsonObject diagnostics;
     diagnostics["runtime_counters"] = "not_collected";
     diagnostics["prepared_runner"] = "available_in_performance_harness";
+    JsonArray workspace_fallbacks;
+    for (const std::string& reason : workspace_fallback_reasons) {
+      workspace_fallbacks.push_back(reason);
+    }
+    diagnostics["workspace_fallback_reasons"] = std::move(workspace_fallbacks);
     diagnostics["unknown_fields"] = std::move(unknown_fields);
 
     const std::string plan_hash = std::to_string(profileId(plan_hash_input));
     JsonObject root;
     root["schema_version"] = 1;
-    root["plan_revision"] = "static-v1";
-    root["contract_revision"] = "layout-kernel-v1";
+    root["plan_revision"] = "static-v1|workspace-slot-v1";
+    root["contract_revision"] = "layout-kernel-v1|workspace-slot-v1";
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen
     // hash, so profile/performance rows cannot join across code-generation

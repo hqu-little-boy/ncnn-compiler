@@ -26,6 +26,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     TileMatmulForall
     VectorizeNCNN
     VerifyBufferizedModel
+    ReuseWorkspaceSlots
     VerifyModelShapeContracts
     VerifyNoNCNNOps
     VerifyNoTosaOps

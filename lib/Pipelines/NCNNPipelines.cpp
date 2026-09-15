@@ -47,6 +47,7 @@
 #include "ncnn-mlir/Transforms/LowerVectorMathNCNN/LowerVectorMathNCNN.hpp"
 #include "ncnn-mlir/Transforms/MatmulKernelNCNN/MatmulKernelNCNN.hpp"
 #include "ncnn-mlir/Transforms/NormalizeNCNN/NormalizeNCNN.hpp"
+#include "ncnn-mlir/Transforms/ReuseWorkspaceSlots/ReuseWorkspaceSlots.hpp"
 #include "ncnn-mlir/Transforms/RewriteLinalgCopies/RewriteLinalgCopies.hpp"
 #include "ncnn-mlir/Transforms/StrategyNCNN/StrategyNCNN.hpp"
 #include "ncnn-mlir/Transforms/TileMatmulForall/TileMatmulForall.hpp"
@@ -212,6 +213,9 @@ void buildNCNNLinalgToMemRefPipeline(
   deallocationOptions.privateFunctionDynamicOwnership = false;
   bufferization::buildBufferDeallocationPipeline(passManager,
                                                  deallocationOptions);
+  // P11：只在可证明的直线静态生命周期中复用局部 workspace slot；未知
+  // alias、动态 shape 和控制流保留原 allocation，并由 verifier 继续兜底。
+  passManager.addPass(createReuseWorkspaceSlotsPass());
   passManager.addPass(createVerifyBufferizedModelPass());
   passManager.addPass(createVerifyModelShapeContractsPass());
   if (!options.executionPlanPath.empty()) {

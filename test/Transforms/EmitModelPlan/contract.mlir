@@ -34,7 +34,7 @@ module {
   }
 }
 
-// CHECK: "contract_revision": "layout-kernel-v1"
+// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1"
 // CHECK-DAG: "kernel_contract": {
 // CHECK-DAG: "kernel": "f32_mxn_fma"
 // CHECK-DAG: "parallel": "outer_tile+inner_simd"

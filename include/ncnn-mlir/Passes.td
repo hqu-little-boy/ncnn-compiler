@@ -286,6 +286,19 @@ def VerifyBufferizedModelPass
   let dependentDialects = ["memref::MemRefDialect"];
 }
 
+def ReuseWorkspaceSlotsPass
+    : Pass<"reuse-ncnn-workspace-slots", "mlir::ModuleOp"> {
+  let summary = "Reuse non-overlapping local static workspace allocations";
+  let description = [{
+    Apply conservative straight-line lifetime analysis after buffer deallocation.
+    Only direct, static, identity-layout allocations with a proven non-overlap
+    may share a local slot; all unknown or unsupported cases are retained.
+  }];
+  let dependentDialects = [
+    "func::FuncDialect", "memref::MemRefDialect"
+  ];
+}
+
 def VerifyModelShapeContractsPass
     : Pass<"verify-ncnn-model-shape-contracts", "mlir::ModuleOp"> {
   let summary = "Verify final static and dynamic ncnn model shape contracts";
