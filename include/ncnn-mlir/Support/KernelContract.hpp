@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -30,9 +31,34 @@ inline constexpr llvm::StringLiteral kAlignment = "ncnn.alignment";
 inline constexpr llvm::StringLiteral kAlias = "ncnn.alias";
 inline constexpr llvm::StringLiteral kContract = "ncnn.contract";
 inline constexpr llvm::StringLiteral kFallback = "ncnn.fallback_reason";
+inline constexpr llvm::StringLiteral kFusion = "ncnn.fusion";
+inline constexpr llvm::StringLiteral kFusionKind = "ncnn.fusion_kind";
+inline constexpr llvm::StringLiteral kFusionProducer = "ncnn.fusion_producer";
+inline constexpr llvm::StringLiteral kFusionResidualInputs =
+  "ncnn.fusion_residual_inputs";
+inline constexpr llvm::StringLiteral kFusionTileWidth =
+  "ncnn.fusion_tile_width";
+inline constexpr llvm::StringLiteral kFusionIntermediateBytes =
+  "ncnn.fusion_intermediate_bytes";
+inline constexpr llvm::StringLiteral kFusionSavedBytes =
+  "ncnn.fusion_saved_bytes";
+inline constexpr llvm::StringLiteral kFusionEnabled = "ncnn.fusion_enabled";
+inline constexpr llvm::StringLiteral kFusionSelectedCount =
+  "ncnn.fusion_selected_count";
+inline constexpr llvm::StringLiteral kFusionResidualCount =
+  "ncnn.fusion_residual_count";
+inline constexpr llvm::StringLiteral kFusionRejectedCount =
+  "ncnn.fusion_rejected_count";
+inline constexpr llvm::StringLiteral kFusionRejectionReasons =
+  "ncnn.fusion_rejection_reasons";
+inline constexpr llvm::StringLiteral kFusionRecords = "ncnn.fusion_records";
 
 inline void setString(Operation* operation, StringRef name, StringRef value) {
   operation->setAttr(name, StringAttr::get(operation->getContext(), value));
+}
+
+inline void setBool(Operation* operation, StringRef name, bool value) {
+  operation->setAttr(name, BoolAttr::get(operation->getContext(), value));
 }
 
 inline void setInteger(Operation* operation, StringRef name, int64_t value) {
@@ -80,6 +106,63 @@ inline void annotatePacking(Operation* operation,
 inline void annotateFallback(Operation* operation, StringRef reason) {
   setString(operation, kContract, "fallback");
   setString(operation, kFallback, reason);
+}
+
+inline void annotateFusionFallback(Operation* operation, StringRef reason) {
+  setString(operation, kFusion, "fallback");
+  setString(operation, kFallback, reason);
+}
+
+inline void annotateFusion(Operation* operation,
+                           StringRef kind,
+                           StringRef producer,
+                           int64_t residualInputs,
+                           int64_t tileWidth,
+                           int64_t intermediateBytes,
+                           int64_t savedBytes) {
+  setString(operation, kContract, "selected");
+  setString(operation, kFusion, "selected");
+  setString(operation, kFusionKind, kind);
+  setString(operation, kFusionProducer, producer);
+  setInteger(operation, kFusionResidualInputs, residualInputs);
+  setInteger(operation, kFusionTileWidth, tileWidth);
+  setInteger(operation, kFusionIntermediateBytes, intermediateBytes);
+  setInteger(operation, kFusionSavedBytes, savedBytes);
+}
+
+inline void appendFusionRecord(Operation* operation,
+                               StringRef function,
+                               StringRef operationKind,
+                               StringRef kind,
+                               StringRef producer,
+                               int64_t residualInputs,
+                               int64_t tileWidth,
+                               int64_t intermediateBytes,
+                               int64_t savedBytes) {
+  MLIRContext* context = operation->getContext();
+  SmallVector<Attribute> records;
+  if (auto existing = operation->getAttrOfType<ArrayAttr>(kFusionRecords)) {
+    for (Attribute record : existing.getValue()) {
+      records.push_back(record);
+    }
+  }
+  NamedAttrList record;
+  record.set("function", StringAttr::get(context, function));
+  record.set("operation", StringAttr::get(context, operationKind));
+  record.set("fusion_status", StringAttr::get(context, "selected"));
+  record.set("fusion_kind", StringAttr::get(context, kind));
+  record.set("fusion_producer", StringAttr::get(context, producer));
+  record.set("fusion_residual_inputs",
+             IntegerAttr::get(IntegerType::get(context, 64), residualInputs));
+  record.set("fusion_tile_width",
+             IntegerAttr::get(IntegerType::get(context, 64), tileWidth));
+  record.set(
+    "fusion_intermediate_bytes",
+    IntegerAttr::get(IntegerType::get(context, 64), intermediateBytes));
+  record.set("fusion_saved_bytes",
+             IntegerAttr::get(IntegerType::get(context, 64), savedBytes));
+  records.push_back(DictionaryAttr::get(context, record));
+  operation->setAttr(kFusionRecords, ArrayAttr::get(context, records));
 }
 
 }  // namespace mlir::ncnn::contract

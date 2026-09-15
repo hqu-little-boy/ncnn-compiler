@@ -2,7 +2,13 @@
 // RUN: ncnn-mlir-opt --emit-ncnn-execution-plan="path=%t.plan.json model=contract target-triple=x86_64-pc-linux-gnu threads=4 vector-lanes=8 vector-tail=true" %s -o %t.out
 // RUN: FileCheck %s --input-file=%t.plan.json
 
-module {
+module attributes {
+  ncnn.fusion_enabled = true,
+  ncnn.fusion_selected_count = 1 : i64,
+  ncnn.fusion_residual_count = 1 : i64,
+  ncnn.fusion_rejected_count = 2 : i64,
+  ncnn.fusion_rejection_reasons = "multi_consumer=1,non_identity_map=1"
+} {
   func.func @model(%input: memref<4x8xf32>) {
     %output = memref.alloc() : memref<4x8xf32>
     "omp.parallel"() ({
@@ -27,14 +33,32 @@ module {
       ncnn.fma = "vector.fma",
       ncnn.tail = "none",
       ncnn.alignment = "unknown",
-      ncnn.alias = "disjoint_output_proven"
+      ncnn.alias = "disjoint_output_proven",
+      ncnn.fusion = "selected",
+      ncnn.fusion_kind = "matmul_epilogue",
+      ncnn.fusion_producer = "linalg.matmul",
+      ncnn.fusion_residual_inputs = 1 : i64,
+      ncnn.fusion_tile_width = 16 : i64,
+      ncnn.fusion_intermediate_bytes = 1024 : i64,
+      ncnn.fusion_saved_bytes = 1024 : i64
     } : () -> ()
     memref.dealloc %output : memref<4x8xf32>
     return
   }
 }
 
-// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1"
+// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1"
+// CHECK-DAG: "fusion": {
+// CHECK-DAG: "enabled": true
+// CHECK-DAG: "selected_count": 1
+// CHECK-DAG: "residual_count": 1
+// CHECK-DAG: "rejected_count": 2
+// CHECK-DAG: "rejection_reasons": "multi_consumer=1,non_identity_map=1"
+// CHECK-DAG: "fusions": [
+// CHECK-DAG: "fusion_kind": "matmul_epilogue"
+// CHECK-DAG: "fusion_residual_inputs": 1
+// CHECK-DAG: "fusion_intermediate_bytes": 1024
+// CHECK-DAG: "fusion_saved_bytes": 1024
 // CHECK-DAG: "kernel_contract": {
 // CHECK-DAG: "kernel": "f32_mxn_fma"
 // CHECK-DAG: "parallel": "outer_tile+inner_simd"

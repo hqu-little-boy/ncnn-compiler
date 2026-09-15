@@ -24,6 +24,16 @@ struct NCNNTosaToLinalgPipelineOptions
     llvm::cl::desc("L2 cache byte budget for the convolution prefer-GEMM "
                    "heuristic"),
     llvm::cl::init(524288)};
+  Option<bool> selectiveFusion{
+    *this,
+    "selective-fusion",
+    llvm::cl::desc("Enable selective static producer-to-epilogue fusion"),
+    llvm::cl::init(true)};
+  Option<bool> selectiveFusionResidual{
+    *this,
+    "selective-fusion-residual",
+    llvm::cl::desc("Allow same-shaped identity-mapped residual fusion inputs"),
+    llvm::cl::init(true)};
 };
 
 struct NCNNLinalgToMemRefPipelineOptions

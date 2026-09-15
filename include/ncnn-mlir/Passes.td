@@ -123,7 +123,11 @@ def FuseLinalgEpiloguePass
   ];
   let options = [
     Option<"tileWidth", "tile-width", "int64_t", /*default=*/"16",
-           "Output column tiling width for fused producers">
+           "Output column tiling width for fused producers">,
+    Option<"enable", "enable", "bool", /*default=*/"true",
+           "Enable selective producer-to-epilogue fusion">,
+    Option<"allowResidual", "allow-residual", "bool", /*default=*/"true",
+           "Allow same-shaped identity-mapped residual inputs">
   ];
 }
 

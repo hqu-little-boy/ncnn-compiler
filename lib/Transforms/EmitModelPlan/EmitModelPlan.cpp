@@ -200,6 +200,7 @@ class EmitModelPlanPass final
     JsonArray buffers;
     JsonArray regions;
     JsonArray contracts;
+    JsonArray fusions;
     JsonArray unknown_fields;
     JsonObject summary;
     std::int64_t allocation_count = 0;
@@ -228,6 +229,35 @@ class EmitModelPlanPass final
     std::int64_t dynamic_buffer_count = 0;
     std::int64_t static_copy_bytes = 0;
     bool has_unknown_copy_bytes = false;
+    const bool fusion_enabled =
+      module->getAttrOfType<BoolAttr>(contract::kFusionEnabled)
+        ? module->getAttrOfType<BoolAttr>(contract::kFusionEnabled).getValue()
+        : true;
+    const std::int64_t fusion_selected_count =
+      module->getAttrOfType<IntegerAttr>(contract::kFusionSelectedCount)
+        ? module->getAttrOfType<IntegerAttr>(contract::kFusionSelectedCount)
+            .getInt()
+        : 0;
+    const std::int64_t fusion_residual_count =
+      module->getAttrOfType<IntegerAttr>(contract::kFusionResidualCount)
+        ? module->getAttrOfType<IntegerAttr>(contract::kFusionResidualCount)
+            .getInt()
+        : 0;
+    const std::int64_t fusion_rejected_count =
+      module->getAttrOfType<IntegerAttr>(contract::kFusionRejectedCount)
+        ? module->getAttrOfType<IntegerAttr>(contract::kFusionRejectedCount)
+            .getInt()
+        : 0;
+    const std::string fusion_rejection_reasons =
+      module->getAttrOfType<StringAttr>(contract::kFusionRejectionReasons)
+        ? module->getAttrOfType<StringAttr>(contract::kFusionRejectionReasons)
+            .getValue()
+            .str()
+        : "";
+    const auto module_fusion_records =
+      module->getAttrOfType<ArrayAttr>(contract::kFusionRecords);
+    const bool has_module_fusion_records =
+      module_fusion_records && !module_fusion_records.empty();
     std::set<std::string> unknown_reasons;
     auto add_unknown = [&](StringRef reason) {
       if (unknown_reasons.insert(reason.str()).second) {
@@ -238,16 +268,64 @@ class EmitModelPlanPass final
     JsonArray static_liveness;
     JsonArray provenance;
     std::string plan_hash_input =
-      "static-v1|layout-kernel-v1|workspace-slot-v1|" + model + "|" +
+      "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v1|" + model + "|" +
       targetTriple + "|" + std::to_string(threads) + "|" +
       std::to_string(vectorLanes) + "|" +
       std::to_string(vectorScalable.getValue()) + "|" +
-      std::to_string(vectorTail.getValue()) + "|codegen=" + codegenIdentity;
+      std::to_string(vectorTail.getValue()) + "|codegen=" + codegenIdentity +
+      "|fusion-enabled=" + std::to_string(fusion_enabled) +
+      "|fusion-selected=" + std::to_string(fusion_selected_count) +
+      "|fusion-residual=" + std::to_string(fusion_residual_count) +
+      "|fusion-rejected=" + std::to_string(fusion_rejected_count) +
+      "|fusion-reasons=" + fusion_rejection_reasons;
 
     // The static plan does not execute a runner or collect runtime counters.
     // Prepared and allocation-audit modes are reported by the numerical
     // harness, not by this compiler-side artifact.
     add_unknown("runtime_counters_not_collected");
+
+    if (module_fusion_records) {
+      std::int64_t recordOrdinal = 0;
+      for (Attribute attribute : module_fusion_records) {
+        auto record = dyn_cast<DictionaryAttr>(attribute);
+        if (!record) {
+          add_unknown("fusion_record_malformed");
+          continue;
+        }
+        JsonObject entry;
+        auto copyString = [&](StringRef attributeName, StringRef fieldName) {
+          if (auto value = record.getAs<StringAttr>(attributeName)) {
+            entry[fieldName.str()] = value.getValue().str();
+          }
+        };
+        auto copyInteger = [&](StringRef attributeName, StringRef fieldName) {
+          if (auto value = record.getAs<IntegerAttr>(attributeName)) {
+            entry[fieldName.str()] = value.getInt();
+          }
+        };
+        std::string functionName;
+        if (auto value = record.getAs<StringAttr>("function")) {
+          functionName = value.getValue().str();
+        }
+        std::string kind;
+        if (auto value = record.getAs<StringAttr>("fusion_kind")) {
+          kind = value.getValue().str();
+        }
+        entry["id"] = "fusion/" + functionName + "/" + kind + "#" +
+                      std::to_string(recordOrdinal++);
+        copyString("function", "function");
+        copyString("operation", "operation");
+        copyString("fusion_status", "fusion_status");
+        copyString("fusion_kind", "fusion_kind");
+        copyString("fusion_producer", "fusion_producer");
+        copyInteger("fusion_residual_inputs", "fusion_residual_inputs");
+        copyInteger("fusion_tile_width", "fusion_tile_width");
+        copyInteger("fusion_intermediate_bytes", "fusion_intermediate_bytes");
+        copyInteger("fusion_saved_bytes", "fusion_saved_bytes");
+        fusions.push_back(std::move(entry));
+        plan_hash_input += "|fusion-record=" + functionName + "|" + kind;
+      }
+    }
 
     auto add_size_fields = [&](JsonObject& object, Type type) {
       object["shape"] = shapeArray(type);
@@ -531,7 +609,8 @@ class EmitModelPlanPass final
         const bool has_contract = operation->hasAttr(contract::kContract) ||
                                   operation->hasAttr(contract::kKernel) ||
                                   operation->hasAttr(contract::kPacking) ||
-                                  operation->hasAttr(contract::kFallback);
+                                  operation->hasAttr(contract::kFallback) ||
+                                  operation->hasAttr(contract::kFusion);
         auto make_contract = [&]() {
           JsonObject result;
           auto copy_string = [&](StringRef attribute, StringRef field) {
@@ -565,6 +644,15 @@ class EmitModelPlanPass final
           copy_string(contract::kAlias, "alias");
           copy_string(contract::kContract, "status");
           copy_string(contract::kFallback, "fallback_reason");
+          copy_string(contract::kFusion, "fusion_status");
+          copy_string(contract::kFusionKind, "fusion_kind");
+          copy_string(contract::kFusionProducer, "fusion_producer");
+          copy_integer(contract::kFusionResidualInputs,
+                       "fusion_residual_inputs");
+          copy_integer(contract::kFusionTileWidth, "fusion_tile_width");
+          copy_integer(contract::kFusionIntermediateBytes,
+                       "fusion_intermediate_bytes");
+          copy_integer(contract::kFusionSavedBytes, "fusion_saved_bytes");
           return result;
         };
         if (has_contract) {
@@ -595,6 +683,19 @@ class EmitModelPlanPass final
           contract_entry["id"] = operation_id;
           contract_entry["operation"] = kind;
           contract_entry["function"] = function_name;
+          const auto operationFusionStatus =
+            operation->getAttrOfType<StringAttr>(contract::kFusion);
+          const bool operationFusionIsSelected =
+            operationFusionStatus &&
+            operationFusionStatus.getValue() == "selected";
+          if (operation->hasAttr(contract::kFusion) &&
+              (!operationFusionIsSelected || !has_module_fusion_records)) {
+            JsonObject fusion_entry = make_contract();
+            fusion_entry["id"] = operation_id;
+            fusion_entry["operation"] = kind;
+            fusion_entry["function"] = function_name;
+            fusions.push_back(std::move(fusion_entry));
+          }
           contracts.push_back(std::move(contract_entry));
         }
         JsonObject operation_object;
@@ -800,6 +901,13 @@ class EmitModelPlanPass final
     summary["parallel_region_count"] = parallel_region_count;
     summary["kernel_contract_count"] = kernel_contract_count;
     summary["kernel_contract_fallback_count"] = kernel_contract_fallback_count;
+    summary["fusion_enabled"] = fusion_enabled;
+    summary["fusion_selected_count"] = fusion_selected_count;
+    summary["fusion_residual_count"] = fusion_residual_count;
+    summary["fusion_rejected_count"] = fusion_rejected_count;
+    summary["fusion_rejection_reasons"] = fusion_rejection_reasons;
+    summary["fusion_contract_count"] =
+      static_cast<std::int64_t>(fusions.size());
     summary["nested_openmp_count"] = nested_openmp_count;
     summary["workspace_slot_count"] = workspace_slot_count;
     summary["workspace_reused_allocation_count"] =
@@ -842,6 +950,14 @@ class EmitModelPlanPass final
       add_unknown("peak_workspace_not_proven");
     }
 
+    JsonObject fusion;
+    fusion["enabled"] = fusion_enabled;
+    fusion["selected_count"] = fusion_selected_count;
+    fusion["residual_count"] = fusion_residual_count;
+    fusion["rejected_count"] = fusion_rejected_count;
+    fusion["rejection_reasons"] = fusion_rejection_reasons;
+    fusion["contract_count"] = static_cast<std::int64_t>(fusions.size());
+
     JsonObject target;
     target["triple"] = targetTriple;
     target["threads"] = static_cast<std::int64_t>(threads);
@@ -862,8 +978,8 @@ class EmitModelPlanPass final
     const std::string plan_hash = std::to_string(profileId(plan_hash_input));
     JsonObject root;
     root["schema_version"] = 1;
-    root["plan_revision"] = "static-v1|workspace-slot-v1";
-    root["contract_revision"] = "layout-kernel-v1|workspace-slot-v1";
+    root["plan_revision"] = "static-v1|workspace-slot-v1|fusion-v1";
+    root["contract_revision"] = "layout-kernel-v1|workspace-slot-v1|fusion-v1";
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen
     // hash, so profile/performance rows cannot join across code-generation
@@ -874,9 +990,11 @@ class EmitModelPlanPass final
     root["kind"] = "ncnn.model_execution_plan";
     root["model"] = model;
     root["target"] = std::move(target);
+    root["fusion"] = std::move(fusion);
     root["functions"] = std::move(functions);
     root["operations"] = std::move(operations);
     root["contracts"] = std::move(contracts);
+    root["fusions"] = std::move(fusions);
     root["buffers"] = std::move(buffers);
     root["regions"] = std::move(regions);
     root["static_liveness"] = std::move(static_liveness);

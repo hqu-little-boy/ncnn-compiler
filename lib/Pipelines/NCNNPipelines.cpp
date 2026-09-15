@@ -161,6 +161,8 @@ void buildNCNNTosaToLinalgPipeline(
   passManager.addPass(createCanonicalizerPass());
   FuseLinalgEpiloguePassOptions epilogueOptions;
   epilogueOptions.tileWidth = options.epilogueTileWidth;
+  epilogueOptions.enable = options.selectiveFusion;
+  epilogueOptions.allowResidual = options.selectiveFusionResidual;
   passManager.addPass(createFuseLinalgEpiloguePass(epilogueOptions));
   passManager.addPass(createVerifyNoTosaOpsPass());
 }
