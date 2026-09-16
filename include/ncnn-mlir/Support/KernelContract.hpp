@@ -52,6 +52,15 @@ inline constexpr llvm::StringLiteral kFusionRejectedCount =
 inline constexpr llvm::StringLiteral kFusionRejectionReasons =
   "ncnn.fusion_rejection_reasons";
 inline constexpr llvm::StringLiteral kFusionRecords = "ncnn.fusion_records";
+inline constexpr llvm::StringLiteral kAttentionSegments =
+  "ncnn.attention_segments";
+inline constexpr llvm::StringLiteral kAttentionOrdinal =
+  "ncnn.attention_next_ordinal";
+inline constexpr llvm::StringLiteral kAttentionRevision =
+  "ncnn.attention_segment_revision";
+inline constexpr llvm::StringLiteral kAttentionPhase = "ncnn.attention_phase";
+inline constexpr llvm::StringLiteral kAttentionSegmentId =
+  "ncnn.attention_segment_id";
 
 inline void setString(Operation* operation, StringRef name, StringRef value) {
   operation->setAttr(name, StringAttr::get(operation->getContext(), value));

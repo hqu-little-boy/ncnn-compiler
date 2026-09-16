@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "llvm/ADT/SmallVector.h"
@@ -23,6 +24,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 #include "ncnn-mlir/Support/ConstantFold.hpp"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 #include "ncnn-mlir/Support/Precision.hpp"
 
 namespace mlir::ncnn {
@@ -3868,6 +3870,125 @@ class ConvertEmbed final : public OpConversionPattern<EmbedOp> {
   }
 };
 
+void appendAttentionSegmentRecords(MultiHeadAttentionOp operation,
+                                   int64_t sequence,
+                                   int64_t qdim,
+                                   int64_t embed,
+                                   int64_t heads,
+                                   int64_t headDim,
+                                   bool dynamicSequence) {
+  auto module = operation->getParentOfType<ModuleOp>();
+  auto function = operation->getParentOfType<func::FuncOp>();
+  if (!module || !function) {
+    return;
+  }
+
+  int64_t ordinal = 0;
+  if (auto next =
+        module->getAttrOfType<IntegerAttr>(contract::kAttentionOrdinal)) {
+    ordinal = next.getInt();
+  }
+  module->setAttr(
+    contract::kAttentionOrdinal,
+    IntegerAttr::get(IntegerType::get(module.getContext(), 64), ordinal + 1));
+  module->setAttr(contract::kAttentionRevision,
+                  StringAttr::get(module.getContext(), "attention-segment-v1"));
+
+  auto existing =
+    module->getAttrOfType<ArrayAttr>(contract::kAttentionSegments);
+  SmallVector<Attribute> records;
+  if (existing) {
+    records.append(existing.begin(), existing.end());
+  }
+
+  std::optional<int64_t> transposeBytes;
+  if (!dynamicSequence && sequence > 0 && heads > 0 && headDim > 0) {
+    constexpr int64_t elementBytes = 4;
+    const auto safeMultiply = [](int64_t lhs,
+                                 int64_t rhs) -> std::optional<int64_t> {
+      if (lhs < 0 || rhs < 0 ||
+          (rhs != 0 && lhs > std::numeric_limits<int64_t>::max() / rhs)) {
+        return std::nullopt;
+      }
+      return lhs * rhs;
+    };
+    auto elements = safeMultiply(sequence, heads);
+    if (elements) {
+      elements = safeMultiply(*elements, headDim);
+    }
+    if (elements) {
+      transposeBytes = safeMultiply(*elements, elementBytes);
+    }
+  }
+
+  const std::string prefix =
+    function.getName().str() + "/attention#" + std::to_string(ordinal);
+  auto append = [&](StringRef phase,
+                    std::optional<int64_t> m,
+                    std::optional<int64_t> k,
+                    std::optional<int64_t> n,
+                    int64_t transposeCount,
+                    StringRef status,
+                    StringRef reason) {
+    MLIRContext* context = module.getContext();
+    NamedAttrList record;
+    record.set("id", StringAttr::get(context, prefix + "/" + phase.str()));
+    record.set("function", StringAttr::get(context, function.getName()));
+    record.set("source_operation",
+               StringAttr::get(context, "ncnn.multi_head_attention"));
+    record.set("attention_ordinal",
+               IntegerAttr::get(IntegerType::get(context, 64), ordinal));
+    record.set("phase", StringAttr::get(context, phase));
+    record.set("heads", IntegerAttr::get(IntegerType::get(context, 64), heads));
+    if (m) {
+      record.set("M", IntegerAttr::get(IntegerType::get(context, 64), *m));
+    }
+    if (k) {
+      record.set("K", IntegerAttr::get(IntegerType::get(context, 64), *k));
+    }
+    if (n) {
+      record.set("N", IntegerAttr::get(IntegerType::get(context, 64), *n));
+    }
+    record.set("kernel_status", StringAttr::get(context, status));
+    if (!reason.empty()) {
+      record.set("reason", StringAttr::get(context, reason));
+    }
+    record.set("transpose_count",
+               IntegerAttr::get(IntegerType::get(context, 64), transposeCount));
+    record.set("copy_bytes_known", BoolAttr::get(context, false));
+    if (transposeBytes) {
+      record.set(
+        "transpose_bytes",
+        IntegerAttr::get(IntegerType::get(context, 64), *transposeBytes));
+      record.set("transpose_bytes_known", BoolAttr::get(context, true));
+    } else {
+      record.set("transpose_bytes_known", BoolAttr::get(context, false));
+    }
+    records.push_back(DictionaryAttr::get(context, record));
+  };
+
+  const StringRef status = dynamicSequence ? "fallback" : "selected";
+  const StringRef reason = dynamicSequence ? "dynamic_sequence" : "";
+  const std::optional<int64_t> seq =
+    dynamicSequence ? std::nullopt : std::optional(sequence);
+  append("q_projection", seq, qdim, embed, 1, status, reason);
+  append("k_projection", seq, qdim, embed, 1, status, reason);
+  append("v_projection", seq, qdim, embed, 1, status, reason);
+  append("score", seq, headDim, seq, 1, status, reason);
+  append("softmax",
+         seq,
+         seq,
+         std::nullopt,
+         0,
+         dynamicSequence ? "fallback" : "unknown",
+         dynamicSequence ? "dynamic_sequence" : "");
+  append("context", seq, seq, headDim, 1, status, reason);
+  append("output_projection", seq, embed, qdim, 1, status, reason);
+
+  module->setAttr(contract::kAttentionSegments,
+                  ArrayAttr::get(module.getContext(), records));
+}
+
 class ConvertMultiHeadAttention final
   : public OpConversionPattern<MultiHeadAttentionOp> {
  public:
@@ -4264,6 +4385,13 @@ class ConvertMultiHeadAttention final
     const int64_t embed = operation.getEmbedDim();
     const int64_t heads = operation.getNumHeads();
     const int64_t headDim = embed / heads;
+    appendAttentionSegmentRecords(operation,
+                                  sequence,
+                                  qdim,
+                                  embed,
+                                  heads,
+                                  headDim,
+                                  ShapedType::isDynamic(sequence));
     if (ShapedType::isDynamic(sequence)) {
       rewriter.replaceOp(operation, lowerDynamic(operation, adaptor, rewriter));
       return success();

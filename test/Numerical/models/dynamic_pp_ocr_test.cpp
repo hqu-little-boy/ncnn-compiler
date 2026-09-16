@@ -1622,7 +1622,7 @@ TEST(NumericalDynamicModel, PPOCRv6TinyRecArtifactsDescribeDynamicAbi) {
 
   const std::string linalgIr =
     read_text(PP_OCRV6_TINY_REC_DYNAMIC_LINALG_IR_PATH);
-  EXPECT_EQ(linalgIr.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalgIr.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalgIr.find("math.exp"), std::string::npos);
   EXPECT_NE(linalgIr.find("tensor.expand_shape"), std::string::npos);
 }
@@ -1910,7 +1910,7 @@ TEST(NumericalDynamicModel, PPOCRv5MobileRecArtifactsDescribeDynamicAbi) {
 
   const std::string linalgIr =
     read_text(PP_OCRV5_MOBILE_REC_DYNAMIC_LINALG_IR_PATH);
-  EXPECT_EQ(linalgIr.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalgIr.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalgIr.find("math.exp"), std::string::npos);
   EXPECT_NE(linalgIr.find("tensor.expand_shape"), std::string::npos);
 }
@@ -2048,12 +2048,12 @@ TEST(NumericalDynamicModel,
   const std::string ncnn_ir =
     read_text(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_NCNN_IR_PATH);
   EXPECT_NE(ncnn_ir.find("int8_scale_term = 102"), std::string::npos);
-  EXPECT_NE(ncnn_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("ncnn.multi_head_attention "), std::string::npos);
   const std::string linalg_ir =
     read_text(PP_OCRV5_MOBILE_REC_INT8_DYNAMIC_LINALG_IR_PATH);
   EXPECT_NE(linalg_ir.find("linalg.batch_matmul"), std::string::npos);
   EXPECT_NE(linalg_ir.find("arith.fptosi"), std::string::npos);
-  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention "), std::string::npos);
 }
 
 TEST(NumericalDynamicModel, PPOCRv5ServerRecInfersSequenceAcrossWidths) {
@@ -2192,7 +2192,7 @@ TEST(NumericalDynamicModel, PPOCRv5ServerRecArtifactsDescribeDynamicAbi) {
 
   const std::string linalg_ir =
     read_text(PP_OCRV5_SERVER_REC_DYNAMIC_LINALG_IR_PATH);
-  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalg_ir.find("math.exp"), std::string::npos);
   EXPECT_NE(linalg_ir.find("tensor.expand_shape"), std::string::npos);
 }
@@ -2334,7 +2334,7 @@ TEST(NumericalDynamicModel, PPOCRv6MediumRecArtifactsDescribeDynamicAbi) {
 
   const std::string linalg_ir =
     read_text(PP_OCRV6_MEDIUM_REC_DYNAMIC_LINALG_IR_PATH);
-  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalg_ir.find("math.exp"), std::string::npos);
   EXPECT_NE(linalg_ir.find("tensor.expand_shape"), std::string::npos);
 }
@@ -2447,7 +2447,7 @@ TEST(NumericalDynamicModel, PPOCRv6SmallRecInt8ArtifactsDescribeDynamicAbi) {
     std::string::npos);
   const std::string linalg_ir =
     read_text(PP_OCRV6_SMALL_REC_INT8_DYNAMIC_LINALG_IR_PATH);
-  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalg_ir.find("math.exp"), std::string::npos);
 }
 
@@ -2556,7 +2556,7 @@ TEST(NumericalDynamicModel, PPOCRv6MediumRecInt8ArtifactsDescribeDynamicAbi) {
   EXPECT_NE(ncnn_ir.find("int8_scale_term = 102"), std::string::npos);
   const std::string linalg_ir =
     read_text(PP_OCRV6_MEDIUM_REC_INT8_DYNAMIC_LINALG_IR_PATH);
-  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalg_ir.find("arith.fptosi"), std::string::npos);
 }
 
@@ -2641,7 +2641,7 @@ TEST(NumericalDynamicModel, PPOCRv6SmallRecArtifactsDescribeDynamicAbi) {
     std::string::npos);
   const std::string linalg_ir =
     read_text(PP_OCRV6_SMALL_REC_DYNAMIC_LINALG_IR_PATH);
-  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalg_ir.find("linalg.batch_matmul"), std::string::npos);
 }
 

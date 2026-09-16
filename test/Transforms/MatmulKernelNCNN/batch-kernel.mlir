@@ -64,3 +64,43 @@ module {
     return
   }
 }
+
+// MHA score 形态：heads×sequence×head_dim 与 heads×head_dim×sequence。
+// 序列维为 40，仍按 bounded panel 生成，不把 sequence 作为 vector 宽度。
+// CHECK-LABEL: func.func @mha_score
+// CHECK: scf.forall {{.*}} in (8)
+// CHECK: vector.transfer_read {{.*}} vector<16xf32>
+// CHECK: vector.transfer_read {{.*}} vector<8xf32>
+// CHECK: vector.fma
+// CHECK-NOT: vector<40xf32>
+// CHECK-NOT: linalg.batch_matmul
+module {
+  func.func @mha_score(%query: memref<8x40x16xf32>,
+                       %key: memref<8x16x40xf32>,
+                       %scores: memref<8x40x40xf32>) {
+    linalg.batch_matmul ins(%query, %key : memref<8x40x16xf32>,
+                                    memref<8x16x40xf32>)
+                        outs(%scores : memref<8x40x40xf32>)
+    return
+  }
+}
+
+// MHA context 形态：sequence 尾部为 41、head_dim 尾部为 17；M/N 尾部必须
+// 通过标量/窄路径处理，不得产生动态或超宽 vector。
+// CHECK-LABEL: func.func @mha_context_tail
+// CHECK: scf.forall {{.*}} in (8)
+// CHECK: vector.transfer_read
+// CHECK: vector<16xf32>
+// CHECK: vector<1xf32>
+// CHECK: vector.fma
+// CHECK-NOT: linalg.batch_matmul
+module {
+  func.func @mha_context_tail(%probabilities: memref<8x41x40xf32>,
+                              %value: memref<8x40x17xf32>,
+                              %context: memref<8x41x17xf32>) {
+    linalg.batch_matmul ins(%probabilities, %value : memref<8x41x40xf32>,
+                                             memref<8x40x17xf32>)
+                        outs(%context : memref<8x41x17xf32>)
+    return
+  }
+}

@@ -47,7 +47,7 @@ module attributes {
   }
 }
 
-// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1"
+// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1"
 // CHECK-DAG: "fusion": {
 // CHECK-DAG: "enabled": true
 // CHECK-DAG: "selected_count": 1

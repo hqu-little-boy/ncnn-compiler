@@ -201,6 +201,7 @@ class EmitModelPlanPass final
     JsonArray regions;
     JsonArray contracts;
     JsonArray fusions;
+    JsonArray attention_segments;
     JsonArray unknown_fields;
     JsonObject summary;
     std::int64_t allocation_count = 0;
@@ -264,6 +265,91 @@ class EmitModelPlanPass final
         unknown_fields.push_back(reason.str());
       }
     };
+
+    const auto module_attention_records =
+      module->getAttrOfType<ArrayAttr>(contract::kAttentionSegments);
+    const std::string attention_revision =
+      module->getAttrOfType<StringAttr>(contract::kAttentionRevision)
+        ? module->getAttrOfType<StringAttr>(contract::kAttentionRevision)
+            .getValue()
+            .str()
+        : "attention-segment-v1";
+    std::string attention_hash_input =
+      "attention-revision=" + attention_revision;
+    std::int64_t attention_selected_count = 0;
+    std::int64_t attention_fallback_count = 0;
+    std::int64_t attention_unknown_count = 0;
+    if (module_attention_records) {
+      std::int64_t recordOrdinal = 0;
+      for (Attribute attribute : module_attention_records) {
+        auto record = dyn_cast<DictionaryAttr>(attribute);
+        if (!record) {
+          add_unknown("attention_record_malformed");
+          continue;
+        }
+        JsonObject segment;
+        auto copyString = [&](StringRef attributeName, StringRef fieldName) {
+          if (auto value = record.getAs<StringAttr>(attributeName)) {
+            segment[fieldName.str()] = value.getValue().str();
+            attention_hash_input +=
+              "|" + fieldName.str() + "=" + value.getValue().str();
+          } else {
+            segment[fieldName.str()] = nullptr;
+          }
+        };
+        auto copyInteger = [&](StringRef attributeName, StringRef fieldName) {
+          if (auto value = record.getAs<IntegerAttr>(attributeName)) {
+            segment[fieldName.str()] = value.getInt();
+            attention_hash_input +=
+              "|" + fieldName.str() + "=" + std::to_string(value.getInt());
+          } else {
+            segment[fieldName.str()] = nullptr;
+          }
+        };
+        auto copyBool = [&](StringRef attributeName, StringRef fieldName) {
+          if (auto value = record.getAs<BoolAttr>(attributeName)) {
+            segment[fieldName.str()] = value.getValue();
+            attention_hash_input += "|" + fieldName.str() + "=" +
+                                    (value.getValue() ? "true" : "false");
+          } else {
+            segment[fieldName.str()] = nullptr;
+          }
+        };
+
+        copyString("id", "id");
+        copyString("function", "function");
+        copyString("source_operation", "source_operation");
+        copyInteger("attention_ordinal", "attention_ordinal");
+        copyString("phase", "phase");
+        copyInteger("heads", "heads");
+        copyInteger("M", "M");
+        copyInteger("K", "K");
+        copyInteger("N", "N");
+        copyString("kernel_status", "kernel_status");
+        copyString("reason", "reason");
+        copyInteger("transpose_count", "transpose_count");
+        copyInteger("transpose_bytes", "transpose_bytes");
+        copyBool("transpose_bytes_known", "transpose_bytes_known");
+        copyInteger("copy_count", "copy_count");
+        copyInteger("copy_bytes", "copy_bytes");
+        copyBool("copy_bytes_known", "copy_bytes_known");
+
+        if (auto status = record.getAs<StringAttr>("kernel_status")) {
+          if (status.getValue() == "selected") {
+            ++attention_selected_count;
+          } else if (status.getValue() == "fallback") {
+            ++attention_fallback_count;
+          } else {
+            ++attention_unknown_count;
+          }
+        } else {
+          ++attention_unknown_count;
+          add_unknown("attention_kernel_status_unknown");
+        }
+        attention_segments.push_back(std::move(segment));
+        attention_hash_input += "|ordinal=" + std::to_string(recordOrdinal++);
+      }
+    }
     unsigned region_ordinal = 0;
     JsonArray static_liveness;
     JsonArray provenance;
@@ -277,7 +363,8 @@ class EmitModelPlanPass final
       "|fusion-selected=" + std::to_string(fusion_selected_count) +
       "|fusion-residual=" + std::to_string(fusion_residual_count) +
       "|fusion-rejected=" + std::to_string(fusion_rejected_count) +
-      "|fusion-reasons=" + fusion_rejection_reasons;
+      "|fusion-reasons=" + fusion_rejection_reasons + "|" +
+      attention_hash_input;
 
     // The static plan does not execute a runner or collect runtime counters.
     // Prepared and allocation-audit modes are reported by the numerical
@@ -913,6 +1000,12 @@ class EmitModelPlanPass final
     summary["workspace_reused_allocation_count"] =
       workspace_reused_allocation_count;
     summary["workspace_fallback_count"] = workspace_fallback_count;
+    summary["attention_segment_count"] =
+      static_cast<std::int64_t>(attention_segments.size());
+    summary["attention_selected_count"] = attention_selected_count;
+    summary["attention_fallback_count"] = attention_fallback_count;
+    summary["attention_unknown_count"] = attention_unknown_count;
+    summary["attention_revision"] = attention_revision;
     if (workspace_slot_bytes_unknown) {
       summary["workspace_slot_bytes"] = nullptr;
       summary["workspace_slot_bytes_known"] = false;
@@ -978,8 +1071,10 @@ class EmitModelPlanPass final
     const std::string plan_hash = std::to_string(profileId(plan_hash_input));
     JsonObject root;
     root["schema_version"] = 1;
-    root["plan_revision"] = "static-v1|workspace-slot-v1|fusion-v1";
-    root["contract_revision"] = "layout-kernel-v1|workspace-slot-v1|fusion-v1";
+    root["plan_revision"] =
+      "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1";
+    root["contract_revision"] =
+      "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1";
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen
     // hash, so profile/performance rows cannot join across code-generation
@@ -991,6 +1086,8 @@ class EmitModelPlanPass final
     root["model"] = model;
     root["target"] = std::move(target);
     root["fusion"] = std::move(fusion);
+    root["attention_revision"] = attention_revision;
+    root["attention_segments"] = std::move(attention_segments);
     root["functions"] = std::move(functions);
     root["operations"] = std::move(operations);
     root["contracts"] = std::move(contracts);

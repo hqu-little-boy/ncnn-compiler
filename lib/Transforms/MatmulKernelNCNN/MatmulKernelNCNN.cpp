@@ -322,6 +322,14 @@ class MatmulKernelNCNNPass final
     const auto aType = cast<MemRefType>(batch.getInputs()[0].getType());
     const auto bType = cast<MemRefType>(batch.getInputs()[1].getType());
     const auto cType = cast<MemRefType>(batch.getOutputs().front().getType());
+    for (ArrayRef<int64_t> shape :
+         {aType.getShape(), bType.getShape(), cType.getShape()}) {
+      for (int64_t extent : shape) {
+        if (extent <= 0) {
+          return false;
+        }
+      }
+    }
     return bType.getShape()[0] == aType.getShape()[0] &&
            cType.getShape()[0] == aType.getShape()[0] &&
            bType.getShape()[1] == aType.getShape()[2] &&

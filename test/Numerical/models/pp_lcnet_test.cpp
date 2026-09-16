@@ -358,13 +358,13 @@ TEST(NumericalModel, PPOCRv5MobileRecArtifactsCoverAttentionPipeline) {
 
   const std::string ncnnIr = read_text(PP_OCRV5_MOBILE_REC_NCNN_IR_PATH);
   EXPECT_NE(ncnnIr.find("ncnn.layer_norm"), std::string::npos);
-  EXPECT_NE(ncnnIr.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_NE(ncnnIr.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(ncnnIr.find("num_heads = 8"), std::string::npos);
   EXPECT_NE(ncnnIr.find("scale = 0.258198"), std::string::npos);
 
   const std::string linalgIr = read_text(PP_OCRV5_MOBILE_REC_LINALG_IR_PATH);
   EXPECT_EQ(linalgIr.find("ncnn.layer_norm"), std::string::npos);
-  EXPECT_EQ(linalgIr.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalgIr.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalgIr.find("linalg.batch_matmul"), std::string::npos);
 }
 
@@ -513,13 +513,13 @@ TEST(NumericalModel, PPOCRv5ServerRecArtifactsCoverAttentionPipeline) {
 
   const std::string ncnn_ir = read_text(PP_OCRV5_SERVER_REC_NCNN_IR_PATH);
   EXPECT_NE(ncnn_ir.find("ncnn.layer_norm"), std::string::npos);
-  EXPECT_NE(ncnn_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(ncnn_ir.find("num_heads = 8"), std::string::npos);
   EXPECT_NE(ncnn_ir.find("scale = 0.258198"), std::string::npos);
 
   const std::string linalg_ir = read_text(PP_OCRV5_SERVER_REC_LINALG_IR_PATH);
   EXPECT_EQ(linalg_ir.find("ncnn.layer_norm"), std::string::npos);
-  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalg_ir.find("linalg.batch_matmul"), std::string::npos);
 }
 
@@ -568,13 +568,13 @@ TEST(NumericalModel, PPOCRv6MediumRecArtifactsCoverAttentionPipeline) {
 
   const std::string ncnn_ir = read_text(PP_OCRV6_MEDIUM_REC_NCNN_IR_PATH);
   EXPECT_NE(ncnn_ir.find("ncnn.layer_norm"), std::string::npos);
-  EXPECT_NE(ncnn_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_NE(ncnn_ir.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(ncnn_ir.find("num_heads = 8"), std::string::npos);
   EXPECT_NE(ncnn_ir.find("scale = 0.204124"), std::string::npos);
 
   const std::string linalg_ir = read_text(PP_OCRV6_MEDIUM_REC_LINALG_IR_PATH);
   EXPECT_EQ(linalg_ir.find("ncnn.layer_norm"), std::string::npos);
-  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention"), std::string::npos);
+  EXPECT_EQ(linalg_ir.find("ncnn.multi_head_attention "), std::string::npos);
   EXPECT_NE(linalg_ir.find("linalg.batch_matmul"), std::string::npos);
 }
 
