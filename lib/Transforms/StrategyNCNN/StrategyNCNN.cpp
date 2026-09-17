@@ -17,6 +17,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
 
@@ -42,6 +43,54 @@ namespace {
 // 深度卷积 lower 为独立的 linalg::DepthwiseConv2DNhwcHwcmOp，天然不进
 // 本策略；Winograd 仅保留开关位（数值预算未验证，默认关闭）。
 enum class ConvStrategy { Auto, Gemm, Conv, Winograd };
+
+void copyConvContract(Operation* source, Operation* target) {
+  for (StringRef attribute : {contract::kOperationFamily,
+                              contract::kImplementation,
+                              contract::kKernelStatic,
+                              contract::kKernelHeight,
+                              contract::kKernelWidth,
+                              contract::kStrideHeight,
+                              contract::kStrideWidth,
+                              contract::kDilationHeight,
+                              contract::kDilationWidth,
+                              contract::kInputChannels,
+                              contract::kOutputChannels,
+                              contract::kMultiplier,
+                              contract::kFallback}) {
+    if (Attribute value = source->getAttr(attribute)) {
+      target->setAttr(attribute, value);
+    }
+  }
+  for (StringRef attribute :
+       {StringRef("ncnn.name"), StringRef("ncnn.source_layer")}) {
+    if (Attribute value = source->getAttr(attribute)) {
+      target->setAttr(attribute, value);
+    }
+  }
+}
+
+void annotateConvContract(Operation* operation,
+                          StringRef implementation,
+                          int64_t kernelHeight,
+                          int64_t kernelWidth,
+                          int64_t strideHeight,
+                          int64_t strideWidth,
+                          int64_t dilationHeight,
+                          int64_t dilationWidth,
+                          int64_t inputChannels,
+                          int64_t outputChannels) {
+  contract::annotateOperationFamily(operation, "conv", implementation);
+  contract::annotateGeometry(operation,
+                             kernelHeight,
+                             kernelWidth,
+                             strideHeight,
+                             strideWidth,
+                             dilationHeight,
+                             dilationWidth,
+                             inputChannels,
+                             outputChannels);
+}
 
 std::optional<ConvStrategy> parseStrategy(StringRef strategy) {
   if (strategy == "auto") {
@@ -620,6 +669,8 @@ class StrategyNCNNPass final
     const int64_t batches = imageShape[0];
     const int64_t outputHeight = resultShape[1];
     const int64_t outputWidth = resultShape[2];
+    const auto strides = convolution.getStrides().getValues<int64_t>();
+    const auto dilations = convolution.getDilations().getValues<int64_t>();
     if (batches != 1 || inputChannels < 1 || outputChannels < 1) {
       // tile 域以 N=1 折叠展开；批维实例回退既有路径。
       return false;
@@ -633,6 +684,16 @@ class StrategyNCNNPass final
     if (!weightElements) {
       return false;
     }
+    annotateConvContract(convolution,
+                         "winograd",
+                         3,
+                         3,
+                         strides[0],
+                         strides[1],
+                         dilations[0],
+                         dilations[1],
+                         inputChannels,
+                         outputChannels);
 
     const int64_t tileRows = (outputHeight + kTile - 1) / kTile;
     const int64_t tileColumns = (outputWidth + kTile - 1) / kTile;
@@ -864,6 +925,7 @@ class StrategyNCNNPass final
                          ValueRange{weightTransformed, uBatched},
                          ValueRange{yInit})
                        .getResult(0);
+    copyConvContract(convolution, yBatched.getDefiningOp());
 
     // 4. 输出变换两段（8-tap 展开形态，输出域交错布局）。Y [64,OC,T]
     //    → [T,OC,64] 转置 → expand [TH,TW,OC,8,8] → 转置换轴到
@@ -1036,6 +1098,8 @@ class StrategyNCNNPass final
           return ShapedType::isDynamic(extent);
         })) {
       // 权重恒为静态常量（TosaToLinalg 已物化）；动态权重实例保持原路径。
+      contract::annotateOperationFamily(convolution, "conv", "fallback");
+      contract::annotateFallback(convolution, "dynamic_or_invalid_geometry");
       return;
     }
     const ArrayRef<int64_t> imageShape = imageType.getShape();
@@ -1050,6 +1114,16 @@ class StrategyNCNNPass final
     llvm::append_range(strides, convolution.getStrides().getValues<int64_t>());
     llvm::append_range(dilations,
                        convolution.getDilations().getValues<int64_t>());
+    annotateConvContract(convolution,
+                         "unknown",
+                         kernelHeight,
+                         kernelWidth,
+                         strides[0],
+                         strides[1],
+                         dilations[0],
+                         dilations[1],
+                         inputChannels,
+                         outputChannels);
 
     // P7 Winograd：显式 winograd 策略对判据内实例优先改写（opt-in，
     // 数值预算逐模型对账后由启用侧决定）；判据 = ncnn convolution_x86
@@ -1104,6 +1178,16 @@ class StrategyNCNNPass final
         break;
       case ConvStrategy::Conv:
         // 直接卷积：保持 linalg.conv_2d_nhwc_hwcf 原路径。
+        annotateConvContract(convolution,
+                             "direct",
+                             kernelHeight,
+                             kernelWidth,
+                             strides[0],
+                             strides[1],
+                             dilations[0],
+                             dilations[1],
+                             inputChannels,
+                             outputChannels);
         return;
       case ConvStrategy::Winograd:
         // 判据外实例（非 3×3 s1 d1、批维非 1、动态空间维、int8）在
@@ -1122,8 +1206,33 @@ class StrategyNCNNPass final
         break;
     }
     if (!useUnitView && !useIm2col) {
+      if (staticSpatial) {
+        annotateConvContract(convolution,
+                             "direct",
+                             kernelHeight,
+                             kernelWidth,
+                             strides[0],
+                             strides[1],
+                             dilations[0],
+                             dilations[1],
+                             inputChannels,
+                             outputChannels);
+      } else {
+        contract::annotateOperationFamily(convolution, "conv", "fallback");
+        contract::annotateFallback(convolution, "dynamic_spatial");
+      }
       return;
     }
+    annotateConvContract(convolution,
+                         "gemm",
+                         kernelHeight,
+                         kernelWidth,
+                         strides[0],
+                         strides[1],
+                         dilations[0],
+                         dilations[1],
+                         inputChannels,
+                         outputChannels);
 
     Location location = convolution.getLoc();
     rewriter.setInsertionPoint(convolution);
@@ -1215,6 +1324,7 @@ class StrategyNCNNPass final
                                     ValueRange{collapsedInit})
           .getResult(0);
     }
+    copyConvContract(convolution, contracted.getDefiningOp());
 
     // epilogue 衔接（方案 a）：唯一用户是恒等逐元素 generic 时，把
     // consumer 整体搬进折叠二维域，expand_shape 推迟到其后，下游继续看

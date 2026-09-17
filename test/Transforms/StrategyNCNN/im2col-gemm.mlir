@@ -16,7 +16,7 @@ func.func @above_threshold(%arg0: tensor<1x10x10x64xf32>) -> tensor<1x8x8x128xf3
 // CHECK: arith.constant dense{{.*}} : tensor<576x128xf32>
 // CHECK: linalg.generic {{.*}}ins({{.*}} : tensor<1x10x10x64xf32>) outs({{.*}} : tensor<8x8x3x3x64xf32>)
 // CHECK: tensor.collapse_shape {{.*}} tensor<8x8x3x3x64xf32> into tensor<64x576xf32>
-// CHECK: linalg.matmul ins({{.*}} : tensor<64x576xf32>, tensor<576x128xf32>)
+// CHECK: linalg.matmul {{.*ncnn.implementation = "gemm".*ncnn.operation_family = "conv".*}} ins({{.*}} : tensor<64x576xf32>, tensor<576x128xf32>)
 // CHECK: tensor.expand_shape {{.*}} output_shape [1, 8, 8, 128]
 // CHECK-NOT: linalg.conv_2d_nhwc_hwcf
 
@@ -40,7 +40,7 @@ func.func @below_threshold(%arg0: tensor<1x10x10x8xf32>) -> tensor<1x8x8x8xf32> 
 // RUN: ncnn-mlir-opt --strategy-ncnn=strategy=gemm --canonicalize %s | FileCheck --check-prefix=GEMM %s
 
 // GEMM-LABEL: func.func @below_threshold
-// GEMM: linalg.matmul ins({{.*}} : tensor<64x72xf32>, tensor<72x8xf32>)
+// GEMM: linalg.matmul {{.*}} ins({{.*}} : tensor<64x72xf32>, tensor<72x8xf32>)
 // GEMM-NOT: linalg.conv_2d_nhwc_hwcf
 
 // -----

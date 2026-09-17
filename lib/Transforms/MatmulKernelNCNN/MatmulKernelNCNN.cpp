@@ -18,6 +18,32 @@ namespace mlir::ncnn {
 
 namespace {
 
+void copyConvContract(Operation* source, Operation* target) {
+  for (StringRef attribute : {contract::kOperationFamily,
+                              contract::kImplementation,
+                              contract::kKernelStatic,
+                              contract::kKernelHeight,
+                              contract::kKernelWidth,
+                              contract::kStrideHeight,
+                              contract::kStrideWidth,
+                              contract::kDilationHeight,
+                              contract::kDilationWidth,
+                              contract::kInputChannels,
+                              contract::kOutputChannels,
+                              contract::kMultiplier,
+                              contract::kFallback}) {
+    if (Attribute value = source->getAttr(attribute)) {
+      target->setAttr(attribute, value);
+    }
+  }
+  for (StringRef attribute :
+       {StringRef("ncnn.name"), StringRef("ncnn.source_layer")}) {
+    if (Attribute value = source->getAttr(attribute)) {
+      target->setAttr(attribute, value);
+    }
+  }
+}
+
 // A1b SIMD matmul 内核 + forall 路径标量热点清理。
 //
 // 1) matmul 内核：A1 策略层把卷积改写为 im2col+matmul 后，内层
@@ -1173,6 +1199,11 @@ class MatmulKernelNCNNPass final
     const int64_t fullRowExtent = rows / tileRows * tileRows;
 
     if (auto forall = matmul->getParentOfType<scf::ForallOp>()) {
+      copyConvContract(matmul.getOperation(), forall.getOperation());
+      if (fused) {
+        contract::annotateOperationFamily(
+          forall.getOperation(), "conv", "gather_free");
+      }
       contract::annotateTile(
         forall.getOperation(),
         "f32_mxn_fma",

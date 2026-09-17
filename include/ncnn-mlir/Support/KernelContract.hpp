@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -31,6 +32,18 @@ inline constexpr llvm::StringLiteral kAlignment = "ncnn.alignment";
 inline constexpr llvm::StringLiteral kAlias = "ncnn.alias";
 inline constexpr llvm::StringLiteral kContract = "ncnn.contract";
 inline constexpr llvm::StringLiteral kFallback = "ncnn.fallback_reason";
+inline constexpr llvm::StringLiteral kOperationFamily = "ncnn.operation_family";
+inline constexpr llvm::StringLiteral kImplementation = "ncnn.implementation";
+inline constexpr llvm::StringLiteral kKernelStatic = "ncnn.kernel_static";
+inline constexpr llvm::StringLiteral kKernelHeight = "ncnn.kernel_h";
+inline constexpr llvm::StringLiteral kKernelWidth = "ncnn.kernel_w";
+inline constexpr llvm::StringLiteral kStrideHeight = "ncnn.stride_h";
+inline constexpr llvm::StringLiteral kStrideWidth = "ncnn.stride_w";
+inline constexpr llvm::StringLiteral kDilationHeight = "ncnn.dilation_h";
+inline constexpr llvm::StringLiteral kDilationWidth = "ncnn.dilation_w";
+inline constexpr llvm::StringLiteral kInputChannels = "ncnn.input_channels";
+inline constexpr llvm::StringLiteral kOutputChannels = "ncnn.output_channels";
+inline constexpr llvm::StringLiteral kMultiplier = "ncnn.multiplier";
 inline constexpr llvm::StringLiteral kFusion = "ncnn.fusion";
 inline constexpr llvm::StringLiteral kFusionKind = "ncnn.fusion_kind";
 inline constexpr llvm::StringLiteral kFusionProducer = "ncnn.fusion_producer";
@@ -115,6 +128,37 @@ inline void annotatePacking(Operation* operation,
 inline void annotateFallback(Operation* operation, StringRef reason) {
   setString(operation, kContract, "fallback");
   setString(operation, kFallback, reason);
+}
+
+inline void annotateOperationFamily(Operation* operation,
+                                    StringRef family,
+                                    StringRef implementation) {
+  setString(operation, kOperationFamily, family);
+  setString(operation, kImplementation, implementation);
+}
+
+inline void annotateGeometry(Operation* operation,
+                             int64_t kernelHeight,
+                             int64_t kernelWidth,
+                             int64_t strideHeight,
+                             int64_t strideWidth,
+                             int64_t dilationHeight,
+                             int64_t dilationWidth,
+                             int64_t inputChannels,
+                             int64_t outputChannels,
+                             std::optional<int64_t> multiplier = std::nullopt) {
+  setInteger(operation, kKernelHeight, kernelHeight);
+  setInteger(operation, kKernelWidth, kernelWidth);
+  setInteger(operation, kStrideHeight, strideHeight);
+  setInteger(operation, kStrideWidth, strideWidth);
+  setInteger(operation, kDilationHeight, dilationHeight);
+  setInteger(operation, kDilationWidth, dilationWidth);
+  setInteger(operation, kInputChannels, inputChannels);
+  setInteger(operation, kOutputChannels, outputChannels);
+  if (multiplier) {
+    setInteger(operation, kMultiplier, *multiplier);
+  }
+  setBool(operation, kKernelStatic, true);
 }
 
 inline void annotateFusionFallback(Operation* operation, StringRef reason) {

@@ -37,6 +37,12 @@ def main() -> int:
       }],
       "summary": {"peak_workspace_bytes": None},
       "diagnostics": {"unknown_fields": []},
+      "conv_depthwise_operations": [{
+        "family": "conv",
+        "implementation": "gather_free",
+        "source_layer": 3,
+        "fallback_reason": None,
+      }],
     }))
     profile.write_text(json.dumps({
       "schema_version": 1,
@@ -93,6 +99,11 @@ def main() -> int:
     report = json.loads(result.stdout)
     if report["top_costs"][0]["source_name"] != "projection":
       raise RuntimeError("provenance was not joined")
+    conv_breakdown = report["static"]["conv_depthwise"]["conv"]
+    if conv_breakdown["implementations"] != {"gather_free": 1}:
+      raise RuntimeError("Conv implementation breakdown was not joined")
+    if conv_breakdown["source_layers"] != [3]:
+      raise RuntimeError("Conv source-layer breakdown was not joined")
     if report["top_costs"][0]["time_fraction"] != 80 / 980:
       raise RuntimeError("top-cost fraction omitted unattributed time")
     if report["runtime"]["unattributed_event_count"] != 1:

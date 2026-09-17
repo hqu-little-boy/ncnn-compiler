@@ -187,6 +187,9 @@ class EmitModelPlanPass final
                     vector::VectorDialect>();
   }
 
+  // This pass intentionally centralizes the complete static-plan walk so that
+  // all counters and the plan hash are derived from one deterministic visit.
+  // NOLINTNEXTLINE(google-readability-function-size)
   void runOnOperation() final {
     ModuleOp module = getOperation();
     if (path.empty()) {
@@ -200,6 +203,7 @@ class EmitModelPlanPass final
     JsonArray buffers;
     JsonArray regions;
     JsonArray contracts;
+    JsonArray conv_depthwise_operations;
     JsonArray fusions;
     JsonArray attention_segments;
     JsonArray unknown_fields;
@@ -214,6 +218,16 @@ class EmitModelPlanPass final
     std::int64_t parallel_region_count = 0;
     std::int64_t kernel_contract_count = 0;
     std::int64_t kernel_contract_fallback_count = 0;
+    std::int64_t conv_operation_count = 0;
+    std::int64_t depthwise_operation_count = 0;
+    std::int64_t conv_fallback_count = 0;
+    std::int64_t depthwise_fallback_count = 0;
+    std::int64_t conv_unknown_count = 0;
+    std::int64_t depthwise_unknown_count = 0;
+    std::map<std::string, std::int64_t> conv_implementations;
+    std::map<std::string, std::int64_t> depthwise_implementations;
+    std::map<std::string, std::int64_t> conv_fallback_reasons;
+    std::map<std::string, std::int64_t> depthwise_fallback_reasons;
     std::int64_t nested_openmp_count = 0;
     std::int64_t workspace_slot_count = 0;
     std::int64_t workspace_reused_allocation_count = 0;
@@ -354,8 +368,9 @@ class EmitModelPlanPass final
     JsonArray static_liveness;
     JsonArray provenance;
     std::string plan_hash_input =
-      "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v1|" + model + "|" +
-      targetTriple + "|" + std::to_string(threads) + "|" +
+      "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v1|conv-depthwise-"
+      "v1|" +
+      model + "|" + targetTriple + "|" + std::to_string(threads) + "|" +
       std::to_string(vectorLanes) + "|" +
       std::to_string(vectorScalable.getValue()) + "|" +
       std::to_string(vectorTail.getValue()) + "|codegen=" + codegenIdentity +
@@ -693,11 +708,14 @@ class EmitModelPlanPass final
           plan_hash_input += "|source-name=" + name.getValue().str();
         }
 
-        const bool has_contract = operation->hasAttr(contract::kContract) ||
-                                  operation->hasAttr(contract::kKernel) ||
-                                  operation->hasAttr(contract::kPacking) ||
-                                  operation->hasAttr(contract::kFallback) ||
-                                  operation->hasAttr(contract::kFusion);
+        const bool has_contract =
+          operation->hasAttr(contract::kContract) ||
+          operation->hasAttr(contract::kKernel) ||
+          operation->hasAttr(contract::kPacking) ||
+          operation->hasAttr(contract::kFallback) ||
+          operation->hasAttr(contract::kOperationFamily) ||
+          operation->hasAttr(contract::kImplementation) ||
+          operation->hasAttr(contract::kFusion);
         auto make_contract = [&]() {
           JsonObject result;
           auto copy_string = [&](StringRef attribute, StringRef field) {
@@ -708,6 +726,11 @@ class EmitModelPlanPass final
           auto copy_integer = [&](StringRef attribute, StringRef field) {
             if (auto value = operation->getAttrOfType<IntegerAttr>(attribute)) {
               result[field.str()] = value.getInt();
+            }
+          };
+          auto copy_bool = [&](StringRef attribute, StringRef field) {
+            if (auto value = operation->getAttrOfType<BoolAttr>(attribute)) {
+              result[field.str()] = value.getValue();
             }
           };
           copy_string(contract::kLayout, "layout");
@@ -731,6 +754,18 @@ class EmitModelPlanPass final
           copy_string(contract::kAlias, "alias");
           copy_string(contract::kContract, "status");
           copy_string(contract::kFallback, "fallback_reason");
+          copy_string(contract::kOperationFamily, "operation_family");
+          copy_string(contract::kImplementation, "implementation");
+          copy_bool(contract::kKernelStatic, "kernel_static");
+          copy_integer(contract::kKernelHeight, "kernel_h");
+          copy_integer(contract::kKernelWidth, "kernel_w");
+          copy_integer(contract::kStrideHeight, "stride_h");
+          copy_integer(contract::kStrideWidth, "stride_w");
+          copy_integer(contract::kDilationHeight, "dilation_h");
+          copy_integer(contract::kDilationWidth, "dilation_w");
+          copy_integer(contract::kInputChannels, "input_channels");
+          copy_integer(contract::kOutputChannels, "output_channels");
+          copy_integer(contract::kMultiplier, "multiplier");
           copy_string(contract::kFusion, "fusion_status");
           copy_string(contract::kFusionKind, "fusion_kind");
           copy_string(contract::kFusionProducer, "fusion_producer");
@@ -742,6 +777,64 @@ class EmitModelPlanPass final
           copy_integer(contract::kFusionSavedBytes, "fusion_saved_bytes");
           return result;
         };
+        auto family =
+          operation->getAttrOfType<StringAttr>(contract::kOperationFamily);
+        if (family &&
+            (family.getValue() == "conv" || family.getValue() == "depthwise")) {
+          const bool isDepthwise = family.getValue() == "depthwise";
+          const std::string familyName = family.getValue().str();
+          std::string implementation = "unknown";
+          if (auto value = operation->getAttrOfType<StringAttr>(
+                contract::kImplementation)) {
+            implementation = value.getValue().str();
+          }
+          auto& implementationCounts =
+            isDepthwise ? depthwise_implementations : conv_implementations;
+          ++implementationCounts[implementation];
+          if (isDepthwise) {
+            ++depthwise_operation_count;
+          } else {
+            ++conv_operation_count;
+          }
+          if (implementation == "fallback") {
+            if (isDepthwise) {
+              ++depthwise_fallback_count;
+            } else {
+              ++conv_fallback_count;
+            }
+            std::string reason = "unknown";
+            if (auto value =
+                  operation->getAttrOfType<StringAttr>(contract::kFallback)) {
+              reason = value.getValue().str();
+            }
+            auto& reasonCounts =
+              isDepthwise ? depthwise_fallback_reasons : conv_fallback_reasons;
+            ++reasonCounts[reason];
+          } else if (implementation == "unknown") {
+            if (isDepthwise) {
+              ++depthwise_unknown_count;
+            } else {
+              ++conv_unknown_count;
+            }
+          }
+          JsonObject familyEntry = make_contract();
+          familyEntry["id"] = operation_id;
+          familyEntry["operation"] = kind;
+          familyEntry["function"] = function_name;
+          familyEntry["family"] = familyName;
+          if (auto source =
+                operation->getAttrOfType<IntegerAttr>("ncnn.source_layer")) {
+            familyEntry["source_layer"] = source.getInt();
+          } else {
+            familyEntry["source_layer"] = nullptr;
+          }
+          if (auto name = operation->getAttrOfType<StringAttr>("ncnn.name")) {
+            familyEntry["source_name"] = name.getValue().str();
+          } else {
+            familyEntry["source_name"] = nullptr;
+          }
+          conv_depthwise_operations.push_back(std::move(familyEntry));
+        }
         if (has_contract) {
           ++kernel_contract_count;
           if (auto status =
@@ -988,6 +1081,30 @@ class EmitModelPlanPass final
     summary["parallel_region_count"] = parallel_region_count;
     summary["kernel_contract_count"] = kernel_contract_count;
     summary["kernel_contract_fallback_count"] = kernel_contract_fallback_count;
+    auto mapToJson = [](const std::map<std::string, std::int64_t>& values) {
+      JsonObject result;
+      for (const auto& [key, value] : values) {
+        result[key] = value;
+      }
+      return result;
+    };
+    JsonObject convDepthwiseSummary;
+    convDepthwiseSummary["conv_operation_count"] = conv_operation_count;
+    convDepthwiseSummary["depthwise_operation_count"] =
+      depthwise_operation_count;
+    convDepthwiseSummary["conv_fallback_count"] = conv_fallback_count;
+    convDepthwiseSummary["depthwise_fallback_count"] = depthwise_fallback_count;
+    convDepthwiseSummary["conv_unknown_count"] = conv_unknown_count;
+    convDepthwiseSummary["depthwise_unknown_count"] = depthwise_unknown_count;
+    convDepthwiseSummary["conv_implementations"] =
+      mapToJson(conv_implementations);
+    convDepthwiseSummary["depthwise_implementations"] =
+      mapToJson(depthwise_implementations);
+    convDepthwiseSummary["conv_fallback_reasons"] =
+      mapToJson(conv_fallback_reasons);
+    convDepthwiseSummary["depthwise_fallback_reasons"] =
+      mapToJson(depthwise_fallback_reasons);
+    summary["conv_depthwise"] = std::move(convDepthwiseSummary);
     summary["fusion_enabled"] = fusion_enabled;
     summary["fusion_selected_count"] = fusion_selected_count;
     summary["fusion_residual_count"] = fusion_residual_count;
@@ -1072,9 +1189,11 @@ class EmitModelPlanPass final
     JsonObject root;
     root["schema_version"] = 1;
     root["plan_revision"] =
-      "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1";
+      "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
+      "depthwise-v1";
     root["contract_revision"] =
-      "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1";
+      "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
+      "depthwise-v1";
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen
     // hash, so profile/performance rows cannot join across code-generation
@@ -1091,6 +1210,7 @@ class EmitModelPlanPass final
     root["functions"] = std::move(functions);
     root["operations"] = std::move(operations);
     root["contracts"] = std::move(contracts);
+    root["conv_depthwise_operations"] = std::move(conv_depthwise_operations);
     root["fusions"] = std::move(fusions);
     root["buffers"] = std::move(buffers);
     root["regions"] = std::move(regions);

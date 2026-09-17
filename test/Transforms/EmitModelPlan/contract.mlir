@@ -16,6 +16,19 @@ module attributes {
         omp.terminator
     }) {
       ncnn.contract = "selected",
+      ncnn.operation_family = "conv",
+      ncnn.implementation = "gather_free",
+      ncnn.kernel_static = true,
+      ncnn.kernel_h = 3 : i64,
+      ncnn.kernel_w = 3 : i64,
+      ncnn.stride_h = 1 : i64,
+      ncnn.stride_w = 1 : i64,
+      ncnn.dilation_h = 1 : i64,
+      ncnn.dilation_w = 1 : i64,
+      ncnn.input_channels = 32 : i64,
+      ncnn.output_channels = 16 : i64,
+      ncnn.source_layer = 7 : i64,
+      ncnn.name = "conv7",
       ncnn.kernel = "f32_mxn_fma",
       ncnn.input_layout = "identity",
       ncnn.weight_layout = "row_major_kxn",
@@ -47,7 +60,7 @@ module attributes {
   }
 }
 
-// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1"
+// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1"
 // CHECK-DAG: "fusion": {
 // CHECK-DAG: "enabled": true
 // CHECK-DAG: "selected_count": 1
@@ -67,5 +80,13 @@ module attributes {
 // CHECK-DAG: "contracts": [
 // CHECK-DAG: "kernel_contract_count": 1
 // CHECK-DAG: "kernel_contract_fallback_count": 0
+// CHECK-DAG: "conv_depthwise_operations": [
+// CHECK-DAG: "family": "conv"
+// CHECK-DAG: "implementation": "gather_free"
+// CHECK-DAG: "source_layer": 7
+// CHECK-DAG: "conv_depthwise": {
+// CHECK-DAG: "conv_operation_count": 1
+// CHECK-DAG: "conv_fallback_count": 0
+// CHECK-DAG: "gather_free": 1
 // CHECK-DAG: "nested_openmp_count": 0
 // CHECK-DAG: "packed_buffer_bytes": 0

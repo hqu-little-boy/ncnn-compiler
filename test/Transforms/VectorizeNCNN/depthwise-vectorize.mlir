@@ -35,6 +35,9 @@ func.func @depthwise_basic(%arg0: tensor<1x7x9x4xf32>) -> tensor<1x3x7x4xf32> {
 // CHECK: vector.transfer_write {{.*}} : vector<4xf32>, tensor<1x1x1x4xf32>
 // CHECK: scf.forall.in_parallel
 // CHECK: tensor.parallel_insert_slice {{.*}} [1, 1, 1, 4]
+// CHECK: ncnn.implementation = "depthwise_simd"
+// CHECK: ncnn.multiplier = 1 : i64
+// CHECK: ncnn.operation_family = "depthwise"
 // CHECK: return {{.*}} : tensor<1x3x7x4xf32>
 // CHECK-NOT: linalg.depthwise
 

@@ -19,7 +19,7 @@ func.func @conv3x3_large_channels(%arg0: tensor<1x10x10x64xf32>) -> tensor<1x8x8
 // CHECK: linalg.generic
 // 中心批量收缩（批维 64 = 变换域元素；权重常量 [64,OC=128,IC=64] 经
 // batch_matmul 的 ins 类型断言覆盖）
-// CHECK: linalg.batch_matmul ins({{.*}} : tensor<64x128x64xf32>, tensor<64x64x4xf32>) outs({{.*}} : tensor<64x128x4xf32>)
+// CHECK: linalg.batch_matmul {{.*}} ins({{.*}} : tensor<64x128x64xf32>, tensor<64x64x4xf32>) outs({{.*}} : tensor<64x128x4xf32>)
 // 输出变换两段（A 与 Aᵀ）
 // CHECK: linalg.generic
 // CHECK: linalg.generic

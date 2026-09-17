@@ -323,6 +323,42 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
     "missing_profile_ids": missing_allocations,
     "complete": not missing_allocations,
   }
+  family_breakdown: dict[str, dict[str, Any]] = {}
+  family_operations = plan.get("conv_depthwise_operations", [])
+  if not isinstance(family_operations, list):
+    raise AttributionError("plan.conv_depthwise_operations must be an array")
+  for family in ("conv", "depthwise"):
+    family_breakdown[family] = {
+      "operation_count": 0,
+      "implementations": {},
+      "fallback_reasons": {},
+      "source_layers": [],
+      "runtime_time_ns": None,
+    }
+  for operation in family_operations:
+    if not isinstance(operation, dict):
+      raise AttributionError("plan.conv_depthwise_operations contains a non-object")
+    family = operation.get("family")
+    if family not in family_breakdown:
+      raise AttributionError(f"unsupported Conv/Depthwise family: {family!r}")
+    entry = family_breakdown[family]
+    entry["operation_count"] += 1
+    implementation = operation.get("implementation", "unknown")
+    if not isinstance(implementation, str) or not implementation:
+      implementation = "unknown"
+    implementations = entry["implementations"]
+    implementations[implementation] = implementations.get(implementation, 0) + 1
+    if implementation == "fallback":
+      reason = operation.get("fallback_reason", "unknown")
+      if not isinstance(reason, str) or not reason:
+        reason = "unknown"
+      reasons = entry["fallback_reasons"]
+      reasons[reason] = reasons.get(reason, 0) + 1
+    source_layer = operation.get("source_layer")
+    if isinstance(source_layer, int) and not isinstance(source_layer, bool):
+      entry["source_layers"].append(source_layer)
+  for entry in family_breakdown.values():
+    entry["source_layers"] = sorted(set(entry["source_layers"]))
   runtime_peak_live_proven = bool(
     profile_summary.get("peak_live_proven", False) and not missing_allocations)
   return {
@@ -348,6 +384,7 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
     "static": {
       "summary": summary,
       "unknown_fields": unknown,
+      "conv_depthwise": family_breakdown,
     },
     "runtime": {
       "summary": profile_summary,

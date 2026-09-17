@@ -37,6 +37,15 @@ bool isLiftableElementwise(Operation& operation) {
          operation.getName().getDialect()->getNamespace() == "math";
 }
 
+void copySourceProvenance(Operation* source, Operation* target) {
+  for (StringRef attribute :
+       {StringRef("ncnn.name"), StringRef("ncnn.source_layer")}) {
+    if (Attribute value = source->getAttr(attribute)) {
+      target->setAttr(attribute, value);
+    }
+  }
+}
+
 // 行级向量化（分块形态）：静态、恒等映射的纯逐元素 generic 改写为
 // scf.forall(shared_outs) 网格（除最内维外的全部输出维）+ 最内维按
 // lanes 分块的 rank-1 vector.transfer_read / 向量化 body。每个迭代把
@@ -422,6 +431,10 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     int64_t chunkWidth;
   };
   SmallVector<DepthwiseCandidate> candidates;
+  module.walk([&](linalg::DepthwiseConv2DNhwcHwcmOp op) {
+    contract::annotateOperationFamily(op, "depthwise", "fallback");
+    contract::annotateFallback(op, "not_vectorized");
+  });
   const auto isVectorWidth = [](int64_t width) {
     return width >= 2 && (width & (width - 1)) == 0;
   };
@@ -755,6 +768,19 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     upperBounds.push_back(rewriter.getIndexAttr(outputWidth));
     auto forall = rewriter.create<scf::ForallOp>(
       location, upperBounds, ValueRange{resultBuffer}, std::nullopt);
+    copySourceProvenance(op.getOperation(), forall.getOperation());
+    contract::annotateOperationFamily(
+      forall.getOperation(), "depthwise", "depthwise_simd");
+    contract::annotateGeometry(forall.getOperation(),
+                               kernelHeight,
+                               kernelWidth,
+                               strideHeight,
+                               strideWidth,
+                               dilationHeight,
+                               dilationWidth,
+                               channels,
+                               channels,
+                               1);
     contract::annotateTile(forall.getOperation(),
                            "depthwise_simd",
                            "nhwc",
@@ -829,6 +855,10 @@ class VectorizeNCNNPass final
       module.walk([&](Operation* operation) {
         if (isa<linalg::GenericOp, linalg::DepthwiseConv2DNhwcHwcmOp>(
               operation)) {
+          if (isa<linalg::DepthwiseConv2DNhwcHwcmOp>(operation)) {
+            contract::annotateOperationFamily(
+              operation, "depthwise", "fallback");
+          }
           contract::annotateFallback(operation, "unsupported_scalable_vector");
         }
       });

@@ -22,7 +22,7 @@ func.func @conv_relu(%arg0: tensor<1x8x8x3xf32>) -> tensor<1x8x8x16xf32> {
 // CHECK-LABEL: func.func @conv_relu
 // CHECK: arith.constant dense{{.*}} : tensor<3x16xf32>
 // CHECK: tensor.collapse_shape {{.*}} tensor<1x8x8x3xf32> into tensor<64x3xf32>
-// CHECK: linalg.matmul ins({{.*}} : tensor<64x3xf32>, tensor<3x16xf32>)
+// CHECK: linalg.matmul {{.*}} ins({{.*}} : tensor<64x3xf32>, tensor<3x16xf32>)
 // CHECK: linalg.generic {{.*}}ins({{.*}} : tensor<64x16xf32>) outs({{.*}} : tensor<64x16xf32>)
 // CHECK: arith.maximumf
 // CHECK: tensor.expand_shape {{.*}} output_shape [1, 8, 8, 16]
@@ -39,6 +39,6 @@ func.func @conv_two_users(%arg0: tensor<1x8x8x3xf32>) -> (tensor<1x8x8x16xf32>, 
 }
 
 // CHECK-LABEL: func.func @conv_two_users
-// CHECK: linalg.matmul ins({{.*}} : tensor<64x3xf32>, tensor<3x16xf32>)
+// CHECK: linalg.matmul {{.*}} ins({{.*}} : tensor<64x3xf32>, tensor<3x16xf32>)
 // CHECK: tensor.expand_shape {{.*}} output_shape [1, 8, 8, 16]
 // CHECK-NOT: arith.maximumf

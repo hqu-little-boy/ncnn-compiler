@@ -18,7 +18,7 @@ func.func @int8_small_conv(%arg0: tensor<1x10x10x8xi8>) -> tensor<1x8x8x8xi32> {
 // CHECK: arith.constant dense{{.*}} : tensor<8x72xi8>
 // CHECK: linalg.generic {{.*}}ins({{.*}} : tensor<1x10x10x8xi8>) outs({{.*}} : tensor<8x8x3x3x8xi8>)
 // CHECK: tensor.collapse_shape {{.*}} tensor<64x72xi8>
-// CHECK: linalg.matmul_transpose_b ins({{.*}} : tensor<64x72xi8>, tensor<8x72xi8>)
+// CHECK: linalg.matmul_transpose_b {{.*}} ins({{.*}} : tensor<64x72xi8>, tensor<8x72xi8>)
 // CHECK: tensor.expand_shape {{.*}} output_shape [1, 8, 8, 8]
 // CHECK-NOT: linalg.conv_2d_nhwc_hwcf
 // CHECK-NOT: linalg.matmul ins
@@ -36,7 +36,7 @@ func.func @int8_one_by_one(%arg0: tensor<1x4x4x8xi8>) -> tensor<1x4x4x4xi32> {
 // CHECK-LABEL: func.func @int8_one_by_one
 // CHECK: arith.constant dense{{.*}} : tensor<4x8xi8>
 // CHECK-NOT: linalg.generic
-// CHECK: linalg.matmul_transpose_b ins({{.*}} : tensor<16x8xi8>, tensor<4x8xi8>)
+// CHECK: linalg.matmul_transpose_b {{.*}} ins({{.*}} : tensor<16x8xi8>, tensor<4x8xi8>)
 // CHECK-NOT: linalg.conv_2d_nhwc_hwcf
 
 // -----

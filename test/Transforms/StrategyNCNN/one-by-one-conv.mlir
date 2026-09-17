@@ -14,7 +14,7 @@ func.func @one_by_one(%arg0: tensor<1x8x8x3xf32>) -> tensor<1x8x8x16xf32> {
 // CHECK-LABEL: func.func @one_by_one
 // CHECK: arith.constant dense{{.*}} : tensor<3x16xf32>
 // CHECK: tensor.collapse_shape {{.*}} tensor<1x8x8x3xf32> into tensor<64x3xf32>
-// CHECK: linalg.matmul ins({{.*}} : tensor<64x3xf32>, tensor<3x16xf32>)
+// CHECK: linalg.matmul {{.*}} ins({{.*}} : tensor<64x3xf32>, tensor<3x16xf32>)
 // CHECK: tensor.expand_shape {{.*}} output_shape [1, 8, 8, 16]
 // CHECK-NOT: linalg.conv_2d_nhwc_hwcf
 
@@ -52,5 +52,5 @@ func.func @dynamic_one_by_one(%arg0: tensor<1x?x?x3xf32>) -> tensor<1x?x?x16xf32
 // DYN: arith.muli {{.*}} : index
 // DYN: tensor.from_elements {{.*}} : tensor<2xindex>
 // DYN: tensor.reshape {{.*}}) : (tensor<1x?x?x3xf32>, tensor<2xindex>) -> tensor<?x3xf32>
-// DYN: linalg.matmul ins({{.*}} : tensor<?x3xf32>, tensor<3x16xf32>)
+// DYN: linalg.matmul {{.*}} ins({{.*}} : tensor<?x3xf32>, tensor<3x16xf32>)
 // DYN: tensor.reshape {{.*}} : (tensor<?x16xf32>, tensor<4xindex>) -> tensor<1x?x?x16xf32>
