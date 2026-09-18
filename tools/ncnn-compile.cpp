@@ -144,6 +144,37 @@ llvm::cl::opt<bool> g_int8_cast_chain(
   llvm::cl::desc("Fuse proven static cast map consumers"),
   llvm::cl::init(false),
   llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_tuning_profile(
+  "tuning-profile",
+  llvm::cl::desc("Bounded compile-time tuning profile: stable or p16-int8"),
+  llvm::cl::init("stable"),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<int64_t> g_matmul_m_rows(
+  "matmul-m-rows",
+  llvm::cl::desc("M-direction register tile rows (0 uses the tuning profile)"),
+  llvm::cl::init(0),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<int64_t> g_matmul_acc_columns(
+  "matmul-acc-columns",
+  llvm::cl::desc("Matmul accumulator columns (0 uses the tuning profile)"),
+  llvm::cl::init(0),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<unsigned> g_row_chunk_lanes(
+  "row-chunk-lanes",
+  llvm::cl::desc(
+    "Row-generic chunk lane budget (unset uses the tuning profile)"),
+  llvm::cl::init(0),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<int64_t> g_matmul_i8_rows(
+  "matmul-i8-rows",
+  llvm::cl::desc("INT8 M-direction register tile rows (0 uses the profile)"),
+  llvm::cl::init(0),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<int64_t> g_matmul_i8_acc_columns(
+  "matmul-i8-acc-columns",
+  llvm::cl::desc("INT8 accumulator columns (0 uses the tuning profile)"),
+  llvm::cl::init(0),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_conv_strategy(
   "conv-strategy",
   llvm::cl::desc(
@@ -1914,12 +1945,24 @@ ClangTargetArguments build_clang_target_arguments(
   return resolved_int8_target;
 }
 
+struct TuningSettings {
+  std::string profile;
+  std::string status = "stable";
+  std::string fallbackReason;
+  int64_t matmulMRows = 4;
+  int64_t matmulAccColumns = 16;
+  unsigned rowChunkLanes = 8;
+  int64_t matmulI8Rows = 2;
+  int64_t matmulI8AccColumns = 4;
+};
+
 std::string build_codegen_identity(std::string_view target_triple,
                                    std::string_view resolved_int8_target,
                                    unsigned effective_threads,
                                    std::string_view resolved_vector_math,
                                    std::string_view vector_math_abi,
-                                   unsigned vector_math_lanes) {
+                                   unsigned vector_math_lanes,
+                                   const TuningSettings& tuning) {
   std::string result =
     "target=" + std::string(target_triple) + "|march=" + g_march +
     "|mcpu=" + g_mcpu + "|mtune=" + g_mtune + "|precision=" + g_precision +
@@ -1933,6 +1976,13 @@ std::string build_codegen_identity(std::string_view target_triple,
     "|vector-math-lanes=" + std::to_string(vector_math_lanes) +
     "|sysroot=" + g_sysroot + "|conv-strategy=" + g_conv_strategy +
     "|conv-gemm-l2-bytes=" + std::to_string(g_conv_gemm_l2_bytes) +
+    "|tuning-profile=" + tuning.profile + "|tuning-status=" + tuning.status +
+    "|tuning-fallback-reason=" + tuning.fallbackReason +
+    "|matmul-m-rows=" + std::to_string(tuning.matmulMRows) +
+    "|matmul-acc-columns=" + std::to_string(tuning.matmulAccColumns) +
+    "|row-chunk-lanes=" + std::to_string(tuning.rowChunkLanes) +
+    "|matmul-i8-rows=" + std::to_string(tuning.matmulI8Rows) +
+    "|matmul-i8-acc-columns=" + std::to_string(tuning.matmulI8AccColumns) +
     "|int8-kernel=" + g_int8_kernel.getValue() +
     "|int8-target=" + std::string(resolved_int8_target) +
     "|int8-depthwise=" + std::to_string(g_int8_depthwise.getValue()) +
@@ -1970,6 +2020,9 @@ std::vector<std::string> normalize_arguments(int argc, char** argv) {
 
 }  // namespace
 
+// The CLI orchestration keeps validation, target resolution, and pipeline
+// construction in one transaction so the emitted identity cannot drift.
+// NOLINTNEXTLINE(google-readability-function-size)
 int main(int argc, char** argv) {
   std::vector<std::string> normalized = normalize_arguments(argc, argv);
   std::vector<const char*> normalized_argv;
@@ -2008,6 +2061,17 @@ int main(int argc, char** argv) {
   }
   if (g_vector_width != 0 && g_vector_width % 64 != 0) {
     return fail("--vector-width must be 0 or a multiple of 64 bits");
+  }
+  if (g_tuning_profile != "stable" && g_tuning_profile != "p16-int8") {
+    return fail("--tuning-profile must be one of stable or p16-int8");
+  }
+  if ((g_matmul_m_rows.getNumOccurrences() != 0 && g_matmul_m_rows <= 0) ||
+      (g_matmul_acc_columns.getNumOccurrences() != 0 &&
+       g_matmul_acc_columns <= 0) ||
+      (g_matmul_i8_rows.getNumOccurrences() != 0 && g_matmul_i8_rows <= 0) ||
+      (g_matmul_i8_acc_columns.getNumOccurrences() != 0 &&
+       g_matmul_i8_acc_columns <= 0)) {
+    return fail("matmul tile parameters must be positive when specified");
   }
   if (!g_target_triple.empty() &&
       (g_march == "native" || g_mcpu == "native" || g_mtune == "native")) {
@@ -2222,6 +2286,34 @@ int main(int argc, char** argv) {
   }
   vector_active = vector_lanes != 0;
 
+  TuningSettings tuning;
+  tuning.profile = g_tuning_profile.getValue();
+  if (g_matmul_m_rows.getNumOccurrences() != 0) {
+    tuning.matmulMRows = g_matmul_m_rows;
+  }
+  if (g_matmul_acc_columns.getNumOccurrences() != 0) {
+    tuning.matmulAccColumns = g_matmul_acc_columns;
+  }
+  if (g_row_chunk_lanes.getNumOccurrences() != 0) {
+    tuning.rowChunkLanes = g_row_chunk_lanes;
+  }
+  if (g_matmul_i8_rows.getNumOccurrences() != 0) {
+    tuning.matmulI8Rows = g_matmul_i8_rows;
+  }
+  if (g_matmul_i8_acc_columns.getNumOccurrences() != 0) {
+    tuning.matmulI8AccColumns = g_matmul_i8_acc_columns;
+  }
+  const bool explicitInt8Kernel = g_int8_kernel.getNumOccurrences() != 0;
+  const bool explicitInt8Depthwise = g_int8_depthwise.getNumOccurrences() != 0;
+  const bool explicitInt8CastChain = g_int8_cast_chain.getNumOccurrences() != 0;
+  const bool requestedP16Profile = g_tuning_profile == "p16-int8";
+  if (requestedP16Profile && !explicitInt8Kernel) {
+    // Ask the same target probe used by explicit auto/VNNI selection to resolve
+    // the capability.  The policy is finalized below only after the probe and
+    // vector/OpenMP constraints are known.
+    g_int8_kernel = "auto";
+  }
+
   auto int8_target = resolve_int8_target(staging.path(),
                                          clang_path,
                                          effective_target_triple,
@@ -2234,6 +2326,32 @@ int main(int argc, char** argv) {
     return fail(int8_target.error());
   }
   const std::string& resolved_int8_target = *int8_target;
+  if (requestedP16Profile && !explicitInt8Kernel) {
+    const bool canSelectVnni = resolved_int8_target != "portable" &&
+                               effective_threads != 1 && vector_active &&
+                               !vector_scalable;
+    if (canSelectVnni) {
+      g_int8_kernel = "vnni";
+      tuning.status = "selected";
+      if (!explicitInt8Depthwise) {
+        g_int8_depthwise = true;
+      }
+      if (!explicitInt8CastChain) {
+        g_int8_cast_chain = true;
+      }
+    } else {
+      g_int8_kernel = "portable";
+      tuning.status = "fallback";
+      tuning.fallbackReason = resolved_int8_target == "portable"
+                                ? "unsupported_vnni_target"
+                              : effective_threads == 1 ? "serial_thread_policy"
+                              : !vector_active ? "fixed_width_vector_required"
+                                               : "scalable_vector_unsupported";
+    }
+  } else if (requestedP16Profile) {
+    tuning.status = "explicit_override";
+    tuning.fallbackReason = "explicit_int8_policy";
+  }
 
   // 解析向量数学后端：auto 按目标探测 libmvec，缺失时静默降级 vendored
   // SLEEF 静态档案，再退回 none；显式指定而不可用时报错退出。部署环境
@@ -2452,7 +2570,8 @@ int main(int argc, char** argv) {
                            effective_threads,
                            resolved_vector_math,
                            vector_math_abi,
-                           vector_math_lanes);
+                           vector_math_lanes,
+                           tuning);
   const std::string codegen_identity_transport = hex_encode(codegen_identity);
 
   std::vector<std::string> driver_command{
@@ -2523,6 +2642,19 @@ int main(int argc, char** argv) {
     linalgOptions.push_back("int8-target=" + resolved_int8_target);
     linalgOptions.push_back(std::string("int8-depthwise=") +
                             (g_int8_depthwise ? "true" : "false"));
+    linalgOptions.push_back("tuning-profile=" + tuning.profile);
+    linalgOptions.push_back("tuning-status=" + tuning.status);
+    linalgOptions.push_back("tuning-fallback-reason=" + tuning.fallbackReason);
+    linalgOptions.push_back("matmul-m-rows=" +
+                            std::to_string(tuning.matmulMRows));
+    linalgOptions.push_back("matmul-acc-columns=" +
+                            std::to_string(tuning.matmulAccColumns));
+    linalgOptions.push_back("row-chunk-lanes=" +
+                            std::to_string(tuning.rowChunkLanes));
+    linalgOptions.push_back("matmul-i8-rows=" +
+                            std::to_string(tuning.matmulI8Rows));
+    linalgOptions.push_back("matmul-i8-acc-columns=" +
+                            std::to_string(tuning.matmulI8AccColumns));
     if (g_profile) {
       linalgOptions.push_back("profile-instrumentation=true");
     }

@@ -271,7 +271,23 @@ def EmitModelPlanPass : Pass<"emit-ncnn-execution-plan", "mlir::ModuleOp"> {
     Option<"vectorTail", "vector-tail", "bool", "false",
            "Whether the vector lowering tail is enabled">,
     Option<"codegenIdentity", "codegen-identity", "std::string", "",
-           "Canonical code-generation identity included in the plan hash">
+           "Canonical code-generation identity included in the plan hash">,
+    Option<"tuningProfile", "tuning-profile", "std::string", "\"stable\"",
+           "Bounded compile-time tuning profile">,
+    Option<"tuningStatus", "tuning-status", "std::string", "\"stable\"",
+           "Resolved tuning status">,
+    Option<"tuningFallbackReason", "tuning-fallback-reason", "std::string",
+           "\"\"", "Auditable reason for tuning fallback or override">,
+    Option<"matmulMRows", "matmul-m-rows", "int64_t", "4",
+           "Resolved M-direction matmul register tile rows">,
+    Option<"matmulAccColumns", "matmul-acc-columns", "int64_t", "16",
+           "Resolved matmul accumulator columns">,
+    Option<"rowChunkLanes", "row-chunk-lanes", "unsigned", "8",
+           "Resolved row-generic vector chunk lane budget">,
+    Option<"matmulI8Rows", "matmul-i8-rows", "int64_t", "2",
+           "Resolved INT8 matmul register tile rows">,
+    Option<"matmulI8AccColumns", "matmul-i8-acc-columns", "int64_t", "4",
+           "Resolved INT8 matmul accumulator columns">
   ];
 }
 

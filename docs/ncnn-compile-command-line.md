@@ -431,8 +431,39 @@ ncnn-compile model.param --int8-kernel=vnni --march=x86-64-v3 \
 `--march/--mcpu/--mtune=native` 的组合均拒绝，避免交叉目标偷用 host ISA。
 
 `--emit-execution-plan` 的 codegen identity 包含请求策略及解析后的 `int8-target`。
-`low_precision` 分别记录 capability、请求策略状态与实际改写记录；`auto` 在有能力时标记
+`low_precision` 分别记录 capability、请求策略状态与实际改写记录；普通 `auto` 在有能力时标记
 `pending_defaultization`。AVX512 编译成功不等于在对应硬件完成运行或性能验收。
+
+### 3.8 `--tuning-profile` 和有限 Matmul 参数
+
+P17 增加了可审计的有限编译期调优入口。默认
+`--tuning-profile=stable` 保持既有 portable INT8 行为和稳定的 Matmul 参数；
+`--tuning-profile=p16-int8` 只在目标探测确认 VNNI、固定宽向量和 OpenMP worker
+条件满足时自动选择 P16 已配对验证的 INT8 row-dot、静态 depthwise 和 cast-chain
+组合，否则记录 fallback 并回到 stable portable 路径。该 profile 不引入运行时
+dispatcher，亦不改变公共 C ABI。
+
+```bash
+ncnn-compile model.param --tuning-profile=p16-int8 \
+  --march=x86-64-v3 --target-feature=+avxvnni \
+  --vector-mode=fixed-width --threads=6
+```
+
+可用的有限 tile 覆盖用于复现实验或 A/B，不进行无界搜索：
+
+```text
+--matmul-m-rows=<positive>
+--matmul-acc-columns=<positive>
+--row-chunk-lanes=<non-negative>
+--matmul-i8-rows=<positive>
+--matmul-i8-acc-columns=<positive>
+```
+
+未显式提供时使用 profile 的 bounded 值 `4/16/8/2/4`。最终 execution plan 的
+`tuning` 对象记录 profile、status、五个 resolved 值和 `tuning-v1`；这些字段以及
+profile 名称进入 plan hash/build identity，避免不同编译策略静默合并性能结果。
+显式 `--int8-kernel/--int8-depthwise/--int8-cast-chain` 优先于 profile；因此可用
+`--int8-kernel=portable` 审计 profile 的 tile 选择而不启用 VNNI。
 
 ## 4. 中间产物和 ABI manifest
 

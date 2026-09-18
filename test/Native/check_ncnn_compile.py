@@ -273,8 +273,22 @@ def main():
     if not plan.get("codegen_identity"):
         raise RuntimeError(f"execution plan lacks codegen identity: {plan}")
     required_plan_sections = {
-        "functions", "operations", "buffers", "regions", "summary", "diagnostics"
+        "functions", "operations", "buffers", "regions", "summary", "diagnostics",
+        "tuning",
     }
+    tuning = plan["tuning"]
+    if tuning.get("profile") != "stable" or tuning.get("status") != "stable":
+        raise RuntimeError(f"unexpected stable tuning plan: {tuning}")
+    if tuning.get("fallback_reason") is not None:
+        raise RuntimeError(f"unexpected stable tuning fallback reason: {tuning}")
+    if {
+        tuning.get("matmul_m_rows"),
+        tuning.get("matmul_acc_columns"),
+        tuning.get("row_chunk_lanes"),
+        tuning.get("matmul_i8_rows"),
+        tuning.get("matmul_i8_acc_columns"),
+    } != {4, 16, 8, 2, 4}:
+        raise RuntimeError(f"unexpected stable tuning values: {tuning}")
     if not required_plan_sections.issubset(plan):
         raise RuntimeError(f"execution plan lacks required sections: {plan}")
     plan_text = plan_path.read_text()
@@ -308,6 +322,39 @@ def main():
     )
     if variant_plan.get("plan_hash") == plan.get("plan_hash"):
         raise RuntimeError("code-generation variants share a plan hash")
+
+    tuned_output = work_dir / "relu-tuned-profile"
+    run(
+        [
+            args.compiler,
+            args.param,
+            "--bin",
+            args.bin,
+            "--model-name",
+            "relu_tuned",
+            "--output-dir",
+            tuned_output,
+            "--emit-manifest",
+            "--emit-execution-plan",
+            "--tuning-profile=p16-int8",
+            "--int8-kernel=portable",
+            "--threads=1",
+            "--vector-width=0",
+            "-O0",
+        ]
+    )
+    tuned_plan = json.loads(
+        (tuned_output / "relu_tuned.plan.json").read_text()
+    )
+    tuned_policy = tuned_plan.get("tuning", {})
+    if tuned_policy.get("profile") != "p16-int8":
+        raise RuntimeError(f"tuning profile was not recorded: {tuned_policy}")
+    if tuned_policy.get("status") != "explicit_override":
+        raise RuntimeError(f"tuning override status was not recorded: {tuned_policy}")
+    if tuned_policy.get("fallback_reason") != "explicit_int8_policy":
+        raise RuntimeError(f"tuning override reason was not recorded: {tuned_policy}")
+    if tuned_plan.get("plan_hash") == plan.get("plan_hash"):
+        raise RuntimeError("tuning profiles share a plan hash")
 
     profile_output = work_dir / "relu-profile"
     run(

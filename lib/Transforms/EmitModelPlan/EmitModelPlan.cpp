@@ -482,6 +482,16 @@ class EmitModelPlanPass final
        : int8_kernel == "auto" ? "pending_defaultization"
                                : int8_kernel);
 
+    std::string tuning_hash_input =
+      "tuning-revision=tuning-v1|profile=" + tuningProfile.getValue() +
+      "|status=" + tuningStatus.getValue() +
+      "|fallback-reason=" + tuningFallbackReason.getValue() +
+      "|matmul-m-rows=" + std::to_string(matmulMRows.getValue()) +
+      "|matmul-acc-columns=" + std::to_string(matmulAccColumns.getValue()) +
+      "|row-chunk-lanes=" + std::to_string(rowChunkLanes.getValue()) +
+      "|matmul-i8-rows=" + std::to_string(matmulI8Rows.getValue()) +
+      "|matmul-i8-acc-columns=" + std::to_string(matmulI8AccColumns.getValue());
+
     std::string plan_hash_input =
       "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v1|conv-depthwise-"
       "v1|" +
@@ -494,7 +504,8 @@ class EmitModelPlanPass final
       "|fusion-residual=" + std::to_string(fusion_residual_count) +
       "|fusion-rejected=" + std::to_string(fusion_rejected_count) +
       "|fusion-reasons=" + fusion_rejection_reasons + "|" +
-      low_precision_hash_input + "|" + attention_hash_input;
+      low_precision_hash_input + "|" + tuning_hash_input + "|" +
+      attention_hash_input;
 
     // The static plan does not execute a runner or collect runtime counters.
     // Prepared and allocation-audit modes are reported by the numerical
@@ -1317,6 +1328,22 @@ class EmitModelPlanPass final
     }
     low_precision["operations"] = std::move(low_precision_operations);
 
+    JsonObject tuning;
+    tuning["revision"] = "tuning-v1";
+    tuning["profile"] = tuningProfile.getValue();
+    tuning["status"] = tuningStatus.getValue();
+    if (tuningFallbackReason.getValue().empty()) {
+      tuning["fallback_reason"] = nullptr;
+    } else {
+      tuning["fallback_reason"] = tuningFallbackReason.getValue();
+    }
+    tuning["matmul_m_rows"] = matmulMRows.getValue();
+    tuning["matmul_acc_columns"] = matmulAccColumns.getValue();
+    tuning["row_chunk_lanes"] =
+      static_cast<std::int64_t>(rowChunkLanes.getValue());
+    tuning["matmul_i8_rows"] = matmulI8Rows.getValue();
+    tuning["matmul_i8_acc_columns"] = matmulI8AccColumns.getValue();
+
     JsonObject target;
     target["triple"] = targetTriple;
     target["threads"] = static_cast<std::int64_t>(threads);
@@ -1339,10 +1366,10 @@ class EmitModelPlanPass final
     root["schema_version"] = 1;
     root["plan_revision"] =
       "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|int8-target-v1";
+      "depthwise-v1|int8-target-v1|tuning-v1";
     root["contract_revision"] =
       "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|int8-target-v1";
+      "depthwise-v1|int8-target-v1|tuning-v1";
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen
     // hash, so profile/performance rows cannot join across code-generation
@@ -1355,6 +1382,7 @@ class EmitModelPlanPass final
     root["target"] = std::move(target);
     root["fusion"] = std::move(fusion);
     root["low_precision"] = std::move(low_precision);
+    root["tuning"] = std::move(tuning);
     root["attention_revision"] = attention_revision;
     root["attention_segments"] = std::move(attention_segments);
     root["functions"] = std::move(functions);

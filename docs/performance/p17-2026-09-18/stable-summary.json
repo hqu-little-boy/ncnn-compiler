@@ -1,0 +1,167 @@
+{
+  "coverage": {
+    "diagnostic_winograd_records": 1,
+    "measured_records": 45,
+    "official_models": 44,
+    "upstream_skipped_records": 2
+  },
+  "date": "2026-09-18",
+  "modes": {
+    "allocation_audit": {
+      "gate_eligible": 0,
+      "heavy_ncnn_ge_100ms": {
+        "count": 9,
+        "max": 18.859,
+        "p50": 1.816,
+        "p90": 5.5614000000000035
+      },
+      "measured": 45,
+      "ncnn_allocation": {
+        "allocation_bytes_max": 69134695720,
+        "allocation_count_max": 13720,
+        "peak_live_bytes_max": 2645865004,
+        "records": 45
+      },
+      "ratio": {
+        "max": 18.859,
+        "p50": 2.086,
+        "p90": 4.109
+      },
+      "records": 45,
+      "slowest": [
+        {
+          "compiled_mean_ms": 8403.923,
+          "model": "pp_ocrv5_server_rec",
+          "ncnn_mean_ms": 445.611,
+          "ratio": 18.859
+        },
+        {
+          "compiled_mean_ms": 716.595,
+          "model": "pp_formulanet_plus_s_encoder",
+          "ncnn_mean_ms": 41.537,
+          "ratio": 17.252
+        },
+        {
+          "compiled_mean_ms": 11.618,
+          "model": "pp_ocrv6_tiny_rec_int8",
+          "ncnn_mean_ms": 2.383,
+          "ratio": 4.876
+        },
+        {
+          "compiled_mean_ms": 49.931,
+          "model": "resnet18_winograd",
+          "ncnn_mean_ms": 10.962,
+          "ratio": 4.555
+        },
+        {
+          "compiled_mean_ms": 91.22,
+          "model": "pp_ocrv6_medium_rec_int8",
+          "ncnn_mean_ms": 21.319,
+          "ratio": 4.279
+        }
+      ]
+    },
+    "end_to_end": {
+      "gate_eligible": 45,
+      "heavy_ncnn_ge_100ms": {
+        "count": 11,
+        "max": 18.769,
+        "p50": 1.802,
+        "p90": 2.286
+      },
+      "measured": 45,
+      "ratio": {
+        "max": 18.769,
+        "p50": 1.986,
+        "p90": 3.692
+      },
+      "records": 45,
+      "slowest": [
+        {
+          "compiled_mean_ms": 8384.34,
+          "model": "pp_ocrv5_server_rec",
+          "ncnn_mean_ms": 446.723,
+          "ratio": 18.769
+        },
+        {
+          "compiled_mean_ms": 711.992,
+          "model": "pp_formulanet_plus_s_encoder",
+          "ncnn_mean_ms": 48.828,
+          "ratio": 14.582
+        },
+        {
+          "compiled_mean_ms": 49.455,
+          "model": "resnet18_winograd",
+          "ncnn_mean_ms": 11.137,
+          "ratio": 4.441
+        },
+        {
+          "compiled_mean_ms": 86.39,
+          "model": "pp_ocrv6_medium_rec_int8",
+          "ncnn_mean_ms": 20.736,
+          "ratio": 4.166
+        },
+        {
+          "compiled_mean_ms": 33.736,
+          "model": "pp_ocrv6_small_rec_int8",
+          "ncnn_mean_ms": 9.054,
+          "ratio": 3.726
+        }
+      ]
+    },
+    "prepared": {
+      "gate_eligible": 0,
+      "heavy_ncnn_ge_100ms": {
+        "count": 11,
+        "max": 19.091,
+        "p50": 1.719,
+        "p90": 2.232
+      },
+      "measured": 45,
+      "ratio": {
+        "max": 19.091,
+        "p50": 2.044,
+        "p90": 3.9874
+      },
+      "records": 45,
+      "slowest": [
+        {
+          "compiled_mean_ms": 8407.783,
+          "model": "pp_ocrv5_server_rec",
+          "ncnn_mean_ms": 440.398,
+          "ratio": 19.091
+        },
+        {
+          "compiled_mean_ms": 724.004,
+          "model": "pp_formulanet_plus_s_encoder",
+          "ncnn_mean_ms": 46.232,
+          "ratio": 15.66
+        },
+        {
+          "compiled_mean_ms": 51.574,
+          "model": "resnet18_winograd",
+          "ncnn_mean_ms": 10.644,
+          "ratio": 4.845
+        },
+        {
+          "compiled_mean_ms": 91.978,
+          "model": "pp_ocrv6_medium_rec_int8",
+          "ncnn_mean_ms": 20.746,
+          "ratio": 4.434
+        },
+        {
+          "compiled_mean_ms": 36.197,
+          "model": "pp_ocrv6_small_rec_int8",
+          "ncnn_mean_ms": 8.599,
+          "ratio": 4.209
+        }
+      ]
+    }
+  },
+  "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+  "profile": "stable",
+  "schema_version": 1,
+  "stage": "P17",
+  "target": "x86_64-pc-linux-gnu",
+  "threads": 6
+}

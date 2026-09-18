@@ -78,6 +78,43 @@ struct NCNNLinalgToMemRefPipelineOptions
     "int8-depthwise",
     llvm::cl::desc("Enable the static int8 depthwise SIMD path"),
     llvm::cl::init(false)};
+  Option<std::string> tuningProfile{
+    *this,
+    "tuning-profile",
+    llvm::cl::desc("Bounded compile-time tuning profile"),
+    llvm::cl::init("stable")};
+  Option<std::string> tuningStatus{*this,
+                                   "tuning-status",
+                                   llvm::cl::desc("Resolved tuning status"),
+                                   llvm::cl::init("stable")};
+  Option<std::string> tuningFallbackReason{
+    *this,
+    "tuning-fallback-reason",
+    llvm::cl::desc("Auditable reason for tuning fallback or override"),
+    llvm::cl::init("")};
+  Option<int64_t> matmulMRows{
+    *this,
+    "matmul-m-rows",
+    llvm::cl::desc("M-direction matmul register tile rows"),
+    llvm::cl::init(4)};
+  Option<int64_t> matmulAccColumns{*this,
+                                   "matmul-acc-columns",
+                                   llvm::cl::desc("Matmul accumulator columns"),
+                                   llvm::cl::init(16)};
+  Option<unsigned> rowChunkLanes{
+    *this,
+    "row-chunk-lanes",
+    llvm::cl::desc("Row-generic vector chunk lane budget"),
+    llvm::cl::init(8)};
+  Option<int64_t> matmulI8Rows{*this,
+                               "matmul-i8-rows",
+                               llvm::cl::desc("INT8 matmul register tile rows"),
+                               llvm::cl::init(2)};
+  Option<int64_t> matmulI8AccColumns{
+    *this,
+    "matmul-i8-acc-columns",
+    llvm::cl::desc("INT8 matmul accumulator columns"),
+    llvm::cl::init(4)};
   Option<std::string> executionPlanPath{
     *this,
     "execution-plan-path",

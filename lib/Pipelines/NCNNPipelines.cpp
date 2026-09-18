@@ -247,8 +247,13 @@ void buildNCNNLinalgToMemRefPipeline(
     // 显式分离：portable 保持历史标量 MAC；vnni 只在目标能力匹配时
     // 生效（不匹配由 pass 直接报错，不做静默降级）。
     MatmulKernelNCNNPassOptions matmulKernelOptions;
+    matmulKernelOptions.matmulMRows = options.matmulMRows;
+    matmulKernelOptions.matmulAccColumns = options.matmulAccColumns;
+    matmulKernelOptions.rowChunkLanes = options.rowChunkLanes;
     matmulKernelOptions.int8Kernel = options.int8KernelPolicy;
     matmulKernelOptions.int8Target = options.int8TargetCapability;
+    matmulKernelOptions.matmulI8Rows = options.matmulI8Rows;
+    matmulKernelOptions.matmulI8AccColumns = options.matmulI8AccColumns;
     passManager.addPass(createMatmulKernelNCNNPass(matmulKernelOptions));
   }
 
@@ -277,6 +282,14 @@ void buildNCNNLinalgToMemRefPipeline(
     planOptions.vectorScalable = options.vectorScalable;
     planOptions.vectorTail = options.vectorTail;
     planOptions.codegenIdentity = options.executionPlanCodegenIdentity;
+    planOptions.tuningProfile = options.tuningProfile;
+    planOptions.tuningStatus = options.tuningStatus;
+    planOptions.tuningFallbackReason = options.tuningFallbackReason;
+    planOptions.matmulMRows = options.matmulMRows;
+    planOptions.matmulAccColumns = options.matmulAccColumns;
+    planOptions.rowChunkLanes = options.rowChunkLanes;
+    planOptions.matmulI8Rows = options.matmulI8Rows;
+    planOptions.matmulI8AccColumns = options.matmulI8AccColumns;
     passManager.addPass(createEmitModelPlanPass(planOptions));
   }
   if (options.profileInstrumentation) {
