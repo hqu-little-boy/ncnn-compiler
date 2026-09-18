@@ -359,6 +359,14 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       entry["source_layers"].append(source_layer)
   for entry in family_breakdown.values():
     entry["source_layers"] = sorted(set(entry["source_layers"]))
+  low_precision = plan.get("low_precision")
+  if low_precision is not None:
+    if not isinstance(low_precision, dict):
+      raise AttributionError("plan.low_precision must be an object")
+    low_precision_operations = low_precision.get("operations")
+    if not isinstance(low_precision_operations, list) or any(
+        not isinstance(operation, dict) for operation in low_precision_operations):
+      raise AttributionError("plan.low_precision.operations must be an array of objects")
   runtime_peak_live_proven = bool(
     profile_summary.get("peak_live_proven", False) and not missing_allocations)
   return {
@@ -385,6 +393,9 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       "summary": summary,
       "unknown_fields": unknown,
       "conv_depthwise": family_breakdown,
+      # This is a compiler-side static audit.  It carries no runtime evidence,
+      # so it stays out of the runtime section.
+      "low_precision": low_precision,
     },
     "runtime": {
       "summary": profile_summary,

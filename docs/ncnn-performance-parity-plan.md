@@ -1,5 +1,15 @@
 # ncnn 性能追平计划（v2）
 
+> **P16 实施补记（2026-09-17，opt-in 交付已完成）**：已实现显式 opt-in 的 AVX-VNNI INT8 row-dot、静态 multiplier=1 量化 depthwise、保序 cast-chain，以及 target/selected-kernel 审计。`portable` 默认与 `auto` pending-defaultization 保持不变。完整记录见外层 [`§12.5 P16 验收`](../../docs/ncnn-mlir-performance-optimization-plan.md#125-p16-实施与验收记录20260917已完成-opt-in-交付)（外层文档不受 compiler Git 管理）。
+>
+> 最终 fresh 同目标 pristine P15/candidate 配对目录 `/tmp/ncnn-compiler-p16-fresh-paired-05`，6T、10 warmup/20 iterations、5 次 A/B↔B/A：tiny INT8 compiled 中位 10.086→9.021 ms（−10.56%），ratio 中位 4.029×→3.543×；medium 92.410→54.380 ms（−41.15%），ratio 4.381×→2.647×。两模型各 3 个随机输入输出逐位相同；最终 candidate-09 fresh `.so` 的 `vpdpbusd` 检查仍为 portable 0、candidate 1188。1T 改善分别 19.27%/46.97%。prepared/allocation_audit 各 3 次独立保存，prepared 仅作诊断，不混入正式 E2E。
+>
+> 最终 fresh 编译 wall 增长 tiny +10.53%、medium +0.26%，代码尺寸 +2.16%/−0.14%，最大编译进程 RSS +1.84%/+6.18%；wall、尺寸在 20%预算内，RSS 作为编译进程指标单独记录，**不等于推理完整峰值预算**。profile-budget-04 的四个 identity join、allocation coverage 和逻辑 requested-byte peak proof 均通过；parallel exclusive time 保持 unknown，不伪造成本归因。
+>
+> 工程记录：candidate-09 全新构建完整 447/447 CTest 通过、0 失败、2 upstream skip（PPLCNetDocOriInt8、PPLCNetTextlineOriInt8），1139.91 s；format_check 与全局 tidy 通过。最终只保留这两个已知 skip，没有扩大 skip。正式 E2E 两个目标模型均达到至少 10% 的中位改善且五轮逐轮改善；正式 ratio 仍高于 1，不宣称 ncnn parity。
+>
+> 可追溯证据：`/tmp/ncnn-compiler-p16-fresh-paired-05/{compile-artifacts.json,measurements/}`、`/tmp/p16-final-paired-05.py`；`/tmp/ncnn-compiler-p16-profile-budget-04/{profile,perf,attribution,summary.json}`；`/tmp/p16-candidate-09-{configure,build,numerical,ctest,format,tidy}.log`。不把 `/tmp` 临时模型二进制纳入提交。
+
 > **v2 初版修订（2026-09-05，计划评审后；执行状态补记至 2026-09-13）**：
 > ① §1 增补 **M3 降级口径**（P7 Winograd 预算否决命中主力重模型时的
 >    退路），消除「≤1.1 依赖 Winograd + 预算一票否决」的内在张力；

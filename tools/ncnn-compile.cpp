@@ -28,6 +28,7 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
+#include "ncnn-mlir/Support/Int8Target.hpp"
 #include "ncnn-mlir/Support/Precision.hpp"
 #include "ncnn-mlir/Support/ShapeProgram.hpp"
 #include "ncnn-mlir/Support/TargetVectorInfo.hpp"
@@ -125,6 +126,23 @@ llvm::cl::opt<std::string> g_vector_mode(
   llvm::cl::desc(
     "MLIR-level vectorization mode: off, auto, fixed-width, or scalable"),
   llvm::cl::init("off"),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_int8_kernel(
+  "int8-kernel",
+  llvm::cl::desc(
+    "INT8 row-dot kernel policy: portable (default), auto (currently keeps "
+    "portable pending performance validation), or vnni (explicit opt-in)"),
+  llvm::cl::init("portable"),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_int8_depthwise(
+  "int8-depthwise",
+  llvm::cl::desc("Enable static INT8 depthwise SIMD"),
+  llvm::cl::init(false),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_int8_cast_chain(
+  "int8-cast-chain",
+  llvm::cl::desc("Fuse proven static cast map consumers"),
+  llvm::cl::init(false),
   llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_conv_strategy(
   "conv-strategy",
@@ -858,8 +876,8 @@ int run(const std::vector<std::string>& command,
   return result;
 }
 
-[[nodiscard]] std::expected<std::string, std::string> read_execution_plan_hash(
-  const fs::path& path) {
+[[nodiscard]] std::expected<std::string, std::string> read_execution_plan_field(
+  const fs::path& path, llvm::StringRef field) {
   auto buffer = llvm::MemoryBuffer::getFile(path.string());
   if (!buffer) {
     return std::unexpected(std::format("cannot read execution plan '{}': {}",
@@ -876,11 +894,11 @@ int run(const std::vector<std::string>& command,
   if (object == nullptr) {
     return std::unexpected("execution plan must be a JSON object");
   }
-  auto hash = object->getString("plan_hash");
-  if (!hash || hash->empty()) {
-    return std::unexpected("execution plan has no plan_hash");
+  auto text = object->getString(field);
+  if (!text || text->empty()) {
+    return std::unexpected("execution plan has no " + field.str());
   }
-  return hash->str();
+  return text->str();
 }
 
 [[nodiscard]] std::expected<std::size_t, std::string> element_count(
@@ -1754,7 +1772,150 @@ validate_output_directory(const fs::path& output_dir,
   return write_file(path, code);
 }
 
+struct ClangTargetArguments {
+  std::vector<std::string> target;
+  std::vector<std::string> isa;
+};
+
+ClangTargetArguments build_clang_target_arguments(
+  const std::string& effective_target_triple) {
+  ClangTargetArguments result;
+  result.target.push_back("--target=" + effective_target_triple);
+  if (!g_sysroot.empty()) {
+    result.target.push_back("--sysroot=" + g_sysroot);
+  }
+  if (!g_march.empty()) {
+    result.isa.push_back("-march=" + g_march);
+  }
+  if (!g_mcpu.empty()) {
+    result.isa.push_back("-mcpu=" + g_mcpu);
+  }
+  for (const std::string& feature : g_target_features) {
+    result.isa.insert(result.isa.end(),
+                      {"-Xclang", "-target-feature", "-Xclang", feature});
+  }
+  return result;
+}
+
+// Probe only dedicated target arguments; opaque Clang options are rejected.
+[[nodiscard]] std::expected<std::string, std::string> resolve_int8_target(
+  const fs::path& staging_path,
+  const std::string& clang_path,
+  const std::string& effective_target_triple,
+  const std::vector<std::string>& target_args,
+  const std::vector<std::string>& isa_args,
+  unsigned effective_threads,
+  bool vector_active,
+  bool vector_scalable) {
+  std::string resolved_int8_target = "portable";
+  if (g_int8_kernel != "portable" && g_int8_kernel != "auto" &&
+      g_int8_kernel != "vnni") {
+    return std::unexpected("--int8-kernel must be one of portable, auto, vnni");
+  }
+  if (g_int8_kernel != "portable") {
+    // Opaque driver options (including response/config files, -Xclang and
+    // macro definitions) cannot be proven equivalent for C probing and IR
+    // codegen. Reject rather than maintain an incomplete target-flag denylist.
+    if (!g_clang_args.empty()) {
+      return std::unexpected(
+        "--clang-arg cannot be combined with --int8-kernel=" +
+        g_int8_kernel.getValue() +
+        "; use --target-triple/--march/--mcpu/--target-feature so the INT8 "
+        "probe and final codegen use the same target arguments");
+    }
+    if (g_march == "native" || g_mcpu == "native") {
+      return std::unexpected(
+        "--march=native/--mcpu=native cannot be combined with "
+        "--int8-kernel=" +
+        g_int8_kernel.getValue() +
+        "; name the CPU or features explicitly so the probed capability is "
+        "reproducible on any machine");
+    }
+    const llvm::StringRef triple_for_probe(effective_target_triple);
+    const bool probe_is_x86_64 =
+      triple_for_probe.contains("x86_64") || triple_for_probe.contains("amd64");
+    if (!probe_is_x86_64) {
+      if (g_int8_kernel == "vnni") {
+        return std::unexpected(
+          "--int8-kernel=vnni requires an x86-64 target triple, got '" +
+          effective_target_triple + "'");
+      }
+      llvm::errs() << "ncnn-compile: info: --int8-kernel=auto keeps portable "
+                      "row-dot for non-x86-64 target '"
+                   << effective_target_triple << "'\n";
+    } else {
+      const fs::path macro_probe = staging_path / "int8_target_probe.c";
+      const fs::path macro_capture = staging_path / "int8_target_macros.txt";
+      if (auto written = write_file(macro_probe, ""); !written) {
+        return std::unexpected(written.error());
+      }
+      std::vector<std::string> macro_command{
+        clang_path, "-E", "-dM", macro_probe.string()};
+      // 与最终 compile 完全同源的目标参数（见上方 isa_args/target_args）。
+      macro_command.insert(
+        macro_command.end(), target_args.begin(), target_args.end());
+      macro_command.insert(
+        macro_command.end(), isa_args.begin(), isa_args.end());
+      if (int status = run(macro_command, macro_capture)) {
+        return std::unexpected("INT8 target capability probe failed");
+      }
+      auto macro_text = read_text(macro_capture);
+      if (!macro_text) {
+        return std::unexpected(macro_text.error());
+      }
+      const ncnn_mlir::Int8DotTarget probed =
+        ncnn_mlir::resolve_int8_dot_target(*macro_text);
+      if (probed == ncnn_mlir::Int8DotTarget::Portable) {
+        if (g_int8_kernel == "vnni") {
+          return std::unexpected(
+            "--int8-kernel=vnni requires AVX2 plus AVX-VNNI or "
+            "AVX512-VNNI in the final target arguments (march/mcpu/"
+            "target-feature), which the probe did not report for " +
+            effective_target_triple);
+        }
+        llvm::errs() << "ncnn-compile: info: no INT8 dot-product ISA for the "
+                        "target; keeping portable row-dot\n";
+      } else {
+        resolved_int8_target =
+          std::string(ncnn_mlir::int8_dot_target_name(probed));
+        if (g_int8_kernel == "auto") {
+          // auto 刻意保持 portable（性能验收未达，见 P16 计划 §3）：
+          // 探测到的能力只进入 identity 与计划，不升级 kernel policy。
+          llvm::errs() << "ncnn-compile: info: target reports "
+                       << resolved_int8_target
+                       << "; --int8-kernel=auto keeps portable row-dot "
+                          "pending performance validation\n";
+        }
+      }
+    }
+  }
+  // 显式 vnni 必须有现代向量尾：threads!=1（OpenMP 路径）或张量级固定宽
+  // 向量化。纯串行 legacy 路径没有向量下降（内核会被静默跳过），而强行
+  // 打开 vector-tail 又会让 pass 的逐元素清理发射串行路径无法下降的
+  // scf.parallel（实测 relu 夹具在 VerifyNoSCFForall 失败）。拒绝该组合
+  // 而不是静默降级 portable。
+  if (g_int8_kernel == "vnni" && resolved_int8_target != "portable" &&
+      effective_threads == 1 && (!vector_active || vector_scalable)) {
+    return std::unexpected(
+      "--int8-kernel=vnni requires OpenMP worker threads (default "
+      "--threads=0) or fixed-width MLIR vectorization "
+      "(--vector-mode=fixed-width); the serial legacy path cannot lower "
+      "the VNNI kernel");
+  }
+  // depthwise opt-in 走 VectorizeNCNN 固定宽向量发射器：scalable 或未启用
+  // MLIR 级向量化时该 pass 不会改写，显式 opt-in 静默失效不可接受。
+  if (g_int8_depthwise && (vector_scalable || !vector_active)) {
+    return std::unexpected(
+      "--int8-depthwise requires fixed-width MLIR vectorization; pass "
+      "--vector-mode=fixed-width (or auto on a fixed-width target). "
+      "Scalable vectors are not supported by the INT8 depthwise path");
+  }
+
+  return resolved_int8_target;
+}
+
 std::string build_codegen_identity(std::string_view target_triple,
+                                   std::string_view resolved_int8_target,
                                    unsigned effective_threads,
                                    std::string_view resolved_vector_math,
                                    std::string_view vector_math_abi,
@@ -1772,6 +1933,10 @@ std::string build_codegen_identity(std::string_view target_triple,
     "|vector-math-lanes=" + std::to_string(vector_math_lanes) +
     "|sysroot=" + g_sysroot + "|conv-strategy=" + g_conv_strategy +
     "|conv-gemm-l2-bytes=" + std::to_string(g_conv_gemm_l2_bytes) +
+    "|int8-kernel=" + g_int8_kernel.getValue() +
+    "|int8-target=" + std::string(resolved_int8_target) +
+    "|int8-depthwise=" + std::to_string(g_int8_depthwise.getValue()) +
+    "|int8-cast-chain=" + std::to_string(g_int8_cast_chain.getValue()) +
     "|threads=" + std::to_string(effective_threads);
   for (const std::string& feature : g_target_features) {
     result += "|target-feature=" + feature;
@@ -1843,6 +2008,12 @@ int main(int argc, char** argv) {
   }
   if (g_vector_width != 0 && g_vector_width % 64 != 0) {
     return fail("--vector-width must be 0 or a multiple of 64 bits");
+  }
+  if (!g_target_triple.empty() &&
+      (g_march == "native" || g_mcpu == "native" || g_mtune == "native")) {
+    return fail(
+      "native CPU selection cannot be combined with an explicit "
+      "--target-triple; name the CPU explicitly for cross targets");
   }
   if (!g_target_triple.empty()) {
     std::string triple = g_target_triple;
@@ -1958,6 +2129,13 @@ int main(int argc, char** argv) {
     }
   }
 
+  // The probe and final backend share one ordered target/ISA argument list.
+  const auto clang_target =
+    build_clang_target_arguments(effective_target_triple);
+  const auto& target_args = clang_target.target;
+  const auto& isa_args = clang_target.isa;
+  std::vector<std::string> codegen_args;
+
   // libomp 探测：多线程产物链接 -lomp；sysroot 缺少 OpenMP 运行时（部分
   // RISC-V 裸环境）要到链接阶段才失败。先行以最小探针验证 -lomp 可解析，
   // 失败则等价回退 --threads=1 并在 manifest 标注 openmp=false。
@@ -1980,10 +2158,8 @@ int main(int argc, char** argv) {
                                              "-o",
                                              probe_library.string(),
                                              "-lomp"};
-      probe_command.push_back("--target=" + effective_target_triple);
-      if (!g_sysroot.empty()) {
-        probe_command.push_back("--sysroot=" + g_sysroot);
-      }
+      probe_command.insert(
+        probe_command.end(), target_args.begin(), target_args.end());
       omp_available =
         run(probe_command) == 0 && fs::is_regular_file(probe_library);
     }
@@ -2045,6 +2221,19 @@ int main(int argc, char** argv) {
     }
   }
   vector_active = vector_lanes != 0;
+
+  auto int8_target = resolve_int8_target(staging.path(),
+                                         clang_path,
+                                         effective_target_triple,
+                                         target_args,
+                                         isa_args,
+                                         effective_threads,
+                                         vector_active,
+                                         vector_scalable);
+  if (!int8_target) {
+    return fail(int8_target.error());
+  }
+  const std::string& resolved_int8_target = *int8_target;
 
   // 解析向量数学后端：auto 按目标探测 libmvec，缺失时静默降级 vendored
   // SLEEF 静态档案，再退回 none；显式指定而不可用时报错退出。部署环境
@@ -2154,10 +2343,7 @@ int main(int argc, char** argv) {
                                          probe_library.string(),
                                          "-Wl,-z,defs",
                                          "-lm"};
-        command.push_back("--target=" + effective_target_triple);
-        if (!g_sysroot.empty()) {
-          command.push_back("--sysroot=" + g_sysroot);
-        }
+        command.insert(command.end(), target_args.begin(), target_args.end());
         available = run(command) == 0 && fs::is_regular_file(probe_library);
       }
       return available;
@@ -2262,6 +2448,7 @@ int main(int argc, char** argv) {
   const bool emit_execution_plan = g_emit_execution_plan || g_profile;
   const std::string codegen_identity =
     build_codegen_identity(effective_target_triple,
+                           resolved_int8_target,
                            effective_threads,
                            resolved_vector_math,
                            vector_math_abi,
@@ -2302,10 +2489,12 @@ int main(int argc, char** argv) {
     return status;
   }
   std::string tosa_linalg_pipeline_option = "--ncnn-tosa-to-linalg-pipeline";
-  if (g_conv_strategy != "auto" || g_conv_gemm_l2_bytes != 524288) {
+  if (g_conv_strategy != "auto" || g_conv_gemm_l2_bytes != 524288 ||
+      g_int8_cast_chain) {
     tosa_linalg_pipeline_option +=
       "=conv-strategy=" + g_conv_strategy +
-      " conv-gemm-l2-bytes=" + std::to_string(g_conv_gemm_l2_bytes);
+      " conv-gemm-l2-bytes=" + std::to_string(g_conv_gemm_l2_bytes) +
+      " int8-cast-chain=" + (g_int8_cast_chain ? "true" : "false");
   }
   if (int status = run({opt_path,
                         tosa_linalg_pipeline_option,
@@ -2318,7 +2507,8 @@ int main(int argc, char** argv) {
   {
     // 现代向量尾 = OpenMP 路径或张量级行向量化。串行 legacy affine
     // 路径（threads=1 且未启用 vector-mode）仍由 affine-super-vectorize
-    // 负责，本组改写不得抢占。
+    // 负责，本组改写不得抢占。显式 vnni 在 threads=1 时已在选项校验中
+    // 要求 vector-mode，因此这里 vector_tail 恒覆盖 vnni 场景。
     const bool vector_tail = g_threads != 1 || vector_active;
     llvm::SmallVector<std::string> linalgOptions;
     if (vector_active) {
@@ -2329,6 +2519,10 @@ int main(int argc, char** argv) {
     if (vector_tail) {
       linalgOptions.push_back("vector-tail=true");
     }
+    linalgOptions.push_back("int8-kernel=" + g_int8_kernel.getValue());
+    linalgOptions.push_back("int8-target=" + resolved_int8_target);
+    linalgOptions.push_back(std::string("int8-depthwise=") +
+                            (g_int8_depthwise ? "true" : "false"));
     if (g_profile) {
       linalgOptions.push_back("profile-instrumentation=true");
     }
@@ -2369,12 +2563,19 @@ int main(int argc, char** argv) {
     return status;
   }
   std::string execution_plan_hash;
+  std::string execution_plan_revision;
   if (g_profile) {
-    auto hash = read_execution_plan_hash(execution_plan_path);
+    auto hash = read_execution_plan_field(execution_plan_path, "plan_hash");
     if (!hash) {
       return fail(hash.error());
     }
     execution_plan_hash = *hash;
+    auto revision =
+      read_execution_plan_field(execution_plan_path, "plan_revision");
+    if (!revision) {
+      return fail(revision.error());
+    }
+    execution_plan_revision = *revision;
   }
   std::string llvm_pipeline = "--ncnn-memref-to-llvm-pipeline=";
   const bool uses_openmp = effective_threads != 1;
@@ -2412,24 +2613,9 @@ int main(int argc, char** argv) {
     return status;
   }
 
-  std::vector<std::string> target_args;
-  std::vector<std::string> codegen_args;
-  target_args.push_back("--target=" + effective_target_triple);
-  if (!g_sysroot.empty()) {
-    target_args.push_back("--sysroot=" + g_sysroot);
-  }
-  if (!g_march.empty()) {
-    codegen_args.push_back("-march=" + g_march);
-  }
-  if (!g_mcpu.empty()) {
-    codegen_args.push_back("-mcpu=" + g_mcpu);
-  }
+  codegen_args.insert(codegen_args.end(), isa_args.begin(), isa_args.end());
   if (!g_mtune.empty()) {
     codegen_args.push_back("-mtune=" + g_mtune);
-  }
-  for (const std::string& feature : g_target_features) {
-    codegen_args.insert(codegen_args.end(),
-                        {"-Xclang", "-target-feature", "-Xclang", feature});
   }
   const llvm::StringRef effective_triple_ref(effective_target_triple);
   const bool target_is_x86 = effective_triple_ref.contains("x86_64") ||
@@ -2469,7 +2655,9 @@ int main(int argc, char** argv) {
       "-DNCNN_PROFILE_DEFAULT_THREADS=\"" + std::to_string(effective_threads) +
         "\"",
       "-DNCNN_PROFILE_DEFAULT_PLAN_HASH=\"" + execution_plan_hash + "\"",
-      "-DNCNN_PROFILE_DEFAULT_BUILD_IDENTITY=\"" + execution_plan_hash + "\""};
+      "-DNCNN_PROFILE_DEFAULT_BUILD_IDENTITY=\"" + execution_plan_hash + "\"",
+      "-DNCNN_PROFILE_DEFAULT_PLAN_REVISION=\"" + execution_plan_revision +
+        "\""};
     profile_compile.insert(
       profile_compile.end(), target_args.begin(), target_args.end());
     profile_compile.insert(

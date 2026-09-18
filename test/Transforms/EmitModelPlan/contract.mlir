@@ -60,7 +60,16 @@ module attributes {
   }
 }
 
-// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1"
+// CHECK-DAG: "low_precision": {
+// CHECK-DAG: "revision": "int8-target-v1"
+// CHECK-DAG: "requested_policy": "unknown"
+// CHECK-DAG: "requested_policy_status": "unknown"
+// CHECK-DAG: "capability": "unknown"
+// CHECK-DAG: "depthwise_enabled": false
+// CHECK-DAG: "cast_chain_enabled": false
+// CHECK-DAG: "operations": [
+// CHECK-DAG: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1"
+// CHECK-DAG: "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1"
 // CHECK-DAG: "fusion": {
 // CHECK-DAG: "enabled": true
 // CHECK-DAG: "selected_count": 1

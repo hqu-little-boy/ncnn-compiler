@@ -21,6 +21,9 @@
 #ifndef NCNN_PROFILE_DEFAULT_BUILD_IDENTITY
 #define NCNN_PROFILE_DEFAULT_BUILD_IDENTITY ""
 #endif
+#ifndef NCNN_PROFILE_DEFAULT_PLAN_REVISION
+#define NCNN_PROFILE_DEFAULT_PLAN_REVISION ""
+#endif
 
 #define NCNN_PROFILE_MAX_RECORDS 4096
 #define NCNN_PROFILE_MAX_STACK 128
@@ -54,7 +57,7 @@ typedef struct {
 typedef struct {
   uint64_t id;
   int64_t bytes;
-  int active;
+  uint64_t active;
 } ncnn_profile_allocation;
 
 static ncnn_profile_record records[NCNN_PROFILE_MAX_RECORDS];
@@ -215,22 +218,29 @@ void __ncnn_profile_alloc(int64_t signed_id, int64_t bytes) {
   }
   const int slot = allocation_for(id);
   if (slot >= 0) {
-    if (allocations[slot].active) {
-      // One static allocation ID may execute concurrently inside a loop or
-      // parallel region.  A single slot cannot represent those instances.
+    if (allocations[slot].active == 0) {
+      allocations[slot].bytes = bytes;
+    } else if (allocations[slot].bytes != bytes) {
+      // Static equal-size instances are interchangeable. Unequal overlapping
+      // sizes cannot be paired by ID alone, so retain the unknown result.
+      allocations[slot].bytes = -1;
+      live_bytes_known = 0;
+    }
+    if (allocations[slot].active == UINT64_MAX) {
+      allocation_overflow = 1;
+      allocations[slot].bytes = -1;
       live_bytes_known = 0;
     } else {
-      allocations[slot].bytes = bytes;
-      allocations[slot].active = 1;
-      if (bytes >= 0 && live_bytes_known &&
-          live_bytes <= UINT64_MAX - (uint64_t)bytes) {
-        live_bytes += (uint64_t)bytes;
-        if (live_bytes > peak_live_bytes) {
-          peak_live_bytes = live_bytes;
-        }
-      } else {
-        live_bytes_known = 0;
+      allocations[slot].active++;
+    }
+    if (bytes >= 0 && live_bytes_known &&
+        live_bytes <= UINT64_MAX - (uint64_t)bytes) {
+      live_bytes += (uint64_t)bytes;
+      if (live_bytes > peak_live_bytes) {
+        peak_live_bytes = live_bytes;
       }
+    } else {
+      live_bytes_known = 0;
     }
   } else {
     live_bytes_known = 0;
@@ -264,7 +274,7 @@ void __ncnn_profile_dealloc(int64_t signed_id) {
     } else {
       live_bytes_known = 0;
     }
-    allocations[slot].active = 0;
+    allocations[slot].active--;
   } else {
     deallocation_bytes_known = 0;
     live_bytes_known = 0;
@@ -472,10 +482,20 @@ void __ncnn_profile_flush(void) {
   }
   int thread_known = 0;
   const unsigned thread_count = parse_unsigned(thread_text, &thread_known);
+  // The revision must match the execution plan the sidecar claims to
+  // describe; ncnn-compile passes the published plan revision at build time,
+  // so the attribution join cannot be defeated by a stale hard-coded string.
+  const char* revision = environment_or_default(
+    "NCNN_PROFILE_PLAN_REVISION", NCNN_PROFILE_DEFAULT_PLAN_REVISION);
   fputs("{\n  \"schema_version\": 1,\n", file);
   fputs("  \"kind\": \"ncnn.model_execution_profile\",\n", file);
-  fputs("  \"plan_revision\": \"static-v1\",\n", file);
-  fputs("  \"model\": ", file);
+  fputs("  \"plan_revision\": ", file);
+  if (revision && *revision) {
+    write_json_string(file, revision);
+  } else {
+    fputs("\"static-v1\"", file);
+  }
+  fputs(",\n  \"model\": ", file);
   write_json_string(file, model ? model : "unknown");
   fputs(",\n  \"plan_hash\": ", file);
   if (plan && *plan) {

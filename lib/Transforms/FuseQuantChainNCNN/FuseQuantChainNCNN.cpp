@@ -6,6 +6,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
@@ -46,9 +47,14 @@ bool isElementwiseChainOp(Operation* operation) {
     }
     region = &generic->getRegion(0);
     numInputs = generic.getNumDpsInputs();
-  } else if (isa<linalg::MapOp>(operation)) {
-    region = &operation->getRegion(0);
-    numInputs = 1;
+  } else if (auto map = dyn_cast<linalg::MapOp>(operation)) {
+    if (map.getNumResults() != 1 || !map.hasPureTensorSemantics() ||
+        map.getNumDpsInits() != 1) {
+      return false;
+    }
+    region = &map->getRegion(0);
+    // Unlike generic, map has input block arguments only (no outs argument).
+    numInputs = map.getNumDpsInputs();
   } else {
     return false;
   }
@@ -60,14 +66,25 @@ bool isElementwiseChainOp(Operation* operation) {
   if (!yield || yield.getValues().size() != 1) {
     return false;
   }
-  // map 的块参为 [in, out]；body 不读 outs 才能安全丢弃其 init。
+  // generic 的 body 不读 outs 才能安全丢弃其 init；map 没有 outs 块参。
   if (numInputs < block.getNumArguments() &&
       !block.getArgument(numInputs).use_empty()) {
     return false;
   }
   for (Operation& statement : block.without_terminator()) {
     const StringRef dialect = statement.getName().getDialect()->getNamespace();
-    if (dialect != "arith" && dialect != "math") {
+    if ((dialect != "arith" && dialect != "math") ||
+        !isMemoryEffectFree(&statement) || statement.getNumRegions() != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool hasStaticTensorOperands(linalg::LinalgOp operation) {
+  for (Value operand : operation->getOperands()) {
+    auto type = dyn_cast<RankedTensorType>(operand.getType());
+    if (!type || !type.hasStaticShape() || type.getEncoding()) {
       return false;
     }
   }
@@ -118,6 +135,12 @@ class FuseElementwiseProducer : public OpRewritePattern<linalg::GenericOp> {
         consumer.getIndexingMapsArray()[operand.getOperandNumber()];
       if (!flowingMap.isIdentity() ||
           flowingMap.getNumDims() != consumerType.getRank()) {
+        continue;
+      }
+
+      auto producerMaps = producer.getIndexingMapsArray();
+      if (!producerMaps.back().isIdentity() ||
+          producerMaps.back().getNumDims() != consumerType.getRank()) {
         continue;
       }
 
@@ -203,8 +226,11 @@ class FuseElementwiseProducer : public OpRewritePattern<linalg::GenericOp> {
     }
     auto producerTerminator =
       cast<linalg::YieldOp>(producerBlock.getTerminator());
+    // 逐元素 body 允许直接 yield 捕获自区域外的值（如函数标量）；这类值
+    // 不在 mapping 中，必须走 lookupOrDefault 保住原定义。捕获值支配
+    // producer，因而也支配新块，直接引用是合法的。
     Value producerYield =
-      producerMapping.lookup(producerTerminator.getValues().front());
+      producerMapping.lookupOrDefault(producerTerminator.getValues().front());
 
     // consumer 块参 → 新块参（流动输入被移除后，后续参数整体前移一位）；
     // 流动块参替换为 producer 的克隆结果。
@@ -233,13 +259,78 @@ class FuseElementwiseProducer : public OpRewritePattern<linalg::GenericOp> {
       cast<linalg::YieldOp>(consumerBlock.getTerminator());
     SmallVector<Value> newResults;
     for (Value yielded : consumerTerminator.getValues()) {
-      newResults.push_back(consumerMapping.lookup(yielded));
+      newResults.push_back(consumerMapping.lookupOrDefault(yielded));
     }
     rewriter.setInsertionPointToEnd(&newBlock);
     rewriter.create<linalg::YieldOp>(consumer.getLoc(), newResults);
 
     rewriter.replaceAllUsesWith(consumer.getResult(0), newGeneric.getResult(0));
     rewriter.eraseOp(consumer);
+    return success();
+  }
+};
+
+// P16: normalize only a map that the existing generic-consumer fusion can
+// actually absorb a producer into. Keep standalone maps and unsupported chains
+// intact; in particular, do not look through tensor casts/views or memrefs.
+class NormalizeMapConsumer : public OpRewritePattern<linalg::MapOp> {
+ public:
+  using OpRewritePattern<linalg::MapOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::MapOp consumer,
+                                PatternRewriter& rewriter) const override {
+    if (!isElementwiseChainOp(consumer) || !hasStaticTensorOperands(consumer)) {
+      return failure();
+    }
+    auto resultType = cast<RankedTensorType>(consumer->getResult(0).getType());
+    bool hasProducer = false;
+    for (Value input : consumer.getDpsInputs()) {
+      auto result = dyn_cast<OpResult>(input);
+      if (!result || !result.hasOneUse() ||
+          !isElementwiseChainOp(result.getOwner())) {
+        continue;
+      }
+      auto producer = cast<linalg::LinalgOp>(result.getOwner());
+      if (!hasStaticTensorOperands(producer) ||
+          cast<RankedTensorType>(result.getType()).getShape() !=
+            resultType.getShape()) {
+        continue;
+      }
+      // Full-rank identity output is essential: all-parallel alone also
+      // admits permutations and does not justify copying the input maps.
+      auto maps = producer.getIndexingMapsArray();
+      if (!maps.back().isIdentity() ||
+          maps.back().getNumDims() != resultType.getRank()) {
+        continue;
+      }
+      hasProducer = true;
+      break;
+    }
+    if (!hasProducer) {
+      return failure();
+    }
+
+    auto generic = rewriter.create<linalg::GenericOp>(
+      consumer.getLoc(),
+      TypeRange{resultType},
+      consumer.getDpsInputs(),
+      consumer.getDpsInits(),
+      SmallVector<AffineMap>(consumer.getIndexingMapsArray()),
+      SmallVector<utils::IteratorType>(resultType.getRank(),
+                                       utils::IteratorType::parallel),
+      [&](OpBuilder& builder, Location, ValueRange arguments) {
+        IRMapping mapping;
+        Block& body = consumer->getRegion(0).front();
+        for (unsigned index = 0; index < body.getNumArguments(); ++index) {
+          mapping.map(body.getArgument(index), arguments[index]);
+        }
+        // Clone every cast and the yield verbatim, with no cast cancellation
+        // or reordering (e.g. f32 -> i8 -> f32 is deliberately lossy).
+        for (Operation& statement : body) {
+          builder.clone(statement, mapping);
+        }
+      });
+    rewriter.replaceOp(consumer, generic.getResults());
     return success();
   }
 };
@@ -252,6 +343,11 @@ class FuseQuantChainNCNNPass final
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
     patterns.add<FuseElementwiseProducer>(&getContext());
+    auto castChain =
+      getOperation()->getAttrOfType<BoolAttr>("ncnn.int8_cast_chain");
+    if (castChain && castChain.getValue()) {
+      patterns.add<NormalizeMapConsumer>(&getContext());
+    }
     if (failed(
           applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();

@@ -117,6 +117,40 @@ class ConvertNestedLinalgToLoopsPass final
   }
 };
 
+class SetLowPrecisionOptionsPass final
+  : public PassWrapper<SetLowPrecisionOptionsPass, OperationPass<ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SetLowPrecisionOptionsPass)
+  SetLowPrecisionOptionsPass(bool depthwise,
+                             bool casts,
+                             std::string policy,
+                             std::string target,
+                             bool preserveCasts = false)
+    : depthwise(depthwise),
+      casts(casts),
+      policy(std::move(policy)),
+      target(std::move(target)),
+      preserveCasts(preserveCasts) {}
+  void runOnOperation() final {
+    Builder builder(&getContext());
+    getOperation()->setAttr("ncnn.int8_depthwise",
+                            builder.getBoolAttr(depthwise));
+    if (!preserveCasts) {
+      getOperation()->setAttr("ncnn.int8_cast_chain",
+                              builder.getBoolAttr(casts));
+    }
+    getOperation()->setAttr("ncnn.int8_kernel", builder.getStringAttr(policy));
+    getOperation()->setAttr("ncnn.int8_target", builder.getStringAttr(target));
+  }
+
+ private:
+  bool depthwise;
+  bool casts;
+  std::string policy;
+  std::string target;
+  bool preserveCasts;
+};
+
 }  // namespace
 
 void buildNCNNToTosaPipeline(OpPassManager& passManager) {
@@ -148,6 +182,8 @@ void buildNCNNTosaToLinalgPipeline(
   // 链融合为单一 generic（P4）。放在 strategy 之前，使量化卷积的
   // requant 尾部与激活一样成为卷积结果之后的单个可折叠逐元素 consumer；
   // 融合保持 op 顺序与常量不变，数值与链式形态逐位一致。
+  passManager.addPass(std::make_unique<SetLowPrecisionOptionsPass>(
+    false, options.int8CastChain, "portable", "portable"));
   passManager.addPass(createFuseQuantChainNCNNPass());
   // 算子形态策略层（A1）：在 epilogue 融合与向量化之前把可改写卷积变为
   // matmul 形态，使计算大头进入投影映射的收缩主干；权重 collapse 由紧随
@@ -175,6 +211,12 @@ void buildNCNNLinalgToMemRefPipeline(OpPassManager& passManager) {
 void buildNCNNLinalgToMemRefPipeline(
   OpPassManager& passManager,
   const NCNNLinalgToMemRefPipelineOptions& options) {
+  passManager.addPass(
+    std::make_unique<SetLowPrecisionOptionsPass>(options.int8Depthwise,
+                                                 false,
+                                                 options.int8KernelPolicy,
+                                                 options.int8TargetCapability,
+                                                 true));
   // 并行化单轨化（T4b 配套）：顶层 matmul 沿 M/N 切进 forall 网格，
   // epilogue 分块循环改写为 shared_outs forall——两者都在向量化之前
   // 完成，体内 generic 随后照常被行级向量化。K 维全程不被切分。
@@ -201,8 +243,13 @@ void buildNCNNLinalgToMemRefPipeline(
   if (options.vectorTail) {
     // A1b SIMD matmul 内核与 forall 路径标量热点清理。发射 vector/
     // ub.poison op，必须确保下游有向量下降尾（串行遗留路径没有），
-    // 由调用方经 vector-tail 显式声明。
-    passManager.addPass(createMatmulKernelNCNNPass());
+    // 由调用方经 vector-tail 显式声明。INT8 kernel policy 与目标能力
+    // 显式分离：portable 保持历史标量 MAC；vnni 只在目标能力匹配时
+    // 生效（不匹配由 pass 直接报错，不做静默降级）。
+    MatmulKernelNCNNPassOptions matmulKernelOptions;
+    matmulKernelOptions.int8Kernel = options.int8KernelPolicy;
+    matmulKernelOptions.int8Target = options.int8TargetCapability;
+    passManager.addPass(createMatmulKernelNCNNPass(matmulKernelOptions));
   }
 
   bufferization::BufferResultsToOutParamsPassOptions outParamOptions;
@@ -298,7 +345,6 @@ void buildNCNNMemRefToLLVMPipeline(
     passManager.addPass(createLowerVectorMathNCNNPass(mathOptions));
   }
   passManager.addPass(createLowerAffinePass());
-  passManager.addPass(createSCFToControlFlowPass());
   passManager.addPass(createConvertMathToLibmPass());
   if (hasVectorIR) {
     // N-D transfer 规范化必须在 ExpandStridedMetadata/MemRefToLLVM 之前：
@@ -310,6 +356,12 @@ void buildNCNNMemRefToLLVMPipeline(
   passManager.addPass(createLowerAffinePass());
   passManager.addPass(createArithToLLVMConversionPass());
   passManager.addPass(createFinalizeMemRefToLLVMConversionPass());
+  // OpenMP lowering introduces single-block memref.alloca_scope regions.
+  // Lower their stack save/restore boundary before SCF expands nested control
+  // flow into multiple blocks; otherwise the intermediate IR is invalid.
+  passManager.addPass(createSCFToControlFlowPass());
+  // SCF lowering creates arithmetic even when no vector tail is enabled.
+  passManager.addPass(createArithToLLVMConversionPass());
   passManager.addPass(createConvertFuncToLLVMPass());
   passManager.addPass(createFinalizeCAPIPass());
   passManager.addPass(createConvertControlFlowToLLVMPass());

@@ -7,6 +7,11 @@ namespace mlir::ncnn {
 
 struct NCNNTosaToLinalgPipelineOptions
   : public PassPipelineOptions<NCNNTosaToLinalgPipelineOptions> {
+  Option<bool> int8CastChain{
+    *this,
+    "int8-cast-chain",
+    llvm::cl::desc("Fuse proven static cast map consumers"),
+    llvm::cl::init(false)};
   Option<int64_t> epilogueTileWidth{
     *this,
     "epilogue-tile-width",
@@ -56,6 +61,22 @@ struct NCNNLinalgToMemRefPipelineOptions
     llvm::cl::desc(
       "Downstream memref-to-llvm will run the vector lowering tail; "
       "gates passes that emit vector dialect ops"),
+    llvm::cl::init(false)};
+  Option<std::string> int8KernelPolicy{
+    *this,
+    "int8-kernel",
+    llvm::cl::desc("INT8 row-dot kernel policy: portable, auto, vnni"),
+    llvm::cl::init("portable")};
+  Option<std::string> int8TargetCapability{
+    *this,
+    "int8-target",
+    llvm::cl::desc(
+      "Resolved backend INT8 capability: portable, avx-vnni, avx512-vnni"),
+    llvm::cl::init("portable")};
+  Option<bool> int8Depthwise{
+    *this,
+    "int8-depthwise",
+    llvm::cl::desc("Enable the static int8 depthwise SIMD path"),
     llvm::cl::init(false)};
   Option<std::string> executionPlanPath{
     *this,

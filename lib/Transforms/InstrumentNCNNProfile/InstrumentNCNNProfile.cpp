@@ -190,14 +190,12 @@ class InstrumentNCNNProfilePass final
 
       SmallVector<Operation*> candidates;
       function.walk([&](Operation* operation) {
-        // Keep callbacks out of nested loop/control-flow regions.  The SCF to
-        // control-flow conversion may split such a region into multiple
-        // blocks; wrapping it in memref.alloca_scope would then violate that
-        // op's single-block contract.  The enclosing region operation still
-        // provides the useful inclusive timing, while unsupported nested
-        // coverage remains explicit rather than risking invalid IR.
-        if (operation->getParentOp() == function.getOperation() &&
-            isProfileCandidate(*operation)) {
+        // Nested memory events need no region wrapping. Keep duration timers
+        // at function scope: worker TLS spans cannot be subtracted from the
+        // parent parallel span, and timing individual lanes is too expensive.
+        if (isa<memref::AllocOp, memref::CopyOp>(operation) ||
+            (operation->getParentOp() == function.getOperation() &&
+             isProfileCandidate(*operation))) {
           candidates.push_back(operation);
         }
       });
@@ -231,9 +229,12 @@ class InstrumentNCNNProfilePass final
         rewriter.setInsertionPoint(operation);
         Value idValue = constant(
           rewriter, operation->getLoc(), static_cast<std::int64_t>(id));
-        Value categoryValue = constant(
-          rewriter, operation->getLoc(), static_cast<std::int64_t>(category));
-        call(rewriter, operation->getLoc(), begin, {idValue, categoryValue});
+        const bool timed = operation->getParentOp() == function.getOperation();
+        if (timed) {
+          Value categoryValue = constant(
+            rewriter, operation->getLoc(), static_cast<std::int64_t>(category));
+          call(rewriter, operation->getLoc(), begin, {idValue, categoryValue});
+        }
 
         if (auto allocOp = dyn_cast<memref::AllocOp>(operation)) {
           const std::int64_t bytes = staticByteSize(allocOp.getType());
@@ -249,10 +250,12 @@ class InstrumentNCNNProfilePass final
           call(rewriter, operation->getLoc(), copy, {idValue, byteValue});
         }
 
-        rewriter.setInsertionPointAfter(operation);
-        Value endId = constant(
-          rewriter, operation->getLoc(), static_cast<std::int64_t>(id));
-        call(rewriter, operation->getLoc(), end, {endId});
+        if (timed) {
+          rewriter.setInsertionPointAfter(operation);
+          Value endId = constant(
+            rewriter, operation->getLoc(), static_cast<std::int64_t>(id));
+          call(rewriter, operation->getLoc(), end, {endId});
+        }
       }
 
       // Deallocation has no useful duration, but it is still an explicit
@@ -260,23 +263,52 @@ class InstrumentNCNNProfilePass final
       // cannot be mistaken for arithmetic time.
       SmallVector<Operation*> deallocations;
       function.walk([&](memref::DeallocOp operation) {
-        if (operation->getParentOp() == function.getOperation()) {
-          deallocations.push_back(operation.getOperation());
-        }
+        deallocations.push_back(operation.getOperation());
       });
+      auto resolveAllocation = [&](Value value) -> Operation* {
+        // Follow the SSA forwarding performed by scf.for in addition to
+        // view-like definitions. A loop result (or an iter arg used by a
+        // nested dealloc) still denotes the original allocation.
+        while (true) {
+          if (auto allocOp = value.getDefiningOp<memref::AllocOp>()) {
+            return allocOp.getOperation();
+          }
+          if (Operation* defining = value.getDefiningOp()) {
+            if (isViewLike(*defining) && defining->getNumOperands() != 0) {
+              value = defining->getOperand(0);
+              continue;
+            }
+            if (auto forOp = dyn_cast<scf::ForOp>(defining)) {
+              auto result = dyn_cast<OpResult>(value);
+              if (!result ||
+                  result.getResultNumber() >= forOp.getInitArgs().size()) {
+                return nullptr;
+              }
+              value = forOp.getInitArgs()[result.getResultNumber()];
+              continue;
+            }
+            return nullptr;
+          }
+          auto blockArgument = dyn_cast<BlockArgument>(value);
+          if (!blockArgument) {
+            return nullptr;
+          }
+          auto forOp =
+            dyn_cast<scf::ForOp>(blockArgument.getOwner()->getParentOp());
+          const unsigned argumentNumber = blockArgument.getArgNumber();
+          if (!forOp || argumentNumber == 0 ||
+              argumentNumber - 1 >= forOp.getInitArgs().size()) {
+            return nullptr;
+          }
+          value = forOp.getInitArgs()[argumentNumber - 1];
+        }
+      };
       for (Operation* operation : deallocations) {
         std::uint64_t id = operation_ids.at(operation);
         if (operation->getNumOperands() == 1) {
-          Value value = operation->getOperand(0);
-          while (Operation* defining = value.getDefiningOp()) {
-            if (auto allocOp = dyn_cast<memref::AllocOp>(defining)) {
-              id = operation_ids.at(allocOp.getOperation());
-              break;
-            }
-            if (!isViewLike(*defining) || defining->getNumOperands() == 0) {
-              break;
-            }
-            value = defining->getOperand(0);
+          if (Operation* allocation =
+                resolveAllocation(operation->getOperand(0))) {
+            id = operation_ids.at(allocation);
           }
         }
         rewriter.setInsertionPoint(operation);

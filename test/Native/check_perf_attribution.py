@@ -19,7 +19,25 @@ def main() -> int:
     plan = root / "model.plan.json"
     profile = root / "model.profile.json"
     perf = root / "perf.ndjson"
+    low_precision = {
+      "revision": "int8-target-v1",
+      "requested_policy": "auto",
+      "resolved_capability": "avx-vnni",
+      "depthwise_enabled": True,
+      "cast_chain_enabled": False,
+      "operations": [{
+        "id": "model/scf.forall#0",
+        "kernel": "int8_vnni_row_dot",
+        "required_isa": "avx-vnni",
+        "signedness": "signed8*signed8",
+        "signedness_correction": "xor_0x80_subtract_128_times_rhs_sum",
+        "accumulator": "modulo32",
+        "static_tails": {"output_policy": "none", "reduction_elements": 3},
+        "fallback_reason": None,
+      }],
+    }
     plan.write_text(json.dumps({
+      "low_precision": low_precision,
       "schema_version": 1,
       "plan_revision": "static-v1",
       "kind": "ncnn.model_execution_plan",
@@ -97,6 +115,10 @@ def main() -> int:
     if result.returncode != 0:
       raise RuntimeError(result.stderr)
     report = json.loads(result.stdout)
+    if report["static"].get("low_precision") != low_precision:
+      raise RuntimeError("static low-precision audit was not preserved")
+    if "low_precision" in report["runtime"]:
+      raise RuntimeError("static low-precision audit advertised runtime data")
     if report["top_costs"][0]["source_name"] != "projection":
       raise RuntimeError("provenance was not joined")
     conv_breakdown = report["static"]["conv_depthwise"]["conv"]

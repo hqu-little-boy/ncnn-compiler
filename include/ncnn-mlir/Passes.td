@@ -222,6 +222,10 @@ def MatmulKernelNCNNPass : Pass<"matmul-kernel-ncnn", "mlir::ModuleOp"> {
            "legalization size from the innermost extent; whole-row forms "
            "were the compile-explosion mechanism on wide models "
            "(docs/ncnn-performance-parity-plan.md §3-P2).">,
+    Option<"int8Kernel", "int8-kernel", "std::string", /*default=*/"\"portable\"",
+           "INT8 row-dot policy: portable, auto, vnni">,
+    Option<"int8Target", "int8-target", "std::string", /*default=*/"\"portable\"",
+           "Resolved backend capability: portable, avx-vnni, avx512-vnni">,
     Option<"matmulI8Rows", "matmul-i8-rows", "int64_t", /*default=*/"2",
            "M-direction register tile rows of the int8 row-dot kernel "
            "(each (row, column) pair keeps one vector accumulator of K-pair "
@@ -235,7 +239,7 @@ def MatmulKernelNCNNPass : Pass<"matmul-kernel-ncnn", "mlir::ModuleOp"> {
   ];
   let dependentDialects = [
     "arith::ArithDialect", "linalg::LinalgDialect", "memref::MemRefDialect",
-    "scf::SCFDialect", "vector::VectorDialect"
+    "scf::SCFDialect", "vector::VectorDialect", "LLVM::LLVMDialect"
   ];
 }
 

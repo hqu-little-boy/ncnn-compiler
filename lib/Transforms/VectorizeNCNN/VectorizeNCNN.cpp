@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 #include "llvm/ADT/SmallVector.h"
@@ -423,12 +424,20 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context,
 // 逐位复刻 mulf+addf 不做收缩。multi-channel multiplier 变体降级标量
 // 留待 P8 评估；动态 shape、非 f32、分块宽非 2 的幂（vector<3>/24 非
 // 2 幂宽度教训，同 MatmulKernelNCNN 通道门控）保持原状。
+// P16 opt-in: signed i8 inputs/weights with i32 accumulation share this
+// geometry, but widen each C lane independently (never a channel dot product).
+// The plain named op has implicit zero zero-points; the explicit-zero-point _q
+// variant is deliberately not matched. Float vector FMA / scalar mulf+addf stay
+// unchanged.
 LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                                          ModuleOp module,
                                          unsigned lanes) {
+  auto int8Attribute = module->getAttrOfType<BoolAttr>("ncnn.int8_depthwise");
+  const bool enableInt8 = int8Attribute && int8Attribute.getValue();
   struct DepthwiseCandidate {
     linalg::DepthwiseConv2DNhwcHwcmOp op;
     int64_t chunkWidth;
+    bool int8;
   };
   SmallVector<DepthwiseCandidate> candidates;
   module.walk([&](linalg::DepthwiseConv2DNhwcHwcmOp op) {
@@ -447,11 +456,25 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
       dyn_cast<RankedTensorType>(op.getDpsInitOperand(0)->get().getType());
     if (!inputType || !weightType || !initType || !inputType.hasStaticShape() ||
         !weightType.hasStaticShape() || !initType.hasStaticShape() ||
+        inputType.getEncoding() || weightType.getEncoding() ||
+        initType.getEncoding() ||
         op->getParentOfType<scf::ForallOp>() != nullptr) {
       return;
     }
-    if (!inputType.getElementType().isF32() || inputType.getRank() != 4 ||
-        weightType.getRank() != 4 || initType.getRank() != 5) {
+    if (inputType.getRank() != 4 || weightType.getRank() != 4 ||
+        initType.getRank() != 5) {
+      return;
+    }
+    // 混合元素类型（如 f32 输入 + f64 权重 + f32 init、f32 in + i32 init）能
+    // 通过 linalg verifier，必须三处全 f32 才走浮点路径，否则改写期构 op
+    // 即崩；int8 路径同样严格要求 i8/i8/i32。
+    const bool isInt8 = inputType.getElementType().isSignlessInteger(8) &&
+                        weightType.getElementType().isSignlessInteger(8) &&
+                        initType.getElementType().isSignlessInteger(32);
+    const bool isFloat32 = inputType.getElementType().isF32() &&
+                           weightType.getElementType().isF32() &&
+                           initType.getElementType().isF32();
+    if (!isFloat32 && !(enableInt8 && isInt8)) {
       return;
     }
     const int64_t channels = inputType.getShape()[3];
@@ -468,8 +491,74 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
         weightType.getShape()[0] <= 0 || weightType.getShape()[1] <= 0) {
       return;
     }
-    // 分块宽沿用逐元素路径的位宽预算（f32 → 4×lanes）；非 2 幂时退到
-    // lanes，仍非 2 幂（窄于 lanes 的奇数宽通道）保持标量。
+    if (isInt8) {
+      // int8 仅匹配规范零零点 region（extsi/extsi/muli/addi 链，命名 op 的
+      // regionBuilder 形态）：linalg verifier 接受自定义 region，非零
+      // zero-point/ clamp 等变体（规范上属 _q）在此拒绝、保持标量。
+      Block& body = op.getRegion().front();
+      auto bodyYield = dyn_cast<linalg::YieldOp>(body.getTerminator());
+      if (!bodyYield || bodyYield.getNumOperands() != 1) {
+        return;
+      }
+      Operation* bodyOps[4];
+      unsigned bodyOpCount = 0;
+      for (Operation& operation : body.without_terminator()) {
+        if (bodyOpCount >= 4) {
+          return;
+        }
+        bodyOps[bodyOpCount++] = &operation;
+      }
+      if (bodyOpCount != 4) {
+        return;
+      }
+      auto widen0 = dyn_cast<arith::ExtSIOp>(bodyOps[0]);
+      auto widen1 = dyn_cast<arith::ExtSIOp>(bodyOps[1]);
+      auto product = dyn_cast<arith::MulIOp>(bodyOps[2]);
+      auto accumulated = dyn_cast<arith::AddIOp>(bodyOps[3]);
+      if (!widen0 || !widen1 || !product || !accumulated ||
+          widen0.getIn() != body.getArgument(0) ||
+          widen1.getIn() != body.getArgument(1) ||
+          !widen0.getOut().getType().isSignlessInteger(32) ||
+          widen0.getOut().getType() != widen1.getOut().getType() ||
+          product.getLhs() != widen0 || product.getRhs() != widen1.getOut() ||
+          product.getOverflowFlags() != arith::IntegerOverflowFlags::none ||
+          accumulated.getLhs() != body.getArgument(2) ||
+          accumulated.getRhs() != product.getResult() ||
+          accumulated.getOverflowFlags() != arith::IntegerOverflowFlags::none ||
+          bodyYield.getOperand(0) != accumulated.getResult()) {
+        return;
+      }
+      // 所有整数 transfer 都 in_bounds：构 IR 前先证明末窗口可容纳，
+      // 校验本身用除法规避溢出。
+      auto windowFits = [](int64_t input,
+                           int64_t output,
+                           int64_t kernel,
+                           int64_t stride,
+                           int64_t dilation) {
+        if (stride <= 0 || dilation <= 0 || output - 1 > (input - 1) / stride) {
+          return false;
+        }
+        const int64_t remaining = (input - 1) - ((output - 1) * stride);
+        return kernel - 1 <= remaining / dilation;
+      };
+      if (op.getNumResults() != 1 || op.getResult(0).getType() != initType ||
+          inputType.getShape()[0] != initType.getShape()[0] ||
+          weightType.getShape()[0] >
+            std::numeric_limits<int64_t>::max() / weightType.getShape()[1]) {
+        return;
+      }
+      for (unsigned axis = 0; axis < 2; ++axis) {
+        if (!windowFits(inputType.getShape()[axis + 1],
+                        initType.getShape()[axis + 1],
+                        weightType.getShape()[axis],
+                        op.getStrides().getValues<int64_t>()[axis],
+                        op.getDilations().getValues<int64_t>()[axis])) {
+          return;
+        }
+      }
+    }
+    // 分块宽沿用逐元素路径的位宽预算（f32 / i32 accumulator → 4×lanes）；
+    // 非 2 幂时退到 lanes，仍非 2 幂（窄于 lanes 的奇数宽通道）保持标量。
     const auto laneBudget = static_cast<int64_t>(lanes);
     int64_t chunkWidth = std::min(4 * laneBudget, channels);
     if (!isVectorWidth(chunkWidth)) {
@@ -479,7 +568,7 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
       return;
     }
     candidates.push_back(
-      DepthwiseCandidate{.op = op, .chunkWidth = chunkWidth});
+      DepthwiseCandidate{.op = op, .chunkWidth = chunkWidth, .int8 = isInt8});
   });
   if (candidates.empty()) {
     return success();
@@ -510,7 +599,9 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     const int64_t chunkWidth = candidate.chunkWidth;
     const int64_t fullChunks = channels / chunkWidth;
     const int64_t tailWidth = channels % chunkWidth;
-    Type elementType = inputType.getElementType();
+    Type inputElementType = inputType.getElementType();
+    Type accumulatorElementType = initType.getElementType();
+    const bool isInt8 = candidate.int8;
     Location location = op.getLoc();
 
     rewriter.setInsertionPoint(op);
@@ -522,14 +613,14 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     // 量 transfer 需要沿 C 连续的形态。输出同样以折叠 4D 计算，替换时
     // expand 回 5D——下游既有 collapse_shape 消费者与该 expand 对消。
     auto weightRowsType = RankedTensorType::get(
-      {kernelHeight * kernelWidth, channels}, elementType);
+      {kernelHeight * kernelWidth, channels}, inputElementType);
     Value weightRows = rewriter.create<tensor::CollapseShapeOp>(
       location,
       weightRowsType,
       weight,
       SmallVector<ReassociationIndices>{{0, 1}, {2, 3}});
     auto initCollapsedType = RankedTensorType::get(
-      {batch, outputHeight, outputWidth, channels}, elementType);
+      {batch, outputHeight, outputWidth, channels}, accumulatorElementType);
     Value initCollapsed = rewriter.create<tensor::CollapseShapeOp>(
       location,
       initCollapsedType,
@@ -538,7 +629,7 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     Value resultBuffer = rewriter.create<tensor::EmptyOp>(
       location,
       ArrayRef<int64_t>{batch, outputHeight, outputWidth, channels},
-      elementType);
+      accumulatorElementType);
     Value zeroIndex = rewriter.create<arith::ConstantIndexOp>(location, 0);
     Value stepOneIndex = rewriter.create<arith::ConstantIndexOp>(location, 1);
     Value chunkWidthIndex =
@@ -555,9 +646,30 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
       rewriter.create<arith::ConstantIndexOp>(location, dilationHeight);
     Value dilationWidthIndex =
       rewriter.create<arith::ConstantIndexOp>(location, dilationWidth);
-    VectorType chunkType = VectorType::get({chunkWidth}, elementType);
+    VectorType inputChunkType = VectorType::get({chunkWidth}, inputElementType);
+    VectorType accumulatorChunkType =
+      VectorType::get({chunkWidth}, accumulatorElementType);
     SmallVector<bool> inBounds(1, true);
-    Value poison = rewriter.create<ub::PoisonOp>(location, elementType);
+    Value inputPoison =
+      rewriter.create<ub::PoisonOp>(location, inputElementType);
+    Value accumulatorPoison =
+      inputElementType == accumulatorElementType
+        ? inputPoison
+        : rewriter.create<ub::PoisonOp>(location, accumulatorElementType)
+            .getResult();
+
+    // Independent signed multiply-add for either vectors or scalar C tails.
+    // No nsw/nuw flags: the named op's i32 accumulator wraps modulo 2^32.
+    auto buildIntegerMac = [&](OpBuilder& builder,
+                               Location loc,
+                               Value lhs,
+                               Value rhs,
+                               Value acc) -> Value {
+      Value wideLhs = builder.create<arith::ExtSIOp>(loc, acc.getType(), lhs);
+      Value wideRhs = builder.create<arith::ExtSIOp>(loc, acc.getType(), rhs);
+      Value product = builder.create<arith::MulIOp>(loc, wideLhs, wideRhs);
+      return builder.create<arith::AddIOp>(loc, acc, product);
+    };
 
     // 一个分块：acc 以 init 行种子起链，kh 外 kw 内逐窗口 fma（与
     // named op 归约序一致）。gridIndices = {n, oh, ow}，ohStride/
@@ -569,10 +681,10 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                                 Value offset) -> Value {
       Value accumulator = builder.create<vector::TransferReadOp>(
         location,
-        chunkType,
+        accumulatorChunkType,
         initCollapsed,
         ValueRange{gridIndices[0], gridIndices[1], gridIndices[2], offset},
-        poison,
+        accumulatorPoison,
         inBounds);
       auto kernelHeightLoop = builder.create<scf::ForOp>(
         location,
@@ -605,20 +717,29 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                 kw);
               Value inputChunk = inner.create<vector::TransferReadOp>(
                 innerLoc,
-                chunkType,
+                inputChunkType,
                 input,
                 ValueRange{gridIndices[0], ih, iw, offset},
-                poison,
+                inputPoison,
                 inBounds);
               Value weightChunk = inner.create<vector::TransferReadOp>(
                 innerLoc,
-                chunkType,
+                inputChunkType,
                 weightRows,
                 ValueRange{weightRow, offset},
-                poison,
+                inputPoison,
                 inBounds);
-              Value fused = inner.create<vector::FMAOp>(
-                innerLoc, chunkType, inputChunk, weightChunk, innerArgs[0]);
+              Value fused;
+              if (isInt8) {
+                fused = buildIntegerMac(
+                  inner, innerLoc, inputChunk, weightChunk, innerArgs[0]);
+              } else {
+                fused = inner.create<vector::FMAOp>(innerLoc,
+                                                    accumulatorChunkType,
+                                                    inputChunk,
+                                                    weightChunk,
+                                                    innerArgs[0]);
+              }
               inner.create<scf::YieldOp>(innerLoc, ValueRange{fused});
             });
           nested.create<scf::YieldOp>(nestedLoc,
@@ -670,10 +791,16 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                 innerLoc, input, ValueRange{gridIndices[0], ih, iw, offset});
               Value weightElement = inner.create<tensor::ExtractOp>(
                 innerLoc, weightRows, ValueRange{weightRow, offset});
-              Value product = inner.create<arith::MulFOp>(
-                innerLoc, inputElement, weightElement);
-              Value updated =
-                inner.create<arith::AddFOp>(innerLoc, product, innerArgs[0]);
+              Value updated;
+              if (isInt8) {
+                updated = buildIntegerMac(
+                  inner, innerLoc, inputElement, weightElement, innerArgs[0]);
+              } else {
+                Value product = inner.create<arith::MulFOp>(
+                  innerLoc, inputElement, weightElement);
+                updated =
+                  inner.create<arith::AddFOp>(innerLoc, product, innerArgs[0]);
+              }
               inner.create<scf::YieldOp>(innerLoc, ValueRange{updated});
             });
           nested.create<scf::YieldOp>(nestedLoc,
@@ -795,7 +922,9 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     contract::setInteger(forall.getOperation(), contract::kSimdLanes, lanes);
     contract::setInteger(
       forall.getOperation(), contract::kSimdChunk, chunkWidth);
-    contract::setString(forall.getOperation(), contract::kFma, "vector.fma");
+    contract::setString(forall.getOperation(),
+                        contract::kFma,
+                        isInt8 ? "extsi_muli_addi" : "vector.fma");
 
     Block* body = &forall.getRegion().front();
     Value sharedOut = body->getArgument(3);
@@ -805,8 +934,8 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
 
     SmallVector<int64_t> tileShape(4, 1);
     tileShape.back() = channels;
-    Value emptyTile =
-      rewriter.create<tensor::EmptyOp>(location, tileShape, elementType);
+    Value emptyTile = rewriter.create<tensor::EmptyOp>(
+      location, tileShape, accumulatorElementType);
     Value tile = buildRow(rewriter, gridIndices, emptyTile);
 
     SmallVector<OpFoldResult> offsets;
@@ -826,6 +955,7 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     rewriter.create<tensor::ParallelInsertSliceOp>(
       location, tile, sharedOut, offsets, sizes, strides);
 
+    rewriter.setInsertionPointAfter(forall);
     SmallVector<OpFoldResult> expandedShape;
     for (int64_t extent : resultType.getShape()) {
       expandedShape.push_back(rewriter.getIndexAttr(extent));

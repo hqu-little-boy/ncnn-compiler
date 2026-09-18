@@ -11,6 +11,16 @@
 
 namespace mlir::ncnn::contract {
 
+inline constexpr llvm::StringLiteral kInt8Target = "ncnn.int8_target";
+inline constexpr llvm::StringLiteral kInt8Kernel = "ncnn.int8_kernel";
+inline constexpr llvm::StringLiteral kInt8Depthwise = "ncnn.int8_depthwise";
+inline constexpr llvm::StringLiteral kInt8CastChain = "ncnn.int8_cast_chain";
+inline constexpr llvm::StringLiteral kInt8Isa = "ncnn.int8_isa";
+// Explicit reduction-tail element count for INT8 dot-product kernels (K % 32
+// for VNNI).  Optional: the plan audit derives it from ncnn.tile_k when the
+// producer does not record it.
+inline constexpr llvm::StringLiteral kInt8ReductionTail =
+  "ncnn.int8_reduction_tail";
 inline constexpr llvm::StringLiteral kLayout = "ncnn.layout";
 inline constexpr llvm::StringLiteral kInputLayout = "ncnn.input_layout";
 inline constexpr llvm::StringLiteral kWeightLayout = "ncnn.weight_layout";

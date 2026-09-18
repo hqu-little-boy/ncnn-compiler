@@ -3,6 +3,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -76,6 +77,30 @@ class MatmulKernelNCNNPass final
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
+    if ((int8Kernel != "portable" && int8Kernel != "auto" &&
+         int8Kernel != "vnni") ||
+        (int8Target != "portable" && int8Target != "avx-vnni" &&
+         int8Target != "avx512-vnni") ||
+        (int8Kernel == "vnni" && int8Target == "portable")) {
+      module.emitError("invalid INT8 policy or unavailable VNNI target");
+      signalPassFailure();
+      return;
+    }
+    if (int8Kernel == "vnni") {
+      if (Operation* existing =
+            module.lookupSymbol("llvm.x86.avx512.vpdpbusd.256")) {
+        auto declaration = dyn_cast<LLVM::LLVMFuncOp>(existing);
+        auto words = VectorType::get({8}, IntegerType::get(&getContext(), 32));
+        auto signature =
+          LLVM::LLVMFunctionType::get(words, {words, words, words});
+        if (!declaration || !declaration.isExternal() ||
+            declaration.getFunctionType() != signature) {
+          existing->emitError("incompatible VNNI intrinsic declaration");
+          signalPassFailure();
+          return;
+        }
+      }
+    }
     SmallVector<linalg::MatmulOp> matmuls;
     SmallVector<linalg::MatmulTransposeBOp> int8Matmuls;
     SmallVector<linalg::BatchMatmulOp> batches;
@@ -268,11 +293,55 @@ class MatmulKernelNCNNPass final
         !accType.getElementType().isInteger(32)) {
       return false;
     }
+    // Canonical named-op 语义等价于 generalized body：accum + extsi(x)*extsi(y)
+    // 的 wrapping MAC（P4 内核假设）。named op 的区域是惰性构建的——文本解析
+    // 后 region 可能为空，此时语义由 tablegen regionBuilder 定义（canonical
+    // signed MAC）；cast 属性会改变扩宽 signedness（如 cast_unsigned），custom
+    // region 则可能是任意算术，两者都不匹配标量 signed-MAC，保持通用下降。
+    if (matmul->getAttr("cast")) {
+      return false;
+    }
+    if (!matmul.getRegion().empty()) {
+      Block& body = matmul.getRegion().front();
+      const auto statements = std::distance(body.without_terminator().begin(),
+                                            body.without_terminator().end());
+      if (body.getNumArguments() != 3 || statements != 4) {
+        return false;
+      }
+      auto yield = dyn_cast<linalg::YieldOp>(body.getTerminator());
+      if (!yield || yield.getNumOperands() != 1) {
+        return false;
+      }
+      // Canonical MAC：accumulator 在 add 的 LHS，乘积在 RHS（tablegen 区域
+      // 即此序）。
+      auto add = dyn_cast<arith::AddIOp>(yield.getOperand(0).getDefiningOp());
+      if (!add || add.getLhs() != body.getArgument(2) ||
+          add.getOverflowFlags() != arith::IntegerOverflowFlags::none) {
+        return false;
+      }
+      auto multiply = dyn_cast<arith::MulIOp>(add.getRhs().getDefiningOp());
+      if (!multiply ||
+          multiply.getOverflowFlags() != arith::IntegerOverflowFlags::none) {
+        return false;
+      }
+      auto lhsCast =
+        dyn_cast<arith::ExtSIOp>(multiply.getLhs().getDefiningOp());
+      auto rhsCast =
+        dyn_cast<arith::ExtSIOp>(multiply.getRhs().getDefiningOp());
+      if (!lhsCast || !rhsCast || lhsCast.getIn() != body.getArgument(0) ||
+          rhsCast.getIn() != body.getArgument(1)) {
+        return false;
+      }
+    }
     // N 是写回行宽；K 无上限（row-dot 内核沿 k 向量化，代码量与 K 无关）。
     const int64_t rows = lhsType.getShape()[0];
     const int64_t depth = lhsType.getShape()[1];
     const int64_t rhsRows = rhsType.getShape()[0];
     const int64_t rhsDepth = rhsType.getShape()[1];
+    if (rows <= 0 || depth <= 0 || rhsRows <= 0 || rhsDepth <= 0 ||
+        accType.getShape()[0] <= 0 || accType.getShape()[1] <= 0) {
+      return false;
+    }
     // matmul_transpose_b 语义：C[M,N] = A[M,K] · B[N,K]ᵀ，B 的行数是 N。
     return rhsDepth == depth && rhsRows == accType.getShape()[1] &&
            accType.getShape()[0] == rows;
@@ -329,6 +398,27 @@ class MatmulKernelNCNNPass final
       const StringRef dialect =
         operation.getName().getDialect()->getNamespace();
       if (dialect != "arith" && dialect != "math") {
+        return false;
+      }
+    }
+    // emitRequantValue 会在 matmul 写回点克隆 body：所有 body 操作数必须
+    // 封闭于块内（块参或块内定义），否则捕获值会被克隆到定义点之前。
+    for (Operation& operation : block.without_terminator()) {
+      for (Value operand : operation.getOperands()) {
+        if (isa<BlockArgument>(operand)) {
+          continue;
+        }
+        Operation* def = operand.getDefiningOp();
+        if (def && def->getBlock() == &block) {
+          continue;
+        }
+        // 捕获值必须定义于 matmul 所在块且严格位于其之前（克隆到写回点
+        // 才是向前引用安全的支配保证；跨块捕获值一律拒绝，足够保守）。
+        if (def && matmul->getBlock() &&
+            def->getBlock() == matmul->getBlock() &&
+            def->isBeforeInBlock(matmul)) {
+          continue;
+        }
         return false;
       }
     }
@@ -1650,6 +1740,96 @@ class MatmulKernelNCNNPass final
     return mapping.lookup(yield.getValues().front());
   }
 
+  static bool hasContiguousK(Value value) {
+    SmallVector<int64_t> strides;
+    int64_t offset = 0;
+    return succeeded(cast<MemRefType>(value.getType())
+                       .getStridesAndOffset(strides, offset)) &&
+           strides.size() == 2 && strides.back() == 1;
+  }
+
+  static SmallVector<Value> emitVnniPartial(ImplicitLocOpBuilder& builder,
+                                            ModuleOp module,
+                                            Value lhs,
+                                            Value rhs,
+                                            ArrayRef<Value> rows,
+                                            ArrayRef<Value> columns,
+                                            int64_t depth,
+                                            ArrayRef<Value> initial) {
+    auto bytes = VectorType::get({32}, builder.getI8Type());
+    auto words = VectorType::get({8}, builder.getI32Type());
+    Value zeroVector = builder.create<arith::ConstantOp>(
+      words, DenseElementsAttr::get(words, builder.getI32IntegerAttr(0)));
+    Value signBytes = builder.create<arith::ConstantOp>(
+      bytes, DenseElementsAttr::get(bytes, builder.getI8IntegerAttr(-128)));
+    Value signWords = builder.create<vector::BitCastOp>(words, signBytes);
+    const llvm::StringRef intrinsic = "llvm.x86.avx512.vpdpbusd.256";
+    auto noMemory = LLVM::MemoryEffectsAttr::get(builder.getContext(),
+                                                 LLVM::ModRefInfo::NoModRef,
+                                                 LLVM::ModRefInfo::NoModRef,
+                                                 LLVM::ModRefInfo::NoModRef);
+    if (!module.lookupSymbol<LLVM::LLVMFuncOp>(intrinsic)) {
+      OpBuilder moduleBuilder(module.getBodyRegion());
+      moduleBuilder.setInsertionPointToStart(module.getBody());
+      auto signature =
+        LLVM::LLVMFunctionType::get(words, {words, words, words});
+      auto declaration = moduleBuilder.create<LLVM::LLVMFuncOp>(
+        builder.getLoc(), intrinsic, signature);
+      declaration.setMemoryEffectsAttr(noMemory);
+    }
+    auto dot = [&](Value acc, Value a, Value b) -> Value {
+      // Named calls implement the call interface needed by ownership-based
+      // deallocation; the intrinsic takes only registers and accesses no
+      // memory.
+      auto call = builder.create<LLVM::CallOp>(
+        words, builder.getStringAttr(intrinsic), ValueRange{acc, a, b});
+      call.setMemoryEffectsAttr(noMemory);
+      return call.getResult();
+    };
+    Value start = builder.create<arith::ConstantIndexOp>(0);
+    Value bound = builder.create<arith::ConstantIndexOp>(depth / 32 * 32);
+    Value step = builder.create<arith::ConstantIndexOp>(32);
+    SmallVector<Value> seeds(initial.size(), zeroVector);
+    auto loop = builder.create<scf::ForOp>(start, bound, step, seeds);
+    builder.setInsertionPointToStart(loop.getBody());
+    Value k = loop.getInductionVar();
+    SmallVector<Value> aWords;
+    for (Value row : rows) {
+      Value loaded =
+        builder.create<vector::LoadOp>(bytes, lhs, ValueRange{row, k});
+      Value rebased = builder.create<arith::XOrIOp>(loaded, signBytes);
+      aWords.push_back(builder.create<vector::BitCastOp>(words, rebased));
+    }
+    SmallVector<Value> bWords;
+    SmallVector<Value> corrections;
+    for (Value column : columns) {
+      Value loaded =
+        builder.create<vector::LoadOp>(bytes, rhs, ValueRange{column, k});
+      Value packed = builder.create<vector::BitCastOp>(words, loaded);
+      bWords.push_back(packed);
+      // unsigned 128 * signed B; shared by every row in this tile.
+      corrections.push_back(dot(zeroVector, signWords, packed));
+    }
+    SmallVector<Value> updated;
+    for (size_t i = 0; i < rows.size(); ++i) {
+      for (size_t j = 0; j < columns.size(); ++j) {
+        Value sum = dot(loop.getRegionIterArgs()[(i * columns.size()) + j],
+                        aWords[i],
+                        bWords[j]);
+        updated.push_back(builder.create<arith::SubIOp>(sum, corrections[j]));
+      }
+    }
+    builder.create<scf::YieldOp>(updated);
+    builder.setInsertionPointAfter(loop);
+    SmallVector<Value> result;
+    for (size_t i = 0; i < initial.size(); ++i) {
+      Value sum = builder.create<vector::ReductionOp>(
+        vector::CombiningKind::ADD, loop.getResult(i));
+      result.push_back(builder.create<arith::AddIOp>(initial[i], sum));
+    }
+    return result;
+  }
+
   void kernelizeInt8RowDot(IRRewriter& rewriter,
                            linalg::MatmulTransposeBOp matmul) const {
     Value lhs = matmul.getInputs()[0];
@@ -1660,6 +1840,9 @@ class MatmulKernelNCNNPass final
     const int64_t rows = lhsType.getShape()[0];
     const int64_t depth = lhsType.getShape()[1];
     const int64_t columns = accType.getShape()[1];
+    const bool useVnni = int8Kernel == "vnni" && int8Target != "portable" &&
+                         depth >= 32 && hasContiguousK(lhs) &&
+                         hasContiguousK(rhs);
 
     // int8 requant epilogue 融合（P4 遗留 / parity-plan §3-P4 附注）：
     // matmul 的 i32 累加缓冲唯一用户是 requant generic（恒等主值 +
@@ -1695,7 +1878,7 @@ class MatmulKernelNCNNPass final
     if (auto forall = matmul->getParentOfType<scf::ForallOp>()) {
       contract::annotateTile(
         forall.getOperation(),
-        "int8_row_dot",
+        useVnni ? "int8_vnni_row_dot" : "int8_row_dot",
         "identity",
         "packed_nk",
         "identity",
@@ -1703,13 +1886,20 @@ class MatmulKernelNCNNPass final
         accColumns,
         depth,
         "outer_tile+inner_simd",
-        tailColumns > 0 || rows % tileRows != 0 ? "scalar_tail" : "none");
+        tailColumns > 0 || rows % tileRows != 0 || (useVnni && depth % 32 != 0)
+          ? "scalar_tail"
+          : "none");
       contract::annotatePacking(
         forall.getOperation(), "prepacked_transpose_b", 1, 0, 0);
       contract::setInteger(
         forall.getOperation(), contract::kSimdChunk, accColumns);
       contract::setString(
-        forall.getOperation(), contract::kFma, "llvm_auto_vectorized_mac");
+        forall.getOperation(),
+        contract::kFma,
+        useVnni ? "vpdpbusd_signed_correction" : "llvm_auto_vectorized_mac");
+      if (useVnni) {
+        contract::setString(forall.getOperation(), "ncnn.int8_isa", int8Target);
+      }
     }
 
     auto zero = builder.create<arith::ConstantIndexOp>(0);
@@ -1755,9 +1945,21 @@ class MatmulKernelNCNNPass final
         }
       }
 
+      Value kStart = zero;
+      if (useVnni) {
+        accumulators = emitVnniPartial(builder,
+                                       matmul->getParentOfType<ModuleOp>(),
+                                       lhs,
+                                       rhs,
+                                       rowIndices,
+                                       columnIndices,
+                                       depth,
+                                       accumulators);
+        kStart = builder.create<arith::ConstantIndexOp>(depth / 32 * 32);
+      }
       auto depthBound = builder.create<arith::ConstantIndexOp>(depth);
       auto kLoop =
-        builder.create<scf::ForOp>(zero, depthBound, one, accumulators);
+        builder.create<scf::ForOp>(kStart, depthBound, one, accumulators);
       builder.setInsertionPointToStart(kLoop.getBody());
       Value kIndex = kLoop.getInductionVar();
       SmallVector<Value> aScalars(rowCount);

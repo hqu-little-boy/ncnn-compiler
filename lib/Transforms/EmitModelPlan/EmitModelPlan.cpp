@@ -162,6 +162,87 @@ std::uint64_t profileId(StringRef operationId) {
   return result;
 }
 
+// Audit only the INT8 kernel contracts visible at this pass boundary. In
+// particular, a module capability is not evidence that an operation uses VNNI,
+// and forall operands need not retain the original i8 input types.
+std::optional<JsonObject> lowPrecisionAudit(Operation* operation) {
+  auto stringValue = [&](StringRef name) -> StringRef {
+    if (auto value = operation->getAttrOfType<StringAttr>(name)) {
+      return value.getValue();
+    }
+    return {};
+  };
+  const StringRef kernel = stringValue(contract::kKernel);
+  const bool vnni = kernel == "int8_vnni_row_dot";
+  const bool portable = kernel == "int8_row_dot";
+  const bool depthwise = kernel == "depthwise_simd" &&
+                         (stringValue(contract::kFma) == "extsi_muli_addi" ||
+                          operation->hasAttr(contract::kInt8Isa));
+  if (!vnni && !portable && !depthwise &&
+      !operation->hasAttr(contract::kInt8Isa)) {
+    return std::nullopt;
+  }
+
+  JsonObject result;
+  auto copyString = [&](StringRef attribute, StringRef field) {
+    StringRef value = stringValue(attribute);
+    if (!value.empty()) {
+      result[field.str()] = value.str();
+    } else {
+      result[field.str()] = nullptr;
+    }
+  };
+  copyString(contract::kKernel, "kernel");
+  copyString(contract::kContract, "status");
+  copyString(contract::kFallback, "fallback_reason");
+  copyString(contract::kFma, "arithmetic");
+  copyString(contract::kInt8Isa, "required_isa");
+  if (portable && stringValue(contract::kInt8Isa).empty()) {
+    // Portable row-dot imposes no dot-product ISA requirement; backend
+    // auto-vectorization is deliberately not advertised here.
+    result["required_isa"] = "portable";
+  }
+  result["signedness"] = nullptr;
+  result["signedness_correction"] = nullptr;
+  result["accumulator"] = nullptr;
+  if (vnni || portable || depthwise) {
+    result["signedness"] = "signed8*signed8";
+    result["signedness_correction"] =
+      vnni ? "xor_0x80_subtract_128_times_rhs_sum" : "sign_extend_i8_to_i32";
+    result["accumulator"] = "modulo32";
+  }
+
+  // Tail counts are static extents per kernel, never invocation counts. The
+  // row-dot ncnn.tail describes M/N only: VNNI also has a separate K % 32 tail.
+  JsonObject tails;
+  tails["output_policy"] = nullptr;
+  if (StringRef policy = stringValue(contract::kTail); !policy.empty()) {
+    tails["output_policy"] = policy.str();
+  }
+  tails["reduction_elements"] = nullptr;
+  if (auto explicitTail =
+        operation->getAttrOfType<IntegerAttr>(contract::kInt8ReductionTail);
+      explicitTail && explicitTail.getInt() >= 0) {
+    tails["reduction_elements"] = explicitTail.getInt();
+  } else if (vnni) {
+    if (auto depth = operation->getAttrOfType<IntegerAttr>(contract::kTileK);
+        depth && depth.getInt() >= 0) {
+      tails["reduction_elements"] = depth.getInt() % 32;
+    }
+  }
+  tails["channel_elements"] = nullptr;
+  if (depthwise) {
+    auto channels =
+      operation->getAttrOfType<IntegerAttr>(contract::kInputChannels);
+    auto chunk = operation->getAttrOfType<IntegerAttr>(contract::kSimdChunk);
+    if (channels && channels.getInt() >= 0 && chunk && chunk.getInt() > 0) {
+      tails["channel_elements"] = channels.getInt() % chunk.getInt();
+    }
+  }
+  result["static_tails"] = std::move(tails);
+  return result;
+}
+
 struct Lifetime final {
   Operation* allocation = nullptr;
   std::string id;
@@ -206,6 +287,7 @@ class EmitModelPlanPass final
     JsonArray conv_depthwise_operations;
     JsonArray fusions;
     JsonArray attention_segments;
+    JsonArray low_precision_operations;
     JsonArray unknown_fields;
     JsonObject summary;
     std::int64_t allocation_count = 0;
@@ -367,6 +449,39 @@ class EmitModelPlanPass final
     unsigned region_ordinal = 0;
     JsonArray static_liveness;
     JsonArray provenance;
+
+    // Low-precision identity: serialize the module-level low-precision
+    // attributes (requested policy, resolved capability, depthwise/cast-chain
+    // switches) so any change flips the plan hash and, transitively, the
+    // build identity that the attribution join enforces.
+    const auto int8TargetAttr =
+      module->getAttrOfType<StringAttr>(contract::kInt8Target);
+    const auto int8KernelAttr =
+      module->getAttrOfType<StringAttr>(contract::kInt8Kernel);
+    const auto int8DepthwiseAttr =
+      module->getAttrOfType<BoolAttr>(contract::kInt8Depthwise);
+    const auto int8CastChainAttr =
+      module->getAttrOfType<BoolAttr>(contract::kInt8CastChain);
+    const std::string int8_target =
+      int8TargetAttr ? int8TargetAttr.getValue().str() : "unknown";
+    const std::string int8_kernel =
+      int8KernelAttr ? int8KernelAttr.getValue().str() : "unknown";
+    const bool int8_depthwise =
+      int8DepthwiseAttr ? int8DepthwiseAttr.getValue() : false;
+    const bool int8_cast_chain =
+      int8CastChainAttr ? int8CastChainAttr.getValue() : false;
+    const std::string low_precision_revision = "int8-target-v1";
+    std::string low_precision_hash_input =
+      "low-precision-revision=" + low_precision_revision +
+      "|int8-target=" + int8_target + "|int8-kernel=" + int8_kernel +
+      "|int8-depthwise=" + std::to_string(int8_depthwise) +
+      "|int8-cast-chain=" + std::to_string(int8_cast_chain) +
+      "|int8-policy-status=" +
+      (int8_kernel == "auto" && int8_target == "portable"
+         ? "fallback=auto_target_unsupported"
+       : int8_kernel == "auto" ? "pending_defaultization"
+                               : int8_kernel);
+
     std::string plan_hash_input =
       "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v1|conv-depthwise-"
       "v1|" +
@@ -379,7 +494,7 @@ class EmitModelPlanPass final
       "|fusion-residual=" + std::to_string(fusion_residual_count) +
       "|fusion-rejected=" + std::to_string(fusion_rejected_count) +
       "|fusion-reasons=" + fusion_rejection_reasons + "|" +
-      attention_hash_input;
+      low_precision_hash_input + "|" + attention_hash_input;
 
     // The static plan does not execute a runner or collect runtime counters.
     // Prepared and allocation-audit modes are reported by the numerical
@@ -878,6 +993,14 @@ class EmitModelPlanPass final
           }
           contracts.push_back(std::move(contract_entry));
         }
+        if (auto lowPrecision = lowPrecisionAudit(operation)) {
+          JsonObject low_precision_entry = std::move(*lowPrecision);
+          low_precision_entry["id"] = operation_id;
+          low_precision_entry["operation"] = kind;
+          low_precision_entry["function"] = function_name;
+          low_precision_operations.push_back(std::move(low_precision_entry));
+          plan_hash_input += "|low-precision-op=" + operation_id;
+        }
         JsonObject operation_object;
         operation_object["id"] = operation_id;
         operation_object["profile_id"] = profileId(operation_id);
@@ -1168,6 +1291,32 @@ class EmitModelPlanPass final
     fusion["rejection_reasons"] = fusion_rejection_reasons;
     fusion["contract_count"] = static_cast<std::int64_t>(fusions.size());
 
+    JsonObject low_precision;
+    low_precision["revision"] = low_precision_revision;
+    low_precision["requested_policy"] = int8_kernel;
+    low_precision["capability"] = int8_target;
+    low_precision["depthwise_enabled"] = int8_depthwise;
+    low_precision["cast_chain_enabled"] = int8_cast_chain;
+    // auto is not yet a selection: it is pending defaultization until a
+    // performance decision pins it, and separately the probed target may
+    // simply have no dot-product ISA.  Report these distinctly; never
+    // silently present auto as a selected VNNI capability.
+    if (int8_kernel == "auto" && int8_target == "portable") {
+      low_precision["requested_policy_status"] = "fallback";
+      low_precision["requested_policy_fallback_reason"] =
+        "auto_target_unsupported";
+    } else if (int8_kernel == "auto") {
+      low_precision["requested_policy_status"] = "pending_defaultization";
+      low_precision["requested_policy_fallback_reason"] = nullptr;
+    } else if (int8_kernel == "unknown") {
+      low_precision["requested_policy_status"] = "unknown";
+      low_precision["requested_policy_fallback_reason"] = nullptr;
+    } else {
+      low_precision["requested_policy_status"] = "selected";
+      low_precision["requested_policy_fallback_reason"] = nullptr;
+    }
+    low_precision["operations"] = std::move(low_precision_operations);
+
     JsonObject target;
     target["triple"] = targetTriple;
     target["threads"] = static_cast<std::int64_t>(threads);
@@ -1190,10 +1339,10 @@ class EmitModelPlanPass final
     root["schema_version"] = 1;
     root["plan_revision"] =
       "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1";
+      "depthwise-v1|int8-target-v1";
     root["contract_revision"] =
       "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1";
+      "depthwise-v1|int8-target-v1";
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen
     // hash, so profile/performance rows cannot join across code-generation
@@ -1205,6 +1354,7 @@ class EmitModelPlanPass final
     root["model"] = model;
     root["target"] = std::move(target);
     root["fusion"] = std::move(fusion);
+    root["low_precision"] = std::move(low_precision);
     root["attention_revision"] = attention_revision;
     root["attention_segments"] = std::move(attention_segments);
     root["functions"] = std::move(functions);

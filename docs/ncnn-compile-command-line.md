@@ -386,6 +386,54 @@ ncnn-compile model.param -O0 --debug-info
 ncnn-compile model.param -O0 -g --emit=all -o debug/model
 ```
 
+### 3.7 INT8 内核 opt-in 与目标能力
+
+`--int8-kernel=portable|auto|vnni` 控制静态 INT8 row-dot 内核，**不等同于**
+`--precision=int8` 或目标 CPU 的 ISA 能力声明：
+
+| 策略 | 行为 |
+|---|---|
+| `portable`（默认） | 保持既有 row-dot 路径，不显式发射 VNNI；最终 Clang 仍可按目标 ISA 自动向量化 |
+| `auto` | 探测并记录能力，但当前仍保持 portable，等待性能默认化验收；不自动选 VNNI |
+| `vnni` | 显式 opt-in；目标不支持则报错。仅合格静态、连续 K 且 K≥32 的 row-dot 使用 256-bit VNNI，其他算子形态仍可 fallback |
+
+探针与最终编译共享 `--target-triple`、`--sysroot`、`--march`、`--mcpu` 和有序
+`--target-feature` 参数。AVX-VNNI 要求 x86-64、AVX2、AVX-VNNI；AVX512-VNNI
+要求 x86-64、AVX2、AVX512F/BW/VL/VNNI。`x86-64-v4` 本身不包含 VNNI。
+重复 feature 由 Clang 按实际顺序和依赖关系解析，最后禁用 VNNI 会使强制策略失败：
+
+```bash
+# AVX-VNNI（部署 CPU 必须支持；不会生成运行时 dispatcher）
+ncnn-compile model.param --int8-kernel=vnni --march=x86-64-v3 \
+  --target-feature=+avxvnni --threads=6
+
+# 串行必须显式开启固定宽 MLIR 向量化
+ncnn-compile model.param --int8-kernel=vnni --march=x86-64-v3 \
+  --target-feature=+avxvnni --threads=1 --vector-mode=fixed-width
+
+# 清晰拒绝：最后的 disable 生效，不可根据前面的 enable 选中 VNNI
+ncnn-compile model.param --int8-kernel=vnni --march=x86-64-v3 \
+  --target-feature=+avxvnni --target-feature=-avxvnni
+```
+
+`vnni` 与有效 `threads=1`、`vector-mode=off/scalable` 的组合会报错，避免旧串行流水线
+静默跳过内核或留下未下降的并行 IR。OpenMP 探测失败回退到单线程时也执行此校验。
+`--int8-depthwise` 默认关闭；启用要求固定宽、非零 lane 的 MLIR 向量化
+（`--vector-mode=fixed-width`，或解析为固定宽的 `auto`），否则报错。它是独立的
+逐通道 signed-i8 扩宽乘加路径，不要求 VNNI，也不跨通道做 dot reduction。
+`--int8-cast-chain` 默认关闭，启用只消除可证明安全的中间物化，保留有损 cast 算术。
+三项优化均保持 opt-in，不根据仅有的 capability 宣称实际算子已改写。
+
+为避免探针与最终 codegen 不一致，`auto/vnni` **拒绝所有 `--clang-arg`**，包括
+`-mno-avxvnni`、`-Xclang`、响应文件、配置文件以及 `-D/-U` 能力宏覆盖；请改用专用
+目标选项。`portable` 保留原有透传行为。`auto/vnni` 也不接受 `--march=native` 或
+`--mcpu=native`，必须写明 CPU/features；任意策略下显式 `--target-triple` 与
+`--march/--mcpu/--mtune=native` 的组合均拒绝，避免交叉目标偷用 host ISA。
+
+`--emit-execution-plan` 的 codegen identity 包含请求策略及解析后的 `int8-target`。
+`low_precision` 分别记录 capability、请求策略状态与实际改写记录；`auto` 在有能力时标记
+`pending_defaultization`。AVX512 编译成功不等于在对应硬件完成运行或性能验收。
+
 ## 4. 中间产物和 ABI manifest
 
 ### 4.1 `--emit=<stage>`

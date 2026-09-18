@@ -139,3 +139,38 @@ set_tests_properties(fp16-arithmetic-codegen PROPERTIES
     LABELS "native;integration;precision;performance"
     RUN_SERIAL TRUE
     TIMEOUT 180)
+
+# P16: independent modulo-2^32 operator oracles and real ISA object checks.
+add_test(NAME int8-target-cli
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_int8_target.py
+        --compiler $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/relu.param
+        --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
+        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/int8-target)
+set_tests_properties(int8-target-cli PROPERTIES
+    LABELS "native;integration;cli;int8"
+    RUN_SERIAL TRUE
+    TIMEOUT 180)
+
+# Unsupported hosts still cross-compile; the script explicitly skips execution.
+foreach(INT8_KIND IN ITEMS matmul depthwise)
+    add_test(NAME int8-${INT8_KIND}-native
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_int8_kernels.py
+            --kind ${INT8_KIND}
+            --opt $<TARGET_FILE:ncnn-mlir-opt>
+            --translate ${MLIR_TRANSLATE}
+            --clang ${CLANG}
+            --objdump ${LLVM_OBJDUMP}
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/int8-kernels)
+    set_tests_properties(int8-${INT8_KIND}-native PROPERTIES
+        LABELS "native;integration;int8;codegen"
+        RUN_SERIAL TRUE
+        TIMEOUT 180)
+endforeach()
