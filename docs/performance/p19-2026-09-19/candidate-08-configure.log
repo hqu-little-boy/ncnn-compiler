@@ -1,0 +1,114 @@
+-- The C compiler identification is GNU 14.2.0
+-- The CXX compiler identification is GNU 14.2.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test HAVE_FFI_CALL
+-- Performing Test HAVE_FFI_CALL - Success
+-- Found FFI: /usr/lib/x86_64-linux-gnu/libffi.so
+-- Could NOT find LibEdit (missing: LibEdit_INCLUDE_DIRS LibEdit_LIBRARIES) 
+-- Found ZLIB: /usr/lib/x86_64-linux-gnu/libz.so (found version "1.3.1")
+-- Found zstd: /usr/lib/x86_64-linux-gnu/libzstd.so
+-- Found LibXml2: /usr/lib/x86_64-linux-gnu/libxml2.so (found version "2.9.14")
+-- Could NOT find CURL (missing: CURL_LIBRARY CURL_INCLUDE_DIR) 
+-- Found LLVM 21.1.8 (cmake dir: /usr/lib/llvm-21/lib/cmake/llvm)
+-- Could NOT find LibEdit (missing: LibEdit_INCLUDE_DIRS LibEdit_LIBRARIES) 
+-- Could NOT find CURL (missing: CURL_LIBRARY CURL_INCLUDE_DIR) 
+-- Found MLIR  (cmake dir: /usr/lib/llvm-21/lib/cmake/mlir)
+-- Linker detection: GNU ld
+-- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found version "3.5.6")
+-- Looking for sys/types.h
+-- Looking for sys/types.h - found
+-- Looking for stdint.h
+-- Looking for stdint.h - found
+-- Looking for stddef.h
+-- Looking for stddef.h - found
+-- Check size of long double
+-- Check size of long double - done
+-- Performing Test COMPILER_SUPPORTS_LONG_DOUBLE
+-- Performing Test COMPILER_SUPPORTS_LONG_DOUBLE - Success
+-- Performing Test COMPILER_SUPPORTS_FLOAT128
+-- Performing Test COMPILER_SUPPORTS_FLOAT128 - Success
+-- Performing Test COMPILER_SUPPORTS_QUADMATH
+-- Performing Test COMPILER_SUPPORTS_QUADMATH - Success
+-- Performing Test COMPILER_SUPPORTS_SSE2
+-- Performing Test COMPILER_SUPPORTS_SSE2 - Success
+-- Performing Test COMPILER_SUPPORTS_SSE4
+-- Performing Test COMPILER_SUPPORTS_SSE4 - Success
+-- Performing Test COMPILER_SUPPORTS_AVX
+-- Performing Test COMPILER_SUPPORTS_AVX - Success
+-- Performing Test COMPILER_SUPPORTS_FMA4
+-- Performing Test COMPILER_SUPPORTS_FMA4 - Success
+-- Performing Test COMPILER_SUPPORTS_AVX2
+-- Performing Test COMPILER_SUPPORTS_AVX2 - Success
+-- Performing Test COMPILER_SUPPORTS_AVX512F
+-- Performing Test COMPILER_SUPPORTS_AVX512F - Success
+-- Found OpenMP_C: -fopenmp (found version "4.5")
+-- Found OpenMP_CXX: -fopenmp (found version "4.5")
+-- Found OpenMP: TRUE (found version "4.5")
+-- Performing Test COMPILER_SUPPORTS_OPENMP
+-- Performing Test COMPILER_SUPPORTS_OPENMP - Success
+-- Performing Test COMPILER_SUPPORTS_OMP_SIMD
+-- Performing Test COMPILER_SUPPORTS_OMP_SIMD - Success
+-- Performing Test COMPILER_SUPPORTS_WEAK_ALIASES
+-- Performing Test COMPILER_SUPPORTS_WEAK_ALIASES - Success
+-- Performing Test COMPILER_SUPPORTS_BUILTIN_MATH
+-- Performing Test COMPILER_SUPPORTS_BUILTIN_MATH - Success
+-- Performing Test COMPILER_SUPPORTS_SYS_GETRANDOM
+-- Performing Test COMPILER_SUPPORTS_SYS_GETRANDOM - Success
+-- Found GTest: /usr/lib/x86_64-linux-gnu/cmake/GTest/GTestConfig.cmake (found version "1.15.0")
+-- CMAKE_INSTALL_PREFIX = /usr/local
+-- NCNN_VERSION_STRING = 1.0.20260920
+-- Performing Test NCNN_COMPILER_SUPPORT_GNU_INLINE_ASM
+-- Performing Test NCNN_COMPILER_SUPPORT_GNU_INLINE_ASM - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_RECIP_NONE
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_RECIP_NONE - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_FMA
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_FMA - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_XOP
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_XOP - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_F16C
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_F16C - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX2
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX2 - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX512
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX512 - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX_VNNI
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX_VNNI - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX_VNNI_INT8
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX_VNNI_INT8 - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX_VNNI_INT16
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX_VNNI_INT16 - Failed
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX_NE_CONVERT
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX_NE_CONVERT - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX512_VNNI
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX512_VNNI - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX512_BF16
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX512_BF16 - Success
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX512_FP16
+-- Performing Test NCNN_COMPILER_SUPPORT_X86_AVX512_FP16 - Success
+CMake Warning at test/third_party/ncnn/CMakeLists.txt:725 (message):
+  The compiler does not support avx vnni int16 extension.  NCNN_AVXVNNIINT16
+  will be OFF.
+
+
+-- Target arch: x86 64bit
+-- Performing Test COMPILER_HAS_HIDDEN_VISIBILITY
+-- Performing Test COMPILER_HAS_HIDDEN_VISIBILITY - Success
+-- Performing Test COMPILER_HAS_HIDDEN_INLINE_VISIBILITY
+-- Performing Test COMPILER_HAS_HIDDEN_INLINE_VISIBILITY - Success
+-- Performing Test COMPILER_HAS_DEPRECATED_ATTR
+-- Performing Test COMPILER_HAS_DEPRECATED_ATTR - Success
+-- Found Threads: TRUE
+-- Configuring done (9.3s)
+-- Generating done (0.3s)
+-- Build files have been written to: /tmp/ncnn-compiler-stage-p19-candidate-08

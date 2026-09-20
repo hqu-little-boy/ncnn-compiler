@@ -423,6 +423,13 @@ class EmitModelPlanPass final
         copyInteger("N", "N");
         copyString("kernel_status", "kernel_status");
         copyString("reason", "reason");
+        copyString("layout", "layout");
+        copyString("layout_producer", "layout_producer");
+        copyString("layout_consumer", "layout_consumer");
+        copyString("parallel_policy", "parallel_policy");
+        copyString("tile_policy", "tile_policy");
+        copyString("transpose_elided_reason", "transpose_elided_reason");
+        copyString("softmax_strategy", "softmax_strategy");
         copyInteger("transpose_count", "transpose_count");
         copyInteger("transpose_bytes", "transpose_bytes");
         copyBool("transpose_bytes_known", "transpose_bytes_known");

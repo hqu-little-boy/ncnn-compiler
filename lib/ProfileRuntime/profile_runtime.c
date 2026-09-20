@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #ifndef NCNN_PROFILE_DEFAULT_MODEL
@@ -35,6 +36,9 @@ enum {
   NCNN_PROFILE_DEALLOCATION = 2,
   NCNN_PROFILE_COPY = 3,
   NCNN_PROFILE_PARALLEL = 4,
+  NCNN_PROFILE_TRANSPOSE = 5,
+  NCNN_PROFILE_PACK = 6,
+  NCNN_PROFILE_UNPACK = 7,
 };
 
 typedef struct {
@@ -78,6 +82,15 @@ static int deallocation_bytes_known = 1;
 static uint64_t copy_events;
 static uint64_t copy_bytes;
 static int copy_bytes_known = 1;
+static uint64_t transpose_events;
+static uint64_t transpose_write_bytes;
+static int transpose_write_bytes_known = 1;
+static uint64_t pack_events;
+static uint64_t pack_bytes;
+static int pack_bytes_known;
+static uint64_t unpack_events;
+static uint64_t unpack_bytes;
+static int unpack_bytes_known;
 static uint64_t parallel_events;
 static uint64_t live_bytes;
 static uint64_t peak_live_bytes;
@@ -86,6 +99,50 @@ static uint64_t mismatch_events;
 static uint64_t top_level_time_ns;
 static int top_level_time_known = 1;
 static uint64_t flush_count;
+static uint64_t invocation_sequence;
+static uint64_t active_roots;
+static int invocation_active;
+static int invocation_complete = 1;
+static int v2_output_initialized;
+
+static int profile_v2_enabled(void) {
+  const char* schema = getenv("NCNN_PROFILE_SCHEMA");
+  return schema && strcmp(schema, "2") == 0;
+}
+
+static void reset_profile_state_locked(void) {
+  memset(records, 0, sizeof(records));
+  record_count = 0;
+  record_overflow = 0;
+  memset(allocations, 0, sizeof(allocations));
+  allocation_count = 0;
+  allocation_overflow = 0;
+  allocation_events = 0;
+  allocation_bytes = 0;
+  allocation_bytes_known = 1;
+  deallocation_events = 0;
+  deallocation_bytes = 0;
+  deallocation_bytes_known = 1;
+  copy_events = 0;
+  copy_bytes = 0;
+  copy_bytes_known = 1;
+  transpose_events = 0;
+  transpose_write_bytes = 0;
+  transpose_write_bytes_known = 1;
+  pack_events = 0;
+  pack_bytes = 0;
+  pack_bytes_known = 0;
+  unpack_events = 0;
+  unpack_bytes = 0;
+  unpack_bytes_known = 0;
+  parallel_events = 0;
+  live_bytes = 0;
+  peak_live_bytes = 0;
+  live_bytes_known = 1;
+  mismatch_events = 0;
+  top_level_time_ns = 0;
+  top_level_time_known = 1;
+}
 
 static void lock_profile(void) {
   while (
@@ -144,10 +201,22 @@ static int allocation_for(uint64_t id) {
 void __ncnn_profile_event_begin(int64_t signed_id, int64_t category) {
   const uint64_t id = (uint64_t)signed_id;
   const uint64_t start = profile_now();
+  const int root = stack_depth == 0 && category == NCNN_PROFILE_OPERATION;
   lock_profile();
+  if (root && profile_v2_enabled()) {
+    if (active_roots == 0) {
+      invocation_active = 1;
+      invocation_complete = 1;
+      ++invocation_sequence;
+    } else {
+      invocation_complete = 0;
+    }
+    ++active_roots;
+  }
   const int record = record_for(id, category);
   if (record >= 0 && category != NCNN_PROFILE_ALLOCATION &&
-      category != NCNN_PROFILE_COPY) {
+      category != NCNN_PROFILE_COPY && category != NCNN_PROFILE_TRANSPOSE &&
+      category != NCNN_PROFILE_PACK && category != NCNN_PROFILE_UNPACK) {
     records[record].calls++;
   }
   if (category == NCNN_PROFILE_PARALLEL) {
@@ -178,6 +247,7 @@ void __ncnn_profile_event_end(int64_t signed_id) {
     return;
   }
   ncnn_profile_frame frame = stack[--stack_depth];
+  const int root = stack_depth == 0 && frame.category == NCNN_PROFILE_OPERATION;
   const uint64_t elapsed = end >= frame.start_ns ? end - frame.start_ns : 0;
   const uint64_t exclusive =
     elapsed >= frame.child_ns ? elapsed - frame.child_ns : 0;
@@ -199,6 +269,12 @@ void __ncnn_profile_event_end(int64_t signed_id) {
       top_level_time_ns += elapsed;
     } else {
       top_level_time_known = 0;
+    }
+  }
+  if (root && profile_v2_enabled() && active_roots != 0) {
+    --active_roots;
+    if (active_roots != 0) {
+      invocation_complete = 0;
     }
   }
   unlock_profile();
@@ -304,6 +380,48 @@ void __ncnn_profile_copy(int64_t signed_id, int64_t bytes) {
   unlock_profile();
 }
 
+void __ncnn_profile_movement(int64_t signed_id, int64_t kind, int64_t bytes) {
+  const uint64_t id = (uint64_t)signed_id;
+  lock_profile();
+  uint64_t* events = NULL;
+  uint64_t* total_bytes = NULL;
+  int* bytes_known = NULL;
+  int64_t category = NCNN_PROFILE_OPERATION;
+  if (kind == 0) {
+    events = &transpose_events;
+    total_bytes = &transpose_write_bytes;
+    bytes_known = &transpose_write_bytes_known;
+    category = NCNN_PROFILE_TRANSPOSE;
+  } else if (kind == 1) {
+    events = &pack_events;
+    total_bytes = &pack_bytes;
+    bytes_known = &pack_bytes_known;
+    category = NCNN_PROFILE_PACK;
+  } else if (kind == 2) {
+    events = &unpack_events;
+    total_bytes = &unpack_bytes;
+    bytes_known = &unpack_bytes_known;
+    category = NCNN_PROFILE_UNPACK;
+  }
+  if (events && total_bytes && bytes_known) {
+    ++*events;
+    if (bytes < 0) {
+      *bytes_known = 0;
+    } else if (*total_bytes <= UINT64_MAX - (uint64_t)bytes) {
+      *total_bytes += (uint64_t)bytes;
+    } else {
+      *bytes_known = 0;
+    }
+  } else {
+    mismatch_events++;
+  }
+  const int record = record_for(id, category);
+  if (record >= 0) {
+    records[record].calls++;
+  }
+  unlock_profile();
+}
+
 static void write_json_string(FILE* file, const char* value) {
   const unsigned char* cursor = (const unsigned char*)(value ? value : "");
   fputc('"', file);
@@ -353,6 +471,12 @@ static const char* category_name(int64_t category) {
       return "copy";
     case NCNN_PROFILE_PARALLEL:
       return "parallel";
+    case NCNN_PROFILE_TRANSPOSE:
+      return "transpose";
+    case NCNN_PROFILE_PACK:
+      return "pack";
+    case NCNN_PROFILE_UNPACK:
+      return "unpack";
     default:
       return "operation";
   }
@@ -396,9 +520,329 @@ static unsigned parse_unsigned(const char* value, int* known) {
   return (unsigned)result;
 }
 
+static void flush_profile_v2(const char* path) {
+  ncnn_profile_record snapshot[NCNN_PROFILE_MAX_RECORDS];
+  unsigned snapshot_count;
+  uint64_t local_allocation_events;
+  uint64_t local_allocation_bytes;
+  int local_allocation_bytes_known;
+  uint64_t local_deallocation_events;
+  uint64_t local_deallocation_bytes;
+  int local_deallocation_bytes_known;
+  uint64_t local_copy_events;
+  uint64_t local_copy_bytes;
+  int local_copy_bytes_known;
+  uint64_t local_transpose_events;
+  uint64_t local_transpose_write_bytes;
+  int local_transpose_write_bytes_known;
+  uint64_t local_pack_events;
+  uint64_t local_pack_bytes;
+  int local_pack_bytes_known;
+  uint64_t local_unpack_events;
+  uint64_t local_unpack_bytes;
+  int local_unpack_bytes_known;
+  uint64_t local_parallel_events;
+  uint64_t local_peak_live_bytes;
+  int local_live_bytes_known;
+  uint64_t local_mismatch_events;
+  uint64_t local_top_level_time_ns;
+  int local_top_level_time_known;
+  int local_record_overflow;
+  int local_allocation_overflow;
+  uint64_t local_invocation_id;
+  int local_complete;
+  unsigned index;
+
+  lock_profile();
+  if (active_roots != 0 ||
+      (!invocation_active && record_count == 0 && allocation_events == 0 &&
+       deallocation_events == 0 && copy_events == 0 && transpose_events == 0 &&
+       pack_events == 0 && unpack_events == 0 && parallel_events == 0)) {
+    unlock_profile();
+    return;
+  }
+  local_invocation_id = invocation_sequence;
+  if (local_invocation_id == 0) {
+    local_invocation_id = ++invocation_sequence;
+  }
+  local_complete = invocation_complete;
+  snapshot_count = record_count;
+  for (index = 0; index < snapshot_count; ++index) {
+    snapshot[index] = records[index];
+  }
+  local_allocation_events = allocation_events;
+  local_allocation_bytes = allocation_bytes;
+  local_allocation_bytes_known = allocation_bytes_known;
+  local_deallocation_events = deallocation_events;
+  local_deallocation_bytes = deallocation_bytes;
+  local_deallocation_bytes_known = deallocation_bytes_known;
+  local_copy_events = copy_events;
+  local_copy_bytes = copy_bytes;
+  local_copy_bytes_known = copy_bytes_known;
+  local_transpose_events = transpose_events;
+  local_transpose_write_bytes = transpose_write_bytes;
+  local_transpose_write_bytes_known = transpose_write_bytes_known;
+  local_pack_events = pack_events;
+  local_pack_bytes = pack_bytes;
+  local_pack_bytes_known = pack_bytes_known;
+  local_unpack_events = unpack_events;
+  local_unpack_bytes = unpack_bytes;
+  local_unpack_bytes_known = unpack_bytes_known;
+  local_parallel_events = parallel_events;
+  local_peak_live_bytes = peak_live_bytes;
+  local_live_bytes_known = live_bytes_known;
+  local_mismatch_events = mismatch_events;
+  local_top_level_time_ns = top_level_time_ns;
+  local_top_level_time_known = top_level_time_known;
+  local_record_overflow = record_overflow;
+  local_allocation_overflow = allocation_overflow;
+  if (local_mismatch_events != 0 || local_record_overflow ||
+      local_allocation_overflow) {
+    local_complete = 0;
+  }
+
+  for (index = 1; index < snapshot_count; ++index) {
+    ncnn_profile_record value = snapshot[index];
+    unsigned position = index;
+    while (position != 0 && record_before(&value, &snapshot[position - 1])) {
+      snapshot[position] = snapshot[position - 1];
+      --position;
+    }
+    snapshot[position] = value;
+  }
+
+  char* json_buffer = NULL;
+  size_t json_size = 0;
+  FILE* file = open_memstream(&json_buffer, &json_size);
+  if (!file) {
+    unlock_profile();
+    return;
+  }
+  const char* model =
+    environment_or_default("NCNN_PROFILE_MODEL", NCNN_PROFILE_DEFAULT_MODEL);
+  const char* plan = environment_or_default("NCNN_PROFILE_PLAN_HASH",
+                                            NCNN_PROFILE_DEFAULT_PLAN_HASH);
+  const char* build_identity = environment_or_default(
+    "NCNN_PROFILE_BUILD_IDENTITY", NCNN_PROFILE_DEFAULT_BUILD_IDENTITY);
+  const char* target =
+    environment_or_default("NCNN_PROFILE_TARGET", NCNN_PROFILE_DEFAULT_TARGET);
+  const char* mode = getenv("NCNN_PROFILE_MODE");
+  const char* thread_text = getenv("NCNN_PROFILE_THREADS");
+  if (!thread_text || !*thread_text) {
+    thread_text = getenv("OMP_NUM_THREADS");
+  }
+  if (!thread_text || !*thread_text) {
+    thread_text = NCNN_PROFILE_DEFAULT_THREADS;
+  }
+  int thread_known = 0;
+  const unsigned thread_count = parse_unsigned(thread_text, &thread_known);
+  const char* revision = environment_or_default(
+    "NCNN_PROFILE_PLAN_REVISION", NCNN_PROFILE_DEFAULT_PLAN_REVISION);
+  fputs("{\n  \"schema_version\": 2,\n", file);
+  fputs("  \"kind\": \"ncnn.model_execution_profile\",\n", file);
+  fputs("  \"plan_revision\": ", file);
+  if (revision && *revision) {
+    write_json_string(file, revision);
+  } else {
+    fputs("\"static-v1\"", file);
+  }
+  fputs(",\n  \"model\": ", file);
+  write_json_string(file, model ? model : "unknown");
+  fputs(",\n  \"plan_hash\": ", file);
+  if (plan && *plan) {
+    write_json_string(file, plan);
+  } else {
+    fputs("null", file);
+  }
+  fputs(",\n  \"build_identity\": ", file);
+  if (build_identity && *build_identity) {
+    write_json_string(file, build_identity);
+  } else {
+    fputs("null", file);
+  }
+  fputs(",\n  \"target\": ", file);
+  if (target && *target) {
+    write_json_string(file, target);
+  } else {
+    fputs("null", file);
+  }
+  fputs(",\n  \"mode\": ", file);
+  write_json_string(file, mode ? mode : "diagnostic");
+  fputs(",\n  \"threads\": ", file);
+  if (thread_known) {
+    fprintf(file, "%u", thread_count);
+  } else {
+    fputs("null", file);
+  }
+  fprintf(file,
+          ",\n  \"invocation_id\": %llu,\n"
+          "  \"complete\": %s,\n"
+          "  \"instrumentation\": {\"enabled\": true, \"coverage\": "
+          "\"explicit-callbacks\", \"aggregation\": \"per-invocation\", "
+          "\"invocation_count\": 1, \"record_overflow\": %s, "
+          "\"allocation_table_overflow\": %s},\n",
+          (unsigned long long)local_invocation_id,
+          local_complete ? "true" : "false",
+          local_record_overflow ? "true" : "false",
+          local_allocation_overflow ? "true" : "false");
+  fputs("  \"summary\": {\n", file);
+  fprintf(file,
+          "    \"allocation_count\": %llu,\n",
+          (unsigned long long)local_allocation_events);
+  if (local_allocation_bytes_known) {
+    fprintf(file,
+            "    \"allocation_bytes\": %llu,\n",
+            (unsigned long long)local_allocation_bytes);
+  } else {
+    fputs("    \"allocation_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"allocation_bytes_known\": %s,\n",
+          local_allocation_bytes_known ? "true" : "false");
+  fprintf(file,
+          "    \"deallocation_count\": %llu,\n",
+          (unsigned long long)local_deallocation_events);
+  if (local_deallocation_bytes_known) {
+    fprintf(file,
+            "    \"deallocation_bytes\": %llu,\n",
+            (unsigned long long)local_deallocation_bytes);
+  } else {
+    fputs("    \"deallocation_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"deallocation_bytes_known\": %s,\n",
+          local_deallocation_bytes_known ? "true" : "false");
+  fprintf(
+    file, "    \"copy_count\": %llu,\n", (unsigned long long)local_copy_events);
+  if (local_copy_bytes_known) {
+    fprintf(file,
+            "    \"copy_bytes\": %llu,\n",
+            (unsigned long long)local_copy_bytes);
+  } else {
+    fputs("    \"copy_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"copy_bytes_known\": %s,\n",
+          local_copy_bytes_known ? "true" : "false");
+  fprintf(file,
+          "    \"transpose_count\": %llu,\n",
+          (unsigned long long)local_transpose_events);
+  if (local_transpose_write_bytes_known) {
+    fprintf(file,
+            "    \"runtime_transpose_write_bytes\": %llu,\n",
+            (unsigned long long)local_transpose_write_bytes);
+  } else {
+    fputs("    \"runtime_transpose_write_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"runtime_transpose_write_bytes_known\": %s,\n",
+          local_transpose_write_bytes_known ? "true" : "false");
+  fprintf(
+    file, "    \"pack_count\": %llu,\n", (unsigned long long)local_pack_events);
+  if (local_pack_bytes_known) {
+    fprintf(file,
+            "    \"pack_bytes\": %llu,\n",
+            (unsigned long long)local_pack_bytes);
+  } else {
+    fputs("    \"pack_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"pack_bytes_known\": %s,\n",
+          local_pack_bytes_known ? "true" : "false");
+  fprintf(file,
+          "    \"unpack_count\": %llu,\n",
+          (unsigned long long)local_unpack_events);
+  if (local_unpack_bytes_known) {
+    fprintf(file,
+            "    \"unpack_bytes\": %llu,\n",
+            (unsigned long long)local_unpack_bytes);
+  } else {
+    fputs("    \"unpack_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"unpack_bytes_known\": %s,\n",
+          local_unpack_bytes_known ? "true" : "false");
+  fprintf(file,
+          "    \"parallel_region_count\": %llu,\n",
+          (unsigned long long)local_parallel_events);
+  if (local_live_bytes_known) {
+    fprintf(file,
+            "    \"peak_live_bytes\": %llu,\n",
+            (unsigned long long)local_peak_live_bytes);
+  } else {
+    fputs("    \"peak_live_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"peak_live_proven\": %s,\n",
+          local_live_bytes_known ? "true" : "false");
+  if (local_top_level_time_known) {
+    fprintf(file,
+            "    \"top_level_time_ns\": %llu,\n",
+            (unsigned long long)local_top_level_time_ns);
+  } else {
+    fputs("    \"top_level_time_ns\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"top_level_time_known\": %s,\n",
+          local_top_level_time_known ? "true" : "false");
+  fprintf(file,
+          "    \"event_mismatch_count\": %llu\n",
+          (unsigned long long)local_mismatch_events);
+  fputs("  },\n  \"events\": [", file);
+  for (index = 0; index < snapshot_count; ++index) {
+    const ncnn_profile_record* record = &snapshot[index];
+    if (index != 0) {
+      fputs(",", file);
+    }
+    fprintf(file,
+            "\n    {\"id\": %llu, \"category\": ",
+            (unsigned long long)record->id);
+    write_json_string(file, category_name(record->category));
+    fprintf(file,
+            ", \"calls\": %llu, \"inclusive_ns\": %llu, \"exclusive_ns\": ",
+            (unsigned long long)record->calls,
+            (unsigned long long)record->inclusive_ns);
+    if (record->exclusive_known) {
+      fprintf(file, "%llu", (unsigned long long)record->exclusive_ns);
+    } else {
+      fputs("null", file);
+    }
+    fputs("}", file);
+  }
+  if (snapshot_count != 0) {
+    fputs("\n  ", file);
+  }
+  fputs("]\n}\n", file);
+  fflush(file);
+  fclose(file);
+  FILE* output = fopen(path, v2_output_initialized ? "a" : "w");
+  if (!output) {
+    free(json_buffer);
+    unlock_profile();
+    return;
+  }
+  for (size_t position = 0; position < json_size; ++position) {
+    if (json_buffer[position] != '\n' && json_buffer[position] != '\r') {
+      fputc(json_buffer[position], output);
+    }
+  }
+  fputc('\n', output);
+  fclose(output);
+  free(json_buffer);
+  v2_output_initialized = 1;
+  reset_profile_state_locked();
+  invocation_active = 0;
+  invocation_complete = 1;
+  unlock_profile();
+}
+
 void __ncnn_profile_flush(void) {
   const char* path = getenv("NCNN_PROFILE_PATH");
   if (!path || !*path) {
+    return;
+  }
+  if (profile_v2_enabled()) {
+    flush_profile_v2(path);
     return;
   }
   ncnn_profile_record snapshot[NCNN_PROFILE_MAX_RECORDS];
@@ -412,6 +856,15 @@ void __ncnn_profile_flush(void) {
   uint64_t local_copy_events;
   uint64_t local_copy_bytes;
   int local_copy_bytes_known;
+  uint64_t local_transpose_events;
+  uint64_t local_transpose_write_bytes;
+  int local_transpose_write_bytes_known;
+  uint64_t local_pack_events;
+  uint64_t local_pack_bytes;
+  int local_pack_bytes_known;
+  uint64_t local_unpack_events;
+  uint64_t local_unpack_bytes;
+  int local_unpack_bytes_known;
   uint64_t local_parallel_events;
   uint64_t local_peak_live_bytes;
   int local_live_bytes_known;
@@ -438,6 +891,15 @@ void __ncnn_profile_flush(void) {
   local_copy_events = copy_events;
   local_copy_bytes = copy_bytes;
   local_copy_bytes_known = copy_bytes_known;
+  local_transpose_events = transpose_events;
+  local_transpose_write_bytes = transpose_write_bytes;
+  local_transpose_write_bytes_known = transpose_write_bytes_known;
+  local_pack_events = pack_events;
+  local_pack_bytes = pack_bytes;
+  local_pack_bytes_known = pack_bytes_known;
+  local_unpack_events = unpack_events;
+  local_unpack_bytes = unpack_bytes;
+  local_unpack_bytes_known = unpack_bytes_known;
   local_parallel_events = parallel_events;
   local_peak_live_bytes = peak_live_bytes;
   local_live_bytes_known = live_bytes_known;
@@ -570,6 +1032,44 @@ void __ncnn_profile_flush(void) {
   fprintf(file,
           "    \"copy_bytes_known\": %s,\n",
           local_copy_bytes_known ? "true" : "false");
+  fprintf(file,
+          "    \"transpose_count\": %llu,\n",
+          (unsigned long long)local_transpose_events);
+  if (local_transpose_write_bytes_known) {
+    fprintf(file,
+            "    \"runtime_transpose_write_bytes\": %llu,\n",
+            (unsigned long long)local_transpose_write_bytes);
+  } else {
+    fputs("    \"runtime_transpose_write_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"runtime_transpose_write_bytes_known\": %s,\n",
+          local_transpose_write_bytes_known ? "true" : "false");
+  fprintf(
+    file, "    \"pack_count\": %llu,\n", (unsigned long long)local_pack_events);
+  if (local_pack_bytes_known) {
+    fprintf(file,
+            "    \"pack_bytes\": %llu,\n",
+            (unsigned long long)local_pack_bytes);
+  } else {
+    fputs("    \"pack_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"pack_bytes_known\": %s,\n",
+          local_pack_bytes_known ? "true" : "false");
+  fprintf(file,
+          "    \"unpack_count\": %llu,\n",
+          (unsigned long long)local_unpack_events);
+  if (local_unpack_bytes_known) {
+    fprintf(file,
+            "    \"unpack_bytes\": %llu,\n",
+            (unsigned long long)local_unpack_bytes);
+  } else {
+    fputs("    \"unpack_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"unpack_bytes_known\": %s,\n",
+          local_unpack_bytes_known ? "true" : "false");
   fprintf(file,
           "    \"parallel_region_count\": %llu,\n",
           (unsigned long long)local_parallel_events);

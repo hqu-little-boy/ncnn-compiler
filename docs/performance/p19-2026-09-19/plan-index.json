@@ -1,0 +1,635 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "model": "chineseocr_lite_anglenet",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "13601429931451234592",
+        "build_identity": "13601429931451234592"
+      },
+      "candidate": {
+        "plan_hash": "13601429931451234592",
+        "build_identity": "13601429931451234592"
+      }
+    },
+    {
+      "model": "efficientnet_b0",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "10943720180159753722",
+        "build_identity": "10943720180159753722"
+      },
+      "candidate": {
+        "plan_hash": "10943720180159753722",
+        "build_identity": "10943720180159753722"
+      }
+    },
+    {
+      "model": "efficientnet_b1",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "17481923453512730581",
+        "build_identity": "17481923453512730581"
+      },
+      "candidate": {
+        "plan_hash": "17481923453512730581",
+        "build_identity": "17481923453512730581"
+      }
+    },
+    {
+      "model": "efficientnet_b2",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "1465137484238768104",
+        "build_identity": "1465137484238768104"
+      },
+      "candidate": {
+        "plan_hash": "1465137484238768104",
+        "build_identity": "1465137484238768104"
+      }
+    },
+    {
+      "model": "efficientnet_b3",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "14831945492953728593",
+        "build_identity": "14831945492953728593"
+      },
+      "candidate": {
+        "plan_hash": "14831945492953728593",
+        "build_identity": "14831945492953728593"
+      }
+    },
+    {
+      "model": "pp_formulanet_plus_s_encoder",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "15693540715806957744",
+        "build_identity": "15693540715806957744"
+      },
+      "candidate": {
+        "plan_hash": "15693540715806957744",
+        "build_identity": "15693540715806957744"
+      }
+    },
+    {
+      "model": "pp_lcnet_x1_0_doc_ori",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "9891746389612514862",
+        "build_identity": "9891746389612514862"
+      },
+      "candidate": {
+        "plan_hash": "9891746389612514862",
+        "build_identity": "9891746389612514862"
+      }
+    },
+    {
+      "model": "pp_lcnet_x1_0_textline_ori",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "10827467495299948579",
+        "build_identity": "10827467495299948579"
+      },
+      "candidate": {
+        "plan_hash": "10827467495299948579",
+        "build_identity": "10827467495299948579"
+      }
+    },
+    {
+      "model": "pp_ocrv5_mobile_det_static",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "8899052485262117271",
+        "build_identity": "8899052485262117271"
+      },
+      "candidate": {
+        "plan_hash": "8899052485262117271",
+        "build_identity": "8899052485262117271"
+      }
+    },
+    {
+      "model": "pp_ocrv5_mobile_rec",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "14893375434955405329",
+        "build_identity": "14893375434955405329"
+      },
+      "candidate": {
+        "plan_hash": "7643053533955073264",
+        "build_identity": "7643053533955073264"
+      }
+    },
+    {
+      "model": "pp_ocrv5_mobile_rec_int8",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "9269923616968465428",
+        "build_identity": "9269923616968465428"
+      },
+      "candidate": {
+        "plan_hash": "8454353189332008690",
+        "build_identity": "8454353189332008690"
+      }
+    },
+    {
+      "model": "pp_ocrv5_server_det_static",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "7534259629859428122",
+        "build_identity": "7534259629859428122"
+      },
+      "candidate": {
+        "plan_hash": "7534259629859428122",
+        "build_identity": "7534259629859428122"
+      }
+    },
+    {
+      "model": "pp_ocrv5_server_rec",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "5818981469512551624",
+        "build_identity": "5818981469512551624"
+      },
+      "candidate": {
+        "plan_hash": "9404721234341543154",
+        "build_identity": "9404721234341543154"
+      }
+    },
+    {
+      "model": "pp_ocrv6_medium_det",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "1938304957319275447",
+        "build_identity": "1938304957319275447"
+      },
+      "candidate": {
+        "plan_hash": "1938304957319275447",
+        "build_identity": "1938304957319275447"
+      }
+    },
+    {
+      "model": "pp_ocrv6_medium_det_int8",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "13179019609053608334",
+        "build_identity": "13179019609053608334"
+      },
+      "candidate": {
+        "plan_hash": "13179019609053608334",
+        "build_identity": "13179019609053608334"
+      }
+    },
+    {
+      "model": "pp_ocrv6_medium_rec",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "10289275316391981867",
+        "build_identity": "10289275316391981867"
+      },
+      "candidate": {
+        "plan_hash": "4487989942369938040",
+        "build_identity": "4487989942369938040"
+      }
+    },
+    {
+      "model": "pp_ocrv6_medium_rec_int8",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "574525156354417155",
+        "build_identity": "574525156354417155"
+      },
+      "candidate": {
+        "plan_hash": "10858575399098851027",
+        "build_identity": "10858575399098851027"
+      }
+    },
+    {
+      "model": "pp_ocrv6_small_det",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "7321339156932495390",
+        "build_identity": "7321339156932495390"
+      },
+      "candidate": {
+        "plan_hash": "7321339156932495390",
+        "build_identity": "7321339156932495390"
+      }
+    },
+    {
+      "model": "pp_ocrv6_small_rec",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "8050326080317363573",
+        "build_identity": "8050326080317363573"
+      },
+      "candidate": {
+        "plan_hash": "8265734331640195962",
+        "build_identity": "8265734331640195962"
+      }
+    },
+    {
+      "model": "pp_ocrv6_small_rec_int8",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "13253722726316107675",
+        "build_identity": "13253722726316107675"
+      },
+      "candidate": {
+        "plan_hash": "9263611204549758906",
+        "build_identity": "9263611204549758906"
+      }
+    },
+    {
+      "model": "pp_ocrv6_tiny_det",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "9001572920534869108",
+        "build_identity": "9001572920534869108"
+      },
+      "candidate": {
+        "plan_hash": "9001572920534869108",
+        "build_identity": "9001572920534869108"
+      }
+    },
+    {
+      "model": "pp_ocrv6_tiny_rec",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "8343092974259260881",
+        "build_identity": "8343092974259260881"
+      },
+      "candidate": {
+        "plan_hash": "8343092974259260881",
+        "build_identity": "8343092974259260881"
+      }
+    },
+    {
+      "model": "pp_ocrv6_tiny_rec_int8",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "9552308303637488772",
+        "build_identity": "9552308303637488772"
+      },
+      "candidate": {
+        "plan_hash": "9552308303637488772",
+        "build_identity": "9552308303637488772"
+      }
+    },
+    {
+      "model": "pp_structrurev2_slanet_plus_cnn",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "2242678814973586199",
+        "build_identity": "2242678814973586199"
+      },
+      "candidate": {
+        "plan_hash": "2242678814973586199",
+        "build_identity": "2242678814973586199"
+      }
+    },
+    {
+      "model": "resnet101",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "145244180442149053",
+        "build_identity": "145244180442149053"
+      },
+      "candidate": {
+        "plan_hash": "145244180442149053",
+        "build_identity": "145244180442149053"
+      }
+    },
+    {
+      "model": "resnet18",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "15474814263975015361",
+        "build_identity": "15474814263975015361"
+      },
+      "candidate": {
+        "plan_hash": "15474814263975015361",
+        "build_identity": "15474814263975015361"
+      }
+    },
+    {
+      "model": "resnet18_winograd",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "464314667205585650",
+        "build_identity": "464314667205585650"
+      },
+      "candidate": {
+        "plan_hash": "464314667205585650",
+        "build_identity": "464314667205585650"
+      }
+    },
+    {
+      "model": "resnet34",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "11085397898673712397",
+        "build_identity": "11085397898673712397"
+      },
+      "candidate": {
+        "plan_hash": "11085397898673712397",
+        "build_identity": "11085397898673712397"
+      }
+    },
+    {
+      "model": "resnet50",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "2490799013894785344",
+        "build_identity": "2490799013894785344"
+      },
+      "candidate": {
+        "plan_hash": "2490799013894785344",
+        "build_identity": "2490799013894785344"
+      }
+    },
+    {
+      "model": "squeezenet_v1_1",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "17473194057968954352",
+        "build_identity": "17473194057968954352"
+      },
+      "candidate": {
+        "plan_hash": "17473194057968954352",
+        "build_identity": "17473194057968954352"
+      }
+    },
+    {
+      "model": "yolov5l",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "7257923301543028497",
+        "build_identity": "7257923301543028497"
+      },
+      "candidate": {
+        "plan_hash": "7257923301543028497",
+        "build_identity": "7257923301543028497"
+      }
+    },
+    {
+      "model": "yolov5l_cls",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "4715152701726385239",
+        "build_identity": "4715152701726385239"
+      },
+      "candidate": {
+        "plan_hash": "4715152701726385239",
+        "build_identity": "4715152701726385239"
+      }
+    },
+    {
+      "model": "yolov5l_seg",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "10104544567571242578",
+        "build_identity": "10104544567571242578"
+      },
+      "candidate": {
+        "plan_hash": "10104544567571242578",
+        "build_identity": "10104544567571242578"
+      }
+    },
+    {
+      "model": "yolov5m",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "13528744510837122138",
+        "build_identity": "13528744510837122138"
+      },
+      "candidate": {
+        "plan_hash": "13528744510837122138",
+        "build_identity": "13528744510837122138"
+      }
+    },
+    {
+      "model": "yolov5m_cls",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "13210744553380112071",
+        "build_identity": "13210744553380112071"
+      },
+      "candidate": {
+        "plan_hash": "13210744553380112071",
+        "build_identity": "13210744553380112071"
+      }
+    },
+    {
+      "model": "yolov5m_seg",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "1610893509171896591",
+        "build_identity": "1610893509171896591"
+      },
+      "candidate": {
+        "plan_hash": "1610893509171896591",
+        "build_identity": "1610893509171896591"
+      }
+    },
+    {
+      "model": "yolov5n",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "15210087874794808146",
+        "build_identity": "15210087874794808146"
+      },
+      "candidate": {
+        "plan_hash": "15210087874794808146",
+        "build_identity": "15210087874794808146"
+      }
+    },
+    {
+      "model": "yolov5n_cls",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "11388208058133970677",
+        "build_identity": "11388208058133970677"
+      },
+      "candidate": {
+        "plan_hash": "11388208058133970677",
+        "build_identity": "11388208058133970677"
+      }
+    },
+    {
+      "model": "yolov5n_seg",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "7583031966895364996",
+        "build_identity": "7583031966895364996"
+      },
+      "candidate": {
+        "plan_hash": "7583031966895364996",
+        "build_identity": "7583031966895364996"
+      }
+    },
+    {
+      "model": "yolov5s",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "10643695871588836088",
+        "build_identity": "10643695871588836088"
+      },
+      "candidate": {
+        "plan_hash": "10643695871588836088",
+        "build_identity": "10643695871588836088"
+      }
+    },
+    {
+      "model": "yolov5s_cls",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "1367863925262299398",
+        "build_identity": "1367863925262299398"
+      },
+      "candidate": {
+        "plan_hash": "1367863925262299398",
+        "build_identity": "1367863925262299398"
+      }
+    },
+    {
+      "model": "yolov5s_seg",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "8210527867091118672",
+        "build_identity": "8210527867091118672"
+      },
+      "candidate": {
+        "plan_hash": "8210527867091118672",
+        "build_identity": "8210527867091118672"
+      }
+    },
+    {
+      "model": "yolov5x",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "9624179159536921259",
+        "build_identity": "9624179159536921259"
+      },
+      "candidate": {
+        "plan_hash": "9624179159536921259",
+        "build_identity": "9624179159536921259"
+      }
+    },
+    {
+      "model": "yolov5x_cls",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "1344498398039181482",
+        "build_identity": "1344498398039181482"
+      },
+      "candidate": {
+        "plan_hash": "1344498398039181482",
+        "build_identity": "1344498398039181482"
+      }
+    },
+    {
+      "model": "yolov5x_seg",
+      "target": "x86_64-pc-linux-gnu",
+      "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1",
+      "threads": 6,
+      "baseline": {
+        "plan_hash": "13419144767233745131",
+        "build_identity": "13419144767233745131"
+      },
+      "candidate": {
+        "plan_hash": "13419144767233745131",
+        "build_identity": "13419144767233745131"
+      }
+    }
+  ]
+}

@@ -3920,6 +3920,9 @@ void appendAttentionSegmentRecords(MultiHeadAttentionOp operation,
       transposeBytes = safeMultiply(*elements, elementBytes);
     }
   }
+  if (!dynamicSequence) {
+    transposeBytes = 0;
+  }
 
   const std::string prefix =
     function.getName().str() + "/attention#" + std::to_string(ordinal);
@@ -3956,6 +3959,35 @@ void appendAttentionSegmentRecords(MultiHeadAttentionOp operation,
     record.set("transpose_count",
                IntegerAttr::get(IntegerType::get(context, 64), transposeCount));
     record.set("copy_bytes_known", BoolAttr::get(context, false));
+    record.set(
+      "layout",
+      StringAttr::get(context,
+                      dynamicSequence ? "head_major_copy" : "sequence_major"));
+    record.set(
+      "layout_producer",
+      StringAttr::get(
+        context, dynamicSequence ? "split_heads_copy" : "projection_reshape"));
+    record.set("layout_consumer",
+               StringAttr::get(context,
+                               phase == "score" || phase == "context"
+                                 ? "indexed_attention_contraction"
+                                 : "projection_or_softmax"));
+    const StringRef parallelPolicy = phase == "score"     ? "head_query_key"
+                                     : phase == "softmax" ? "head_query"
+                                     : phase == "context"
+                                       ? "sequence_head_feature"
+                                       : "sequence_feature";
+    record.set("parallel_policy", StringAttr::get(context, parallelPolicy));
+    record.set("tile_policy",
+               StringAttr::get(context, "shape_driven_linalg_parallel"));
+    if (!dynamicSequence && phase != "softmax") {
+      record.set("transpose_elided_reason",
+                 StringAttr::get(context, "direct_indexed_attention"));
+    }
+    if (phase == "softmax") {
+      record.set("softmax_strategy",
+                 StringAttr::get(context, "stable_two_pass"));
+    }
     if (transposeBytes) {
       record.set(
         "transpose_bytes",
@@ -3971,19 +4003,23 @@ void appendAttentionSegmentRecords(MultiHeadAttentionOp operation,
   const StringRef reason = dynamicSequence ? "dynamic_sequence" : "";
   const std::optional<int64_t> seq =
     dynamicSequence ? std::nullopt : std::optional(sequence);
-  append("q_projection", seq, qdim, embed, 1, status, reason);
-  append("k_projection", seq, qdim, embed, 1, status, reason);
-  append("v_projection", seq, qdim, embed, 1, status, reason);
-  append("score", seq, headDim, seq, 1, status, reason);
+  const int64_t layoutTransposeCount = dynamicSequence ? 1 : 0;
+  append(
+    "q_projection", seq, qdim, embed, layoutTransposeCount, status, reason);
+  append(
+    "k_projection", seq, qdim, embed, layoutTransposeCount, status, reason);
+  append(
+    "v_projection", seq, qdim, embed, layoutTransposeCount, status, reason);
+  append("score", seq, headDim, seq, 0, status, reason);
   append("softmax",
          seq,
          seq,
          std::nullopt,
          0,
-         dynamicSequence ? "fallback" : "unknown",
+         dynamicSequence ? "fallback" : "selected",
          dynamicSequence ? "dynamic_sequence" : "");
-  append("context", seq, seq, headDim, 1, status, reason);
-  append("output_projection", seq, embed, qdim, 1, status, reason);
+  append("context", seq, seq, headDim, layoutTransposeCount, status, reason);
+  append("output_projection", seq, embed, qdim, 0, status, reason);
 
   module->setAttr(contract::kAttentionSegments,
                   ArrayAttr::get(module.getContext(), records));
@@ -4449,55 +4485,183 @@ class ConvertMultiHeadAttention final
     Value shift = createI8Zero(rewriter, location);
     query = rewriter.create<tosa::MulOp>(
       location, projectedType, query, scale, shift);
-    auto splitHeads = [&](Value projected) {
-      Value split =
-        reshapeSequence(projected,
-                        RankedTensorType::get({sequence, heads, headDim},
-                                              rewriter.getF32Type()),
-                        0,
-                        1);
-      return static_cast<Value>(rewriter.create<tosa::TransposeOp>(
-        location,
-        RankedTensorType::get({heads, sequence, headDim},
-                              rewriter.getF32Type()),
-        split,
-        ArrayRef<int32_t>{1, 0, 2}));
+    auto sequenceMajorType =
+      RankedTensorType::get({sequence, heads, headDim}, rewriter.getF32Type());
+    auto toSequenceMajor = [&](Value projected) {
+      return reshapeSequence(projected, sequenceMajorType, 0, 1);
     };
-    Value queryHeads = splitHeads(query);
-    Value keyHeads = splitHeads(key);
-    Value valueHeads = splitHeads(value);
-    Value transposedKey = rewriter.create<tosa::TransposeOp>(
-      location,
-      RankedTensorType::get({heads, headDim, sequence}, rewriter.getF32Type()),
-      keyHeads,
-      ArrayRef<int32_t>{0, 2, 1});
+    Value querySequence = toSequenceMajor(query);
+    Value keySequence = toSequenceMajor(key);
+    Value valueSequence = toSequenceMajor(value);
+
     auto scoresType =
       RankedTensorType::get({heads, sequence, sequence}, rewriter.getF32Type());
-    Value scores = rewriter.create<tosa::MatMulOp>(
-      location, scoresType, queryHeads, transposedKey);
+    Value scoresEmpty =
+      rewriter.create<tensor::EmptyOp>(location, scoresType, ValueRange{});
+    Value zero = rewriter.create<arith::ConstantOp>(
+      location, rewriter.getF32FloatAttr(0.0));
+    Value initializedScores =
+      rewriter.create<linalg::FillOp>(location, zero, scoresEmpty).getResult(0);
+    MLIRContext* context = rewriter.getContext();
+    AffineExpr head = rewriter.getAffineDimExpr(0);
+    AffineExpr queryIndex = rewriter.getAffineDimExpr(1);
+    AffineExpr keyIndex = rewriter.getAffineDimExpr(2);
+    AffineExpr feature = rewriter.getAffineDimExpr(3);
+    AffineMap queryMap =
+      AffineMap::get(4, 0, {queryIndex, head, feature}, context);
+    AffineMap keyMap = AffineMap::get(4, 0, {keyIndex, head, feature}, context);
+    AffineMap scoresMap =
+      AffineMap::get(4, 0, {head, queryIndex, keyIndex}, context);
+    SmallVector<utils::IteratorType> scoreIterators(
+      3, utils::IteratorType::parallel);
+    scoreIterators.push_back(utils::IteratorType::reduction);
+    Value scores =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          ValueRange{querySequence, keySequence},
+          ValueRange{initializedScores},
+          ArrayRef<AffineMap>{queryMap, keyMap, scoresMap},
+          scoreIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value product = nested.create<arith::MulFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value sum = nested.create<arith::AddFOp>(
+              nestedLocation, product, arguments[2]);
+            nested.create<linalg::YieldOp>(nestedLocation, sum);
+          })
+        .getResult(0);
+
     auto reducedType =
-      RankedTensorType::get({heads, sequence, 1}, rewriter.getF32Type());
-    Value maximum =
-      rewriter.create<tosa::ReduceMaxOp>(location, reducedType, scores, 2);
-    Value shifted =
-      rewriter.create<tosa::SubOp>(location, scoresType, scores, maximum);
-    Value exponent =
-      rewriter.create<tosa::ExpOp>(location, scoresType, shifted);
-    Value sum =
-      rewriter.create<tosa::ReduceSumOp>(location, reducedType, exponent, 2);
-    Value reciprocal =
-      rewriter.create<tosa::ReciprocalOp>(location, reducedType, sum);
-    Value probabilities = rewriter.create<tosa::MulOp>(
-      location, scoresType, exponent, reciprocal, shift);
-    auto headsType =
-      RankedTensorType::get({heads, sequence, headDim}, rewriter.getF32Type());
-    Value context = rewriter.create<tosa::MatMulOp>(
-      location, headsType, probabilities, valueHeads);
-    Value sequenceMajor = rewriter.create<tosa::TransposeOp>(
+      RankedTensorType::get({heads, sequence}, rewriter.getF32Type());
+    Value maximumEmpty =
+      rewriter.create<tensor::EmptyOp>(location, reducedType, ValueRange{});
+    Value negativeInfinity = rewriter.create<arith::ConstantOp>(
       location,
-      RankedTensorType::get({sequence, heads, headDim}, rewriter.getF32Type()),
-      context,
-      ArrayRef<int32_t>{1, 0, 2});
+      rewriter.getF32FloatAttr(-std::numeric_limits<float>::infinity()));
+    Value initializedMaximum =
+      rewriter.create<linalg::FillOp>(location, negativeInfinity, maximumEmpty)
+        .getResult(0);
+    AffineMap softmaxInputMap =
+      AffineMap::get(3, 0, {head, queryIndex, keyIndex}, context);
+    AffineMap reductionMap = AffineMap::get(3, 0, {head, queryIndex}, context);
+    SmallVector<utils::IteratorType> reductionIterators = {
+      utils::IteratorType::parallel,
+      utils::IteratorType::parallel,
+      utils::IteratorType::reduction};
+    Value maximum =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          reducedType,
+          ValueRange{scores},
+          ValueRange{initializedMaximum},
+          ArrayRef<AffineMap>{softmaxInputMap, reductionMap},
+          reductionIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value result = nested.create<arith::MaximumFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value exponentEmpty =
+      rewriter.create<tensor::EmptyOp>(location, scoresType, ValueRange{});
+    AffineMap scoresIdentity = rewriter.getMultiDimIdentityMap(3);
+    AffineMap maximumMap = AffineMap::get(3, 0, {head, queryIndex}, context);
+    SmallVector<utils::IteratorType> softmaxParallel(
+      3, utils::IteratorType::parallel);
+    Value exponent =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          ValueRange{scores, maximum},
+          ValueRange{exponentEmpty},
+          ArrayRef<AffineMap>{scoresIdentity, maximumMap, scoresIdentity},
+          softmaxParallel,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value shifted = nested.create<arith::SubFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value result = nested.create<math::ExpOp>(nestedLocation, shifted);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value sumEmpty =
+      rewriter.create<tensor::EmptyOp>(location, reducedType, ValueRange{});
+    Value initializedSum =
+      rewriter.create<linalg::FillOp>(location, zero, sumEmpty).getResult(0);
+    Value sum =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          reducedType,
+          ValueRange{exponent},
+          ValueRange{initializedSum},
+          ArrayRef<AffineMap>{softmaxInputMap, reductionMap},
+          reductionIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value result = nested.create<arith::AddFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    Value probabilitiesEmpty =
+      rewriter.create<tensor::EmptyOp>(location, scoresType, ValueRange{});
+    Value probabilities =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          scoresType,
+          ValueRange{exponent, sum},
+          ValueRange{probabilitiesEmpty},
+          ArrayRef<AffineMap>{scoresIdentity, maximumMap, scoresIdentity},
+          softmaxParallel,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value result = nested.create<arith::DivFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            nested.create<linalg::YieldOp>(nestedLocation, result);
+          })
+        .getResult(0);
+
+    auto contextType =
+      RankedTensorType::get({sequence, heads, headDim}, rewriter.getF32Type());
+    Value contextEmpty =
+      rewriter.create<tensor::EmptyOp>(location, contextType, ValueRange{});
+    Value initializedContext =
+      rewriter.create<linalg::FillOp>(location, zero, contextEmpty)
+        .getResult(0);
+    AffineExpr contextFeature = rewriter.getAffineDimExpr(2);
+    AffineExpr contextReduction = rewriter.getAffineDimExpr(3);
+    AffineMap probabilityMap =
+      AffineMap::get(4, 0, {head, queryIndex, contextReduction}, context);
+    AffineMap valueMap =
+      AffineMap::get(4, 0, {contextReduction, head, contextFeature}, context);
+    AffineMap contextMap =
+      AffineMap::get(4, 0, {queryIndex, head, contextFeature}, context);
+    SmallVector<utils::IteratorType> contextIterators(
+      3, utils::IteratorType::parallel);
+    contextIterators.push_back(utils::IteratorType::reduction);
+    Value sequenceMajor =
+      rewriter
+        .create<linalg::GenericOp>(
+          location,
+          contextType,
+          ValueRange{probabilities, valueSequence},
+          ValueRange{initializedContext},
+          ArrayRef<AffineMap>{probabilityMap, valueMap, contextMap},
+          contextIterators,
+          [](OpBuilder& nested, Location nestedLocation, ValueRange arguments) {
+            Value product = nested.create<arith::MulFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+            Value sum = nested.create<arith::AddFOp>(
+              nestedLocation, product, arguments[2]);
+            nested.create<linalg::YieldOp>(nestedLocation, sum);
+          })
+        .getResult(0);
     Value merged = reshapeSequence(sequenceMajor, projectedType, 1, 0);
     Value outWeight = transposeOrFoldConstant(
       rewriter,

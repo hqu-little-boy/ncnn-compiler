@@ -8,15 +8,20 @@ module attributes {
     {id = "model/attention#0/score", function = "model",
      source_operation = "ncnn.multi_head_attention", attention_ordinal = 0 : i64,
      phase = "score", heads = 8 : i64, M = 40 : i64, K = 16 : i64,
-     N = 40 : i64, kernel_status = "selected", transpose_count = 1 : i64,
-     transpose_bytes = 20480 : i64, transpose_bytes_known = true,
-     copy_bytes_known = false},
+     N = 40 : i64, kernel_status = "selected", transpose_count = 0 : i64,
+     transpose_bytes = 0 : i64, transpose_bytes_known = true,
+     copy_bytes_known = false, layout = "sequence_major",
+     layout_producer = "projection_reshape",
+     layout_consumer = "indexed_attention_contraction",
+     parallel_policy = "head_query_key",
+     tile_policy = "shape_driven_linalg_parallel",
+     transpose_elided_reason = "direct_indexed_attention"},
     {id = "model/attention#0/softmax", function = "model",
      source_operation = "ncnn.multi_head_attention", attention_ordinal = 0 : i64,
      phase = "softmax", heads = 8 : i64, M = 40 : i64, K = 40 : i64,
-     kernel_status = "unknown", reason = "reduction_generic",
-     transpose_count = 0 : i64, transpose_bytes_known = false,
-     copy_bytes_known = false}
+     kernel_status = "selected", reason = "stable_two_pass",
+     softmax_strategy = "stable_two_pass", transpose_count = 0 : i64,
+     transpose_bytes_known = false, copy_bytes_known = false}
   ]
 } {
   func.func @model(%input: memref<4x8xf32>) {
@@ -31,14 +36,21 @@ module attributes {
 // CHECK-DAG: "copy_count": null
 // CHECK: "id": "model/attention#0/score"
 // CHECK: "kernel_status": "selected"
+// CHECK: "layout": "sequence_major"
+// CHECK: "layout_consumer": "indexed_attention_contraction"
+// CHECK: "layout_producer": "projection_reshape"
+// CHECK: "parallel_policy": "head_query_key"
 // CHECK: "phase": "score"
-// CHECK: "transpose_bytes": 20480
+// CHECK: "tile_policy": "shape_driven_linalg_parallel"
+// CHECK: "transpose_bytes": 0
 // CHECK: "transpose_bytes_known": true
-// CHECK: "kernel_status": "unknown"
+// CHECK: "transpose_elided_reason": "direct_indexed_attention"
+// CHECK: "kernel_status": "selected"
 // CHECK: "phase": "softmax"
-// CHECK: "reason": "reduction_generic"
+// CHECK: "reason": "stable_two_pass"
+// CHECK: "softmax_strategy": "stable_two_pass"
 // CHECK: "transpose_bytes": null
 // CHECK-DAG: "attention_segment_count": 2
-// CHECK-DAG: "attention_selected_count": 1
+// CHECK-DAG: "attention_selected_count": 2
 // CHECK-DAG: "attention_fallback_count": 0
-// CHECK-DAG: "attention_unknown_count": 1
+// CHECK-DAG: "attention_unknown_count": 0

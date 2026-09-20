@@ -2967,8 +2967,10 @@ int main(int argc, char** argv) {
                                                  "fputc",
                                                  "fputs",
                                                  "fprintf",
+                                                 "fflush",
                                                  "fwrite",
                                                  "getenv",
+                                                 "open_memstream",
                                                  "__tls_get_addr"};
   const auto is_allowed_undefined = [&](const std::string& symbol) {
     // SLEEF 静态档案的分发器运行需要这两个 libc 例程（计时与对齐分配）。

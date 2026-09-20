@@ -28,6 +28,7 @@ constexpr StringLiteral kEnd = "__ncnn_profile_event_end";
 constexpr StringLiteral kAlloc = "__ncnn_profile_alloc";
 constexpr StringLiteral kDealloc = "__ncnn_profile_dealloc";
 constexpr StringLiteral kCopy = "__ncnn_profile_copy";
+constexpr StringLiteral kMovement = "__ncnn_profile_movement";
 constexpr StringLiteral kFlush = "__ncnn_profile_flush";
 
 // Categories are part of the private profile ABI.  They intentionally remain
@@ -38,6 +39,9 @@ enum class EventCategory : std::int64_t {
   Deallocation = 2,
   Copy = 3,
   Parallel = 4,
+  Transpose = 5,
+  Pack = 6,
+  Unpack = 7,
 };
 
 std::uint64_t fnv1a(StringRef value) {
@@ -168,6 +172,7 @@ class InstrumentNCNNProfilePass final
     auto alloc = declare(rewriter, module, kAlloc, twoIds);
     auto dealloc = declare(rewriter, module, kDealloc, oneId);
     auto copy = declare(rewriter, module, kCopy, twoIds);
+    auto movement = declare(rewriter, module, kMovement, {i64, i64, i64});
     auto flush = declare(rewriter, module, kFlush, {});
 
     SmallVector<func::FuncOp> functions;
@@ -221,8 +226,9 @@ class InstrumentNCNNProfilePass final
       for (Operation* operation : candidates) {
         const std::uint64_t id = operation_ids.at(operation);
         const auto category =
-          isa<memref::AllocOp>(*operation)  ? EventCategory::Allocation
-          : isa<memref::CopyOp>(*operation) ? EventCategory::Copy
+          isa<memref::AllocOp>(*operation)       ? EventCategory::Allocation
+          : isa<memref::CopyOp>(*operation)      ? EventCategory::Copy
+          : isa<memref::TransposeOp>(*operation) ? EventCategory::Transpose
           : isa<scf::ForallOp, scf::ParallelOp, omp::ParallelOp>(*operation)
             ? EventCategory::Parallel
             : EventCategory::Operation;
@@ -248,6 +254,18 @@ class InstrumentNCNNProfilePass final
             sourceType ? staticByteSize(sourceType) : -1;
           Value byteValue = constant(rewriter, operation->getLoc(), bytes);
           call(rewriter, operation->getLoc(), copy, {idValue, byteValue});
+        }
+        if (auto transposeOp = dyn_cast<memref::TransposeOp>(operation)) {
+          const auto resultType =
+            dyn_cast<MemRefType>(transposeOp.getResult().getType());
+          const std::int64_t bytes =
+            resultType ? staticByteSize(resultType) : -1;
+          Value kind = constant(rewriter, operation->getLoc(), 0);
+          Value byteValue = constant(rewriter, operation->getLoc(), bytes);
+          call(rewriter,
+               operation->getLoc(),
+               movement,
+               {idValue, kind, byteValue});
         }
 
         if (timed) {

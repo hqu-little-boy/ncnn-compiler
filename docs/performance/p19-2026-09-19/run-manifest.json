@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-19",
+  "baseline_build": "/tmp/ncnn-compiler-stage-p19-baseline-04",
+  "candidate_build": "/tmp/ncnn-compiler-stage-p19-candidate-07",
+  "test_filter": "^PerformanceModel\\.",
+  "warmup": 10,
+  "iterations": 20,
+  "formal_threads": 6,
+  "formal_measured_rows_per_run": 45,
+  "one_thread_scope": "PPOcrv5ServerRec",
+  "one_thread_candidate_full_suite": {
+    "status": "diagnostic_timeout",
+    "file": "candidate-1t-full-suite-timeout.ndjson",
+    "measured_rows_before_timeout": 44,
+    "timeout_test": "PerformanceModel.PPOcrv5ServerDetStatic",
+    "timeout_seconds": 1800
+  },
+  "paired_rounds": [
+    {"round": 1, "order": ["baseline", "candidate"]},
+    {"round": 2, "order": ["candidate", "baseline"]},
+    {"round": 3, "order": ["baseline", "candidate"]},
+    {"round": 4, "order": ["candidate", "baseline"]},
+    {"round": 5, "order": ["baseline", "candidate"]}
+  ],
+  "formal_runs": {
+    "baseline": ["baseline-6t-r1.ndjson", "baseline-6t-r2.ndjson", "baseline-6t-r3.ndjson", "baseline-6t-r4.ndjson", "baseline-6t-r5.ndjson"],
+    "candidate": ["candidate-6t-r1.ndjson", "candidate-6t-r2.ndjson", "candidate-6t-r3.ndjson", "candidate-6t-r4.ndjson", "candidate-6t-r5.ndjson"]
+  },
+  "reference_runs": ["baseline-6t-r0.ndjson", "candidate-6t-r0.ndjson"],
+  "one_thread_server_rec_runs": ["baseline-1t-server-rec-focused.ndjson", "candidate-1t-server-rec-focused.ndjson"],
+  "known_upstream_skips": ["PerformanceModel.PPLCNetDocOriInt8", "PerformanceModel.PPLCNetTextlineOriInt8"],
+  "files": [
+    "README.md", "build-identity.json", "run-manifest.json", "run.log",
+    "paired-rounds.ndjson", "paired-summary.json", "paired-summary.txt",
+    "baseline-6t-r0.summary.txt", "candidate-6t-r0.summary.txt", "plan-index.json",
+    "candidate-08-status.txt", "candidate-08-configure.log", "candidate-08-build.log",
+    "candidate-08-format.log", "candidate-08-tidy.log", "candidate-08-numerical-build.log", "candidate-08-ctest.log",
+    "baseline-6t-r0.ndjson", "candidate-6t-r0.ndjson",
+    "baseline-6t-r1.ndjson", "candidate-6t-r1.ndjson",
+    "baseline-6t-r2.ndjson", "candidate-6t-r2.ndjson",
+    "baseline-6t-r3.ndjson", "candidate-6t-r3.ndjson",
+    "baseline-6t-r4.ndjson", "candidate-6t-r4.ndjson",
+    "baseline-6t-r5.ndjson", "candidate-6t-r5.ndjson",
+    "baseline-1t-server-rec-focused.ndjson", "candidate-1t-server-rec-focused.ndjson",
+    "candidate-1t-full-suite-timeout.ndjson"
+  ]
+}

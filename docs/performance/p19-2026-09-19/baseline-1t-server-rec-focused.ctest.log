@@ -1,0 +1,11 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-stage-p19-baseline-04
+Test project /tmp/ncnn-compiler-stage-p19-baseline-04
+    Start 434: PerformanceModel.PPOcrv5ServerRec
+1/1 Test #434: PerformanceModel.PPOcrv5ServerRec ...   Passed  1686.47 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+performance    = 1686.47 sec*proc (1 test)
+
+Total Test time (real) = 1686.48 sec

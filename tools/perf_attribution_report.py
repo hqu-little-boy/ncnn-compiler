@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -29,6 +30,29 @@ def read_json(path: str) -> dict[str, Any]:
   if not isinstance(value, dict):
     raise AttributionError(f"{path}: root must be an object")
   return value
+
+
+def read_profile(path: str) -> dict[str, Any] | list[dict[str, Any]]:
+  try:
+    text = Path(path).read_text(encoding="utf-8")
+  except OSError as error:
+    raise AttributionError(f"cannot read {path}: {error}") from error
+  try:
+    value = json.loads(text)
+  except json.JSONDecodeError:
+    rows = []
+    try:
+      rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+    except json.JSONDecodeError as error:
+      raise AttributionError(f"cannot read {path}: {error}") from error
+    if not rows or any(not isinstance(row, dict) for row in rows):
+      raise AttributionError(f"{path}: profile NDJSON rows must be objects")
+    value = rows
+  if isinstance(value, dict):
+    return value
+  if isinstance(value, list) and value and all(isinstance(row, dict) for row in value):
+    return value
+  raise AttributionError(f"{path}: profile must be an object or non-empty NDJSON")
 
 
 def read_perf(path: str, model: str, mode: str) -> dict[str, Any]:
@@ -68,9 +92,16 @@ def validate_identity(plan: dict[str, Any], profile: dict[str, Any],
   if plan.get("schema_version") != 1 or plan.get("kind") != \
       "ncnn.model_execution_plan":
     raise AttributionError("plan has unsupported schema or kind")
-  if profile.get("schema_version") != 1 or profile.get("kind") != \
+  if profile.get("schema_version") not in {1, 2} or profile.get("kind") != \
       "ncnn.model_execution_profile":
     raise AttributionError("profile has unsupported schema or kind")
+  if profile.get("schema_version") == 2:
+    instrumentation = profile.get("instrumentation")
+    if not isinstance(instrumentation, dict) or \
+        instrumentation.get("aggregation") != "per-invocation":
+      raise AttributionError("schema-2 profile must be per-invocation")
+    if not isinstance(profile.get("complete"), bool):
+      raise AttributionError("schema-2 profile complete must be boolean")
   model = require_string(plan.get("model"), "plan.model")
   if profile.get("model") != model or perf.get("model") != model:
     raise AttributionError("model identity mismatch across plan/profile/perf")
@@ -169,7 +200,8 @@ def allocation_index(plan: dict[str, Any]) -> set[int]:
 def category_name(category: Any) -> str:
   if not isinstance(category, str) or not category:
     return "unknown"
-  if category in {"allocation", "deallocation", "copy", "parallel"}:
+  if category in {"allocation", "deallocation", "copy", "parallel",
+                  "transpose", "pack", "unpack"}:
     return category
   return "kernel" if category == "operation" else category
 
@@ -214,7 +246,8 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       raise AttributionError("profile event id must be an unsigned 64-bit integer")
     raw_category = event.get("category")
     if raw_category not in {"operation", "allocation", "deallocation",
-                            "copy", "parallel"}:
+                            "copy", "parallel", "transpose", "pack",
+                            "unpack"}:
       raise AttributionError("profile event category is unsupported")
     event_key = (identifier, raw_category)
     if event_key in seen_events:
@@ -413,6 +446,57 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
   }
 
 
+def aggregate_v2_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
+  if not reports:
+    raise AttributionError("schema-2 profile contains no invocations")
+  first = reports[0]
+  runtime = first["runtime"]
+  transpose_values = []
+  top_level_values = []
+  peak_values = []
+  complete_values = []
+  for report in reports:
+    report_runtime = report["runtime"]
+    summary = report_runtime["summary"]
+    transpose = summary.get("runtime_transpose_write_bytes")
+    if summary.get("runtime_transpose_write_bytes_known") and \
+        isinstance(transpose, int):
+      transpose_values.append(transpose)
+    top_level = summary.get("top_level_time_ns")
+    if summary.get("top_level_time_known") and isinstance(top_level, int):
+      top_level_values.append(top_level)
+    peak = summary.get("peak_live_bytes")
+    if summary.get("peak_live_proven") and isinstance(peak, int):
+      peak_values.append(peak)
+    complete_values.append(bool(report_runtime.get("complete")))
+  runtime["invocation_count"] = len(reports)
+  runtime["complete_all"] = all(complete_values)
+  runtime["per_invocation"] = {
+    "runtime_transpose_write_bytes": {
+      "known_count": len(transpose_values),
+      "median": statistics.median(transpose_values)
+      if transpose_values else None,
+      "worst": max(transpose_values) if transpose_values else None,
+    },
+    "top_level_time_ns": {
+      "known_count": len(top_level_values),
+      "median": statistics.median(top_level_values)
+      if top_level_values else None,
+      "worst": max(top_level_values) if top_level_values else None,
+    },
+    "peak_live_bytes": {
+      "known_count": len(peak_values),
+      "median": statistics.median(peak_values) if peak_values else None,
+      "worst": max(peak_values) if peak_values else None,
+    },
+  }
+  runtime["complete"] = runtime["complete"] and runtime["complete_all"]
+  runtime["incomplete_reasons"] = sorted(set(
+    reason for report in reports for reason in report["runtime"]["incomplete_reasons"]
+  ))
+  return first
+
+
 def main() -> int:
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument("--perf", required=True, help="performance NDJSON")
@@ -423,11 +507,18 @@ def main() -> int:
   arguments = parser.parse_args()
   try:
     plan = read_json(arguments.plan)
-    profile = read_json(arguments.profile)
+    profile_value = read_profile(arguments.profile)
     perf = read_perf(arguments.perf, require_string(plan.get("model"), "plan.model"),
-                      arguments.mode)
-    validate_identity(plan, profile, perf, arguments.mode)
-    report = build_report(plan, profile, perf, arguments.mode)
+                     arguments.mode)
+    if isinstance(profile_value, list):
+      reports = []
+      for profile in profile_value:
+        validate_identity(plan, profile, perf, arguments.mode)
+        reports.append(build_report(plan, profile, perf, arguments.mode))
+      report = aggregate_v2_reports(reports)
+    else:
+      validate_identity(plan, profile_value, perf, arguments.mode)
+      report = build_report(plan, profile_value, perf, arguments.mode)
     text = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if arguments.output:
       Path(arguments.output).write_text(text, encoding="utf-8")

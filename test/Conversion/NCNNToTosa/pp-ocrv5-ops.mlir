@@ -56,14 +56,15 @@ func.func @self_attention(%input: tensor<3x4xf32>) -> tensor<3x4xf32> {
 }
 
 // CHECK-LABEL: func.func @self_attention
-// CHECK-COUNT-3: tosa.matmul
-// CHECK: tosa.matmul
-// CHECK: tosa.reduce_max {{.*}} {axis = 2 : i32}
-// CHECK: tosa.exp
-// CHECK: tosa.reduce_sum {{.*}} {axis = 2 : i32}
-// CHECK: tosa.reciprocal
-// CHECK-COUNT-2: tosa.matmul
-// CHECK-NOT: ncnn.multi_head_attention
+// CHECK-NOT: tosa.transpose
+// CHECK-NOT: tosa.reduce_max
+// CHECK-NOT: tosa.reduce_sum
+// CHECK-DAG: tosa.matmul
+// CHECK-DAG: linalg.generic
+// CHECK-DAG: arith.maximumf
+// CHECK-DAG: math.exp
+// CHECK-DAG: arith.divf
+// CHECK: return
 
 func.func @dynamic_self_attention(%input: tensor<?x4xf32>) -> tensor<?x4xf32> {
   %qw = arith.constant dense<0.0> : tensor<4x4xf32>
@@ -87,15 +88,12 @@ func.func @dynamic_self_attention(%input: tensor<?x4xf32>) -> tensor<?x4xf32> {
 // CHECK-NOT: tosa.matmul
 // CHECK-NOT: ncnn.multi_head_attention
 
-// Static MHA is lowered to two batch matmuls (score and context), then the
-// buffer pipeline reaches the bounded batch kernel.  Dynamic MHA deliberately
-// remains on generic contractions because its sequence dimensions are dynamic.
+// Static and dynamic MHA use the same transpose-free, sequence-major indexed
+// contractions.  Dynamic MHA deliberately remains on generic contractions
+// because its sequence dimensions are dynamic.
 // KERNEL-LABEL: func.func @self_attention
-// KERNEL: scf.forall
-// KERNEL: vector.fma
-// KERNEL: vector.fma
+// KERNEL: linalg.generic
 // KERNEL-NOT: linalg.batch_matmul
 // KERNEL-LABEL: func.func @dynamic_self_attention
 // KERNEL: linalg.generic
-// KERNEL-NOT: scf.forall
-// KERNEL-NOT: vector.fma
+// KERNEL-NOT: linalg.batch_matmul

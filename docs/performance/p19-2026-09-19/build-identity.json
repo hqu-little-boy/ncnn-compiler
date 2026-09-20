@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "source": "/tmp/ncnn-compiler-p19-baseline-src/compiler",
+    "build": "/tmp/ncnn-compiler-stage-p19-baseline-04",
+    "git_head": "509b3c53952da861004591106ef648fdb8e8aa31",
+    "source_state": "clean pre-P19 snapshot",
+    "server_rec_plan_hash": "5818981469512551624",
+    "build_type": "Release",
+    "target": "x86_64-pc-linux-gnu",
+    "llvm": "21"
+  },
+  "candidate": {
+    "source": "/mnt/ncnn-compiler/compiler",
+    "build": "/tmp/ncnn-compiler-stage-p19-candidate-07",
+    "git_head": "509b3c53952da861004591106ef648fdb8e8aa31",
+    "source_state": "P19 working tree; candidate-07 built after final source fixes",
+    "server_rec_plan_hash": "9404721234341543154",
+    "build_type": "Release",
+    "target": "x86_64-pc-linux-gnu",
+    "llvm": "21"
+  },
+  "final_validation": {
+    "build": "/tmp/ncnn-compiler-stage-p19-candidate-08",
+    "status": "fresh Release format tidy numerical and full CTest passed",
+    "full_ctest": "447 total; 445 passed; 2 known upstream INT8 skips"
+  },
+  "vendored_reference": {
+    "path": "/mnt/ncnn-compiler/compiler/test/third_party/ncnn",
+    "revision": "a4d2ea1d4422c9e849f166fd7a4aefb52f942f6a"
+  },
+  "host": {
+    "cpu": "12th Gen Intel(R) Core(TM) i5-12600KF",
+    "logical_cpus": 16,
+    "formal_threads": 6,
+    "isa": "AVX2/FMA"
+  }
+}

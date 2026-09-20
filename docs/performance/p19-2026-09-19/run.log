@@ -1,0 +1,57 @@
+2026-09-19T22:59:58+00:00 START baseline-6t-r0 variant=baseline threads=6
+2026-09-19T22:59:58+00:00 DONE baseline-6t-r0
+2026-09-19T22:59:58+00:00 START candidate-6t-r0 variant=candidate threads=6
+2026-09-19T22:59:58+00:00 DONE candidate-6t-r0
+2026-09-19T22:59:58+00:00 START candidate-1t-server-rec variant=candidate threads=1
+2026-09-19T22:59:58+00:00 DONE candidate-1t-server-rec
+2026-09-19T22:59:58+00:00 START baseline-1t-server-rec variant=baseline threads=1
+2026-09-19T22:59:58+00:00 DONE baseline-1t-server-rec
+2026-09-19T22:59:58+00:00 START baseline-6t-r1 variant=baseline threads=6
+2026-09-19T22:59:58+00:00 DONE baseline-6t-r1
+2026-09-19T22:59:58+00:00 START candidate-6t-r1 variant=candidate threads=6
+2026-09-19T22:59:58+00:00 DONE candidate-6t-r1
+2026-09-19T22:59:58+00:00 START candidate-6t-r2 variant=candidate threads=6
+2026-09-19T22:59:58+00:00 DONE candidate-6t-r2
+2026-09-19T22:59:58+00:00 START baseline-6t-r2 variant=baseline threads=6
+2026-09-19T22:59:58+00:00 DONE baseline-6t-r2
+2026-09-19T22:59:58+00:00 START baseline-6t-r3 variant=baseline threads=6
+2026-09-19T22:59:58+00:00 DONE baseline-6t-r3
+2026-09-19T22:59:58+00:00 START candidate-6t-r3 variant=candidate threads=6
+2026-09-19T22:59:58+00:00 DONE candidate-6t-r3
+2026-09-19T22:59:58+00:00 START candidate-6t-r4 variant=candidate threads=6
+2026-09-19T22:59:58+00:00 DONE candidate-6t-r4
+2026-09-19T22:59:58+00:00 START baseline-6t-r4 variant=baseline threads=6
+2026-09-19T22:59:58+00:00 DONE baseline-6t-r4
+2026-09-19T22:59:58+00:00 START baseline-6t-r5 variant=baseline threads=6
+2026-09-19T22:59:58+00:00 DONE baseline-6t-r5
+2026-09-19T22:59:58+00:00 START candidate-6t-r5 variant=candidate threads=6
+2026-09-19T22:59:58+00:00 DONE candidate-6t-r5
+2026-09-19T22:59:59+00:00 ALL_RUNS_DONE
+2026-09-19T23:00:54+00:00 START baseline-6t-r0 variant=baseline threads=6
+2026-09-19T23:19:55+00:00 DONE baseline-6t-r0
+2026-09-19T23:19:55+00:00 START candidate-6t-r0 variant=candidate threads=6
+2026-09-19T23:39:04+00:00 DONE candidate-6t-r0
+2026-09-19T23:39:04+00:00 START candidate-1t-server-rec variant=candidate threads=1
+2026-09-20T01:04:40+00:00 START baseline-1t-server-rec-focused variant=baseline threads=1 filter=^PerformanceModel\.PPOcrv5ServerRec$
+2026-09-20T01:32:47+00:00 DONE baseline-1t-server-rec-focused
+2026-09-20T01:32:47+00:00 START baseline-6t-r1 variant=baseline threads=6 filter=^PerformanceModel\.
+2026-09-20T01:52:10+00:00 DONE baseline-6t-r1
+2026-09-20T01:52:10+00:00 START candidate-6t-r1 variant=candidate threads=6 filter=^PerformanceModel\.
+2026-09-20T02:11:39+00:00 DONE candidate-6t-r1
+2026-09-20T02:11:39+00:00 START candidate-6t-r2 variant=candidate threads=6 filter=^PerformanceModel\.
+2026-09-20T02:31:09+00:00 DONE candidate-6t-r2
+2026-09-20T02:31:09+00:00 START baseline-6t-r2 variant=baseline threads=6 filter=^PerformanceModel\.
+2026-09-20T02:50:32+00:00 DONE baseline-6t-r2
+2026-09-20T02:50:32+00:00 START baseline-6t-r3 variant=baseline threads=6 filter=^PerformanceModel\.
+2026-09-20T03:09:56+00:00 DONE baseline-6t-r3
+2026-09-20T03:09:56+00:00 START candidate-6t-r3 variant=candidate threads=6 filter=^PerformanceModel\.
+2026-09-20T03:29:30+00:00 DONE candidate-6t-r3
+2026-09-20T03:29:30+00:00 START candidate-6t-r4 variant=candidate threads=6 filter=^PerformanceModel\.
+2026-09-20T03:49:03+00:00 DONE candidate-6t-r4
+2026-09-20T03:49:03+00:00 START baseline-6t-r4 variant=baseline threads=6 filter=^PerformanceModel\.
+2026-09-20T04:08:32+00:00 DONE baseline-6t-r4
+2026-09-20T04:08:32+00:00 START baseline-6t-r5 variant=baseline threads=6 filter=^PerformanceModel\.
+2026-09-20T04:28:08+00:00 DONE baseline-6t-r5
+2026-09-20T04:28:08+00:00 START candidate-6t-r5 variant=candidate threads=6 filter=^PerformanceModel\.
+2026-09-20T04:48:24+00:00 DONE candidate-6t-r5
+2026-09-20T04:48:24+00:00 ALL_REMAINING_RUNS_DONE

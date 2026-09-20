@@ -1,0 +1,549 @@
+Built target NCNNPassesIncGen
+Built target NCNNOpsIncGen
+Running clang-tidy in parallel (Google)
+Enabled checks:
+    google-build-explicit-make-pair
+    google-build-namespaces
+    google-build-using-namespace
+    google-explicit-constructor
+    google-global-names-in-headers
+    google-objc-avoid-nsobject-new
+    google-objc-avoid-throwing-exception
+    google-objc-function-naming
+    google-objc-global-variable-declaration
+    google-readability-avoid-underscore-in-googletest-name
+    google-readability-braces-around-statements
+    google-readability-casting
+    google-readability-function-size
+    google-readability-namespace-comments
+    google-readability-todo
+    google-runtime-operator
+    google-upgrade-googletest-case
+    modernize-avoid-bind
+    modernize-concat-nested-namespaces
+    modernize-deprecated-headers
+    modernize-deprecated-ios-base-aliases
+    modernize-loop-convert
+    modernize-macro-to-enum
+    modernize-make-shared
+    modernize-make-unique
+    modernize-min-max-use-initializer-list
+    modernize-pass-by-value
+    modernize-raw-string-literal
+    modernize-redundant-void-arg
+    modernize-replace-auto-ptr
+    modernize-replace-disallow-copy-and-assign-macro
+    modernize-replace-random-shuffle
+    modernize-return-braced-init-list
+    modernize-shrink-to-fit
+    modernize-type-traits
+    modernize-unary-static-assert
+    modernize-use-auto
+    modernize-use-bool-literals
+    modernize-use-constraints
+    modernize-use-designated-initializers
+    modernize-use-emplace
+    modernize-use-equals-default
+    modernize-use-equals-delete
+    modernize-use-integer-sign-comparison
+    modernize-use-noexcept
+    modernize-use-nullptr
+    modernize-use-override
+    modernize-use-ranges
+    modernize-use-scoped-lock
+    modernize-use-starts-ends-with
+    modernize-use-std-format
+    modernize-use-std-numbers
+    modernize-use-std-print
+    modernize-use-transparent-functors
+    modernize-use-uncaught-exceptions
+    modernize-use-using
+    readability-ambiguous-smartptr-reset-call
+    readability-avoid-const-params-in-decls
+    readability-avoid-return-with-void-value
+    readability-avoid-unconditional-preprocessor-if
+    readability-braces-around-statements
+    readability-const-return-type
+    readability-container-contains
+    readability-container-data-pointer
+    readability-container-size-empty
+    readability-delete-null-pointer
+    readability-duplicate-include
+    readability-else-after-return
+    readability-enum-initial-value
+    readability-identifier-naming
+    readability-inconsistent-declaration-parameter-name
+    readability-make-member-function-const
+    readability-math-missing-parentheses
+    readability-misleading-indentation
+    readability-misplaced-array-index
+    readability-non-const-parameter
+    readability-operators-representation
+    readability-qualified-auto
+    readability-redundant-access-specifiers
+    readability-redundant-casting
+    readability-redundant-control-flow
+    readability-redundant-declaration
+    readability-redundant-function-ptr-dereference
+    readability-redundant-inline-specifier
+    readability-redundant-preprocessor
+    readability-redundant-smartptr-get
+    readability-redundant-string-cstr
+    readability-redundant-string-init
+    readability-reference-to-constructed-temporary
+    readability-simplify-subscript-expr
+    readability-static-accessed-through-instance
+    readability-static-definition-in-anonymous-namespace
+    readability-string-compare
+    readability-suspicious-call-argument
+    readability-uniqueptr-delete-release
+    readability-use-concise-preprocessor-directives
+    readability-use-std-min-max
+
+Running clang-tidy for 89 files out of 532 in compilation database ...
+[ 1/89][6.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/efficientnet_b2_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[ 2/89][7.3s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/resnet34_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[ 3/89][8.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Graph/graph.cpp
+17772 warnings generated.
+Suppressed 17772 warnings (17772 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[ 4/89][8.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/resnet18_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[ 5/89][9.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/resnet18_winograd_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[ 6/89][10.8s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/pp_lcnet_test.cpp
+23165 warnings generated.
+Suppressed 23191 warnings (23165 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[ 7/89][13.3s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/liteocr_ported_test.cpp
+41911 warnings generated.
+Suppressed 41938 warnings (41908 in non-user code, 27 NOLINT, 3 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[ 8/89][13.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/dynamic_pp_ocr_test.cpp
+22134 warnings generated.
+Suppressed 22160 warnings (22134 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[ 9/89][5.2s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Support/TargetVectorInfo.cpp
+16495 warnings generated.
+Suppressed 16495 warnings (16495 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[10/89][7.8s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5m_seg_test.cpp
+18847 warnings generated.
+Suppressed 18873 warnings (18847 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[11/89][15.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/support/performance_test_support.cpp
+44652 warnings generated.
+Suppressed 44679 warnings (44646 in non-user code, 27 NOLINT, 6 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[12/89][16.7s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Importer/NCNNImporter.cpp
+27505 warnings generated.
+Suppressed 27505 warnings (27505 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[13/89][16.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Importer/ImportConvolution.cpp
+27322 warnings generated.
+Suppressed 27322 warnings (27322 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[14/89][9.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/efficientnet_b1_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[15/89][20.7s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/VerifyModelShapeContracts/VerifyModelShapeContracts.cpp
+30683 warnings generated.
+Suppressed 30683 warnings (30165 in non-user code, 518 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[16/89][8.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5l_seg_test.cpp
+18847 warnings generated.
+Suppressed 18873 warnings (18847 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[17/89][12.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Support/ConstantFold.cpp
+24097 warnings generated.
+Suppressed 24097 warnings (24097 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[18/89][16.2s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Importer/ImportPooling.cpp
+27113 warnings generated.
+Suppressed 27113 warnings (27113 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[19/89][27.6s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/TileMatmulForall/TileMatmulForall.cpp
+32647 warnings generated.
+Suppressed 32647 warnings (31842 in non-user code, 805 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[20/89][7.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/efficientnet_b0_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[21/89][29.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/BufferizeNCNN/BufferizeNCNN.cpp
+34019 warnings generated.
+Suppressed 34019 warnings (33016 in non-user code, 1003 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[22/89][16.6s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Importer/ImportQuantization.cpp
+27132 warnings generated.
+Suppressed 27132 warnings (27132 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[23/89][33.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/GenerateCAPI/GenerateCAPI.cpp
+33282 warnings generated.
+Suppressed 33282 warnings (33282 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[24/89][7.8s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/operators/vectorized_ops_test.cpp
+20463 warnings generated.
+Suppressed 20489 warnings (20463 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[25/89][9.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5n_cls_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[26/89][22.7s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/VerifyBufferizedModel/VerifyBufferizedModel.cpp
+30197 warnings generated.
+Suppressed 30197 warnings (29667 in non-user code, 530 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[27/89][20.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/NormalizeNCNN/NormalizeNCNN.cpp
+28117 warnings generated.
+Suppressed 28117 warnings (28117 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[28/89][8.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5s_cls_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[29/89][24.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/VectorizeNCNN/LowerVectorTransfersNCNN.cpp
+30275 warnings generated.
+Suppressed 30275 warnings (30272 in non-user code, 3 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[30/89][31.8s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/VerifyNoNestedOpenMP/VerifyNoNestedOpenMP.cpp
+32970 warnings generated.
+Suppressed 32970 warnings (32970 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[31/89][7.3s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5m_cls_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[32/89][6.6s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/resnet50_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[33/89][26.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/FuseQuantChainNCNN/FuseQuantChainNCNN.cpp
+30606 warnings generated.
+Suppressed 30606 warnings (30605 in non-user code, 1 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[34/89][8.3s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5n_seg_test.cpp
+18847 warnings generated.
+Suppressed 18873 warnings (18847 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[35/89][39.7s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Conversion/NCNNToTosa/NCNNToTosa.cpp
+34128 warnings generated.
+Suppressed 34128 warnings (34128 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[36/89][7.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Unit/precision_test.cpp
+18795 warnings generated.
+Suppressed 18821 warnings (18795 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[37/89][20.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Unit/load_squeezenet_typed.cpp
+31419 warnings generated.
+Suppressed 31445 warnings (31419 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[38/89][18.6s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/tools/ncnn-mlir-driver.cpp
+28467 warnings generated.
+Suppressed 28467 warnings (28467 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[39/89][48.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/EmitModelPlan/EmitModelPlan.cpp
+39972 warnings generated.
+Suppressed 39973 warnings (38637 in non-user code, 1 NOLINT, 1335 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[40/89][6.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Graph/parser.cpp
+14539 warnings generated.
+Suppressed 14539 warnings (14539 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[41/89][14.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Unit/layer_registry_test.cpp
+28357 warnings generated.
+Suppressed 28383 warnings (28357 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[42/89][5.0s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Support/Precision.cpp
+11768 warnings generated.
+Suppressed 11768 warnings (11768 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[43/89][30.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/StrategyNCNN/StrategyNCNN.cpp
+31478 warnings generated.
+Suppressed 31478 warnings (31478 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[44/89][8.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5m_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[45/89][20.7s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Dialect/NCNN/IR/NCNNDialect.cpp
+27706 warnings generated.
+Suppressed 27706 warnings (27706 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[46/89][14.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Importer/ImportTensor.cpp
+27149 warnings generated.
+Suppressed 27149 warnings (27149 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[47/89][7.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/resnet101_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[48/89][8.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Unit/malformed_graph_test.cpp
+20046 warnings generated.
+Suppressed 20072 warnings (20046 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[49/89][8.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5x_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[50/89][8.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5x_seg_test.cpp
+18847 warnings generated.
+Suppressed 18873 warnings (18847 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[51/89][7.6s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5s_seg_test.cpp
+18847 warnings generated.
+Suppressed 18873 warnings (18847 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[52/89][6.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/squeezenet_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[53/89][7.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5n_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[54/89][43.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/InstrumentNCNNProfile/InstrumentNCNNProfile.cpp
+36831 warnings generated.
+Suppressed 36831 warnings (35822 in non-user code, 1009 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[55/89][15.2s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Importer/ImportDetection.cpp
+27143 warnings generated.
+Suppressed 27143 warnings (27143 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[56/89][6.8s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5s_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[57/89][30.8s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/FuseLinalgEpilogue/FuseLinalgEpilogue.cpp
+30964 warnings generated.
+Suppressed 30964 warnings (30964 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[58/89][12.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/support/numerical_test_support.cpp
+41778 warnings generated.
+Suppressed 41805 warnings (41775 in non-user code, 27 NOLINT, 3 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[59/89][7.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5l_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[60/89][20.0s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/FoldNCNNBatchNorm/FoldNCNNBatchNorm.cpp
+29141 warnings generated.
+Suppressed 29141 warnings (29141 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[61/89][20.2s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/VerifyNoSCFForall/VerifyNoSCFForall.cpp
+29678 warnings generated.
+Suppressed 29678 warnings (29183 in non-user code, 495 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[62/89][6.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/efficientnet_b3_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[63/89][25.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/ForallizeDisjointTileLoops/ForallizeDisjointTileLoops.cpp
+30361 warnings generated.
+Suppressed 30361 warnings (29697 in non-user code, 664 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[64/89][8.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/operators/int8_ops_test.cpp
+20655 warnings generated.
+Suppressed 20681 warnings (20655 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[65/89][25.3s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/FoldLinalgConstantTranspose/FoldLinalgConstantTranspose.cpp
+30034 warnings generated.
+Suppressed 30034 warnings (30034 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[66/89][32.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/VectorizeNCNN/VectorizeNCNN.cpp
+32421 warnings generated.
+Suppressed 32421 warnings (32420 in non-user code, 1 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[67/89][8.6s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/performance_test.cpp
+21360 warnings generated.
+Suppressed 21386 warnings (21360 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[68/89][15.3s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.cpp
+27563 warnings generated.
+Suppressed 27563 warnings (27320 in non-user code, 243 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[69/89][14.8s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/VerifyNoTosaOps/VerifyNoTosaOps.cpp
+27559 warnings generated.
+Suppressed 27559 warnings (27316 in non-user code, 243 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[70/89][16.0s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Importer/ImportActivation.cpp
+27387 warnings generated.
+Suppressed 27387 warnings (27387 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[71/89][7.8s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/operators/dynamic_ops_test.cpp
+18872 warnings generated.
+Suppressed 18898 warnings (18872 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[72/89][7.3s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5x_cls_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[73/89][25.6s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Dialect/NCNN/IR/NCNNOps.cpp
+30706 warnings generated.
+Suppressed 30706 warnings (30706 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[74/89][7.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/models/yolov5l_cls_test.cpp
+18837 warnings generated.
+Suppressed 18863 warnings (18837 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[75/89][22.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/ReuseWorkspaceSlots/ReuseWorkspaceSlots.cpp
+30128 warnings generated.
+Suppressed 30128 warnings (29610 in non-user code, 518 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[76/89][8.0s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Unit/load_squeezenet.cpp
+19557 warnings generated.
+Suppressed 19583 warnings (19557 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[77/89][8.7s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Numerical/operators/supported_ops_test.cpp
+21131 warnings generated.
+Suppressed 21157 warnings (21131 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[78/89][6.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Unit/parser_test.cpp
+19921 warnings generated.
+Suppressed 19947 warnings (19921 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[79/89][7.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Unit/shape_program_test.cpp
+22986 warnings generated.
+Suppressed 23012 warnings (22986 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[80/89][13.6s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Importer/ImportOps.cpp
+27358 warnings generated.
+Suppressed 27358 warnings (27358 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[81/89][15.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/tools/ncnn-compile.cpp
+29026 warnings generated.
+Suppressed 29027 warnings (29024 in non-user code, 1 NOLINT, 2 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[82/89][11.2s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Importer/ImportInput.cpp
+27119 warnings generated.
+Suppressed 27119 warnings (27119 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[83/89][21.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/LowerVectorMathNCNN/LowerVectorMathNCNN.cpp
+29759 warnings generated.
+Suppressed 29759 warnings (29759 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[84/89][16.4s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Conversion/NCNNToFunc/NCNNToFunc.cpp
+29857 warnings generated.
+Suppressed 29857 warnings (29857 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[85/89][21.5s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/RewriteLinalgCopies/RewriteLinalgCopies.cpp
+32347 warnings generated.
+Suppressed 32347 warnings (31488 in non-user code, 859 with check filters).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[86/89][16.7s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/test/Unit/ncnn_importer_test.cpp
+31874 warnings generated.
+Suppressed 31900 warnings (31874 in non-user code, 26 NOLINT).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[87/89][30.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Transforms/MatmulKernelNCNN/MatmulKernelNCNN.cpp
+36020 warnings generated.
+Suppressed 36020 warnings (36020 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[88/89][34.1s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/lib/Pipelines/NCNNPipelines.cpp
+41415 warnings generated.
+Suppressed 41415 warnings (41415 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+[89/89][70.9s] /usr/bin/clang-tidy-21 --exclude-header-filter=^/mnt/ncnn-compiler/compiler/([^/]*build[^/]*|test/third_party|third_party|(.*/)?generated)(/|$) -header-filter=^/mnt/ncnn-compiler/compiler/(include|lib|bin|tools|test)/ -p=/tmp/ncnn-compiler-stage-p19-candidate-08 /mnt/ncnn-compiler/compiler/bin/ncnn-mlir-opt.cpp
+60457 warnings generated.
+Suppressed 60457 warnings (60457 in non-user code).
+Use -header-filter=.* to display errors from all non-system headers. Use -system-headers to display errors from system headers as well.
+
+Built target tidy
