@@ -1,0 +1,11 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-stage-p18-final-02
+Test project /tmp/ncnn-compiler-stage-p18-final-02
+    Start 401: PerformanceModel.ResNet18
+1/1 Test #401: PerformanceModel.ResNet18 ........   Passed    0.38 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+performance    =   0.38 sec*proc (1 test)
+
+Total Test time (real) =   0.38 sec

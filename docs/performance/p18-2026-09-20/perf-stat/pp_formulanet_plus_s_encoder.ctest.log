@@ -1,0 +1,11 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-stage-p18-final-02
+Test project /tmp/ncnn-compiler-stage-p18-final-02
+    Start 446: PerformanceModel.PPFormulaNetPlusSEncoder
+1/1 Test #446: PerformanceModel.PPFormulaNetPlusSEncoder ...   Passed    6.74 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+performance    =   6.74 sec*proc (1 test)
+
+Total Test time (real) =   6.75 sec

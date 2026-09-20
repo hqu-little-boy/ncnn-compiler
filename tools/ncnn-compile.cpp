@@ -2696,6 +2696,7 @@ int main(int argc, char** argv) {
   }
   std::string execution_plan_hash;
   std::string execution_plan_revision;
+  std::string execution_attribution_revision = "attribution-v1";
   if (g_profile) {
     auto hash = read_execution_plan_field(execution_plan_path, "plan_hash");
     if (!hash) {
@@ -2708,6 +2709,12 @@ int main(int argc, char** argv) {
       return fail(revision.error());
     }
     execution_plan_revision = *revision;
+    auto attribution =
+      read_execution_plan_field(execution_plan_path, "attribution_revision");
+    if (!attribution) {
+      return fail(attribution.error());
+    }
+    execution_attribution_revision = *attribution;
   }
   std::string llvm_pipeline = "--ncnn-memref-to-llvm-pipeline=";
   const bool uses_openmp = effective_threads != 1;
@@ -2789,7 +2796,9 @@ int main(int argc, char** argv) {
       "-DNCNN_PROFILE_DEFAULT_PLAN_HASH=\"" + execution_plan_hash + "\"",
       "-DNCNN_PROFILE_DEFAULT_BUILD_IDENTITY=\"" + execution_plan_hash + "\"",
       "-DNCNN_PROFILE_DEFAULT_PLAN_REVISION=\"" + execution_plan_revision +
-        "\""};
+        "\"",
+      "-DNCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION=\"" +
+        execution_attribution_revision + "\""};
     profile_compile.insert(
       profile_compile.end(), target_args.begin(), target_args.end());
     profile_compile.insert(

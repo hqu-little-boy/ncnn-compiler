@@ -574,9 +574,10 @@ ncnn-compile model.param \\
 sidecar 的环境元数据，未设置时使用编译期默认值；`NCNN_PROFILE_BUILD_IDENTITY` 可覆盖
 build identity。`NCNN_PROFILE_MODE` 必须与待 join 的 perf 行一致（例如 prepared 示例需设置
 `NCNN_PROFILE_MODE=prepared`）。profile 文件的 `kind` 为
-`ncnn.model_execution_profile`。默认 schema 1 保持 `process-cumulative` 聚合；设置
-`NCNN_PROFILE_SCHEMA=2` 时输出一条 compact NDJSON 记录/次 invocation，记录
-`invocation_id`、`complete` 和 `aggregation=per-invocation`。两种 schema 都记录
+`ncnn.model_execution_profile`，并带有版本化的 `attribution_revision=attribution-v1`。
+默认 schema 1 保持 `process-cumulative` 聚合；设置 `NCNN_PROFILE_SCHEMA=2` 时输出一条
+compact NDJSON 记录/次 invocation，记录 `invocation_id`、`complete` 和
+`aggregation=per-invocation`。两种 schema 都记录
 operation/parallel/allocation/copy/movement 事件、峰值 live bytes、顶层 wall-time、事件不匹配和
 容量溢出；当前 movement ABI 已区分 transpose、pack 和 unpack，但 pack/unpack 未被所有
 producer 覆盖。插桩只覆盖可安全识别的显式回调点；未覆盖、并发归属无法证明或无法证明的
@@ -584,8 +585,10 @@ producer 覆盖。插桩只覆盖可安全识别的显式回调点；未覆盖�
 
 `--profile` 不改变 typed bare-pointer 公共 C ABI，但会改变内部动态库内容并增加诊断开销。
 instrumented 时间只能用于 `perf_attribution_report.py` 的诊断归因，不能写入或替代正式
-end-to-end ratio 门禁。归因工具严格校验 model、plan hash、build identity、target、threads、
-mode 和 schema；其中 build identity 是包含 code-generation identity 的 plan hash。典型用法为：
+end-to-end ratio 门禁。归因工具严格校验 model、plan hash、build identity、attribution
+revision、target、threads、mode 和 schema；其中 build identity 是包含 code-generation
+identity 的 plan hash。报告包含 top-20 runtime cost、top-10 allocation/workspace、copy/layout
+bytes 和 unknown/incomplete reasons；未知值保持 null，不以零代替。典型用法为：
 
 ```bash
 python3 tools/perf_attribution_report.py \\

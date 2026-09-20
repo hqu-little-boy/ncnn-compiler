@@ -1,0 +1,23 @@
+{
+  "schema": "ncnn.p18.build_identity",
+  "stage": "/tmp/ncnn-compiler-stage-p18-final-02",
+  "build_type": "Release",
+  "llvm_dir": "/usr/lib/llvm-21/lib/cmake/llvm",
+  "llvm_version": "21.1.8",
+  "compiler_version": "Debian LLVM version 21.1.8\n  Optimized build.",
+  "configure_flags": [
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm",
+    "-DCOMPILER_ENABLE_FORMAT_TARGETS=ON",
+    "-DCOMPILER_INSTALL_RPATH=ON",
+    "-DBUILD_TESTING=ON"
+  ],
+  "parallel": 16,
+  "target": "x86_64-pc-linux-gnu",
+  "threads": 6,
+  "git_head": "15f7bbded57413ef64ef87167da935c6fd3e6d4c",
+  "git_status": "M docs/ncnn-compile-command-line.md\n M lib/ProfileRuntime/profile_runtime.c\n M lib/Transforms/EmitModelPlan/EmitModelPlan.cpp\n M test/Native/check_perf_attribution.py\n M test/Native/check_perf_json_summary.py\n M test/Native/check_profile_runtime.py\n M test/Transforms/EmitModelPlan/contract.mlir\n M test/Transforms/EmitModelPlan/workspace-slots.mlir\n M tools/ncnn-compile.cpp\n M tools/perf_attribution_report.py\n M tools/perf_json_summary.py\n?? docs/performance/p18-2026-09-20/\n?? test/Native/__pycache__/\n?? tools/__pycache__/",
+  "source_diff_sha256": "2f698c8835c284867cef8ec11270370b164a0adb00a9e1c00a488d8c9146af4a",
+  "compiler_binary": "/tmp/ncnn-compiler-stage-p18-final-02/tools/ncnn-compile",
+  "compiler_binary_sha256": "4291a2ae312bcca98906de72fb3abf7a08cee2bac8ee3d58ef64e81f7acfd1e6"
+}

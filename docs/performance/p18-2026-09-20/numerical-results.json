@@ -1,0 +1,17 @@
+{
+  "stage": "/tmp/ncnn-compiler-stage-p18-final-02",
+  "required_targets": [
+    "numerical_tests",
+    "numerical_dynamic_operator_tests",
+    "numerical_dynamic_tests"
+  ],
+  "build_exit_code": 0,
+  "ctest_exit_code": 0,
+  "ctest_total_tests": 447,
+  "ctest_failed": 0,
+  "ctest_skipped": [
+    "PerformanceModel.PPLCNetDocOriInt8",
+    "PerformanceModel.PPLCNetTextlineOriInt8"
+  ],
+  "lit_contract_fixed": "packed_buffer_bytes=64"
+}

@@ -1,0 +1,499 @@
+{
+  "attention_revision": "attention-segment-v1",
+  "attention_segments": [],
+  "attribution_revision": "attribution-v1",
+  "buffers": [
+    {
+      "bytes": 240,
+      "bytes_known": true,
+      "element_type": "f32",
+      "function": "model",
+      "id": "model/memref.alloc#0",
+      "liveness_status": "unknown",
+      "ownership": "internal",
+      "profile_id": 17610563127416308805,
+      "shape": [
+        4,
+        5,
+        3
+      ],
+      "type": "memref<4x5x3xf32>",
+      "workspace_join_reason": "control_flow_or_region",
+      "workspace_join_status": "fallback",
+      "workspace_reuse_status": "fallback"
+    },
+    {
+      "bytes": 240,
+      "bytes_known": true,
+      "element_type": "f32",
+      "function": "model",
+      "id": "model/memref.alloc#1",
+      "liveness_status": "unknown",
+      "ownership": "internal",
+      "profile_id": 17610562027904680594,
+      "shape": [
+        1,
+        4,
+        5,
+        3
+      ],
+      "type": "memref<1x4x5x3xf32>",
+      "workspace_join_reason": "control_flow_or_region",
+      "workspace_join_status": "fallback",
+      "workspace_reuse_status": "fallback"
+    }
+  ],
+  "build_identity": "7766876872483072160",
+  "codegen_identity": "7461726765743d7838365f36342d70632d6c696e75782d676e757c6d617263683d7c6d6370753d7c6d74756e653d7c707265636973696f6e3d6175746f7c667031362d616363756d756c61746f723d6631367c616c6c6f772d66616c6c6261636b3d307c6f7074696d697a6174696f6e3d337c766563746f722d77696474683d3235367c766563746f722d6d6f64653d6f66667c766563746f722d6d6174683d6c69626d7665637c766563746f722d6d6174682d6162693d5f5a4756624e347c766563746f722d6d6174682d6c616e65733d347c737973726f6f743d7c636f6e762d73747261746567793d6175746f7c636f6e762d67656d6d2d6c322d62797465733d3532343238387c74756e696e672d70726f66696c653d737461626c657c74756e696e672d7374617475733d737461626c657c74756e696e672d66616c6c6261636b2d726561736f6e3d7c6d61746d756c2d6d2d726f77733d347c6d61746d756c2d6163632d636f6c756d6e733d31367c726f772d6368756e6b2d6c616e65733d387c6d61746d756c2d69382d726f77733d327c6d61746d756c2d69382d6163632d636f6c756d6e733d347c696e74382d6b65726e656c3d706f727461626c657c696e74382d7461726765743d706f727461626c657c696e74382d6465707468776973653d307c696e74382d636173742d636861696e3d307c746872656164733d36",
+  "codegen_identity_encoding": "hex-utf8-or-empty",
+  "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1|attribution-v1",
+  "contracts": [],
+  "conv_depthwise_operations": [],
+  "diagnostics": {
+    "prepared_runner": "available_in_performance_harness",
+    "runtime_counters": "not_collected",
+    "unknown_fields": [
+      "runtime_counters_not_collected",
+      "buffer_liveness_unknown",
+      "peak_workspace_control_flow_unknown",
+      "peak_workspace_liveness_unknown",
+      "peak_workspace_not_proven"
+    ],
+    "workspace_fallback_reasons": [
+      "control_flow_or_region"
+    ]
+  },
+  "functions": [
+    {
+      "arguments": [
+        {
+          "bytes": 240,
+          "element_type": "f32",
+          "shape": [
+            3,
+            4,
+            5
+          ]
+        },
+        {
+          "bytes": 240,
+          "element_type": "f32",
+          "shape": [
+            3,
+            4,
+            5
+          ]
+        }
+      ],
+      "id": "model",
+      "name": "model",
+      "results": []
+    }
+  ],
+  "fusion": {
+    "contract_count": 0,
+    "enabled": true,
+    "rejected_count": 0,
+    "rejection_reasons": "",
+    "residual_count": 0,
+    "selected_count": 0
+  },
+  "fusions": [],
+  "kind": "ncnn.model_execution_plan",
+  "low_precision": {
+    "capability": "portable",
+    "cast_chain_enabled": false,
+    "depthwise_enabled": false,
+    "operations": [],
+    "requested_policy": "portable",
+    "requested_policy_fallback_reason": null,
+    "requested_policy_status": "selected",
+    "revision": "int8-target-v1"
+  },
+  "model": "relu",
+  "operations": [
+    {
+      "function": "model",
+      "id": "model/arith.constant#0",
+      "kind": "arith.constant",
+      "operand_types": [],
+      "profile_id": 14712359705534835900,
+      "result_types": [
+        "vector<3xf32>"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/ub.poison#0",
+      "kind": "ub.poison",
+      "operand_types": [],
+      "profile_id": 15090070951374773013,
+      "result_types": [
+        "f32"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/arith.constant#1",
+      "kind": "arith.constant",
+      "operand_types": [],
+      "profile_id": 14712360805046464111,
+      "result_types": [
+        "index"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/arith.constant#2",
+      "kind": "arith.constant",
+      "operand_types": [],
+      "profile_id": 14712361904558092322,
+      "result_types": [
+        "index"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/arith.constant#3",
+      "kind": "arith.constant",
+      "operand_types": [],
+      "profile_id": 14712363004069720533,
+      "result_types": [
+        "index"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/arith.constant#4",
+      "kind": "arith.constant",
+      "operand_types": [],
+      "profile_id": 14712355307488323056,
+      "result_types": [
+        "index"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/memref.alloc#0",
+      "kind": "memref.alloc",
+      "operand_types": [],
+      "profile_id": 17610563127416308805,
+      "result_types": [
+        "memref<4x5x3xf32>"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/linalg.yield#0",
+      "kind": "linalg.yield",
+      "operand_types": [
+        "f32"
+      ],
+      "profile_id": 100255168724992212,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/linalg.transpose#0",
+      "kind": "linalg.transpose",
+      "operand_types": [
+        "memref<3x4x5xf32>",
+        "memref<4x5x3xf32>"
+      ],
+      "profile_id": 3321634294009449490,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/memref.expand_shape#0",
+      "kind": "memref.expand_shape",
+      "operand_types": [
+        "memref<4x5x3xf32>"
+      ],
+      "profile_id": 15630661846266637692,
+      "result_types": [
+        "memref<1x4x5x3xf32>"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/memref.alloc#1",
+      "kind": "memref.alloc",
+      "operand_types": [],
+      "profile_id": 17610562027904680594,
+      "result_types": [
+        "memref<1x4x5x3xf32>"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/vector.transfer_read#0",
+      "kind": "vector.transfer_read",
+      "operand_types": [
+        "memref<1x4x5x3xf32>",
+        "index",
+        "index",
+        "index",
+        "index",
+        "f32"
+      ],
+      "profile_id": 976719964555084997,
+      "result_types": [
+        "vector<3xf32>"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/arith.maximumf#0",
+      "kind": "arith.maximumf",
+      "operand_types": [
+        "vector<3xf32>",
+        "vector<3xf32>"
+      ],
+      "profile_id": 1052058290318551492,
+      "result_types": [
+        "vector<3xf32>"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/vector.transfer_write#0",
+      "kind": "vector.transfer_write",
+      "operand_types": [
+        "vector<3xf32>",
+        "memref<1x4x5x3xf32>",
+        "index",
+        "index",
+        "index",
+        "index"
+      ],
+      "profile_id": 9673347828327201746,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/scf.reduce#0",
+      "kind": "scf.reduce",
+      "operand_types": [],
+      "profile_id": 2512018408642707668,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/scf.parallel#0",
+      "kind": "scf.parallel",
+      "operand_types": [
+        "index",
+        "index",
+        "index",
+        "index",
+        "index",
+        "index"
+      ],
+      "profile_id": 8412862350461217353,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/memref.collapse_shape#0",
+      "kind": "memref.collapse_shape",
+      "operand_types": [
+        "memref<1x4x5x3xf32>"
+      ],
+      "profile_id": 11688392904499227311,
+      "result_types": [
+        "memref<4x5x3xf32>"
+      ]
+    },
+    {
+      "function": "model",
+      "id": "model/linalg.yield#1",
+      "kind": "linalg.yield",
+      "operand_types": [
+        "f32"
+      ],
+      "profile_id": 100256268236620423,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/linalg.transpose#1",
+      "kind": "linalg.transpose",
+      "operand_types": [
+        "memref<4x5x3xf32>",
+        "memref<3x4x5xf32>"
+      ],
+      "profile_id": 3321635393521077701,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/memref.dealloc#0",
+      "kind": "memref.dealloc",
+      "operand_types": [
+        "memref<4x5x3xf32>"
+      ],
+      "profile_id": 13641866542181207576,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/memref.dealloc#1",
+      "kind": "memref.dealloc",
+      "operand_types": [
+        "memref<1x4x5x3xf32>"
+      ],
+      "profile_id": 13641867641692835787,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/func.return#0",
+      "kind": "func.return",
+      "operand_types": [],
+      "profile_id": 15109172650429175312,
+      "result_types": []
+    },
+    {
+      "function": "model",
+      "id": "model/func.func#0",
+      "kind": "func.func",
+      "operand_types": [],
+      "profile_id": 13136411074785292016,
+      "result_types": []
+    }
+  ],
+  "plan_hash": "7766876872483072160",
+  "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1|attribution-v1",
+  "provenance": [],
+  "regions": [
+    {
+      "function": "model",
+      "id": "model/region#0",
+      "kind": "function_body"
+    },
+    {
+      "function": "model",
+      "id": "model/region#1",
+      "owner": "model/linalg.transpose#0"
+    },
+    {
+      "function": "model",
+      "id": "model/region#2",
+      "owner": "model/scf.parallel#0"
+    },
+    {
+      "function": "model",
+      "id": "model/region#3",
+      "owner": "model/linalg.transpose#1"
+    }
+  ],
+  "schema_version": 1,
+  "static_liveness": [
+    {
+      "allocation_position": 6,
+      "bytes": 240,
+      "deallocation_position": 19,
+      "first_use_position": 8,
+      "id": "model/memref.alloc#0",
+      "last_use_position": 11,
+      "profile_id": 17610563127416308805,
+      "status": "unknown",
+      "workspace_fallback_reason": "control_flow_or_region",
+      "workspace_reuse_status": "fallback"
+    },
+    {
+      "allocation_position": 10,
+      "bytes": 240,
+      "deallocation_position": 20,
+      "first_use_position": 13,
+      "id": "model/memref.alloc#1",
+      "last_use_position": 18,
+      "profile_id": 17610562027904680594,
+      "status": "unknown",
+      "workspace_fallback_reason": "control_flow_or_region",
+      "workspace_reuse_status": "fallback"
+    }
+  ],
+  "summary": {
+    "allocation_count": 2,
+    "attention_fallback_count": 0,
+    "attention_revision": "attention-segment-v1",
+    "attention_segment_count": 0,
+    "attention_selected_count": 0,
+    "attention_unknown_count": 0,
+    "attribution_revision": "attribution-v1",
+    "batch_matmul_count": 0,
+    "conv_depthwise": {
+      "conv_fallback_count": 0,
+      "conv_fallback_reasons": {},
+      "conv_implementations": {},
+      "conv_operation_count": 0,
+      "conv_unknown_count": 0,
+      "depthwise_fallback_count": 0,
+      "depthwise_fallback_reasons": {},
+      "depthwise_implementations": {},
+      "depthwise_operation_count": 0,
+      "depthwise_unknown_count": 0
+    },
+    "copy_count": 0,
+    "deallocation_count": 2,
+    "dynamic_buffer_count": 0,
+    "fusion_contract_count": 0,
+    "fusion_enabled": true,
+    "fusion_rejected_count": 0,
+    "fusion_rejection_reasons": "",
+    "fusion_residual_count": 0,
+    "fusion_selected_count": 0,
+    "kernel_contract_count": 0,
+    "kernel_contract_fallback_count": 0,
+    "matmul_count": 0,
+    "nested_openmp_count": 0,
+    "packed_buffer_bytes": 0,
+    "parallel_region_count": 1,
+    "peak_workspace_bytes": null,
+    "peak_workspace_proven": false,
+    "static_buffer_bytes": 480,
+    "static_copy_bytes": null,
+    "static_copy_bytes_known": false,
+    "static_copy_count": 0,
+    "static_copy_status": "not_applicable",
+    "static_pack_bytes": null,
+    "static_pack_bytes_known": false,
+    "static_pack_count": 0,
+    "static_pack_status": "not_applicable",
+    "static_transpose_bytes": null,
+    "static_transpose_bytes_known": false,
+    "static_transpose_count": 0,
+    "static_transpose_status": "not_applicable",
+    "static_unpack_bytes": null,
+    "static_unpack_bytes_known": false,
+    "static_unpack_count": 0,
+    "static_unpack_status": "not_applicable",
+    "transpose_count": 0,
+    "vector_fma_count": 0,
+    "workspace_fallback_count": 2,
+    "workspace_reused_allocation_count": 0,
+    "workspace_slot_bytes": 0,
+    "workspace_slot_bytes_known": true,
+    "workspace_slot_count": 0
+  },
+  "target": {
+    "threads": 6,
+    "triple": "x86_64-pc-linux-gnu",
+    "vector_lanes": 0,
+    "vector_scalable": false,
+    "vector_tail": true
+  },
+  "tuning": {
+    "fallback_reason": null,
+    "matmul_acc_columns": 16,
+    "matmul_i8_acc_columns": 4,
+    "matmul_i8_rows": 2,
+    "matmul_m_rows": 4,
+    "profile": "stable",
+    "revision": "tuning-v1",
+    "row_chunk_lanes": 8,
+    "status": "stable"
+  }
+}

@@ -23,6 +23,24 @@ from typing import Any
 
 RowKey = tuple[str, str]
 
+# Stable P17/P18 official set: 45 measured rows minus the Winograd diagnostic.
+OFFICIAL_MODELS = frozenset({
+  "squeezenet_v1_1", "resnet18", "resnet34", "resnet50", "resnet101",
+  "yolov5n_cls", "yolov5s_cls", "yolov5m_cls", "yolov5l_cls", "yolov5x_cls",
+  "yolov5n", "yolov5s", "yolov5m", "yolov5l", "yolov5x",
+  "efficientnet_b0", "efficientnet_b1", "efficientnet_b2", "efficientnet_b3",
+  "pp_lcnet_x1_0_doc_ori", "pp_lcnet_x1_0_textline_ori",
+  "chineseocr_lite_anglenet", "yolov5n_seg", "yolov5s_seg", "yolov5m_seg",
+  "yolov5l_seg", "yolov5x_seg", "pp_ocrv6_tiny_rec",
+  "pp_ocrv6_tiny_rec_int8", "pp_ocrv5_mobile_rec",
+  "pp_ocrv5_mobile_rec_int8", "pp_ocrv5_server_rec", "pp_ocrv6_medium_rec",
+  "pp_ocrv6_medium_rec_int8", "pp_ocrv6_small_rec",
+  "pp_ocrv6_small_rec_int8", "pp_ocrv6_tiny_det", "pp_ocrv6_small_det",
+  "pp_ocrv6_medium_det", "pp_ocrv6_medium_det_int8",
+  "pp_ocrv5_mobile_det_static", "pp_ocrv5_server_det_static",
+  "pp_structrurev2_slanet_plus_cnn", "pp_formulanet_plus_s_encoder",
+})
+
 
 def _number(record: dict[str, Any], field: str, *, required: bool) -> float | None:
   value = record.get(field)
@@ -69,6 +87,12 @@ def _normalise_record(record: Any, line_number: int) -> dict[str, Any]:
     if value is not None and (not isinstance(value, str) or not value):
       raise ValueError(
         f"line {line_number}: {field} must be a non-empty string or null")
+  threads = record.get("threads")
+  if (threads is not None and
+      (isinstance(threads, bool) or not isinstance(threads, int) or
+       threads < 0)):
+    raise ValueError(
+      f"line {line_number}: threads must be a non-negative integer or null")
 
   measured = status == "measured"
   _number(record, "ratio", required=measured)
@@ -133,6 +157,18 @@ def measured_rows(rows: dict[RowKey, dict[str, Any]], mode: str) -> list[dict[st
   ]
 
 
+def official_rows(rows: dict[RowKey, dict[str, Any]]) -> dict[RowKey, dict[str, Any]]:
+  """Return the reproducible 44-model official end-to-end subset."""
+  return {
+    key: row
+    for key, row in rows.items()
+    if row["mode"] == "end_to_end"
+    and row["status"] == "measured"
+    and row["gate_eligible"]
+    and row["model"] in OFFICIAL_MODELS
+  }
+
+
 def print_mode_summary(rows: dict[RowKey, dict[str, Any]], mode: str) -> None:
   values = [float(row["ratio"]) for row in measured_rows(rows, mode)]
   diagnostics = [row for row in rows.values() if row["mode"] == mode]
@@ -173,6 +209,10 @@ def main() -> int:
     "--gate", type=float, default=0.0,
     help="fail when an eligible end-to-end ratio exceeds this positive limit; 0 disables",
   )
+  parser.add_argument(
+    "--official-only", action="store_true",
+    help="use the reproducible 44-model official end-to-end subset",
+  )
   arguments = parser.parse_args()
   if not math.isfinite(arguments.gate) or arguments.gate < 0.0:
     print("--gate must be a finite non-negative number", file=sys.stderr)
@@ -184,6 +224,22 @@ def main() -> int:
   except ValueError as error:
     print(str(error), file=sys.stderr)
     return 1
+  if arguments.official_only:
+    rows = official_rows(rows)
+    baseline = official_rows(baseline)
+    if len(rows) != 44:
+      print(
+        f"--official-only requires exactly 44 official measured models; got {len(rows)}",
+        file=sys.stderr,
+      )
+      return 1
+    if baseline and len(baseline) != 44:
+      print(
+        f"--official-only baseline requires exactly 44 official measured models; "
+        f"got {len(baseline)}",
+        file=sys.stderr,
+      )
+      return 1
   if not rows:
     print("没有可用记录", file=sys.stderr)
     return 1

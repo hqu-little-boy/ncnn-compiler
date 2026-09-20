@@ -25,6 +25,9 @@
 #ifndef NCNN_PROFILE_DEFAULT_PLAN_REVISION
 #define NCNN_PROFILE_DEFAULT_PLAN_REVISION ""
 #endif
+#ifndef NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION
+#define NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION "attribution-v1"
+#endif
 
 #define NCNN_PROFILE_MAX_RECORDS 4096
 #define NCNN_PROFILE_MAX_STACK 128
@@ -46,8 +49,10 @@ typedef struct {
   uint64_t calls;
   uint64_t inclusive_ns;
   uint64_t exclusive_ns;
+  uint64_t bytes;
   int64_t category;
   int exclusive_known;
+  int bytes_known;
 } ncnn_profile_record;
 
 typedef struct {
@@ -88,9 +93,11 @@ static int transpose_write_bytes_known = 1;
 static uint64_t pack_events;
 static uint64_t pack_bytes;
 static int pack_bytes_known;
+static int pack_bytes_observed;
 static uint64_t unpack_events;
 static uint64_t unpack_bytes;
 static int unpack_bytes_known;
+static int unpack_bytes_observed;
 static uint64_t parallel_events;
 static uint64_t live_bytes;
 static uint64_t peak_live_bytes;
@@ -132,9 +139,11 @@ static void reset_profile_state_locked(void) {
   pack_events = 0;
   pack_bytes = 0;
   pack_bytes_known = 0;
+  pack_bytes_observed = 0;
   unpack_events = 0;
   unpack_bytes = 0;
   unpack_bytes_known = 0;
+  unpack_bytes_observed = 0;
   parallel_events = 0;
   live_bytes = 0;
   peak_live_bytes = 0;
@@ -176,9 +185,30 @@ static int record_for(uint64_t id, int64_t category) {
   records[record_count].calls = 0;
   records[record_count].inclusive_ns = 0;
   records[record_count].exclusive_ns = 0;
+  records[record_count].bytes = 0;
   records[record_count].category = category;
   records[record_count].exclusive_known = 1;
+  records[record_count].bytes_known =
+    category == NCNN_PROFILE_ALLOCATION ||
+    category == NCNN_PROFILE_DEALLOCATION || category == NCNN_PROFILE_COPY ||
+    category == NCNN_PROFILE_TRANSPOSE || category == NCNN_PROFILE_PACK ||
+    category == NCNN_PROFILE_UNPACK;
   return (int)record_count++;
+}
+
+static void add_record_bytes(int record, int64_t bytes) {
+  if (record < 0) {
+    return;
+  }
+  if (bytes < 0 || !records[record].bytes_known) {
+    records[record].bytes_known = 0;
+    return;
+  }
+  if (records[record].bytes > UINT64_MAX - (uint64_t)bytes) {
+    records[record].bytes_known = 0;
+    return;
+  }
+  records[record].bytes += (uint64_t)bytes;
 }
 
 static int allocation_for(uint64_t id) {
@@ -324,17 +354,20 @@ void __ncnn_profile_alloc(int64_t signed_id, int64_t bytes) {
   const int record = record_for(id, NCNN_PROFILE_ALLOCATION);
   if (record >= 0) {
     records[record].calls++;
+    add_record_bytes(record, bytes);
   }
   unlock_profile();
 }
 
 void __ncnn_profile_dealloc(int64_t signed_id) {
   const uint64_t id = (uint64_t)signed_id;
+  int64_t record_bytes = -1;
   lock_profile();
   deallocation_events++;
   const int slot = allocation_for(id);
   if (slot >= 0 && allocations[slot].active) {
     if (allocations[slot].bytes >= 0) {
+      record_bytes = allocations[slot].bytes;
       if (deallocation_bytes <=
           UINT64_MAX - (uint64_t)allocations[slot].bytes) {
         deallocation_bytes += (uint64_t)allocations[slot].bytes;
@@ -358,6 +391,7 @@ void __ncnn_profile_dealloc(int64_t signed_id) {
   const int record = record_for(id, NCNN_PROFILE_DEALLOCATION);
   if (record >= 0) {
     records[record].calls++;
+    add_record_bytes(record, record_bytes);
   }
   unlock_profile();
 }
@@ -376,6 +410,7 @@ void __ncnn_profile_copy(int64_t signed_id, int64_t bytes) {
   const int record = record_for(id, NCNN_PROFILE_COPY);
   if (record >= 0) {
     records[record].calls++;
+    add_record_bytes(record, bytes);
   }
   unlock_profile();
 }
@@ -386,6 +421,7 @@ void __ncnn_profile_movement(int64_t signed_id, int64_t kind, int64_t bytes) {
   uint64_t* events = NULL;
   uint64_t* total_bytes = NULL;
   int* bytes_known = NULL;
+  int* bytes_observed = NULL;
   int64_t category = NCNN_PROFILE_OPERATION;
   if (kind == 0) {
     events = &transpose_events;
@@ -396,19 +432,27 @@ void __ncnn_profile_movement(int64_t signed_id, int64_t kind, int64_t bytes) {
     events = &pack_events;
     total_bytes = &pack_bytes;
     bytes_known = &pack_bytes_known;
+    bytes_observed = &pack_bytes_observed;
     category = NCNN_PROFILE_PACK;
   } else if (kind == 2) {
     events = &unpack_events;
     total_bytes = &unpack_bytes;
     bytes_known = &unpack_bytes_known;
+    bytes_observed = &unpack_bytes_observed;
     category = NCNN_PROFILE_UNPACK;
   }
   if (events && total_bytes && bytes_known) {
+    const int had_observation =
+      bytes_observed ? *bytes_observed : (*events != 0);
     ++*events;
-    if (bytes < 0) {
+    if (bytes_observed) {
+      *bytes_observed = 1;
+    }
+    if (bytes < 0 || (had_observation && !*bytes_known)) {
       *bytes_known = 0;
     } else if (*total_bytes <= UINT64_MAX - (uint64_t)bytes) {
       *total_bytes += (uint64_t)bytes;
+      *bytes_known = 1;
     } else {
       *bytes_known = 0;
     }
@@ -418,6 +462,7 @@ void __ncnn_profile_movement(int64_t signed_id, int64_t kind, int64_t bytes) {
   const int record = record_for(id, category);
   if (record >= 0) {
     records[record].calls++;
+    add_record_bytes(record, bytes);
   }
   unlock_profile();
 }
@@ -638,6 +683,9 @@ static void flush_profile_v2(const char* path) {
   const unsigned thread_count = parse_unsigned(thread_text, &thread_known);
   const char* revision = environment_or_default(
     "NCNN_PROFILE_PLAN_REVISION", NCNN_PROFILE_DEFAULT_PLAN_REVISION);
+  const char* attribution_revision =
+    environment_or_default("NCNN_PROFILE_ATTRIBUTION_REVISION",
+                           NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION);
   fputs("{\n  \"schema_version\": 2,\n", file);
   fputs("  \"kind\": \"ncnn.model_execution_profile\",\n", file);
   fputs("  \"plan_revision\": ", file);
@@ -646,6 +694,9 @@ static void flush_profile_v2(const char* path) {
   } else {
     fputs("\"static-v1\"", file);
   }
+  fputs(",\n  \"attribution_revision\": ", file);
+  write_json_string(file,
+                    attribution_revision ? attribution_revision : "unknown");
   fputs(",\n  \"model\": ", file);
   write_json_string(file, model ? model : "unknown");
   fputs(",\n  \"plan_hash\": ", file);
@@ -739,29 +790,31 @@ static void flush_profile_v2(const char* path) {
           local_transpose_write_bytes_known ? "true" : "false");
   fprintf(
     file, "    \"pack_count\": %llu,\n", (unsigned long long)local_pack_events);
-  if (local_pack_bytes_known) {
+  if (local_pack_events != 0 && local_pack_bytes_known) {
     fprintf(file,
             "    \"pack_bytes\": %llu,\n",
             (unsigned long long)local_pack_bytes);
   } else {
     fputs("    \"pack_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"pack_bytes_known\": %s,\n",
-          local_pack_bytes_known ? "true" : "false");
+  fprintf(
+    file,
+    "    \"pack_bytes_known\": %s,\n",
+    (local_pack_events != 0 && local_pack_bytes_known) ? "true" : "false");
   fprintf(file,
           "    \"unpack_count\": %llu,\n",
           (unsigned long long)local_unpack_events);
-  if (local_unpack_bytes_known) {
+  if (local_unpack_events != 0 && local_unpack_bytes_known) {
     fprintf(file,
             "    \"unpack_bytes\": %llu,\n",
             (unsigned long long)local_unpack_bytes);
   } else {
     fputs("    \"unpack_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"unpack_bytes_known\": %s,\n",
-          local_unpack_bytes_known ? "true" : "false");
+  fprintf(
+    file,
+    "    \"unpack_bytes_known\": %s,\n",
+    (local_unpack_events != 0 && local_unpack_bytes_known) ? "true" : "false");
   fprintf(file,
           "    \"parallel_region_count\": %llu,\n",
           (unsigned long long)local_parallel_events);
@@ -807,7 +860,14 @@ static void flush_profile_v2(const char* path) {
     } else {
       fputs("null", file);
     }
-    fputs("}", file);
+    fputs(", \"bytes\": ", file);
+    if (record->bytes_known) {
+      fprintf(file, "%llu", (unsigned long long)record->bytes);
+    } else {
+      fputs("null", file);
+    }
+    fprintf(
+      file, ", \"bytes_known\": %s}", record->bytes_known ? "true" : "false");
   }
   if (snapshot_count != 0) {
     fputs("\n  ", file);
@@ -949,6 +1009,9 @@ void __ncnn_profile_flush(void) {
   // so the attribution join cannot be defeated by a stale hard-coded string.
   const char* revision = environment_or_default(
     "NCNN_PROFILE_PLAN_REVISION", NCNN_PROFILE_DEFAULT_PLAN_REVISION);
+  const char* attribution_revision =
+    environment_or_default("NCNN_PROFILE_ATTRIBUTION_REVISION",
+                           NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION);
   fputs("{\n  \"schema_version\": 1,\n", file);
   fputs("  \"kind\": \"ncnn.model_execution_profile\",\n", file);
   fputs("  \"plan_revision\": ", file);
@@ -957,6 +1020,9 @@ void __ncnn_profile_flush(void) {
   } else {
     fputs("\"static-v1\"", file);
   }
+  fputs(",\n  \"attribution_revision\": ", file);
+  write_json_string(file,
+                    attribution_revision ? attribution_revision : "unknown");
   fputs(",\n  \"model\": ", file);
   write_json_string(file, model ? model : "unknown");
   fputs(",\n  \"plan_hash\": ", file);
@@ -1047,29 +1113,31 @@ void __ncnn_profile_flush(void) {
           local_transpose_write_bytes_known ? "true" : "false");
   fprintf(
     file, "    \"pack_count\": %llu,\n", (unsigned long long)local_pack_events);
-  if (local_pack_bytes_known) {
+  if (local_pack_events != 0 && local_pack_bytes_known) {
     fprintf(file,
             "    \"pack_bytes\": %llu,\n",
             (unsigned long long)local_pack_bytes);
   } else {
     fputs("    \"pack_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"pack_bytes_known\": %s,\n",
-          local_pack_bytes_known ? "true" : "false");
+  fprintf(
+    file,
+    "    \"pack_bytes_known\": %s,\n",
+    (local_pack_events != 0 && local_pack_bytes_known) ? "true" : "false");
   fprintf(file,
           "    \"unpack_count\": %llu,\n",
           (unsigned long long)local_unpack_events);
-  if (local_unpack_bytes_known) {
+  if (local_unpack_events != 0 && local_unpack_bytes_known) {
     fprintf(file,
             "    \"unpack_bytes\": %llu,\n",
             (unsigned long long)local_unpack_bytes);
   } else {
     fputs("    \"unpack_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"unpack_bytes_known\": %s,\n",
-          local_unpack_bytes_known ? "true" : "false");
+  fprintf(
+    file,
+    "    \"unpack_bytes_known\": %s,\n",
+    (local_unpack_events != 0 && local_unpack_bytes_known) ? "true" : "false");
   fprintf(file,
           "    \"parallel_region_count\": %llu,\n",
           (unsigned long long)local_parallel_events);
@@ -1115,7 +1183,14 @@ void __ncnn_profile_flush(void) {
     } else {
       fputs("null", file);
     }
-    fputs("}", file);
+    fputs(", \"bytes\": ", file);
+    if (record->bytes_known) {
+      fprintf(file, "%llu", (unsigned long long)record->bytes);
+    } else {
+      fputs("null", file);
+    }
+    fprintf(
+      file, ", \"bytes_known\": %s}", record->bytes_known ? "true" : "false");
   }
   if (snapshot_count != 0) {
     fputs("\n  ", file);

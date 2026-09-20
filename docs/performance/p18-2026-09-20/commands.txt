@@ -1,0 +1,10 @@
+# P18 fresh validation and evidence commands (2026-09-20)
+cmake -S compiler -B /tmp/ncnn-compiler-stage-p18-final-02 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm -DCOMPILER_ENABLE_FORMAT_TARGETS=ON -DCOMPILER_INSTALL_RPATH=ON -DBUILD_TESTING=ON
+cmake --build /tmp/ncnn-compiler-stage-p18-final-02 --target format_check --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p18-final-02 --target tidy --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p18-final-02 --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p18-final-02 --target numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests --parallel 16
+ctest --test-dir /tmp/ncnn-compiler-stage-p18-final-02 --output-on-failure
+NCNN_PERF_THREADS=6 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 NCNN_PERF_MAX_RATIO=0 NCNN_PERF_MODE=end_to_end NCNN_PERF_JSON=compiler/docs/performance/p18-2026-09-20/candidate-end-to-end.ndjson ctest --test-dir /tmp/ncnn-compiler-stage-p18-final-02 -R '^PerformanceModel\.' --output-on-failure
+python3 compiler/tools/perf_json_summary.py compiler/docs/performance/p18-2026-09-20/candidate-end-to-end.ndjson --official-only
+python3 compiler/tools/perf_json_summary.py compiler/docs/performance/p18-2026-09-20/candidate-end-to-end.ndjson

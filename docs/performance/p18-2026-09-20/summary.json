@@ -1,0 +1,275 @@
+{
+  "schema": "ncnn.p18_performance_summary",
+  "date": "2026-09-20",
+  "stage": "/tmp/ncnn-compiler-stage-p18-final-02",
+  "mode": "end_to_end",
+  "threads": 6,
+  "warmup": 10,
+  "iterations": 20,
+  "rows_total": 45,
+  "measured_rows": 45,
+  "official_rows": 44,
+  "diagnostic_rows": [
+    "resnet18_winograd"
+  ],
+  "official": {
+    "n": 44,
+    "p50": 2.0705,
+    "p90": 3.8911000000000016,
+    "max": 19.422,
+    "geomean": 2.2839103606562268,
+    "models_ratio_le_1_5": 5,
+    "sum_ncnn_ms": 9482.433,
+    "sum_compiled_ms": 29186.279,
+    "sum_excess_ms": 19703.845999999998,
+    "top_excess": [
+      {
+        "model": "pp_ocrv5_server_rec",
+        "ncnn_ms": 460.401,
+        "compiled_ms": 8942.042,
+        "ratio": 19.422,
+        "excess_ms": 8481.641
+      },
+      {
+        "model": "pp_ocrv5_server_det_static",
+        "ncnn_ms": 4735.916,
+        "compiled_ms": 11599.857,
+        "ratio": 2.449,
+        "excess_ms": 6863.941
+      },
+      {
+        "model": "pp_formulanet_plus_s_encoder",
+        "ncnn_ms": 65.162,
+        "compiled_ms": 993.922,
+        "ratio": 15.253,
+        "excess_ms": 928.76
+      },
+      {
+        "model": "yolov5x_seg",
+        "ncnn_ms": 713.14,
+        "compiled_ms": 1350.663,
+        "ratio": 1.894,
+        "excess_ms": 637.523
+      },
+      {
+        "model": "yolov5x",
+        "ncnn_ms": 563.328,
+        "compiled_ms": 1102.416,
+        "ratio": 1.957,
+        "excess_ms": 539.088
+      },
+      {
+        "model": "yolov5l_seg",
+        "ncnn_ms": 453.282,
+        "compiled_ms": 902.118,
+        "ratio": 1.99,
+        "excess_ms": 448.83600000000007
+      },
+      {
+        "model": "yolov5l",
+        "ncnn_ms": 368.953,
+        "compiled_ms": 669.434,
+        "ratio": 1.814,
+        "excess_ms": 300.481
+      },
+      {
+        "model": "pp_ocrv6_medium_det",
+        "ncnn_ms": 461.736,
+        "compiled_ms": 733.297,
+        "ratio": 1.588,
+        "excess_ms": 271.56100000000004
+      },
+      {
+        "model": "yolov5m_seg",
+        "ncnn_ms": 260.241,
+        "compiled_ms": 419.212,
+        "ratio": 1.611,
+        "excess_ms": 158.971
+      },
+      {
+        "model": "pp_ocrv6_medium_rec_int8",
+        "ncnn_ms": 25.22,
+        "compiled_ms": 126.299,
+        "ratio": 5.008,
+        "excess_ms": 101.07900000000001
+      }
+    ]
+  },
+  "measured": {
+    "n": 45,
+    "p50": 2.079,
+    "p90": 4.265200000000001,
+    "max": 19.422,
+    "geomean": 2.319813815634318,
+    "models_ratio_le_1_5": 5,
+    "sum_ncnn_ms": 9496.381,
+    "sum_compiled_ms": 29250.554,
+    "sum_excess_ms": 19754.173,
+    "top_excess": [
+      {
+        "model": "pp_ocrv5_server_rec",
+        "ncnn_ms": 460.401,
+        "compiled_ms": 8942.042,
+        "ratio": 19.422,
+        "excess_ms": 8481.641
+      },
+      {
+        "model": "pp_ocrv5_server_det_static",
+        "ncnn_ms": 4735.916,
+        "compiled_ms": 11599.857,
+        "ratio": 2.449,
+        "excess_ms": 6863.941
+      },
+      {
+        "model": "pp_formulanet_plus_s_encoder",
+        "ncnn_ms": 65.162,
+        "compiled_ms": 993.922,
+        "ratio": 15.253,
+        "excess_ms": 928.76
+      },
+      {
+        "model": "yolov5x_seg",
+        "ncnn_ms": 713.14,
+        "compiled_ms": 1350.663,
+        "ratio": 1.894,
+        "excess_ms": 637.523
+      },
+      {
+        "model": "yolov5x",
+        "ncnn_ms": 563.328,
+        "compiled_ms": 1102.416,
+        "ratio": 1.957,
+        "excess_ms": 539.088
+      },
+      {
+        "model": "yolov5l_seg",
+        "ncnn_ms": 453.282,
+        "compiled_ms": 902.118,
+        "ratio": 1.99,
+        "excess_ms": 448.83600000000007
+      },
+      {
+        "model": "yolov5l",
+        "ncnn_ms": 368.953,
+        "compiled_ms": 669.434,
+        "ratio": 1.814,
+        "excess_ms": 300.481
+      },
+      {
+        "model": "pp_ocrv6_medium_det",
+        "ncnn_ms": 461.736,
+        "compiled_ms": 733.297,
+        "ratio": 1.588,
+        "excess_ms": 271.56100000000004
+      },
+      {
+        "model": "yolov5m_seg",
+        "ncnn_ms": 260.241,
+        "compiled_ms": 419.212,
+        "ratio": 1.611,
+        "excess_ms": 158.971
+      },
+      {
+        "model": "pp_ocrv6_medium_rec_int8",
+        "ncnn_ms": 25.22,
+        "compiled_ms": 126.299,
+        "ratio": 5.008,
+        "excess_ms": 101.07900000000001
+      }
+    ]
+  },
+  "heavy_official": {
+    "n": 13,
+    "p50": 1.814,
+    "p90": 2.3572,
+    "max": 19.422,
+    "geomean": 2.0311365299989435,
+    "models_ratio_le_1_5": 3,
+    "sum_ncnn_ms": 8677.803,
+    "sum_compiled_ms": 26684.003,
+    "sum_excess_ms": 18006.2,
+    "top_excess": [
+      {
+        "model": "pp_ocrv5_server_rec",
+        "ncnn_ms": 460.401,
+        "compiled_ms": 8942.042,
+        "ratio": 19.422,
+        "excess_ms": 8481.641
+      },
+      {
+        "model": "pp_ocrv5_server_det_static",
+        "ncnn_ms": 4735.916,
+        "compiled_ms": 11599.857,
+        "ratio": 2.449,
+        "excess_ms": 6863.941
+      },
+      {
+        "model": "yolov5x_seg",
+        "ncnn_ms": 713.14,
+        "compiled_ms": 1350.663,
+        "ratio": 1.894,
+        "excess_ms": 637.523
+      },
+      {
+        "model": "yolov5x",
+        "ncnn_ms": 563.328,
+        "compiled_ms": 1102.416,
+        "ratio": 1.957,
+        "excess_ms": 539.088
+      },
+      {
+        "model": "yolov5l_seg",
+        "ncnn_ms": 453.282,
+        "compiled_ms": 902.118,
+        "ratio": 1.99,
+        "excess_ms": 448.83600000000007
+      },
+      {
+        "model": "yolov5l",
+        "ncnn_ms": 368.953,
+        "compiled_ms": 669.434,
+        "ratio": 1.814,
+        "excess_ms": 300.481
+      },
+      {
+        "model": "pp_ocrv6_medium_det",
+        "ncnn_ms": 461.736,
+        "compiled_ms": 733.297,
+        "ratio": 1.588,
+        "excess_ms": 271.56100000000004
+      },
+      {
+        "model": "yolov5m_seg",
+        "ncnn_ms": 260.241,
+        "compiled_ms": 419.212,
+        "ratio": 1.611,
+        "excess_ms": 158.971
+      },
+      {
+        "model": "pp_ocrv6_small_det",
+        "ncnn_ms": 107.177,
+        "compiled_ms": 207.768,
+        "ratio": 1.939,
+        "excess_ms": 100.591
+      },
+      {
+        "model": "yolov5m",
+        "ncnn_ms": 191.27,
+        "compiled_ms": 291.578,
+        "ratio": 1.524,
+        "excess_ms": 100.30799999999996
+      }
+    ]
+  },
+  "skipped_upstream_models": [
+    "pp_lcnet_x1_0_doc_ori_int8",
+    "pp_lcnet_x1_0_textline_ori_int8"
+  ],
+  "runtime_counters": "not_collected in formal E2E; diagnostic profile sidecars archived separately",
+  "physical_rss": "not_collected",
+  "notes": [
+    "resnet18_winograd is retained only in measured diagnostic rows",
+    "official statistics exclude resnet18_winograd",
+    "prepared/allocation profiles are diagnostic and not formal E2E"
+  ]
+}

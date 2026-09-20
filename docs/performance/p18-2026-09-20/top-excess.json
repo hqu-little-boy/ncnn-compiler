@@ -1,0 +1,72 @@
+[
+  {
+    "model": "pp_ocrv5_server_rec",
+    "ncnn_ms": 460.401,
+    "compiled_ms": 8942.042,
+    "ratio": 19.422,
+    "excess_ms": 8481.641
+  },
+  {
+    "model": "pp_ocrv5_server_det_static",
+    "ncnn_ms": 4735.916,
+    "compiled_ms": 11599.857,
+    "ratio": 2.449,
+    "excess_ms": 6863.941
+  },
+  {
+    "model": "pp_formulanet_plus_s_encoder",
+    "ncnn_ms": 65.162,
+    "compiled_ms": 993.922,
+    "ratio": 15.253,
+    "excess_ms": 928.76
+  },
+  {
+    "model": "yolov5x_seg",
+    "ncnn_ms": 713.14,
+    "compiled_ms": 1350.663,
+    "ratio": 1.894,
+    "excess_ms": 637.523
+  },
+  {
+    "model": "yolov5x",
+    "ncnn_ms": 563.328,
+    "compiled_ms": 1102.416,
+    "ratio": 1.957,
+    "excess_ms": 539.088
+  },
+  {
+    "model": "yolov5l_seg",
+    "ncnn_ms": 453.282,
+    "compiled_ms": 902.118,
+    "ratio": 1.99,
+    "excess_ms": 448.83600000000007
+  },
+  {
+    "model": "yolov5l",
+    "ncnn_ms": 368.953,
+    "compiled_ms": 669.434,
+    "ratio": 1.814,
+    "excess_ms": 300.481
+  },
+  {
+    "model": "pp_ocrv6_medium_det",
+    "ncnn_ms": 461.736,
+    "compiled_ms": 733.297,
+    "ratio": 1.588,
+    "excess_ms": 271.56100000000004
+  },
+  {
+    "model": "yolov5m_seg",
+    "ncnn_ms": 260.241,
+    "compiled_ms": 419.212,
+    "ratio": 1.611,
+    "excess_ms": 158.971
+  },
+  {
+    "model": "pp_ocrv6_medium_rec_int8",
+    "ncnn_ms": 25.22,
+    "compiled_ms": 126.299,
+    "ratio": 5.008,
+    "excess_ms": 101.07900000000001
+  }
+]

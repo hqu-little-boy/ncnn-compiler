@@ -1,0 +1,18 @@
+# started on Sun Sep 20 10:54:52 2026
+
+20315918,,cpu_atom/cycles:u/,5671535,30.00,,
+242508190436,,cpu_core/cycles:u/,58150437089,99.00,,
+18366708,,cpu_atom/instructions:u/,5671535,30.00,0.90,insn per cycle
+378816168832,,cpu_core/instructions:u/,58150437089,99.00,1.56,insn per cycle
+3652177,,cpu_atom/branches:u/,5671535,30.00,,
+18952913064,,cpu_core/branches:u/,58150437089,99.00,,
+122604,,cpu_atom/branch-misses:u/,5671535,30.00,3.36,of all branches
+32437257,,cpu_core/branch-misses:u/,58150437089,99.00,0.17,of all branches
+316728,,cpu_atom/cache-references:u/,5671535,30.00,,
+9170631533,,cpu_core/cache-references:u/,58150437089,99.00,,
+208441,,cpu_atom/cache-misses:u/,5671535,30.00,65.81,of all cache refs
+1318555810,,cpu_core/cache-misses:u/,58150437089,99.00,14.38,of all cache refs
+4287,,cpu_atom/dTLB-load-misses:u/,5671535,30.00,,
+1135262754,,cpu_core/dTLB-load-misses:u/,58150437089,99.00,,
+0,,context-switches:u,58156108624,100.00,,
+821229,,page-faults:u,58156108624,100.00,,

@@ -33,10 +33,10 @@ module attributes {
       ncnn.input_layout = "identity",
       ncnn.weight_layout = "row_major_kxn",
       ncnn.output_layout = "identity",
-      ncnn.packing = "unpacked",
-      ncnn.pack_factor = 1 : i64,
-      ncnn.pack_bytes = 0 : i64,
-      ncnn.unpack_bytes = 0 : i64,
+      ncnn.packing = "packed",
+      ncnn.pack_factor = 4 : i64,
+      ncnn.pack_bytes = 64 : i64,
+      ncnn.unpack_bytes = 32 : i64,
       ncnn.tile_m = 4 : i64,
       ncnn.tile_n = 8 : i64,
       ncnn.tile_k = 8 : i64,
@@ -77,8 +77,17 @@ module attributes {
 // CHECK-DAG: "matmul_i8_rows": 2
 // CHECK-DAG: "matmul_i8_acc_columns": 4
 // CHECK-DAG: "operations": [
-// CHECK-DAG: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1"
-// CHECK-DAG: "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1"
+// CHECK-DAG: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1|attribution-v1"
+// CHECK-DAG: "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|int8-target-v1|tuning-v1|attribution-v1"
+// CHECK-DAG: "attribution_revision": "attribution-v1"
+// CHECK-DAG: "static_pack_count": 1
+// CHECK-DAG: "static_pack_bytes": 64
+// CHECK-DAG: "static_pack_bytes_known": true
+// CHECK-DAG: "static_pack_status": "known"
+// CHECK-DAG: "static_unpack_count": 1
+// CHECK-DAG: "static_unpack_bytes": 32
+// CHECK-DAG: "static_unpack_bytes_known": true
+// CHECK-DAG: "static_unpack_status": "known"
 // CHECK-DAG: "fusion": {
 // CHECK-DAG: "enabled": true
 // CHECK-DAG: "selected_count": 1
@@ -107,4 +116,4 @@ module attributes {
 // CHECK-DAG: "conv_fallback_count": 0
 // CHECK-DAG: "gather_free": 1
 // CHECK-DAG: "nested_openmp_count": 0
-// CHECK-DAG: "packed_buffer_bytes": 0
+// CHECK-DAG: "packed_buffer_bytes": 64

@@ -13,7 +13,17 @@ import tempfile
 SCRIPT = pathlib.Path(__file__).parents[2] / "tools" / "perf_attribution_report.py"
 
 
+def fnv1a64(value: str) -> int:
+  result = 14695981039346656037
+  for character in value.encode("utf-8"):
+    result ^= character
+    result = (result * 1099511628211) & ((1 << 64) - 1)
+  return result
+
+
 def main() -> int:
+  if fnv1a64("model/linalg.matmul#0") != 16011668676398822909:
+    raise RuntimeError("fixture FNV-1a stable ID is incorrect")
   with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
     plan = root / "model.plan.json"
@@ -40,6 +50,7 @@ def main() -> int:
       "low_precision": low_precision,
       "schema_version": 1,
       "plan_revision": "static-v1",
+      "attribution_revision": "attribution-v1",
       "kind": "ncnn.model_execution_plan",
       "model": "fixture",
       "plan_hash": "plan-123",
@@ -49,7 +60,7 @@ def main() -> int:
       "operations": [{
         "id": "model/linalg.matmul#0",
         "kind": "linalg.matmul",
-        "profile_id": 17610563127416308805,
+        "profile_id": 16011668676398822909,
         "source_layer": 3,
         "source_name": "projection",
       }],
@@ -65,6 +76,7 @@ def main() -> int:
     profile.write_text(json.dumps({
       "schema_version": 1,
       "plan_revision": "static-v1",
+      "attribution_revision": "attribution-v1",
       "kind": "ncnn.model_execution_profile",
       "model": "fixture",
       "plan_hash": "plan-123",
@@ -73,9 +85,9 @@ def main() -> int:
       "threads": 2,
       "mode": "prepared",
       "instrumentation": {"coverage": "explicit-callbacks"},
-      "summary": {"peak_live_proven": True},
+      "summary": {"peak_live_proven": True, "peak_live_bytes": 64},
       "events": [{
-        "id": 17610563127416308805,
+        "id": 16011668676398822909,
         "category": "operation",
         "calls": 4,
         "inclusive_ns": 100,
@@ -140,6 +152,91 @@ def main() -> int:
       raise RuntimeError("unattributed event was reported as complete")
     if not report["runtime"]["peak_live_proven"]:
       raise RuntimeError("complete allocation coverage lost peak proof")
+    if report["top_allocations"][0]["id"] != 1234:
+      raise RuntimeError("top allocation report was not generated")
+    if report["runtime"]["copy_layout"]["copy"]["status"] != "not_observed":
+      raise RuntimeError("copy layout status was not explicit")
+
+    v2_profile = root / "profile-v2.ndjson"
+    v2_base = json.loads(profile.read_text())
+    v2_rows = []
+    for invocation_id, allocation_bytes, copy_bytes, complete in [
+        (1, 64, 32, True), (2, 128, None, False)]:
+      row = dict(v2_base)
+      row.update({
+        "schema_version": 2,
+        "instrumentation": {
+          "coverage": "explicit-callbacks",
+          "aggregation": "per-invocation",
+        },
+        "invocation_id": invocation_id,
+        "complete": complete,
+        "summary": {
+          "peak_live_proven": True,
+          "peak_live_bytes": allocation_bytes,
+          "top_level_time_ns": 100 * invocation_id,
+          "top_level_time_known": True,
+        },
+        "events": [{
+          "id": 16011668676398822909,
+          "category": "operation",
+          "calls": 1,
+          "inclusive_ns": 100 * invocation_id,
+          "exclusive_ns": 100 * invocation_id,
+        }, {
+          "id": 1234,
+          "category": "allocation",
+          "calls": 1,
+          "inclusive_ns": 0,
+          "exclusive_ns": 0,
+          "bytes": allocation_bytes,
+          "bytes_known": True,
+        }, {
+          "id": 16011668676398822909,
+          "category": "copy",
+          "calls": 1,
+          "inclusive_ns": 0,
+          "exclusive_ns": 0,
+          "bytes": copy_bytes,
+          "bytes_known": copy_bytes is not None,
+        }],
+      })
+      v2_rows.append(row)
+    v2_profile.write_text("".join(json.dumps(row) + "\n" for row in v2_rows))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(perf), "--plan", str(plan),
+      "--profile", str(v2_profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+      raise RuntimeError(result.stderr)
+    v2_report = json.loads(result.stdout)
+    v2_runtime = v2_report["runtime"]
+    if v2_runtime["invocation_count"] != 2:
+      raise RuntimeError("schema-2 invocation count was not aggregated")
+    if v2_report["invocation_id"] is not None or \
+        v2_report["invocation_ids"] != [1, 2]:
+      raise RuntimeError("schema-2 invocation identity was not aggregated")
+    if v2_runtime["copy_layout"]["copy"]["status"] != "unknown":
+      raise RuntimeError("schema-2 unknown copy bytes were lost")
+    if v2_runtime["copy_layout"]["copy"]["bytes"] is not None:
+      raise RuntimeError("schema-2 unknown copy bytes became numeric")
+    if v2_runtime["complete"]:
+      raise RuntimeError("schema-2 incomplete invocation was accepted")
+    if "runtime_profile_incomplete" not in v2_runtime["incomplete_reasons"]:
+      raise RuntimeError("schema-2 incomplete reason was not reported")
+    if v2_report["top_allocations"][0]["runtime_bytes"] != 96:
+      raise RuntimeError("schema-2 allocation bytes were not aggregated")
+
+    schema1_ndjson = root / "schema1.ndjson"
+    schema1_row = json.loads(profile.read_text())
+    schema1_ndjson.write_text(
+      json.dumps(schema1_row) + "\n" + json.dumps(schema1_row) + "\n")
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(perf), "--plan", str(plan),
+      "--profile", str(schema1_ndjson), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode == 0 or "schema-2" not in result.stderr:
+      raise RuntimeError("schema-1 NDJSON was accepted as schema-2")
 
     runtime_default_plan = json.loads(plan.read_text())
     runtime_default_plan["target"]["threads"] = 0
@@ -281,6 +378,17 @@ def main() -> int:
     ], capture_output=True, text=True)
     if result.returncode == 0 or "attribution is incomplete" not in result.stderr:
       raise RuntimeError("event mismatch was accepted")
+
+    invalid["summary"]["event_mismatch_count"] = 0
+    invalid["summary"]["copy_bytes"] = None
+    invalid["summary"]["copy_bytes_known"] = True
+    profile.write_text(json.dumps(invalid))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(perf), "--plan", str(plan),
+      "--profile", str(profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode == 0 or "copy_bytes_known=true" not in result.stderr:
+      raise RuntimeError("inconsistent summary bytes were accepted")
   return 0
 
 

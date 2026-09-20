@@ -28,6 +28,8 @@ int main(void) {
   __ncnn_profile_alloc(9, 64);
   __ncnn_profile_copy(10, 32);
   __ncnn_profile_movement(11, 0, 128);
+  __ncnn_profile_movement(12, 1, 256);
+  __ncnn_profile_movement(13, 2, 512);
   __ncnn_profile_dealloc(9);
   __ncnn_profile_flush();
   __ncnn_profile_flush();
@@ -132,6 +134,7 @@ def main() -> int:
     document = json.loads(profile.read_text(encoding="utf-8"))
     assert document["kind"] == "ncnn.model_execution_profile"
     assert document["plan_revision"] == "static-v1|int8-target-v1"
+    assert document["attribution_revision"] == "attribution-v1"
     assert document["instrumentation"]["aggregation"] == "process-cumulative"
     assert document["instrumentation"]["invocation_count"] == 2
     assert document["mode"] == "line\bfeed\f"
@@ -147,8 +150,12 @@ def main() -> int:
     assert summary["transpose_count"] == 1
     assert summary["runtime_transpose_write_bytes"] == 128
     assert summary["runtime_transpose_write_bytes_known"] is True
-    assert summary["pack_count"] == 0
-    assert summary["pack_bytes"] is None
+    assert summary["pack_count"] == 1
+    assert summary["pack_bytes"] == 256
+    assert summary["pack_bytes_known"] is True
+    assert summary["unpack_count"] == 1
+    assert summary["unpack_bytes"] == 512
+    assert summary["unpack_bytes_known"] is True
     assert summary["peak_live_bytes"] == 64
     assert summary["peak_live_proven"] is True
     assert summary["top_level_time_ns"] > 0
@@ -157,8 +164,16 @@ def main() -> int:
     records = {(event["id"], event["category"]): event
                for event in document["events"]}
     assert records[(9, "allocation")]["calls"] == 1
+    assert records[(9, "allocation")]["bytes"] == 64
+    assert records[(9, "allocation")]["bytes_known"] is True
     assert records[(10, "copy")]["calls"] == 1
+    assert records[(10, "copy")]["bytes"] == 32
     assert records[(11, "transpose")]["calls"] == 1
+    assert records[(11, "transpose")]["bytes"] == 128
+    assert records[(12, "pack")]["calls"] == 1
+    assert records[(12, "pack")]["bytes"] == 256
+    assert records[(13, "unpack")]["calls"] == 1
+    assert records[(13, "unpack")]["bytes"] == 512
     assert records[(8, "parallel")]["exclusive_ns"] is None
     source.write_text(CONCURRENT_HARNESS, encoding="utf-8")
     subprocess.run([args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror",
@@ -196,6 +211,7 @@ def main() -> int:
     assert len(rows) == 2
     assert [row["schema_version"] for row in rows] == [2, 2]
     assert [row["invocation_id"] for row in rows] == [1, 2]
+    assert all(row["attribution_revision"] == "attribution-v1" for row in rows)
     assert all(row["complete"] is True for row in rows)
     assert [row["summary"]["allocation_bytes"] for row in rows] == [64, 128]
     assert [row["summary"]["runtime_transpose_write_bytes"]

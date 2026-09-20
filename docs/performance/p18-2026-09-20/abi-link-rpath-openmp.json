@@ -1,0 +1,13 @@
+{
+  "library": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet18/libresnet18.so",
+  "library_exists": true,
+  "rpath_or_runpath_present": false,
+  "openmp_runtime_links": [
+    "libomp.so.5 => /lib/x86_64-linux-gnu/libomp.so.5 (0x00007fa10c970000)"
+  ],
+  "public_profile_abi_symbols": [],
+  "compiler_rpath_or_runpath_present": false,
+  "note": "This is a structural audit; no public typed bare-pointer ABI change is introduced.",
+  "cmake_compiler_install_rpath": "ON",
+  "rpath_interpretation": "CMAKE COMPILER_INSTALL_RPATH is ON; generated model shared library is intentionally standalone and has no DT_RPATH/DT_RUNPATH."
+}

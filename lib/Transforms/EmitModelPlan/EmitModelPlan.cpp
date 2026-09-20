@@ -320,12 +320,20 @@ class EmitModelPlanPass final
     std::set<std::string> workspace_fallback_reasons;
     std::int64_t packed_buffer_bytes = 0;
     bool packed_buffer_bytes_unknown = false;
+    std::int64_t packed_operation_count = 0;
+    std::int64_t static_pack_bytes = 0;
+    bool static_pack_bytes_unknown = false;
+    std::int64_t unpacked_operation_count = 0;
+    std::int64_t static_unpack_bytes = 0;
+    bool static_unpack_bytes_unknown = false;
     std::optional<std::int64_t> static_buffer_bytes = 0;
     std::optional<std::int64_t> static_peak_live_bytes;
     bool peak_workspace_unknown = false;
     std::int64_t dynamic_buffer_count = 0;
     std::int64_t static_copy_bytes = 0;
     bool has_unknown_copy_bytes = false;
+    std::int64_t static_transpose_bytes = 0;
+    bool has_unknown_transpose_bytes = false;
     const bool fusion_enabled =
       module->getAttrOfType<BoolAttr>(contract::kFusionEnabled)
         ? module->getAttrOfType<BoolAttr>(contract::kFusionEnabled).getValue()
@@ -499,11 +507,12 @@ class EmitModelPlanPass final
       "|matmul-i8-rows=" + std::to_string(matmulI8Rows.getValue()) +
       "|matmul-i8-acc-columns=" + std::to_string(matmulI8AccColumns.getValue());
 
+    constexpr StringLiteral attribution_revision = "attribution-v1";
     std::string plan_hash_input =
       "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v1|conv-depthwise-"
       "v1|" +
-      model + "|" + targetTriple + "|" + std::to_string(threads) + "|" +
-      std::to_string(vectorLanes) + "|" +
+      attribution_revision.str() + "|" + model + "|" + targetTriple + "|" +
+      std::to_string(threads) + "|" + std::to_string(vectorLanes) + "|" +
       std::to_string(vectorScalable.getValue()) + "|" +
       std::to_string(vectorTail.getValue()) + "|codegen=" + codegenIdentity +
       "|fusion-enabled=" + std::to_string(fusion_enabled) +
@@ -979,6 +988,7 @@ class EmitModelPlanPass final
                 operation->getAttrOfType<StringAttr>(contract::kPacking);
               packing && packing.getValue() != "unpacked" &&
               packing.getValue() != "none") {
+            ++packed_operation_count;
             if (auto bytes =
                   operation->getAttrOfType<IntegerAttr>(contract::kPackBytes)) {
               if (!packed_buffer_bytes_unknown && bytes.getInt() > 0 &&
@@ -988,8 +998,30 @@ class EmitModelPlanPass final
               } else {
                 packed_buffer_bytes_unknown = true;
               }
+              if (!static_pack_bytes_unknown && bytes.getInt() >= 0 &&
+                  static_pack_bytes <=
+                    std::numeric_limits<std::int64_t>::max() - bytes.getInt()) {
+                static_pack_bytes += bytes.getInt();
+              } else {
+                static_pack_bytes_unknown = true;
+              }
             } else {
               packed_buffer_bytes_unknown = true;
+              static_pack_bytes_unknown = true;
+            }
+          }
+          if (auto bytes =
+                operation->getAttrOfType<IntegerAttr>(contract::kUnpackBytes);
+              bytes) {
+            if (bytes.getInt() > 0) {
+              ++unpacked_operation_count;
+            }
+            if (!static_unpack_bytes_unknown && bytes.getInt() >= 0 &&
+                static_unpack_bytes <=
+                  std::numeric_limits<std::int64_t>::max() - bytes.getInt()) {
+              static_unpack_bytes += bytes.getInt();
+            } else {
+              static_unpack_bytes_unknown = true;
             }
           }
           JsonObject contract_entry = make_contract();
@@ -1070,6 +1102,9 @@ class EmitModelPlanPass final
           buffer["profile_id"] = profileId(operation_id);
           add_size_fields(buffer, alloc.getType());
           const ByteSize size = checkedByteSize(alloc.getType());
+          buffer["bytes_known"] = size.bytes.has_value();
+          buffer["workspace_join_status"] = "not_applicable";
+          buffer["workspace_join_reason"] = "no_workspace_slot";
           auto lifetime = lifetimes.find(operation);
           if (lifetime != lifetimes.end()) {
             const bool proven =
@@ -1083,15 +1118,22 @@ class EmitModelPlanPass final
             buffer["workspace_reuse_status"] = status.getValue().str();
             if (status.getValue() == "fallback") {
               ++workspace_fallback_count;
+              buffer["workspace_join_status"] = "fallback";
               if (auto reason = alloc->getAttrOfType<StringAttr>(
                     "ncnn.workspace_fallback_reason")) {
-                workspace_fallback_reasons.insert(reason.getValue().str());
+                const std::string reason_value = reason.getValue().str();
+                workspace_fallback_reasons.insert(reason_value);
+                buffer["workspace_join_reason"] = reason_value;
+              } else {
+                buffer["workspace_join_reason"] = "unknown";
               }
             }
           }
           if (auto slot =
                 alloc->getAttrOfType<IntegerAttr>("ncnn.workspace_slot")) {
             buffer["workspace_slot"] = slot.getInt();
+            buffer["workspace_join_status"] = "joined";
+            buffer["workspace_join_reason"] = nullptr;
             const std::string slotId =
               function_name + "/" + std::to_string(slot.getInt());
             if (workspace_slot_ids.insert(slotId).second) {
@@ -1194,8 +1236,25 @@ class EmitModelPlanPass final
             operation->getParentOfType<omp::ParallelOp>() != nullptr) {
           ++nested_openmp_count;
         }
-        if (kind.find("transpose") != std::string::npos) {
+        if (isa<memref::TransposeOp>(*operation)) {
           ++transpose_count;
+          if (!has_unknown_transpose_bytes) {
+            Type size_type;
+            if (operation->getNumResults() != 0) {
+              size_type = operation->getResult(0).getType();
+            } else if (operation->getNumOperands() != 0) {
+              size_type = operation->getOperand(0).getType();
+            }
+            const ByteSize size = checkedByteSize(size_type);
+            if (size.bytes &&
+                static_transpose_bytes <=
+                  std::numeric_limits<std::int64_t>::max() - *size.bytes) {
+              static_transpose_bytes += *size.bytes;
+            } else {
+              has_unknown_transpose_bytes = true;
+              add_unknown("transpose_bytes_unknown");
+            }
+          }
         }
         if (operation == function.getOperation()) {
           return;
@@ -1286,12 +1345,54 @@ class EmitModelPlanPass final
       summary["static_buffer_bytes"] = nullptr;
     }
     summary["dynamic_buffer_count"] = dynamic_buffer_count;
-    if (has_unknown_copy_bytes) {
+    if (copy_count == 0 || has_unknown_copy_bytes) {
       summary["static_copy_bytes"] = nullptr;
     } else {
       summary["static_copy_bytes"] = static_copy_bytes;
     }
-    summary["static_copy_bytes_known"] = !has_unknown_copy_bytes;
+    summary["static_copy_bytes_known"] =
+      copy_count != 0 && !has_unknown_copy_bytes;
+    summary["attribution_revision"] = attribution_revision.str();
+    summary["static_copy_count"] = copy_count;
+    summary["static_copy_status"] = copy_count == 0          ? "not_applicable"
+                                    : has_unknown_copy_bytes ? "unknown"
+                                                             : "known";
+    summary["static_transpose_count"] = transpose_count;
+    if (transpose_count == 0 || has_unknown_transpose_bytes) {
+      summary["static_transpose_bytes"] = nullptr;
+    } else {
+      summary["static_transpose_bytes"] = static_transpose_bytes;
+    }
+    summary["static_transpose_bytes_known"] =
+      transpose_count != 0 && !has_unknown_transpose_bytes;
+    summary["static_transpose_status"] = transpose_count == 0 ? "not_applicable"
+                                         : has_unknown_transpose_bytes
+                                           ? "unknown"
+                                           : "known";
+    summary["static_pack_count"] = packed_operation_count;
+    if (packed_operation_count == 0 || static_pack_bytes_unknown) {
+      summary["static_pack_bytes"] = nullptr;
+    } else {
+      summary["static_pack_bytes"] = static_pack_bytes;
+    }
+    summary["static_pack_bytes_known"] =
+      packed_operation_count != 0 && !static_pack_bytes_unknown;
+    summary["static_pack_status"] = packed_operation_count == 0
+                                      ? "not_applicable"
+                                    : static_pack_bytes_unknown ? "unknown"
+                                                                : "known";
+    summary["static_unpack_count"] = unpacked_operation_count;
+    if (unpacked_operation_count == 0 || static_unpack_bytes_unknown) {
+      summary["static_unpack_bytes"] = nullptr;
+    } else {
+      summary["static_unpack_bytes"] = static_unpack_bytes;
+    }
+    summary["static_unpack_bytes_known"] =
+      unpacked_operation_count != 0 && !static_unpack_bytes_unknown;
+    summary["static_unpack_status"] = unpacked_operation_count == 0
+                                        ? "not_applicable"
+                                      : static_unpack_bytes_unknown ? "unknown"
+                                                                    : "known";
     if (static_peak_live_bytes && !peak_workspace_unknown) {
       summary["peak_workspace_bytes"] = *static_peak_live_bytes;
       summary["peak_workspace_proven"] = true;
@@ -1373,10 +1474,11 @@ class EmitModelPlanPass final
     root["schema_version"] = 1;
     root["plan_revision"] =
       "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|int8-target-v1|tuning-v1";
+      "depthwise-v1|int8-target-v1|tuning-v1|attribution-v1";
     root["contract_revision"] =
       "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|int8-target-v1|tuning-v1";
+      "depthwise-v1|int8-target-v1|tuning-v1|attribution-v1";
+    root["attribution_revision"] = attribution_revision.str();
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen
     // hash, so profile/performance rows cannot join across code-generation

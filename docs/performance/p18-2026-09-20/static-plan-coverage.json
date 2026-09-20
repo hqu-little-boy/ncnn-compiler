@@ -1,0 +1,10 @@
+{
+  "models": 45,
+  "workspace_slot_count_nonzero": 0,
+  "peak_workspace_proven_true": 0,
+  "packed_buffer_bytes_nonzero": 0,
+  "static_pack_count_nonzero": 5,
+  "static_unpack_count_nonzero": 0,
+  "transpose_count_nonzero": 0,
+  "interpretation": "Static plan metadata is evidence of contracts only; runtime counters remain not_collected in formal E2E."
+}

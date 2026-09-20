@@ -1,0 +1,37 @@
+{
+  "function": "relu",
+  "inputs": [
+    {
+      "dynamic_dim_mask": 0,
+      "element_type": "f32",
+      "name": "input1",
+      "shape": [
+        3,
+        4,
+        5
+      ]
+    }
+  ],
+  "openmp": true,
+  "outputs": [
+    {
+      "dynamic_dim_mask": 0,
+      "element_type": "f32",
+      "name": "output1",
+      "shape": [
+        3,
+        4,
+        5
+      ]
+    }
+  ],
+  "target": {
+    "cpu": "",
+    "execution_profile": "x86-64-auto",
+    "features": [],
+    "march": "",
+    "triple": "x86_64-pc-linux-gnu",
+    "tune": ""
+  },
+  "vector_math": "libmvec"
+}

@@ -1,0 +1,321 @@
+{
+  "stage": "/tmp/ncnn-compiler-stage-p18-final-02/test",
+  "artifacts": [
+    {
+      "model": "squeezenet_v1_1",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/squeezenet_v1_1/squeezenet_v1_1.plan.json",
+      "plan_sha256": "5c2be02b494b6a1a03dd96bb953fb67db4f4821d4478140770adaaa8329e051e",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/squeezenet_v1_1/libsqueezenet_v1_1.so",
+      "library_archived": false
+    },
+    {
+      "model": "resnet18",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet18/resnet18.plan.json",
+      "plan_sha256": "0c2648156560f06769dfca1d1a37ddfb974e40195f6f434a3b7bc7979983a091",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet18/libresnet18.so",
+      "library_archived": false
+    },
+    {
+      "model": "resnet18_winograd",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet18_winograd/resnet18_winograd.plan.json",
+      "plan_sha256": "80edd34f480abd6c5ec0a8b7fe970dbd235d706ce46236a30053e94f6432f84a",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet18_winograd/libresnet18_winograd.so",
+      "library_archived": false
+    },
+    {
+      "model": "resnet34",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet34/resnet34.plan.json",
+      "plan_sha256": "46203a163a819812ff1e234eb0fb6c9f8e2f310509891c37e7613d8229604659",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet34/libresnet34.so",
+      "library_archived": false
+    },
+    {
+      "model": "resnet50",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet50/resnet50.plan.json",
+      "plan_sha256": "7677b7031c90fd4cf9d94b9cd97992e809895adb82c73d7a085e9cd03c816bb3",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet50/libresnet50.so",
+      "library_archived": false
+    },
+    {
+      "model": "resnet101",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet101/resnet101.plan.json",
+      "plan_sha256": "57114d0b76a4247dc35203c07a158b18853a8aac1b31493302827135c37e8dca",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/resnet101/libresnet101.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5n_cls",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5n_cls/yolov5n_cls.plan.json",
+      "plan_sha256": "49c39f1a8b0eea1f1e007bfa13aa207c2aefc883dab356a9e6a2762def155825",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5n_cls/libyolov5n_cls.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5s_cls",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5s_cls/yolov5s_cls.plan.json",
+      "plan_sha256": "6d09ed4b6cca10d1c51ff138e9271a171670e79ded10452d02ef58e73c840c5f",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5s_cls/libyolov5s_cls.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5m_cls",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5m_cls/yolov5m_cls.plan.json",
+      "plan_sha256": "2eb17404f73fbc4cd7b0bfb64576d4ae883d444cfc4f52f6ef5251f753c4c6bf",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5m_cls/libyolov5m_cls.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5l_cls",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5l_cls/yolov5l_cls.plan.json",
+      "plan_sha256": "3b04f0b5a1fa8f4fe09f4f96d44b259f27528652c3e5017617d825c5f3e5e6fd",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5l_cls/libyolov5l_cls.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5x_cls",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5x_cls/yolov5x_cls.plan.json",
+      "plan_sha256": "9daa1165309fb4fda980b3a1db49c7a2db83822c9f7939eb527e320bbbec60e6",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5x_cls/libyolov5x_cls.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5n",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5n/yolov5n.plan.json",
+      "plan_sha256": "759988e55d77e07060c118759852bc913062c043348ac70282bbe2a70d09ee3f",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5n/libyolov5n.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5s",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5s/yolov5s.plan.json",
+      "plan_sha256": "654f006159a869c1b13513b3724ebaf2d62a660c246dcb512a34380e488b5459",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5s/libyolov5s.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5m",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5m/yolov5m.plan.json",
+      "plan_sha256": "dfbe20a7866837fa341883f2c3c9b2c80db9fb013e75482c80f62db03fd08638",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5m/libyolov5m.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5l",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5l/yolov5l.plan.json",
+      "plan_sha256": "7a17e2a967555fbe01582c3e7abe66e047b751bbc80475a77d969237d4b1e1d7",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5l/libyolov5l.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5x",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5x/yolov5x.plan.json",
+      "plan_sha256": "892e96e49c45e6d33c0908e7589cc7b3782e3eb19b037ff86425741b16a98e42",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5x/libyolov5x.so",
+      "library_archived": false
+    },
+    {
+      "model": "efficientnet_b0",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/efficientnet_b0/efficientnet_b0.plan.json",
+      "plan_sha256": "b1d31136a9169c907901b0bc57874761145c2b5a6c84d314861faf639b4b0f28",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/efficientnet_b0/libefficientnet_b0.so",
+      "library_archived": false
+    },
+    {
+      "model": "efficientnet_b1",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/efficientnet_b1/efficientnet_b1.plan.json",
+      "plan_sha256": "9df01bf141f9d1843642796347680f0f138391c9ac15f7cff73dcfad06bbbfa0",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/efficientnet_b1/libefficientnet_b1.so",
+      "library_archived": false
+    },
+    {
+      "model": "efficientnet_b2",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/efficientnet_b2/efficientnet_b2.plan.json",
+      "plan_sha256": "dc1797566c5638cefde1d916a3fe1d0f258551c0cd0ff7f31302bf190e2c273f",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/efficientnet_b2/libefficientnet_b2.so",
+      "library_archived": false
+    },
+    {
+      "model": "efficientnet_b3",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/efficientnet_b3/efficientnet_b3.plan.json",
+      "plan_sha256": "4ead5fb940af5fc9c325715b615d159601cc46585ec8bcfb651a0e60bfdc877f",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/efficientnet_b3/libefficientnet_b3.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_lcnet_x1_0_doc_ori",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_lcnet_x1_0_doc_ori/pp_lcnet_x1_0_doc_ori.plan.json",
+      "plan_sha256": "f5d94d121518fe6fc23a7a4b241dc17571f04defb6a0acfeb686d96f38dcdb51",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_lcnet_x1_0_doc_ori/libpp_lcnet_x1_0_doc_ori.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_lcnet_x1_0_textline_ori",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_lcnet_x1_0_textline_ori/pp_lcnet_x1_0_textline_ori.plan.json",
+      "plan_sha256": "8562250d0a40beb29f6ff3d25a28a16ae3cd0239b5a4a6c4d0199ee2fc4d0652",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_lcnet_x1_0_textline_ori/libpp_lcnet_x1_0_textline_ori.so",
+      "library_archived": false
+    },
+    {
+      "model": "chineseocr_lite_anglenet",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/chineseocr_lite_anglenet/chineseocr_lite_anglenet.plan.json",
+      "plan_sha256": "efa795655b6cc394efc76c8f6d39034418c9cafcb6fbf3239d0f2a091bca683c",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/chineseocr_lite_anglenet/libchineseocr_lite_anglenet.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5n_seg",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5n_seg/yolov5n_seg.plan.json",
+      "plan_sha256": "dde624e3e527f1c4cee91dc4afbb5318ab51a3db82f6b13d15458eed87e8b443",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5n_seg/libyolov5n_seg.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5s_seg",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5s_seg/yolov5s_seg.plan.json",
+      "plan_sha256": "58411528343c8735e6d15282b1d95a3cd1fb607b77dbd1b789ec3c6f0182afdd",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5s_seg/libyolov5s_seg.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5m_seg",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5m_seg/yolov5m_seg.plan.json",
+      "plan_sha256": "d7a4e07c990fe3be3edb56a5d435b9e1f3639b4696faa22bf7a32e4e4c3d8e83",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5m_seg/libyolov5m_seg.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5l_seg",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5l_seg/yolov5l_seg.plan.json",
+      "plan_sha256": "f3ba95158b633377cb8d51eba3fdd06d533808fb17d79996d52303066d00d7d0",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5l_seg/libyolov5l_seg.so",
+      "library_archived": false
+    },
+    {
+      "model": "yolov5x_seg",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5x_seg/yolov5x_seg.plan.json",
+      "plan_sha256": "16ec5b095dfbdf41f3712570f6135207e6b6fe1e641d1ae5495fedf64094d3b8",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/yolov5x_seg/libyolov5x_seg.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_tiny_rec",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_tiny_rec/pp_ocrv6_tiny_rec.plan.json",
+      "plan_sha256": "27869767b50c32533eecbc4db0ad833f446be67a01d87f5b92db0d4cb0511a6f",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_tiny_rec/libpp_ocrv6_tiny_rec.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_tiny_rec_int8",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_tiny_rec_int8/pp_ocrv6_tiny_rec_int8.plan.json",
+      "plan_sha256": "aa35c9b4894279bcdf69b91829a93c0e96c16f6d8ae5a64cf00e3503cf5601f1",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_tiny_rec_int8/libpp_ocrv6_tiny_rec_int8.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv5_mobile_rec",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_mobile_rec/pp_ocrv5_mobile_rec.plan.json",
+      "plan_sha256": "a08a5ebf8be4aeacc40c012a0f0ef2af2798e79d9d062f5c09f01db7900be001",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_mobile_rec/libpp_ocrv5_mobile_rec.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv5_mobile_rec_int8",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_mobile_rec_int8/pp_ocrv5_mobile_rec_int8.plan.json",
+      "plan_sha256": "1309b597e7d9fe3279ea51735a383b2a884758f878070657311dcb8560bc6677",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_mobile_rec_int8/libpp_ocrv5_mobile_rec_int8.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv5_server_rec",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_server_rec/pp_ocrv5_server_rec.plan.json",
+      "plan_sha256": "2e45df74444e08d29cca449c3794cdb2dc89740594f832862bc4456cc01844e7",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_server_rec/libpp_ocrv5_server_rec.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_medium_rec",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_medium_rec/pp_ocrv6_medium_rec.plan.json",
+      "plan_sha256": "0ba58523eddfe4a3044a301d9310f9731d4ab1bf5bd7194e65cc7bccf8c85e97",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_medium_rec/libpp_ocrv6_medium_rec.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_medium_rec_int8",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_medium_rec_int8/pp_ocrv6_medium_rec_int8.plan.json",
+      "plan_sha256": "f684a6487e5767442cd497f8490efc08da47ebdf49b0debc7d6caf6fe863dbdd",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_medium_rec_int8/libpp_ocrv6_medium_rec_int8.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_small_rec",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_small_rec/pp_ocrv6_small_rec.plan.json",
+      "plan_sha256": "a3dc9d8490e9bbbc74a80844ab5c659a8b9265ed9d08e667133166779f222ab9",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_small_rec/libpp_ocrv6_small_rec.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_small_rec_int8",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_small_rec_int8/pp_ocrv6_small_rec_int8.plan.json",
+      "plan_sha256": "2af6fd56f7d2b294ec72f66760558a0d9fc7c4cfdd8a74db4854322b26edc6ae",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_small_rec_int8/libpp_ocrv6_small_rec_int8.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_tiny_det",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_tiny_det/pp_ocrv6_tiny_det.plan.json",
+      "plan_sha256": "668f9b0cc85df700ea945954ae597e432b2a02d8aa1e6a38a41498e2a8cb27ac",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_tiny_det/libpp_ocrv6_tiny_det.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_small_det",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_small_det/pp_ocrv6_small_det.plan.json",
+      "plan_sha256": "7f3079a323fc2e5cf3fb5e52f7dcfbedad208cc430f6b192775ccb5deb3a2e5f",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_small_det/libpp_ocrv6_small_det.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_medium_det",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_medium_det/pp_ocrv6_medium_det.plan.json",
+      "plan_sha256": "b0a755ee2d78aa135e597a8c55142ec2e0532a7eaa89e184aa77e03fd97ab0c6",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_medium_det/libpp_ocrv6_medium_det.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv6_medium_det_int8",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_medium_det_int8/pp_ocrv6_medium_det_int8.plan.json",
+      "plan_sha256": "3e0e7008bdb82eb7a0c4927583106b14c31812ef4bdac3e0450ab674aca476a8",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv6_medium_det_int8/libpp_ocrv6_medium_det_int8.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv5_mobile_det_static",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_mobile_det_static/pp_ocrv5_mobile_det_static.plan.json",
+      "plan_sha256": "529950d03cd2c055168216c88475c2c010f5b052bb19e51b7be05f2dbe5df1e7",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_mobile_det_static/libpp_ocrv5_mobile_det_static.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_ocrv5_server_det_static",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_server_det_static/pp_ocrv5_server_det_static.plan.json",
+      "plan_sha256": "c5e0115020dfe6cfe5a822d2c13846e50105a472056ce239bd234b097b0d7627",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_ocrv5_server_det_static/libpp_ocrv5_server_det_static.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_structrurev2_slanet_plus_cnn",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_structrurev2_slanet_plus_cnn/pp_structrurev2_slanet_plus_cnn.plan.json",
+      "plan_sha256": "72a4854791da5896a5ea750c1773d4a69d9da8df02ad8867fd29b8c0410a68cc",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_structrurev2_slanet_plus_cnn/libpp_structrurev2_slanet_plus_cnn.so",
+      "library_archived": false
+    },
+    {
+      "model": "pp_formulanet_plus_s_encoder",
+      "plan_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_formulanet_plus_s_encoder/pp_formulanet_plus_s_encoder.plan.json",
+      "plan_sha256": "1e6bebeb165fc8d5b147d01235f0c3818dbda2470bb6da8287f0039acc957012",
+      "library_path": "/tmp/ncnn-compiler-stage-p18-final-02/test/Numerical/generated/pp_formulanet_plus_s_encoder/libpp_formulanet_plus_s_encoder.so",
+      "library_archived": false
+    }
+  ],
+  "note": "Large generated shared libraries remain in fresh /tmp stage; plans and hashes are archived."
+}
