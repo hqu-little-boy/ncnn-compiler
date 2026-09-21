@@ -63,8 +63,13 @@ def main() -> int:
         "profile_id": 16011668676398822909,
         "source_layer": 3,
         "source_name": "projection",
+        "kernel_contract": {
+          "kernel": "f32_packed_mxn_fma",
+          "packing": "prepacked_B",
+          "pack_runtime": "compile_time_B",
+        },
       }],
-      "summary": {"peak_workspace_bytes": None},
+      "summary": {"peak_workspace_bytes": None, "packed_buffer_bytes": 64},
       "diagnostics": {"unknown_fields": []},
       "conv_depthwise_operations": [{
         "family": "conv",
@@ -131,6 +136,13 @@ def main() -> int:
       raise RuntimeError("static low-precision audit was not preserved")
     if "low_precision" in report["runtime"]:
       raise RuntimeError("static low-precision audit advertised runtime data")
+    packed_runtime = report["runtime"]["packed_kernel_summary"]
+    if packed_runtime["runtime_consumed"] is not True or \
+        packed_runtime["call_count"] != 4 or \
+        packed_runtime["packed_buffer_bytes"] != 64:
+      raise RuntimeError("packed kernel runtime join was not preserved")
+    if report["runtime"]["packed_kernels"][0]["event_join_status"] != "joined":
+      raise RuntimeError("packed kernel event was not joined")
     if report["top_costs"][0]["source_name"] != "projection":
       raise RuntimeError("provenance was not joined")
     conv_breakdown = report["static"]["conv_depthwise"]["conv"]
@@ -216,6 +228,27 @@ def main() -> int:
     if v2_report["invocation_id"] is not None or \
         v2_report["invocation_ids"] != [1, 2]:
       raise RuntimeError("schema-2 invocation identity was not aggregated")
+    parallel_profile = root / "parallel-profile.json"
+    parallel_value = json.loads(profile.read_text())
+    parallel_value["events"] = [
+      dict(event, category="parallel")
+      if event.get("category") == "operation" and
+      event.get("id") == 16011668676398822909 else event
+      for event in parallel_value["events"]
+    ]
+    parallel_profile.write_text(json.dumps(parallel_value))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(perf), "--plan", str(plan),
+      "--profile", str(parallel_profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+      raise RuntimeError(result.stderr)
+    parallel_report = json.loads(result.stdout)
+    parallel_runtime = parallel_report["runtime"]["packed_kernel_summary"]
+    if parallel_runtime["runtime_consumed"] is not True or \
+        parallel_runtime["call_count"] != 4:
+      raise RuntimeError("parallel packed kernel event was not joined")
+
     if v2_runtime["copy_layout"]["copy"]["status"] != "unknown":
       raise RuntimeError("schema-2 unknown copy bytes were lost")
     if v2_runtime["copy_layout"]["copy"]["bytes"] is not None:

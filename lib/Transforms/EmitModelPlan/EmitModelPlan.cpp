@@ -320,6 +320,10 @@ class EmitModelPlanPass final
     std::set<std::string> workspace_fallback_reasons;
     std::int64_t packed_buffer_bytes = 0;
     bool packed_buffer_bytes_unknown = false;
+    std::int64_t packed_constant_bytes = 0;
+    bool packed_constant_bytes_unknown = false;
+    std::int64_t packed_constant_count = 0;
+    std::set<std::string> packed_constant_ids;
     std::int64_t packed_operation_count = 0;
     std::int64_t static_pack_bytes = 0;
     bool static_pack_bytes_unknown = false;
@@ -510,7 +514,7 @@ class EmitModelPlanPass final
     constexpr StringLiteral attribution_revision = "attribution-v1";
     std::string plan_hash_input =
       "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v1|conv-depthwise-"
-      "v1|" +
+      "v1|packed-gemm-v1|" +
       attribution_revision.str() + "|" + model + "|" + targetTriple + "|" +
       std::to_string(threads) + "|" + std::to_string(vectorLanes) + "|" +
       std::to_string(vectorScalable.getValue()) + "|" +
@@ -842,6 +846,28 @@ class EmitModelPlanPass final
           plan_hash_input += "|" + printType(result);
         }
         plan_hash_input += "|attrs=" + printAttributes(*operation);
+        if (operation->hasAttr(contract::kPackedWeight)) {
+          std::string packedId = operation_id;
+          if (auto global = dyn_cast<memref::GetGlobalOp>(operation)) {
+            packedId = "global/" + global.getName().str();
+          }
+          if (packed_constant_ids.insert(packedId).second) {
+            ++packed_constant_count;
+            Type packedType = operation->getNumResults() != 0
+                                ? operation->getResult(0).getType()
+                                : Type();
+            ByteSize packedSize = checkedByteSize(packedType);
+            if (packedSize.bytes && !packed_constant_bytes_unknown &&
+                packed_constant_bytes <=
+                  std::numeric_limits<std::int64_t>::max() -
+                    *packedSize.bytes) {
+              packed_constant_bytes += *packedSize.bytes;
+            } else {
+              packed_constant_bytes_unknown = true;
+              add_unknown("packed_constant_bytes_unknown");
+            }
+          }
+        }
         if (auto source =
               operation->getAttrOfType<IntegerAttr>("ncnn.source_layer")) {
           plan_hash_input += "|source-layer=" + std::to_string(source.getInt());
@@ -883,6 +909,11 @@ class EmitModelPlanPass final
           copy_integer(contract::kPackFactor, "pack_factor");
           copy_integer(contract::kPackBytes, "pack_bytes");
           copy_integer(contract::kUnpackBytes, "unpack_bytes");
+          copy_string(contract::kPackSchema, "pack_schema");
+          copy_integer(contract::kPackRawBytes, "pack_raw_bytes");
+          copy_integer(contract::kPackTileK, "pack_tile_k");
+          copy_string(contract::kPackRuntime, "pack_runtime");
+          copy_bool(contract::kPackedWeight, "packed_weight");
           copy_integer(contract::kTileM, "tile_m");
           copy_integer(contract::kTileN, "tile_n");
           copy_integer(contract::kTileK, "tile_k");
@@ -989,25 +1020,36 @@ class EmitModelPlanPass final
               packing && packing.getValue() != "unpacked" &&
               packing.getValue() != "none") {
             ++packed_operation_count;
-            if (auto bytes =
-                  operation->getAttrOfType<IntegerAttr>(contract::kPackBytes)) {
-              if (!packed_buffer_bytes_unknown && bytes.getInt() > 0 &&
-                  packed_buffer_bytes <=
-                    std::numeric_limits<std::int64_t>::max() - bytes.getInt()) {
-                packed_buffer_bytes += bytes.getInt();
+            const bool compileTimeB =
+              packing.getValue() == "prepacked_B" &&
+              operation->getAttrOfType<StringAttr>(contract::kPackRuntime) &&
+              operation->getAttrOfType<StringAttr>(contract::kPackRuntime)
+                  .getValue() == "compile_time_B";
+            // A compile-time B panel is accounted for by its deduplicated
+            // packed global below, not once per tiled forall operation.
+            if (!compileTimeB) {
+              if (auto bytes = operation->getAttrOfType<IntegerAttr>(
+                    contract::kPackBytes)) {
+                if (!packed_buffer_bytes_unknown && bytes.getInt() > 0 &&
+                    packed_buffer_bytes <=
+                      std::numeric_limits<std::int64_t>::max() -
+                        bytes.getInt()) {
+                  packed_buffer_bytes += bytes.getInt();
+                } else {
+                  packed_buffer_bytes_unknown = true;
+                }
+                if (!static_pack_bytes_unknown && bytes.getInt() >= 0 &&
+                    static_pack_bytes <=
+                      std::numeric_limits<std::int64_t>::max() -
+                        bytes.getInt()) {
+                  static_pack_bytes += bytes.getInt();
+                } else {
+                  static_pack_bytes_unknown = true;
+                }
               } else {
                 packed_buffer_bytes_unknown = true;
-              }
-              if (!static_pack_bytes_unknown && bytes.getInt() >= 0 &&
-                  static_pack_bytes <=
-                    std::numeric_limits<std::int64_t>::max() - bytes.getInt()) {
-                static_pack_bytes += bytes.getInt();
-              } else {
                 static_pack_bytes_unknown = true;
               }
-            } else {
-              packed_buffer_bytes_unknown = true;
-              static_pack_bytes_unknown = true;
             }
           }
           if (auto bytes =
@@ -1271,6 +1313,28 @@ class EmitModelPlanPass final
       });
     });
 
+    if (packed_constant_count != 0) {
+      if (packed_constant_bytes_unknown) {
+        packed_buffer_bytes_unknown = true;
+        static_pack_bytes_unknown = true;
+      } else {
+        if (!packed_buffer_bytes_unknown &&
+            packed_buffer_bytes <= std::numeric_limits<std::int64_t>::max() -
+                                     packed_constant_bytes) {
+          packed_buffer_bytes += packed_constant_bytes;
+        } else {
+          packed_buffer_bytes_unknown = true;
+        }
+        if (!static_pack_bytes_unknown &&
+            static_pack_bytes <= std::numeric_limits<std::int64_t>::max() -
+                                   packed_constant_bytes) {
+          static_pack_bytes += packed_constant_bytes;
+        } else {
+          static_pack_bytes_unknown = true;
+        }
+      }
+    }
+
     summary["allocation_count"] = allocation_count;
     summary["deallocation_count"] = deallocation_count;
     summary["copy_count"] = copy_count;
@@ -1336,6 +1400,19 @@ class EmitModelPlanPass final
     } else {
       summary["packed_buffer_bytes"] = packed_buffer_bytes;
     }
+    summary["packed_constant_count"] = packed_constant_count;
+    if (packed_constant_bytes_unknown) {
+      summary["packed_constant_bytes"] = nullptr;
+      summary["packed_constant_bytes_known"] = false;
+      add_unknown("packed_constant_bytes_unknown");
+    } else {
+      summary["packed_constant_bytes"] = packed_constant_bytes;
+      summary["packed_constant_bytes_known"] = true;
+    }
+    summary["packed_constant_status"] =
+      packed_constant_count == 0      ? "not_applicable"
+      : packed_constant_bytes_unknown ? "unknown"
+                                      : "known";
     if (nested_openmp_count > 0) {
       add_unknown("nested_openmp_present");
     }
@@ -1474,10 +1551,10 @@ class EmitModelPlanPass final
     root["schema_version"] = 1;
     root["plan_revision"] =
       "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|int8-target-v1|tuning-v1|attribution-v1";
+      "depthwise-v1|packed-gemm-v1|int8-target-v1|tuning-v1|attribution-v1";
     root["contract_revision"] =
       "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|int8-target-v1|tuning-v1|attribution-v1";
+      "depthwise-v1|packed-gemm-v1|int8-target-v1|tuning-v1|attribution-v1";
     root["attribution_revision"] = attribution_revision.str();
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen

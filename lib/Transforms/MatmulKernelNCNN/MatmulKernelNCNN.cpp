@@ -111,6 +111,19 @@ class MatmulKernelNCNNPass final
       const bool inForall =
         operation->getParentOfType<scf::ForallOp>() != nullptr;
       if (auto matmul = dyn_cast<linalg::MatmulOp>(operation)) {
+        const bool packed =
+          matmul->getAttrOfType<StringAttr>(contract::kPacking) &&
+          matmul->getAttrOfType<StringAttr>(contract::kPacking).getValue() ==
+            "prepacked_B";
+        // A physically packed RHS is valid only for the explicit kernel path.
+        // Never let an un-tiled or otherwise unsupported matmul silently reach
+        // generic row-major lowering.
+        if (packed && (!inForall || !isKernelizable(matmul))) {
+          matmul.emitError(
+            "prepacked_B matmul has no compatible packed kernel consumer");
+          packingFailure = true;
+          return;
+        }
         // matmul 内核仅针对 forall 分块形态；未切分的保持通用下降。
         if (inForall && isKernelizable(matmul)) {
           matmuls.push_back(matmul);
@@ -148,6 +161,10 @@ class MatmulKernelNCNNPass final
         }
       }
     });
+    if (packingFailure) {
+      signalPassFailure();
+      return;
+    }
     if (matmuls.empty() && int8Matmuls.empty() && batches.empty() &&
         rowGenerics.empty() && selfCopyLoops.empty() && gathers.empty()) {
       return;
@@ -240,6 +257,11 @@ class MatmulKernelNCNNPass final
 
   // i8 im2col gather 的非 2 幂通道分块宽（32 字节 = 一个 ymm）。
   static constexpr int64_t kGatherChunkLanes = 32;
+
+  // A failed packed-layout probe cannot fall back to row-major addressing: the
+  // RHS storage has already been physically reordered. Defer pass failure until
+  // the traversal completes so the diagnostic points at the offending matmul.
+  mutable bool packingFailure = false;
 
   static SmallVector<Value> bufferOperands(linalg::LinalgOp linalgOp) {
     SmallVector<Value> operands;
@@ -1247,6 +1269,100 @@ class MatmulKernelNCNNPass final
     return false;
   }
 
+  struct PackedBSource final {
+    Value flat;
+    Value columnOffset;
+    memref::GetGlobalOp globalAccess;
+  };
+
+  static std::optional<PackedBSource> preparePackedB(
+    ImplicitLocOpBuilder& builder, Value rhs) {
+    Value current = rhs;
+    Value columnOffset = builder.create<arith::ConstantIndexOp>(0);
+    memref::GetGlobalOp globalAccess;
+    while (Operation* defining = current.getDefiningOp()) {
+      if (auto global = dyn_cast<memref::GetGlobalOp>(defining)) {
+        globalAccess = global;
+        break;
+      }
+      if (auto subview = dyn_cast<memref::SubViewOp>(defining)) {
+        auto offsets = subview.getMixedOffsets();
+        auto strides = subview.getMixedStrides();
+        if (offsets.size() != 2 || strides.size() != 2 ||
+            !isConstantIndex(offsets[0], 0) ||
+            !isConstantIndex(strides[0], 1) ||
+            !isConstantIndex(strides[1], 1)) {
+          // The packed address formula assumes the complete K dimension and a
+          // unit-stride two-dimensional tile. In particular, a nonzero K
+          // offset or strided view cannot be reinterpreted as panel-NK.
+          return std::nullopt;
+        }
+        OpFoldResult offset = offsets[1];
+        if (auto value = offset.dyn_cast<Value>()) {
+          columnOffset = builder.create<arith::AddIOp>(columnOffset, value);
+        } else if (auto integer =
+                     dyn_cast<IntegerAttr>(offset.get<Attribute>())) {
+          if (integer.getInt() != 0) {
+            columnOffset = builder.create<arith::AddIOp>(
+              columnOffset,
+              builder.create<arith::ConstantIndexOp>(integer.getInt()));
+          }
+        } else {
+          return std::nullopt;
+        }
+        current = subview.getSource();
+        continue;
+      }
+      if (auto cast = dyn_cast<memref::CastOp>(defining)) {
+        auto sourceType = dyn_cast<MemRefType>(cast.getSource().getType());
+        auto resultType = dyn_cast<MemRefType>(cast.getType());
+        if (!sourceType || !resultType || sourceType.getRank() != 2 ||
+            resultType.getRank() != 2 || !sourceType.hasStaticShape() ||
+            !resultType.hasStaticShape() ||
+            sourceType.getShape() != resultType.getShape()) {
+          return std::nullopt;
+        }
+        current = cast.getSource();
+        continue;
+      }
+      if (auto cast = dyn_cast<memref::ReinterpretCastOp>(defining)) {
+        auto sourceType = dyn_cast<MemRefType>(cast.getSource().getType());
+        auto resultType = dyn_cast<MemRefType>(cast.getType());
+        auto offsets = cast.getMixedOffsets();
+        auto sizes = cast.getMixedSizes();
+        auto strides = cast.getMixedStrides();
+        if (!sourceType || !resultType || sourceType.getRank() != 2 ||
+            resultType.getRank() != 2 || !sourceType.hasStaticShape() ||
+            !resultType.hasStaticShape() ||
+            sourceType.getShape() != resultType.getShape() ||
+            offsets.size() != 2 || sizes.size() != 2 || strides.size() != 2 ||
+            !isConstantIndex(offsets[0], 0) ||
+            !isConstantIndex(offsets[1], 0) ||
+            !isConstantIndex(strides[1], 1)) {
+          return std::nullopt;
+        }
+        current = cast.getSource();
+        continue;
+      }
+      break;
+    }
+    auto type = dyn_cast<MemRefType>(current.getType());
+    if (!type || type.getRank() != 2 || !type.hasStaticShape() ||
+        !globalAccess) {
+      return std::nullopt;
+    }
+    SmallVector<ReassociationIndices> reassociation{{0, 1}};
+    MemRefType flatType =
+      memref::CollapseShapeOp::computeCollapsedType(type, reassociation);
+    if (!flatType) {
+      return std::nullopt;
+    }
+    Value flat = builder.create<memref::CollapseShapeOp>(
+      builder.getLoc(), flatType, current, reassociation);
+    return PackedBSource{
+      .flat = flat, .columnOffset = columnOffset, .globalAccess = globalAccess};
+  }
+
   void kernelize(IRRewriter& rewriter, linalg::MatmulOp matmul) const {
     Value lhs = matmul.getInputs()[0];
     Value rhs = matmul.getInputs()[1];
@@ -1269,6 +1385,47 @@ class MatmulKernelNCNNPass final
 
     ImplicitLocOpBuilder builder(matmul.getLoc(), rewriter);
     builder.setInsertionPoint(matmul);
+    auto parentForall = matmul->getParentOfType<scf::ForallOp>();
+    // A tiled forall may contain multiple matmuls after producer/consumer
+    // fusion. Its boundary contract describes the first matmul only, so the
+    // physical B choice must come from the matmul being rewritten rather than
+    // from the shared parent forall.
+    bool packedB =
+      matmul->getAttrOfType<StringAttr>(contract::kPacking) &&
+      matmul->getAttrOfType<StringAttr>(contract::kPacking).getValue() ==
+        "prepacked_B";
+    std::optional<PackedBSource> packedBSource;
+    if (packedB) {
+      packedBSource = preparePackedB(builder, rhs);
+      if (!packedBSource) {
+        matmul.emitError(
+          "cannot prove the memref view preserves the panel-NK packed layout");
+        packingFailure = true;
+        return;
+      }
+      if (packedBSource->globalAccess) {
+        // Bufferization drops arbitrary tensor attributes while materializing
+        // memref globals. Reattach the P20 identity to the unique global access
+        // so execution-plan emission can account for physical storage once,
+        // rather than once per tiled forall invocation.
+        Operation* global = packedBSource->globalAccess.getOperation();
+        contract::setBool(global, contract::kPackedWeight, true);
+        if (auto bytes =
+              matmul->getAttrOfType<IntegerAttr>(contract::kPackBytes)) {
+          contract::setInteger(global, contract::kPackBytes, bytes.getInt());
+        }
+        for (StringRef attribute : {contract::kPackFactor,
+                                    contract::kPackTileK,
+                                    contract::kPackSchema,
+                                    contract::kPackRuntime,
+                                    contract::kAlignment,
+                                    contract::kWeightLayout}) {
+          if (Attribute value = matmul->getAttr(attribute)) {
+            global->setAttr(attribute, value);
+          }
+        }
+      }
+    }
 
     // M×N 寄存器分块（P3）：M 方向 tileRows 行 accumulator 驻留寄存器，
     // B 行每轮 K 只读一次、复用 tileRows 次（各行 A 标量 broadcast），
@@ -1294,18 +1451,35 @@ class MatmulKernelNCNNPass final
         contract::annotateOperationFamily(
           forall.getOperation(), "conv", "gather_free");
       }
-      contract::annotateTile(
-        forall.getOperation(),
-        "f32_mxn_fma",
-        fused ? "nhwc_gather_free" : "identity",
-        "row_major_kxn",
-        "identity",
-        tileRows,
-        accColumns,
-        depth,
-        "outer_tile+inner_simd",
-        tailColumns > 0 || rows % tileRows != 0 ? "scalar_tail" : "none");
-      contract::annotatePacking(forall.getOperation(), "unpacked", 1, 0, 0);
+      const int64_t packedTileK =
+        packedB && !fused &&
+            matmul->getAttrOfType<IntegerAttr>(contract::kPackTileK)
+          ? matmul->getAttrOfType<IntegerAttr>(contract::kPackTileK).getInt()
+          : depth;
+      const bool parentAlreadyPacked =
+        forall->getAttrOfType<StringAttr>(contract::kPacking) &&
+        forall->getAttrOfType<StringAttr>(contract::kPacking).getValue() ==
+          "prepacked_B";
+      // A mixed forall can contain a packed producer followed by an unpacked
+      // small-shape producer. Preserve the parent boundary's packed metadata
+      // for the former while selecting the physical layout independently per
+      // matmul above; the latter must not overwrite that shared metadata.
+      if (packedB || !parentAlreadyPacked) {
+        contract::annotateTile(
+          forall.getOperation(),
+          packedB ? "f32_packed_mxn_fma" : "f32_mxn_fma",
+          fused ? "nhwc_gather_free" : "identity",
+          packedB ? "panel_nk" : "row_major_kxn",
+          "identity",
+          tileRows,
+          accColumns,
+          packedB ? std::min<int64_t>(packedTileK, depth) : depth,
+          "outer_tile+inner_simd",
+          tailColumns > 0 || rows % tileRows != 0 ? "scalar_tail" : "none");
+        if (!packedB) {
+          contract::annotatePacking(forall.getOperation(), "unpacked", 1, 0, 0);
+        }
+      }
       contract::setInteger(
         forall.getOperation(), contract::kSimdChunk, accColumns);
       contract::setString(forall.getOperation(), contract::kFma, "vector.fma");
@@ -1350,6 +1524,30 @@ class MatmulKernelNCNNPass final
       // 步到位，舍入语义与 ncnn 的 FMA 内核一致，差异由数值黄金预算吸
       // 收。各 accumulator 链相互独立，K 循环体的发射率不再被单链延迟
       // 钉死。
+      // The panel/lane portion of the packed B address is invariant across K.
+      // Materialize it once per output block rather than rebuilding div/rem and
+      // panel-base arithmetic in every reduction iteration.
+      Value packedPanelBase;
+      Value packedLaneOffset;
+      Value packedPanelWidth;
+      if (packedB) {
+        const int64_t packN =
+          matmul->getAttrOfType<IntegerAttr>(contract::kPackFactor)
+            ? matmul->getAttrOfType<IntegerAttr>(contract::kPackFactor).getInt()
+            : 16;
+        Value globalColumn = builder.create<arith::AddIOp>(
+          packedBSource->columnOffset, columnStart);
+        packedPanelWidth = builder.create<arith::ConstantIndexOp>(packN);
+        Value panelIndex =
+          builder.create<arith::DivUIOp>(globalColumn, packedPanelWidth);
+        Value panelStart =
+          builder.create<arith::MulIOp>(panelIndex, packedPanelWidth);
+        packedLaneOffset =
+          builder.create<arith::RemUIOp>(globalColumn, packedPanelWidth);
+        packedPanelBase = builder.create<arith::MulIOp>(
+          panelStart, builder.create<arith::ConstantIndexOp>(depth));
+      }
+
       // P6-A 融合时 A 标量直取源图窗口：k 拆 (kh, kw, ic) 由外层 kp
       // (kh·KW+kw) 与内层 ic 两层静态界循环给出——k = kp·IC + ic 与折叠
       // [[2,3,4]] 展平严格一致，FMA 累加链数值与常规内核逐位相同；行
@@ -1360,12 +1558,27 @@ class MatmulKernelNCNNPass final
                            Value windowColumnPart,
                            Value channelIndex,
                            SmallVector<Value> regionIterArgs) {
-        auto bRow = builder.create<vector::TransferReadOp>(
-          vectorType,
-          rhs,
-          ValueRange{kIndex, columnStart},
-          std::nullopt,
-          SmallVector<bool>(1, true));
+        Value bIndex;
+        if (!packedB) {
+          bIndex = builder.create<vector::TransferReadOp>(
+            vectorType,
+            rhs,
+            ValueRange{kIndex, columnStart},
+            std::nullopt,
+            SmallVector<bool>(1, true));
+        } else {
+          Value kBase = builder.create<arith::MulIOp>(kIndex, packedPanelWidth);
+          Value packedIndex = builder.create<arith::AddIOp>(
+            builder.create<arith::AddIOp>(packedPanelBase, kBase),
+            packedLaneOffset);
+          bIndex =
+            builder.create<vector::TransferReadOp>(vectorType,
+                                                   packedBSource->flat,
+                                                   ValueRange{packedIndex},
+                                                   std::nullopt,
+                                                   SmallVector<bool>(1, true));
+        }
+        Value bRow = bIndex;
         SmallVector<Value> updated;
         updated.reserve(rowCount);
         for (int64_t i = 0; i < rowCount; ++i) {
@@ -1415,21 +1628,62 @@ class MatmulKernelNCNNPass final
       SmallVector<Value> results;
       if (!fused) {
         auto depthBound = builder.create<arith::ConstantIndexOp>(depth);
-        auto kLoop = builder.create<scf::ForOp>(
-          zero, depthBound, one, ValueRange(accumulators));
-        builder.setInsertionPointToStart(kLoop.getBody());
-        SmallVector<Value> updated =
-          emitKBody(kLoop.getInductionVar(),
-                    Value(),
-                    Value(),
-                    Value(),
-                    SmallVector<Value>(kLoop.getRegionIterArgs().begin(),
-                                       kLoop.getRegionIterArgs().end()));
-        builder.create<scf::YieldOp>(updated);
-        for (auto result : kLoop.getResults()) {
-          results.push_back(result);
+        const int64_t packedKTile =
+          packedB &&
+              parentForall->getAttrOfType<IntegerAttr>(contract::kPackTileK)
+            ? parentForall->getAttrOfType<IntegerAttr>(contract::kPackTileK)
+                .getInt()
+            : depth;
+        const bool useKBlocking = packedB && packedKTile > 0 &&
+                                  packedKTile < depth &&
+                                  depth % packedKTile == 0;
+        if (!useKBlocking) {
+          auto kLoop = builder.create<scf::ForOp>(
+            zero, depthBound, one, ValueRange(accumulators));
+          builder.setInsertionPointToStart(kLoop.getBody());
+          SmallVector<Value> updated =
+            emitKBody(kLoop.getInductionVar(),
+                      Value(),
+                      Value(),
+                      Value(),
+                      SmallVector<Value>(kLoop.getRegionIterArgs().begin(),
+                                         kLoop.getRegionIterArgs().end()));
+          builder.create<scf::YieldOp>(updated);
+          for (auto result : kLoop.getResults()) {
+            results.push_back(result);
+          }
+          builder.setInsertionPointAfter(kLoop);
+        } else {
+          auto tileBound = builder.create<arith::ConstantIndexOp>(packedKTile);
+          auto blockLoop = builder.create<scf::ForOp>(
+            zero, depthBound, tileBound, ValueRange(accumulators));
+          builder.setInsertionPointToStart(blockLoop.getBody());
+          Value blockEnd = builder.create<arith::AddIOp>(
+            blockLoop.getInductionVar(), tileBound);
+          auto innerLoop = builder.create<scf::ForOp>(
+            blockLoop.getInductionVar(),
+            blockEnd,
+            one,
+            SmallVector<Value>(blockLoop.getRegionIterArgs().begin(),
+                               blockLoop.getRegionIterArgs().end()));
+          builder.setInsertionPointToStart(innerLoop.getBody());
+          SmallVector<Value> updated =
+            emitKBody(innerLoop.getInductionVar(),
+                      Value(),
+                      Value(),
+                      Value(),
+                      SmallVector<Value>(innerLoop.getRegionIterArgs().begin(),
+                                         innerLoop.getRegionIterArgs().end()));
+          builder.create<scf::YieldOp>(updated);
+          builder.setInsertionPoint(blockLoop.getBody(),
+                                    blockLoop.getBody()->end());
+          builder.create<scf::YieldOp>(SmallVector<Value>(
+            innerLoop.getResults().begin(), innerLoop.getResults().end()));
+          for (auto result : blockLoop.getResults()) {
+            results.push_back(result);
+          }
+          builder.setInsertionPointAfter(blockLoop);
         }
-        builder.setInsertionPointAfter(kLoop);
       } else {
         // 外层 kp 扫 KH·KW 个窗口位置，内层 ic 扫 IC 个通道；
         // k = kp·IC + ic 对齐折叠展平。kp 的 (kh, kw) 拆解用 div/mod——

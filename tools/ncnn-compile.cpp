@@ -159,6 +159,11 @@ llvm::cl::opt<int64_t> g_matmul_acc_columns(
   llvm::cl::desc("Matmul accumulator columns (0 uses the tuning profile)"),
   llvm::cl::init(0),
   llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_matmul_packing(
+  "matmul-packing",
+  llvm::cl::desc("Static f32 RHS packing policy: off or auto"),
+  llvm::cl::init("auto"),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<unsigned> g_row_chunk_lanes(
   "row-chunk-lanes",
   llvm::cl::desc(
@@ -1951,6 +1956,7 @@ struct TuningSettings {
   std::string fallbackReason;
   int64_t matmulMRows = 4;
   int64_t matmulAccColumns = 16;
+  std::string matmulPacking = "auto";
   unsigned rowChunkLanes = 8;
   int64_t matmulI8Rows = 2;
   int64_t matmulI8AccColumns = 4;
@@ -1980,6 +1986,7 @@ std::string build_codegen_identity(std::string_view target_triple,
     "|tuning-fallback-reason=" + tuning.fallbackReason +
     "|matmul-m-rows=" + std::to_string(tuning.matmulMRows) +
     "|matmul-acc-columns=" + std::to_string(tuning.matmulAccColumns) +
+    "|matmul-packing=" + tuning.matmulPacking +
     "|row-chunk-lanes=" + std::to_string(tuning.rowChunkLanes) +
     "|matmul-i8-rows=" + std::to_string(tuning.matmulI8Rows) +
     "|matmul-i8-acc-columns=" + std::to_string(tuning.matmulI8AccColumns) +
@@ -2288,6 +2295,10 @@ int main(int argc, char** argv) {
 
   TuningSettings tuning;
   tuning.profile = g_tuning_profile.getValue();
+  tuning.matmulPacking = g_matmul_packing.getValue();
+  if (tuning.matmulPacking != "auto" && tuning.matmulPacking != "off") {
+    return fail("--matmul-packing must be one of off or auto");
+  }
   if (g_matmul_m_rows.getNumOccurrences() != 0) {
     tuning.matmulMRows = g_matmul_m_rows;
   }
@@ -2351,6 +2362,15 @@ int main(int argc, char** argv) {
   } else if (requestedP16Profile) {
     tuning.status = "explicit_override";
     tuning.fallbackReason = "explicit_int8_policy";
+  }
+  // Winograd emits a large transformed graph whose packed-B code expansion
+  // exceeds the established fixture compile-time budget. Keep the physical
+  // packing opt-in for the ordinary GEMM/Conv path, but make this shape-family
+  // fallback explicit and identity-visible instead of allowing a timeout.
+  if (g_conv_strategy == "winograd" && tuning.matmulPacking == "auto") {
+    tuning.matmulPacking = "off";
+    tuning.status = "fallback";
+    tuning.fallbackReason = "winograd_packing_compile_budget";
   }
 
   // 解析向量数学后端：auto 按目标探测 libmvec，缺失时静默降级 vendored
@@ -2640,6 +2660,7 @@ int main(int argc, char** argv) {
     }
     linalgOptions.push_back("int8-kernel=" + g_int8_kernel.getValue());
     linalgOptions.push_back("int8-target=" + resolved_int8_target);
+    linalgOptions.push_back("matmul-packing=" + tuning.matmulPacking);
     linalgOptions.push_back(std::string("int8-depthwise=") +
                             (g_int8_depthwise ? "true" : "false"));
     linalgOptions.push_back("tuning-profile=" + tuning.profile);

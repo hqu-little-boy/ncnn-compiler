@@ -251,21 +251,53 @@ class TileMatmulForallPass final
         inputType && inputType.hasRank() && inputType.getRank() == 2
           ? inputType.getShape()[1]
           : 0;
+      const bool packedF32 =
+        matmul && matmul->getAttrOfType<StringAttr>(contract::kPacking) &&
+        matmul->getAttrOfType<StringAttr>(contract::kPacking).getValue() ==
+          "prepacked_B";
+      const StringRef weightLayout = isInt8      ? StringRef("packed_nk")
+                                     : packedF32 ? StringRef("panel_nk")
+                                                 : StringRef("row_major_kxn");
       contract::annotateTile(forall.getOperation(),
-                             isInt8 ? "int8_row_dot" : "f32_matmul",
+                             isInt8      ? "int8_row_dot"
+                             : packedF32 ? "f32_packed_mxn_fma"
+                                         : "f32_matmul",
                              "identity",
-                             isInt8 ? "packed_nk" : "row_major_kxn",
+                             weightLayout,
                              "identity",
                              tileM,
                              tileN,
                              tileK,
                              "outer_tile",
                              "bounded_panel");
-      contract::annotatePacking(forall.getOperation(),
-                                isInt8 ? "prepacked_transpose_b" : "unpacked",
-                                1,
-                                0,
-                                0);
+      if (packedF32) {
+        auto packing = matmul->getAttrOfType<StringAttr>(contract::kPacking);
+        auto factor = matmul->getAttrOfType<IntegerAttr>(contract::kPackFactor);
+        auto bytes = matmul->getAttrOfType<IntegerAttr>(contract::kPackBytes);
+        auto unpack =
+          matmul->getAttrOfType<IntegerAttr>(contract::kUnpackBytes);
+        contract::annotatePacking(forall.getOperation(),
+                                  packing.getValue(),
+                                  factor ? factor.getInt() : 1,
+                                  bytes ? bytes.getInt() : 0,
+                                  unpack ? unpack.getInt() : 0);
+        for (StringRef attribute : {contract::kPackSchema,
+                                    contract::kPackRawBytes,
+                                    contract::kPackTileK,
+                                    contract::kPackRuntime,
+                                    contract::kAlignment,
+                                    contract::kWeightLayout}) {
+          if (Attribute value = matmul->getAttr(attribute)) {
+            forall->setAttr(attribute, value);
+          }
+        }
+      } else {
+        contract::annotatePacking(forall.getOperation(),
+                                  isInt8 ? "prepacked_transpose_b" : "unpacked",
+                                  1,
+                                  0,
+                                  0);
+      }
     });
   }
 };

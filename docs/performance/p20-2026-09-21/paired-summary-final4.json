@@ -1,0 +1,22 @@
+{
+  "stage": "/tmp/ncnn-compiler-stage-p20-final-4-20260921",
+  "static_shallow": {
+    "auto_mean_gflops": 115.5042,
+    "auto_values": [115.659, 115.838, 116.028, 114.943, 115.053],
+    "off_mean_gflops": 116.3222,
+    "off_values": [115.469, 119.801, 116.125, 115.347, 114.869],
+    "improvement_pct": -0.7033233044648708,
+    "checksums": [289899572.40625]
+  },
+  "static_deep": {
+    "auto_mean_gflops": 118.082,
+    "auto_values": [116.779, 121.485, 118.302, 116.983, 116.861],
+    "off_mean_gflops": 113.588,
+    "off_values": [113.637, 114.876, 113.542, 113.657, 112.228],
+    "improvement_pct": 3.9532272789382687,
+    "checksums": [1159588163.5]
+  },
+  "deep_improvement_gate": false,
+  "shallow_preservation_gate": true,
+  "default_productization": "no-go"
+}

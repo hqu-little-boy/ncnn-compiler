@@ -14,6 +14,13 @@ set(NCNN_PLATFORM_API OFF CACHE BOOL "" FORCE)
 set(NCNN_RUNTIME_CPU ON CACHE BOOL "" FORCE)
 set(NCNN_INT8 ON CACHE BOOL "" FORCE)
 set(NCNN_DISABLE_RTTI ON CACHE BOOL "" FORCE)
+set(NCNN_MATMUL_PACKING "auto" CACHE STRING
+    "Static f32 RHS packing policy for numerical model fixtures")
+set_property(CACHE NCNN_MATMUL_PACKING PROPERTY STRINGS off auto)
+if(NOT NCNN_MATMUL_PACKING STREQUAL "off" AND
+   NOT NCNN_MATMUL_PACKING STREQUAL "auto")
+    message(FATAL_ERROR "NCNN_MATMUL_PACKING must be off or auto")
+endif()
 set(NCNN_DISABLE_EXCEPTION ON CACHE BOOL "" FORCE)
 
 add_subdirectory(
@@ -30,7 +37,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     if(NOT "${input_shape}" STREQUAL "")
         list(REMOVE_AT input_constraints 0)
     endif()
-    set(precision_args)
+    set(precision_args --matmul-packing ${NCNN_MATMUL_PACKING})
     set(clang_args)
     set(linker_args)
     set(filtered_constraints)
@@ -2808,3 +2815,51 @@ add_test(NAME MatmulBench.Gflops COMMAND matmul_bench_driver)
 set_property(TEST MatmulBench.Gflops PROPERTY LABELS matmul-bench)
 set_property(TEST MatmulBench.Gflops PROPERTY RUN_SERIAL TRUE)
 set_property(TEST MatmulBench.Gflops PROPERTY TIMEOUT 300)
+
+# P20 static-RHS paired benchmark. The source contains the same two static
+# tensor constants for both policies; only the compile-time packing policy
+# changes. Keep separate objects/executables so an A/B run cannot accidentally
+# reuse a direct or packed artifact.
+set(matmul_static_bench_source
+    ${CMAKE_CURRENT_SOURCE_DIR}/bench/matmul_static_bench.mlir)
+set(matmul_static_bench_driver
+    ${CMAKE_CURRENT_SOURCE_DIR}/support/matmul_static_bench_main.c)
+foreach(matmul_static_policy IN ITEMS off auto)
+    set(matmul_static_dir
+        ${CMAKE_CURRENT_BINARY_DIR}/matmul_static_bench_${matmul_static_policy}_artifacts)
+    set(matmul_static_kernel_ir
+        ${matmul_static_dir}/matmul_static_kernel.mlir)
+    set(matmul_static_llvm_ir
+        ${matmul_static_dir}/matmul_static_llvm.mlir)
+    set(matmul_static_ll ${matmul_static_dir}/matmul_static.ll)
+    set(matmul_static_obj ${matmul_static_dir}/matmul_static.o)
+    add_custom_command(
+        OUTPUT ${matmul_static_obj}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${matmul_static_dir}
+        COMMAND $<TARGET_FILE:ncnn-mlir-opt>
+                "--ncnn-linalg-to-memref-pipeline=vector-tail=true matmul-packing=${matmul_static_policy}"
+                ${matmul_static_bench_source}
+                -o ${matmul_static_kernel_ir}
+        COMMAND $<TARGET_FILE:ncnn-mlir-opt>
+                "--ncnn-memref-to-llvm-pipeline=threads=1 vector-lowering=true"
+                ${matmul_static_kernel_ir}
+                -o ${matmul_static_llvm_ir}
+        COMMAND ${MLIR_TRANSLATE} --mlir-to-llvmir ${matmul_static_llvm_ir}
+                -o ${matmul_static_ll}
+        COMMAND ${CLANG} -O3 -Wno-override-module
+                ${ncnn_matmul_bench_clang_args} -fPIC -c ${matmul_static_ll}
+                -o ${matmul_static_obj}
+        DEPENDS ncnn-mlir-opt ${matmul_static_bench_source}
+                ${matmul_static_bench_driver}
+        VERBATIM)
+    add_executable(matmul_static_bench_${matmul_static_policy}
+        ${matmul_static_obj} ${matmul_static_bench_driver})
+    add_test(NAME MatmulBench.Static.${matmul_static_policy}
+             COMMAND matmul_static_bench_${matmul_static_policy})
+    set_property(TEST MatmulBench.Static.${matmul_static_policy}
+                 PROPERTY LABELS matmul-bench)
+    set_property(TEST MatmulBench.Static.${matmul_static_policy}
+                 PROPERTY RUN_SERIAL TRUE)
+    set_property(TEST MatmulBench.Static.${matmul_static_policy}
+                 PROPERTY TIMEOUT 300)
+endforeach()

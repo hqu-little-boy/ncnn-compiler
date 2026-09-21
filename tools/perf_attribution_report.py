@@ -283,6 +283,7 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
     raise AttributionError("profile summary top_level_time_known must be boolean")
   joined: list[dict[str, Any]] = []
   allocation_events: dict[int, dict[str, Any]] = {}
+  operation_events: dict[int, dict[str, Any]] = {}
   movement_totals: dict[str, dict[str, Any]] = {
     kind: {"count": 0, "bytes": 0, "bytes_known": True}
     for kind in ("copy", "transpose", "pack", "unpack")
@@ -347,6 +348,14 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
         "bytes": bytes_value,
         "bytes_known": bytes_known,
       }
+    if raw_category in {"operation", "parallel"}:
+      # Packed tiled GEMM operations are emitted as scf.forall and therefore
+      # are reported by the runtime under the parallel event category.
+      operation_events[identifier] = {
+        "calls": calls,
+        "inclusive_ns": inclusive,
+        "exclusive_ns": event.get("exclusive_ns"),
+      }
     exclusive_value = event.get("exclusive_ns")
     if exclusive_value is None:
       exclusive = None
@@ -386,6 +395,49 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       "bytes_known": bytes_known,
       "attributed_ns": attributed_ns,
     })
+  packed_kernel_runtime: list[dict[str, Any]] = []
+  for identifier, operation in operations.items():
+    contract = operation.get("kernel_contract")
+    if not isinstance(contract, dict) or contract.get("packing") not in {
+        "prepacked_B", "packed_A_B"}:
+      continue
+    event = operation_events.get(identifier)
+    calls = event["calls"] if event is not None else None
+    packed_kernel_runtime.append({
+      "id": operation.get("id"),
+      "profile_id": identifier,
+      "kernel": contract.get("kernel"),
+      "packing": contract.get("packing"),
+      "pack_runtime": contract.get("pack_runtime"),
+      "event_join_status": "joined" if event is not None else "missing",
+      "runtime_consumed": calls > 0 if calls is not None else None,
+      "call_count": calls,
+      "inclusive_ns": event["inclusive_ns"] if event is not None else None,
+      "exclusive_ns": event["exclusive_ns"] if event is not None else None,
+    })
+  packed_kernel_runtime.sort(key=lambda row: (row["id"], row["profile_id"]))
+  packed_selected_count = len(packed_kernel_runtime)
+  packed_joined_count = sum(
+    row["event_join_status"] == "joined" for row in packed_kernel_runtime)
+  packed_consumed_count = sum(
+    row["runtime_consumed"] is True for row in packed_kernel_runtime)
+  packed_call_counts = [
+    row["call_count"] for row in packed_kernel_runtime
+    if isinstance(row["call_count"], int)
+  ]
+  packed_kernel_summary = {
+    "selected_count": packed_selected_count,
+    "joined_count": packed_joined_count,
+    "consumed_count": packed_consumed_count,
+    "runtime_consumed": (
+      None if packed_selected_count == 0 else
+      packed_consumed_count == packed_selected_count
+      if packed_joined_count == packed_selected_count else None),
+    "call_count": (
+      sum(packed_call_counts)
+      if len(packed_call_counts) == packed_selected_count else None),
+    "packed_buffer_bytes": plan.get("summary", {}).get("packed_buffer_bytes"),
+  }
   profile_total_value = profile_summary.get("top_level_time_ns")
   if profile_total_value is None:
     total_ns = measured_event_time_ns
@@ -608,6 +660,8 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       "allocation_coverage": allocation_coverage,
       "workspace_coverage": workspace_coverage,
       "copy_layout": copy_layout,
+      "packed_kernels": packed_kernel_runtime,
+      "packed_kernel_summary": packed_kernel_summary,
       "peak_live_proven": runtime_peak_live_proven,
       "complete": not incomplete_reasons,
       "incomplete_reasons": incomplete_reasons,

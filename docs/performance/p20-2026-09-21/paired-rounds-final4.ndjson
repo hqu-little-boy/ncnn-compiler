@@ -1,0 +1,10 @@
+{"round":1,"policy":"auto","rows":[{"case":"static_shallow","gflops":115.659,"checksum":289899572.40625},{"case":"static_deep","gflops":116.779,"checksum":1159588163.5}]}
+{"round":1,"policy":"off","rows":[{"case":"static_shallow","gflops":115.469,"checksum":289899572.40625},{"case":"static_deep","gflops":113.637,"checksum":1159588163.5}]}
+{"round":2,"policy":"auto","rows":[{"case":"static_shallow","gflops":115.838,"checksum":289899572.40625},{"case":"static_deep","gflops":121.485,"checksum":1159588163.5}]}
+{"round":2,"policy":"off","rows":[{"case":"static_shallow","gflops":119.801,"checksum":289899572.40625},{"case":"static_deep","gflops":114.876,"checksum":1159588163.5}]}
+{"round":3,"policy":"auto","rows":[{"case":"static_shallow","gflops":116.028,"checksum":289899572.40625},{"case":"static_deep","gflops":118.302,"checksum":1159588163.5}]}
+{"round":3,"policy":"off","rows":[{"case":"static_shallow","gflops":116.125,"checksum":289899572.40625},{"case":"static_deep","gflops":113.542,"checksum":1159588163.5}]}
+{"round":4,"policy":"auto","rows":[{"case":"static_shallow","gflops":114.943,"checksum":289899572.40625},{"case":"static_deep","gflops":116.983,"checksum":1159588163.5}]}
+{"round":4,"policy":"off","rows":[{"case":"static_shallow","gflops":115.347,"checksum":289899572.40625},{"case":"static_deep","gflops":113.657,"checksum":1159588163.5}]}
+{"round":5,"policy":"auto","rows":[{"case":"static_shallow","gflops":115.053,"checksum":289899572.40625},{"case":"static_deep","gflops":116.861,"checksum":1159588163.5}]}
+{"round":5,"policy":"off","rows":[{"case":"static_shallow","gflops":114.869,"checksum":289899572.40625},{"case":"static_deep","gflops":112.228,"checksum":1159588163.5}]}

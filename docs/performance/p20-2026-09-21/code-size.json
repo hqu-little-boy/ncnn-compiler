@@ -1,0 +1,14 @@
+{
+  "auto": {
+    "matmul_static.ll": 1907815,
+    "matmul_static.o": 372504,
+    "matmul_static_kernel.mlir": 11577,
+    "matmul_static_llvm.mlir": 31209
+  },
+  "off": {
+    "matmul_static.ll": 1906974,
+    "matmul_static.o": 372248,
+    "matmul_static_kernel.mlir": 9505,
+    "matmul_static_llvm.mlir": 30432
+  }
+}

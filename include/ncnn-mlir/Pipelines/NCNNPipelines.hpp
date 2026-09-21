@@ -62,6 +62,11 @@ struct NCNNLinalgToMemRefPipelineOptions
       "Downstream memref-to-llvm will run the vector lowering tail; "
       "gates passes that emit vector dialect ops"),
     llvm::cl::init(false)};
+  Option<std::string> matmulPackingPolicy{
+    *this,
+    "matmul-packing",
+    llvm::cl::desc("Static f32 B packing policy: off or auto"),
+    llvm::cl::init("auto")};
   Option<std::string> int8KernelPolicy{
     *this,
     "int8-kernel",

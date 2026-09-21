@@ -1,0 +1,317 @@
+[
+  {
+    "library_bytes": 5291656,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/squeezenet_v1_1/libsqueezenet_v1_1.so",
+    "model": "squeezenet_v1_1",
+    "plan_hash": "14215754232910994804",
+    "plan_path": "plans/squeezenet_v1_1.plan.json"
+  },
+  {
+    "library_bytes": 47074272,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/resnet18/libresnet18.so",
+    "model": "resnet18",
+    "plan_hash": "10658790434961987780",
+    "plan_path": "plans/resnet18.plan.json"
+  },
+  {
+    "library_bytes": 283924448,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/resnet18_winograd/libresnet18_winograd.so",
+    "model": "resnet18_winograd",
+    "plan_hash": "3045103515805986273",
+    "plan_path": "plans/resnet18_winograd.plan.json"
+  },
+  {
+    "library_bytes": 87740744,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/resnet34/libresnet34.so",
+    "model": "resnet34",
+    "plan_hash": "11893118835395821848",
+    "plan_path": "plans/resnet34.plan.json"
+  },
+  {
+    "library_bytes": 102621632,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/resnet50/libresnet50.so",
+    "model": "resnet50",
+    "plan_hash": "17146144263009231823",
+    "plan_path": "plans/resnet50.plan.json"
+  },
+  {
+    "library_bytes": 178866200,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/resnet101/libresnet101.so",
+    "model": "resnet101",
+    "plan_hash": "64640924160083128",
+    "plan_path": "plans/resnet101.plan.json"
+  },
+  {
+    "library_bytes": 10143512,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5n_cls/libyolov5n_cls.so",
+    "model": "yolov5n_cls",
+    "plan_hash": "17942722748055571076",
+    "plan_path": "plans/yolov5n_cls.plan.json"
+  },
+  {
+    "library_bytes": 22058904,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5s_cls/libyolov5s_cls.so",
+    "model": "yolov5s_cls",
+    "plan_hash": "18363080671378203413",
+    "plan_path": "plans/yolov5s_cls.plan.json"
+  },
+  {
+    "library_bytes": 52303304,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5m_cls/libyolov5m_cls.so",
+    "model": "yolov5m_cls",
+    "plan_hash": "14953350964018977936",
+    "plan_path": "plans/yolov5m_cls.plan.json"
+  },
+  {
+    "library_bytes": 106857480,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5l_cls/libyolov5l_cls.so",
+    "model": "yolov5l_cls",
+    "plan_hash": "5283627439406348724",
+    "plan_path": "plans/yolov5l_cls.plan.json"
+  },
+  {
+    "library_bytes": 193253944,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5x_cls/libyolov5x_cls.so",
+    "model": "yolov5x_cls",
+    "plan_hash": "3968555362950730939",
+    "plan_path": "plans/yolov5x_cls.plan.json"
+  },
+  {
+    "library_bytes": 8409288,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5n/libyolov5n.so",
+    "model": "yolov5n",
+    "plan_hash": "9419670169284424590",
+    "plan_path": "plans/yolov5n.plan.json"
+  },
+  {
+    "library_bytes": 29970752,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5s/libyolov5s.so",
+    "model": "yolov5s",
+    "plan_hash": "15922777842904048646",
+    "plan_path": "plans/yolov5s.plan.json"
+  },
+  {
+    "library_bytes": 86054456,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5m/libyolov5m.so",
+    "model": "yolov5m",
+    "plan_hash": "11201172790380596292",
+    "plan_path": "plans/yolov5m.plan.json"
+  },
+  {
+    "library_bytes": 187820848,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5l/libyolov5l.so",
+    "model": "yolov5l",
+    "plan_hash": "808866420925403133",
+    "plan_path": "plans/yolov5l.plan.json"
+  },
+  {
+    "library_bytes": 348872744,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5x/libyolov5x.so",
+    "model": "yolov5x",
+    "plan_hash": "14401227007632303027",
+    "plan_path": "plans/yolov5x.plan.json"
+  },
+  {
+    "library_bytes": 21707616,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/efficientnet_b0/libefficientnet_b0.so",
+    "model": "efficientnet_b0",
+    "plan_hash": "1288105924400991610",
+    "plan_path": "plans/efficientnet_b0.plan.json"
+  },
+  {
+    "library_bytes": 31975064,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/efficientnet_b1/libefficientnet_b1.so",
+    "model": "efficientnet_b1",
+    "plan_hash": "5459178549638653522",
+    "plan_path": "plans/efficientnet_b1.plan.json"
+  },
+  {
+    "library_bytes": 37373592,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/efficientnet_b2/libefficientnet_b2.so",
+    "model": "efficientnet_b2",
+    "plan_hash": "17198435211112269862",
+    "plan_path": "plans/efficientnet_b2.plan.json"
+  },
+  {
+    "library_bytes": 49967608,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/efficientnet_b3/libefficientnet_b3.so",
+    "model": "efficientnet_b3",
+    "plan_hash": "6630820836632057157",
+    "plan_path": "plans/efficientnet_b3.plan.json"
+  },
+  {
+    "library_bytes": 6946064,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_lcnet_x1_0_doc_ori/libpp_lcnet_x1_0_doc_ori.so",
+    "model": "pp_lcnet_x1_0_doc_ori",
+    "plan_hash": "17423405169205538588",
+    "plan_path": "plans/pp_lcnet_x1_0_doc_ori.plan.json"
+  },
+  {
+    "library_bytes": 6860688,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_lcnet_x1_0_textline_ori/libpp_lcnet_x1_0_textline_ori.so",
+    "model": "pp_lcnet_x1_0_textline_ori",
+    "plan_hash": "17566195775128642137",
+    "plan_path": "plans/pp_lcnet_x1_0_textline_ori.plan.json"
+  },
+  {
+    "library_bytes": 1141520,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/chineseocr_lite_anglenet/libchineseocr_lite_anglenet.so",
+    "model": "chineseocr_lite_anglenet",
+    "plan_hash": "852503050656694536",
+    "plan_path": "plans/chineseocr_lite_anglenet.plan.json"
+  },
+  {
+    "library_bytes": 8910936,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5n_seg/libyolov5n_seg.so",
+    "model": "yolov5n_seg",
+    "plan_hash": "3853700991079278129",
+    "plan_path": "plans/yolov5n_seg.plan.json"
+  },
+  {
+    "library_bytes": 31545560,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5s_seg/libyolov5s_seg.so",
+    "model": "yolov5s_seg",
+    "plan_hash": "14801869879498303305",
+    "plan_path": "plans/yolov5s_seg.plan.json"
+  },
+  {
+    "library_bytes": 89280304,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5m_seg/libyolov5m_seg.so",
+    "model": "yolov5m_seg",
+    "plan_hash": "11341415009087897240",
+    "plan_path": "plans/yolov5m_seg.plan.json"
+  },
+  {
+    "library_bytes": 193303944,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5l_seg/libyolov5l_seg.so",
+    "model": "yolov5l_seg",
+    "plan_hash": "18139563878226245053",
+    "plan_path": "plans/yolov5l_seg.plan.json"
+  },
+  {
+    "library_bytes": 357182432,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/yolov5x_seg/libyolov5x_seg.so",
+    "model": "yolov5x_seg",
+    "plan_hash": "7893911542200512980",
+    "plan_path": "plans/yolov5x_seg.plan.json"
+  },
+  {
+    "library_bytes": 4621112,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_tiny_rec/libpp_ocrv6_tiny_rec.so",
+    "model": "pp_ocrv6_tiny_rec",
+    "plan_hash": "11333167018667742164",
+    "plan_path": "plans/pp_ocrv6_tiny_rec.plan.json"
+  },
+  {
+    "library_bytes": 1515024,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_tiny_rec_int8/libpp_ocrv6_tiny_rec_int8.so",
+    "model": "pp_ocrv6_tiny_rec_int8",
+    "plan_hash": "1726651631065664166",
+    "plan_path": "plans/pp_ocrv6_tiny_rec_int8.plan.json"
+  },
+  {
+    "library_bytes": 16941088,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv5_mobile_rec/libpp_ocrv5_mobile_rec.so",
+    "model": "pp_ocrv5_mobile_rec",
+    "plan_hash": "2087672953907822518",
+    "plan_path": "plans/pp_ocrv5_mobile_rec.plan.json"
+  },
+  {
+    "library_bytes": 5061208,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv5_mobile_rec_int8/libpp_ocrv5_mobile_rec_int8.so",
+    "model": "pp_ocrv5_mobile_rec_int8",
+    "plan_hash": "2977074647706217580",
+    "plan_path": "plans/pp_ocrv5_mobile_rec_int8.plan.json"
+  },
+  {
+    "library_bytes": 84957272,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv5_server_rec/libpp_ocrv5_server_rec.so",
+    "model": "pp_ocrv5_server_rec",
+    "plan_hash": "4552169784433150538",
+    "plan_path": "plans/pp_ocrv5_server_rec.plan.json"
+  },
+  {
+    "library_bytes": 77077800,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_medium_rec/libpp_ocrv6_medium_rec.so",
+    "model": "pp_ocrv6_medium_rec",
+    "plan_hash": "8882223596033026890",
+    "plan_path": "plans/pp_ocrv6_medium_rec.plan.json"
+  },
+  {
+    "library_bytes": 20963608,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_medium_rec_int8/libpp_ocrv6_medium_rec_int8.so",
+    "model": "pp_ocrv6_medium_rec_int8",
+    "plan_hash": "5014999541849755921",
+    "plan_path": "plans/pp_ocrv6_medium_rec_int8.plan.json"
+  },
+  {
+    "library_bytes": 21587688,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_small_rec/libpp_ocrv6_small_rec.so",
+    "model": "pp_ocrv6_small_rec",
+    "plan_hash": "8533300118381417008",
+    "plan_path": "plans/pp_ocrv6_small_rec.plan.json"
+  },
+  {
+    "library_bytes": 6400288,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_small_rec_int8/libpp_ocrv6_small_rec_int8.so",
+    "model": "pp_ocrv6_small_rec_int8",
+    "plan_hash": "1535333572927277024",
+    "plan_path": "plans/pp_ocrv6_small_rec_int8.plan.json"
+  },
+  {
+    "library_bytes": 2077280,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_tiny_det/libpp_ocrv6_tiny_det.so",
+    "model": "pp_ocrv6_tiny_det",
+    "plan_hash": "10528968114423662839",
+    "plan_path": "plans/pp_ocrv6_tiny_det.plan.json"
+  },
+  {
+    "library_bytes": 10269760,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_small_det/libpp_ocrv6_small_det.so",
+    "model": "pp_ocrv6_small_det",
+    "plan_hash": "18434393000368621601",
+    "plan_path": "plans/pp_ocrv6_small_det.plan.json"
+  },
+  {
+    "library_bytes": 62156896,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_medium_det/libpp_ocrv6_medium_det.so",
+    "model": "pp_ocrv6_medium_det",
+    "plan_hash": "13045920005292302612",
+    "plan_path": "plans/pp_ocrv6_medium_det.plan.json"
+  },
+  {
+    "library_bytes": 16473048,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv6_medium_det_int8/libpp_ocrv6_medium_det_int8.so",
+    "model": "pp_ocrv6_medium_det_int8",
+    "plan_hash": "8506358478126726270",
+    "plan_path": "plans/pp_ocrv6_medium_det_int8.plan.json"
+  },
+  {
+    "library_bytes": 5013520,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv5_mobile_det_static/libpp_ocrv5_mobile_det_static.so",
+    "model": "pp_ocrv5_mobile_det_static",
+    "plan_hash": "8446218350773313071",
+    "plan_path": "plans/pp_ocrv5_mobile_det_static.plan.json"
+  },
+  {
+    "library_bytes": 88620352,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_ocrv5_server_det_static/libpp_ocrv5_server_det_static.so",
+    "model": "pp_ocrv5_server_det_static",
+    "plan_hash": "8698687669045417771",
+    "plan_path": "plans/pp_ocrv5_server_det_static.plan.json"
+  },
+  {
+    "library_bytes": 5935960,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_structrurev2_slanet_plus_cnn/libpp_structrurev2_slanet_plus_cnn.so",
+    "model": "pp_structrurev2_slanet_plus_cnn",
+    "plan_hash": "7536143417618540393",
+    "plan_path": "plans/pp_structrurev2_slanet_plus_cnn.plan.json"
+  },
+  {
+    "library_bytes": 55431384,
+    "library_path": "/tmp/ncnn-compiler-stage-p20-final-3-20260921/test/Numerical/generated/pp_formulanet_plus_s_encoder/libpp_formulanet_plus_s_encoder.so",
+    "model": "pp_formulanet_plus_s_encoder",
+    "plan_hash": "5300727568893759563",
+    "plan_path": "plans/pp_formulanet_plus_s_encoder.plan.json"
+  }
+]

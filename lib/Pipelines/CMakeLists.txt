@@ -18,6 +18,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     GenerateCAPI
     LowerVectorMathNCNN
     MatmulKernelNCNN
+    PackStaticMatmulNCNN
     NCNNToFunc
     NCNNToTosa
     NormalizeNCNN

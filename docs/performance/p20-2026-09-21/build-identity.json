@@ -1,0 +1,20 @@
+{
+  "auto_matmul_packing": "auto",
+  "auto_stage": "/tmp/ncnn-compiler-stage-p20-final-3-20260921",
+  "baseline_model_rows": 45,
+  "build_type": "Release",
+  "candidate_model_rows": 45,
+  "clang_arg": "-march=x86-64-v3",
+  "compiler_install_rpath": true,
+  "full_ctest": "449/449 passed; 2 skipped by existing test contract",
+  "generator": "Unix Makefiles",
+  "llvm_dir": "/usr/lib/llvm-21/lib/cmake/llvm",
+  "mlir_dir": "/usr/lib/llvm-21/lib/cmake/mlir",
+  "off_matmul_packing": "off",
+  "off_stage": "/tmp/ncnn-compiler-stage-p20-off-final-2-20260921",
+  "source_commit": "c2456c3801137d51f2066b8c83fe042b9c303b15",
+  "target_features": [
+    "+avx2",
+    "+fma"
+  ]
+}

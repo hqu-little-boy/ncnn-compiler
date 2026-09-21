@@ -1,0 +1,10 @@
+{"order": 0, "policy": "off", "round": 1, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 113.642}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 112.918}]}
+{"order": 1, "policy": "auto", "round": 1, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 115.449}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 110.961}]}
+{"order": 0, "policy": "auto", "round": 2, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 116.187}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 116.428}]}
+{"order": 1, "policy": "off", "round": 2, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 115.427}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 111.732}]}
+{"order": 0, "policy": "off", "round": 3, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 115.915}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 112.581}]}
+{"order": 1, "policy": "auto", "round": 3, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 116.071}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 116.747}]}
+{"order": 0, "policy": "auto", "round": 4, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 116.456}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 116.317}]}
+{"order": 1, "policy": "off", "round": 4, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 114.894}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 112.63}]}
+{"order": 0, "policy": "off", "round": 5, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 115.568}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 109.406}]}
+{"order": 1, "policy": "auto", "round": 5, "rows": [{"case": "static_shallow", "checksum": 289899572.40625, "gflops": 99.712}, {"case": "static_deep", "checksum": 1159588163.5, "gflops": 113.661}]}

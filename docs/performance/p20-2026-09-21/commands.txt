@@ -1,0 +1,13 @@
+cmake -S /mnt/ncnn-compiler/compiler -B /tmp/ncnn-compiler-stage-p20-final-3-20260921 -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DCOMPILER_INSTALL_RPATH=ON -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm -DMLIR_DIR=/usr/lib/llvm-21/lib/cmake/mlir
+cmake --build /tmp/ncnn-compiler-stage-p20-final-3-20260921 --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p20-final-3-20260921 --target format --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p20-final-3-20260921 --target format_check --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p20-final-3-20260921 --target tidy --parallel 16
+ctest --test-dir /tmp/ncnn-compiler-stage-p20-final-3-20260921 --output-on-failure
+cmake -S /mnt/ncnn-compiler/compiler -B /tmp/ncnn-compiler-stage-p20-off-final-2-20260921 -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DCOMPILER_INSTALL_RPATH=ON -DNCNN_MATMUL_PACKING=off -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm -DMLIR_DIR=/usr/lib/llvm-21/lib/cmake/mlir
+cmake --build /tmp/ncnn-compiler-stage-p20-off-final-2-20260921 --parallel 16
+cmake -S /mnt/ncnn-compiler/compiler -B /tmp/ncnn-compiler-stage-p20-final-4-20260921 -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DCOMPILER_INSTALL_RPATH=ON -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm -DMLIR_DIR=/usr/lib/llvm-21/lib/cmake/mlir
+cmake --build /tmp/ncnn-compiler-stage-p20-final-4-20260921 --parallel 16
+ctest --test-dir /tmp/ncnn-compiler-stage-p20-final-4-20260921 --output-on-failure
+MATMUL_STATIC_BENCH_ITERS=5 /tmp/ncnn-compiler-stage-p20-final-4-20260921/test/Numerical/matmul_static_bench_auto
+MATMUL_STATIC_BENCH_ITERS=5 /tmp/ncnn-compiler-stage-p20-final-4-20260921/test/Numerical/matmul_static_bench_off

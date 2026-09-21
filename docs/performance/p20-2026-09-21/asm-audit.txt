@@ -1,0 +1,12 @@
+[off] /mnt/ncnn-compiler/compiler/docs/performance/p20-2026-09-21/static-bench/off/matmul_static.ll
+  llvm.fma_count=0
+  fmadd_text_count=0
+  fmul_count=9
+  vector_text_count=8
+  size=372248
+[auto] /mnt/ncnn-compiler/compiler/docs/performance/p20-2026-09-21/static-bench/auto/matmul_static.ll
+  llvm.fma_count=0
+  fmadd_text_count=0
+  fmul_count=9
+  vector_text_count=8
+  size=372504

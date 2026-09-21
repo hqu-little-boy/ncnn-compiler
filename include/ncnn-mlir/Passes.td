@@ -349,6 +349,38 @@ def VerifyNoNestedOpenMPPass
   let dependentDialects = ["omp::OpenMPDialect"];
 }
 
+def PackStaticMatmulNCNNPass
+    : Pass<"pack-static-matmul-ncnn", "mlir::ModuleOp"> {
+  let summary = "Physically panel-pack static f32 Matmul RHS constants";
+  let description = [{
+    Reorders eligible static f32 rank-2 Matmul RHS constants into a
+    panel-major N-by-K storage layout. The matching bufferized kernel consumes
+    this physical layout; dynamic, non-constant, small, and unsupported shapes
+    remain on the direct fallback path with an explicit contract reason.
+  }];
+  let options = [
+    Option<"packN", "pack-n", "int64_t", "16",
+           "Number of contiguous N lanes in a packed B panel">,
+    Option<"minK", "min-k", "int64_t", "64",
+           "Minimum K extent for prepacking">,
+    Option<"minN", "min-n", "int64_t", "32",
+           "Minimum N extent for prepacking">,
+    Option<"tileK", "tile-k", "int64_t", "128",
+           "Bounded cache K tile recorded in the contract">,
+    Option<"tileRows", "tile-rows", "int64_t", "32",
+           "M tile size used by the downstream forall tiler">,
+    Option<"tileColumns", "tile-columns", "int64_t", "32",
+           "N tile size used by the downstream forall tiler">,
+    Option<"maxTotalBytes", "max-total-bytes", "int64_t", "100663296",
+           "Maximum aggregate packed B bytes per module (0 disables the budget)">,
+    Option<"enabled", "enabled", "bool", "true",
+           "Enable physical static B packing">
+  ];
+  let dependentDialects = [
+    "arith::ArithDialect", "linalg::LinalgDialect", "tensor::TensorDialect"
+  ];
+}
+
 def TileMatmulForallPass : Pass<"tile-matmul-forall", "mlir::ModuleOp"> {
   let summary =
     "Tile top-level static matmuls into scf.forall grids along M/N";

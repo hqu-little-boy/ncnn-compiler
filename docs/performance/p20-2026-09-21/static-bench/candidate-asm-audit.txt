@@ -1,0 +1,14 @@
+@__constant_: 4
+define void @_mlir_ciface_bench_shallow: 1
+define void @_mlir_ciface_bench_deep: 1
+getelementptr: 58
+fmul: 9
+fadd: 0
+llvm.fmuladd: 9
+fma: 0
+_mlir_ciface_bench_shallow.getelementptr: 0
+_mlir_ciface_bench_shallow.fmul: 0
+_mlir_ciface_bench_shallow.fadd: 0
+_mlir_ciface_bench_deep.getelementptr: 0
+_mlir_ciface_bench_deep.fmul: 0
+_mlir_ciface_bench_deep.fadd: 0

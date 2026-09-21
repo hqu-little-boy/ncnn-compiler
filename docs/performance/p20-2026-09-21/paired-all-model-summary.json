@@ -1,0 +1,200 @@
+{
+  "auto_better_than_off_count": 2,
+  "auto_ratio_mean": 2.7384666666666666,
+  "conventional_conv_rows": [
+    {
+      "auto_compiled_mean_ms": 96.446,
+      "auto_ratio_vs_ncnn": 2.792,
+      "auto_vs_off_improvement_pct": -80.50411629305518,
+      "model": "efficientnet_b0",
+      "ncnn_mean_ms_auto": 34.54,
+      "ncnn_mean_ms_off": 9.427,
+      "off_compiled_mean_ms": 18.803,
+      "off_ratio_vs_ncnn": 1.995
+    },
+    {
+      "auto_compiled_mean_ms": 103.334,
+      "auto_ratio_vs_ncnn": 2.206,
+      "auto_vs_off_improvement_pct": -69.73987264598294,
+      "model": "efficientnet_b1",
+      "ncnn_mean_ms_auto": 46.843,
+      "ncnn_mean_ms_off": 15.229,
+      "off_compiled_mean_ms": 31.269,
+      "off_ratio_vs_ncnn": 2.053
+    },
+    {
+      "auto_compiled_mean_ms": 121.269,
+      "auto_ratio_vs_ncnn": 2.252,
+      "auto_vs_off_improvement_pct": -60.75171725667731,
+      "model": "efficientnet_b2",
+      "ncnn_mean_ms_auto": 53.844,
+      "ncnn_mean_ms_off": 19.981,
+      "off_compiled_mean_ms": 47.596,
+      "off_ratio_vs_ncnn": 2.382
+    },
+    {
+      "auto_compiled_mean_ms": 215.653,
+      "auto_ratio_vs_ncnn": 2.835,
+      "auto_vs_off_improvement_pct": -65.82101802432612,
+      "model": "efficientnet_b3",
+      "ncnn_mean_ms_auto": 76.076,
+      "ncnn_mean_ms_off": 35.904,
+      "off_compiled_mean_ms": 73.708,
+      "off_ratio_vs_ncnn": 2.053
+    },
+    {
+      "auto_compiled_mean_ms": 88.473,
+      "auto_ratio_vs_ncnn": 1.357,
+      "auto_vs_off_improvement_pct": -6.44829496004431,
+      "model": "resnet101",
+      "ncnn_mean_ms_auto": 65.184,
+      "ncnn_mean_ms_off": 46.583,
+      "off_compiled_mean_ms": 82.768,
+      "off_ratio_vs_ncnn": 1.777
+    },
+    {
+      "auto_compiled_mean_ms": 228.957,
+      "auto_ratio_vs_ncnn": 2.836,
+      "auto_vs_off_improvement_pct": -87.36574990063637,
+      "model": "resnet18",
+      "ncnn_mean_ms_auto": 80.726,
+      "ncnn_mean_ms_off": 11.029,
+      "off_compiled_mean_ms": 28.927,
+      "off_ratio_vs_ncnn": 2.623
+    },
+    {
+      "auto_compiled_mean_ms": 370.292,
+      "auto_ratio_vs_ncnn": 2.575,
+      "auto_vs_off_improvement_pct": -87.14663022695602,
+      "model": "resnet34",
+      "ncnn_mean_ms_auto": 143.803,
+      "ncnn_mean_ms_off": 21.436,
+      "off_compiled_mean_ms": 47.595,
+      "off_ratio_vs_ncnn": 2.22
+    },
+    {
+      "auto_compiled_mean_ms": 63.137,
+      "auto_ratio_vs_ncnn": 0.829,
+      "auto_vs_off_improvement_pct": -9.202211064827281,
+      "model": "resnet50",
+      "ncnn_mean_ms_auto": 76.182,
+      "ncnn_mean_ms_off": 34.516,
+      "off_compiled_mean_ms": 57.327,
+      "off_ratio_vs_ncnn": 1.661
+    },
+    {
+      "auto_compiled_mean_ms": 80.114,
+      "auto_ratio_vs_ncnn": 3.749,
+      "auto_vs_off_improvement_pct": -84.2574331577502,
+      "model": "squeezenet_v1_1",
+      "ncnn_mean_ms_auto": 21.37,
+      "ncnn_mean_ms_off": 5.048,
+      "off_compiled_mean_ms": 12.612,
+      "off_ratio_vs_ncnn": 2.498
+    }
+  ],
+  "model_count": 45,
+  "off_ratio_mean": 2.799688888888889,
+  "top_auto_vs_off": [
+    {
+      "auto_compiled_mean_ms": 484.078,
+      "auto_ratio_vs_ncnn": 7.88,
+      "auto_vs_off_improvement_pct": 52.721668821966716,
+      "model": "pp_formulanet_plus_s_encoder",
+      "ncnn_mean_ms_auto": 61.43,
+      "ncnn_mean_ms_off": 54.971,
+      "off_compiled_mean_ms": 739.292,
+      "off_ratio_vs_ncnn": 13.449
+    },
+    {
+      "auto_compiled_mean_ms": 7.647,
+      "auto_ratio_vs_ncnn": 1.919,
+      "auto_vs_off_improvement_pct": 9.40238001830782,
+      "model": "pp_ocrv6_medium_det_int8",
+      "ncnn_mean_ms_auto": 3.984,
+      "ncnn_mean_ms_off": 3.842,
+      "off_compiled_mean_ms": 8.366,
+      "off_ratio_vs_ncnn": 2.177
+    },
+    {
+      "auto_compiled_mean_ms": 14.042,
+      "auto_ratio_vs_ncnn": 1.913,
+      "auto_vs_off_improvement_pct": -3.254522147842176,
+      "model": "yolov5s_cls",
+      "ncnn_mean_ms_auto": 7.34,
+      "ncnn_mean_ms_off": 6.449,
+      "off_compiled_mean_ms": 13.585,
+      "off_ratio_vs_ncnn": 2.107
+    },
+    {
+      "auto_compiled_mean_ms": 11132.657,
+      "auto_ratio_vs_ncnn": 2.323,
+      "auto_vs_off_improvement_pct": -5.130644014272601,
+      "model": "pp_ocrv5_server_det_static",
+      "ncnn_mean_ms_auto": 4792.257,
+      "ncnn_mean_ms_off": 4583.456,
+      "off_compiled_mean_ms": 10561.48,
+      "off_ratio_vs_ncnn": 2.304
+    },
+    {
+      "auto_compiled_mean_ms": 9124.652,
+      "auto_ratio_vs_ncnn": 17.791,
+      "auto_vs_off_improvement_pct": -6.142360278507053,
+      "model": "pp_ocrv5_server_rec",
+      "ncnn_mean_ms_auto": 512.883,
+      "ncnn_mean_ms_off": 450.138,
+      "off_compiled_mean_ms": 8564.183,
+      "off_ratio_vs_ncnn": 19.026
+    },
+    {
+      "auto_compiled_mean_ms": 88.473,
+      "auto_ratio_vs_ncnn": 1.357,
+      "auto_vs_off_improvement_pct": -6.44829496004431,
+      "model": "resnet101",
+      "ncnn_mean_ms_auto": 65.184,
+      "ncnn_mean_ms_off": 46.583,
+      "off_compiled_mean_ms": 82.768,
+      "off_ratio_vs_ncnn": 1.777
+    },
+    {
+      "auto_compiled_mean_ms": 68.18,
+      "auto_ratio_vs_ncnn": 1.504,
+      "auto_vs_off_improvement_pct": -7.6063361689645115,
+      "model": "yolov5n",
+      "ncnn_mean_ms_auto": 45.321,
+      "ncnn_mean_ms_off": 43.072,
+      "off_compiled_mean_ms": 62.994,
+      "off_ratio_vs_ncnn": 1.463
+    },
+    {
+      "auto_compiled_mean_ms": 63.137,
+      "auto_ratio_vs_ncnn": 0.829,
+      "auto_vs_off_improvement_pct": -9.202211064827281,
+      "model": "resnet50",
+      "ncnn_mean_ms_auto": 76.182,
+      "ncnn_mean_ms_off": 34.516,
+      "off_compiled_mean_ms": 57.327,
+      "off_ratio_vs_ncnn": 1.661
+    },
+    {
+      "auto_compiled_mean_ms": 129.354,
+      "auto_ratio_vs_ncnn": 1.356,
+      "auto_vs_off_improvement_pct": -10.302735129953467,
+      "model": "yolov5s",
+      "ncnn_mean_ms_auto": 95.386,
+      "ncnn_mean_ms_off": 88.476,
+      "off_compiled_mean_ms": 116.027,
+      "off_ratio_vs_ncnn": 1.311
+    },
+    {
+      "auto_compiled_mean_ms": 74.124,
+      "auto_ratio_vs_ncnn": 1.773,
+      "auto_vs_off_improvement_pct": -10.436565754681338,
+      "model": "pp_structrurev2_slanet_plus_cnn",
+      "ncnn_mean_ms_auto": 41.801,
+      "ncnn_mean_ms_off": 40.857,
+      "off_compiled_mean_ms": 66.388,
+      "off_ratio_vs_ncnn": 1.625
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "comparison": {
+    "static_deep": {
+      "baseline_median_gflops": 112.581,
+      "candidate_median_gflops": 116.317,
+      "improvement_percent": 3.3184995691990515,
+      "ratio": 1.0331849956919905
+    },
+    "static_shallow": {
+      "baseline_median_gflops": 115.427,
+      "candidate_median_gflops": 116.071,
+      "improvement_percent": 0.5579283876389285,
+      "ratio": 1.0055792838763893
+    }
+  },
+  "result": {
+    "auto/static_deep": {
+      "max": 116.747,
+      "median": 116.317,
+      "min": 110.961,
+      "samples": [
+        110.961,
+        116.428,
+        116.747,
+        116.317,
+        113.661
+      ]
+    },
+    "auto/static_shallow": {
+      "max": 116.456,
+      "median": 116.071,
+      "min": 99.712,
+      "samples": [
+        115.449,
+        116.187,
+        116.071,
+        116.456,
+        99.712
+      ]
+    },
+    "off/static_deep": {
+      "max": 112.918,
+      "median": 112.581,
+      "min": 109.406,
+      "samples": [
+        112.918,
+        111.732,
+        112.581,
+        112.63,
+        109.406
+      ]
+    },
+    "off/static_shallow": {
+      "max": 115.915,
+      "median": 115.427,
+      "min": 113.642,
+      "samples": [
+        113.642,
+        115.427,
+        115.915,
+        114.894,
+        115.568
+      ]
+    }
+  },
+  "rounds": 5
+}

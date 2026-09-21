@@ -1,0 +1,10 @@
+{
+  "auto": {
+    "artifact_dir": "static-bench/auto",
+    "binary_bytes": 389376
+  },
+  "off": {
+    "artifact_dir": "static-bench/off",
+    "binary_bytes": 389376
+  }
+}

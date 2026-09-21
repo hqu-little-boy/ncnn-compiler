@@ -220,6 +220,17 @@ void buildNCNNLinalgToMemRefPipeline(
   // 并行化单轨化（T4b 配套）：顶层 matmul 沿 M/N 切进 forall 网格，
   // epilogue 分块循环改写为 shared_outs forall——两者都在向量化之前
   // 完成，体内 generic 随后照常被行级向量化。K 维全程不被切分。
+  // P20 在此之前把静态 f32 RHS 常量重排为物理 panel-NK 存储；关闭
+  // policy 保留完全等价的 unpacked 基线路径，供 paired A/B 使用。
+  PackStaticMatmulNCNNPassOptions packingOptions;
+  // The initial panel schema is fixed at Nr=16. Keep the opt-in transform
+  // disabled for register tiles that cannot be partitioned into that panel;
+  // otherwise a direct fallback would interpret physically reordered storage.
+  const bool packedPanelCompatible =
+    options.matmulAccColumns > 0 && 16 % options.matmulAccColumns == 0;
+  packingOptions.enabled =
+    options.matmulPackingPolicy == "auto" && packedPanelCompatible;
+  passManager.addPass(createPackStaticMatmulNCNNPass(packingOptions));
   passManager.addPass(createTileMatmulForallPass());
   passManager.addPass(createForallizeDisjointTileLoopsPass());
   passManager.addPass(createCanonicalizerPass());
