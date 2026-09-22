@@ -1,0 +1,55 @@
+P21 five-round paired performance summary
+official models: 44; rounds: 5; threads: 6; warmup: 10; iterations: 20
+baseline ratio p50 median: 1.9270
+candidate ratio p50 median: 1.9780
+baseline ratio geometric mean: 2.1188
+candidate ratio geometric mean: 2.1501
+candidate compiled delta median: +1.80%
+candidate compiled delta geometric mean: +2.35%
+models faster: 12; regressed: 32
+
+model,p50 baseline ms,p50 candidate ms,delta %,baseline ratio,candidate ratio
+chineseocr_lite_anglenet,2.500,2.697,+1.87,3.053,3.211
+efficientnet_b0,23.874,23.802,-0.45,2.557,2.494
+efficientnet_b1,31.036,34.563,+7.92,2.022,2.177
+efficientnet_b2,45.119,46.022,+4.17,2.354,2.168
+efficientnet_b3,74.060,74.455,+3.30,2.086,2.182
+pp_formulanet_plus_s_encoder,365.851,399.304,+9.14,6.928,7.300
+pp_lcnet_x1_0_doc_ori,7.741,7.299,-1.74,2.537,2.375
+pp_lcnet_x1_0_textline_ori,6.896,7.607,+6.39,1.600,2.069
+pp_ocrv5_mobile_det_static,117.120,123.740,+5.65,1.098,1.162
+pp_ocrv5_mobile_rec,27.928,30.753,+4.63,1.264,1.309
+pp_ocrv5_mobile_rec_int8,33.691,37.184,+14.05,1.670,1.788
+pp_ocrv5_server_det_static,9588.597,9649.314,+0.54,2.095,2.103
+pp_ocrv5_server_rec,8091.083,8086.055,-0.06,18.047,18.031
+pp_ocrv6_medium_det,584.097,608.043,+6.73,1.508,1.572
+pp_ocrv6_medium_det_int8,7.106,7.214,+0.19,1.954,1.990
+pp_ocrv6_medium_rec,80.681,86.091,+3.65,2.112,2.403
+pp_ocrv6_medium_rec_int8,100.289,101.293,-3.10,4.818,4.533
+pp_ocrv6_small_det,172.121,169.606,+0.95,1.884,1.883
+pp_ocrv6_small_rec,30.531,32.650,+5.03,2.585,2.528
+pp_ocrv6_small_rec_int8,37.282,37.852,+4.49,4.079,3.919
+pp_ocrv6_tiny_det,99.126,102.470,+3.12,2.029,2.093
+pp_ocrv6_tiny_rec,8.262,8.821,+3.76,2.889,2.834
+pp_ocrv6_tiny_rec_int8,10.909,10.520,-7.45,4.137,3.586
+pp_structrurev2_slanet_plus_cnn,68.120,72.147,+5.67,1.667,1.822
+resnet101,72.469,75.901,+2.15,1.479,1.488
+resnet18,26.603,27.566,+2.58,2.157,2.400
+resnet34,41.714,41.692,+1.16,2.055,1.927
+resnet50,50.952,50.939,+1.62,1.654,1.697
+squeezenet_v1_1,12.339,13.047,+2.86,2.374,2.539
+yolov5l,547.496,539.143,-1.63,1.855,1.779
+yolov5l_cls,60.738,57.915,-6.59,2.083,2.032
+yolov5l_seg,718.368,715.564,-0.48,1.900,1.903
+yolov5m,240.079,236.402,+0.59,1.456,1.424
+yolov5m_cls,26.397,27.327,+3.52,1.793,1.966
+yolov5m_seg,331.040,336.215,+1.11,1.450,1.478
+yolov5n,55.913,56.967,+1.73,1.244,1.286
+yolov5n_cls,7.790,7.259,-4.72,2.497,2.412
+yolov5n_seg,81.414,85.439,+5.70,1.332,1.365
+yolov5s,104.574,103.832,+0.77,1.175,1.150
+yolov5s_cls,12.570,13.029,+4.90,1.818,1.905
+yolov5s_seg,159.943,159.361,-0.51,1.294,1.294
+yolov5x,841.176,843.439,-1.99,1.759,1.753
+yolov5x_cls,87.084,86.403,-1.62,1.896,1.808
+yolov5x_seg,1042.567,1039.635,+0.58,1.777,1.759

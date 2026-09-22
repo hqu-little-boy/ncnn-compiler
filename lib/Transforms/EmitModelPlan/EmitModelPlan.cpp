@@ -306,6 +306,11 @@ class EmitModelPlanPass final
     std::int64_t depthwise_fallback_count = 0;
     std::int64_t conv_unknown_count = 0;
     std::int64_t depthwise_unknown_count = 0;
+    std::int64_t layout_island_count = 0;
+    std::int64_t layout_island_selected_count = 0;
+    std::int64_t layout_island_rejected_count = 0;
+    std::int64_t layout_pack4_count = 0;
+    std::int64_t layout_pack8_count = 0;
     std::map<std::string, std::int64_t> conv_implementations;
     std::map<std::string, std::int64_t> depthwise_implementations;
     std::map<std::string, std::int64_t> conv_fallback_reasons;
@@ -489,6 +494,14 @@ class EmitModelPlanPass final
       int8DepthwiseAttr ? int8DepthwiseAttr.getValue() : false;
     const bool int8_cast_chain =
       int8CastChainAttr ? int8CastChainAttr.getValue() : false;
+    const auto packedConvDepthwiseAttr =
+      module->getAttrOfType<BoolAttr>("ncnn.packed_conv_depthwise");
+    const bool packed_conv_depthwise =
+      packedConvDepthwiseAttr && packedConvDepthwiseAttr.getValue();
+    const std::string layout_island_revision = "layout-island-v1";
+    std::string layout_island_hash_input =
+      "layout-island-revision=" + layout_island_revision +
+      "|packed-conv-depthwise=" + std::to_string(packed_conv_depthwise);
     const std::string low_precision_revision = "int8-target-v1";
     std::string low_precision_hash_input =
       "low-precision-revision=" + low_precision_revision +
@@ -524,8 +537,8 @@ class EmitModelPlanPass final
       "|fusion-residual=" + std::to_string(fusion_residual_count) +
       "|fusion-rejected=" + std::to_string(fusion_rejected_count) +
       "|fusion-reasons=" + fusion_rejection_reasons + "|" +
-      low_precision_hash_input + "|" + tuning_hash_input + "|" +
-      attention_hash_input;
+      low_precision_hash_input + "|" + layout_island_hash_input + "|" +
+      tuning_hash_input + "|" + attention_hash_input;
 
     // The static plan does not execute a runner or collect runtime counters.
     // Prepared and allocation-audit modes are reported by the numerical
@@ -883,7 +896,8 @@ class EmitModelPlanPass final
           operation->hasAttr(contract::kFallback) ||
           operation->hasAttr(contract::kOperationFamily) ||
           operation->hasAttr(contract::kImplementation) ||
-          operation->hasAttr(contract::kFusion);
+          operation->hasAttr(contract::kFusion) ||
+          operation->hasAttr(contract::kLayoutIslandId);
         auto make_contract = [&]() {
           JsonObject result;
           auto copy_string = [&](StringRef attribute, StringRef field) {
@@ -939,6 +953,14 @@ class EmitModelPlanPass final
           copy_integer(contract::kInputChannels, "input_channels");
           copy_integer(contract::kOutputChannels, "output_channels");
           copy_integer(contract::kMultiplier, "multiplier");
+          copy_string(contract::kLayoutIslandId, "layout_island_id");
+          copy_string(contract::kLayoutIslandStatus, "layout_island_status");
+          copy_string(contract::kLayoutIslandEntry, "layout_island_entry");
+          copy_string(contract::kLayoutIslandExit, "layout_island_exit");
+          copy_string(contract::kLayoutIslandCost, "layout_island_cost");
+          copy_string(contract::kLayoutIslandReason, "layout_island_reason");
+          copy_integer(contract::kLayoutPackFactor, "layout_pack_factor");
+          copy_integer(contract::kLayoutChannelBlocks, "layout_channel_blocks");
           copy_string(contract::kFusion, "fusion_status");
           copy_string(contract::kFusionKind, "fusion_kind");
           copy_string(contract::kFusionProducer, "fusion_producer");
@@ -1007,6 +1029,28 @@ class EmitModelPlanPass final
             familyEntry["source_name"] = nullptr;
           }
           conv_depthwise_operations.push_back(std::move(familyEntry));
+        }
+        if (auto island =
+              operation->getAttrOfType<StringAttr>(contract::kLayoutIslandId)) {
+          ++layout_island_count;
+          layout_island_hash_input += "|id=" + island.getValue().str();
+          if (auto status = operation->getAttrOfType<StringAttr>(
+                contract::kLayoutIslandStatus)) {
+            layout_island_hash_input += "|status=" + status.getValue().str();
+            if (status.getValue() == "selected") {
+              ++layout_island_selected_count;
+            } else if (status.getValue() == "rejected") {
+              ++layout_island_rejected_count;
+            }
+          }
+          if (auto factor = operation->getAttrOfType<IntegerAttr>(
+                contract::kLayoutPackFactor)) {
+            if (factor.getInt() == 4) {
+              ++layout_pack4_count;
+            } else if (factor.getInt() == 8) {
+              ++layout_pack8_count;
+            }
+          }
         }
         if (has_contract) {
           ++kernel_contract_count;
@@ -1345,6 +1389,12 @@ class EmitModelPlanPass final
     summary["parallel_region_count"] = parallel_region_count;
     summary["kernel_contract_count"] = kernel_contract_count;
     summary["kernel_contract_fallback_count"] = kernel_contract_fallback_count;
+    summary["layout_island_count"] = layout_island_count;
+    summary["layout_island_selected_count"] = layout_island_selected_count;
+    summary["layout_island_rejected_count"] = layout_island_rejected_count;
+    summary["layout_pack4_count"] = layout_pack4_count;
+    summary["layout_pack8_count"] = layout_pack8_count;
+    summary["packed_conv_depthwise"] = packed_conv_depthwise;
     auto mapToJson = [](const std::map<std::string, std::int64_t>& values) {
       JsonObject result;
       for (const auto& [key, value] : values) {
@@ -1551,10 +1601,12 @@ class EmitModelPlanPass final
     root["schema_version"] = 1;
     root["plan_revision"] =
       "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|packed-gemm-v1|int8-target-v1|tuning-v1|attribution-v1";
+      "depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|"
+      "attribution-v1";
     root["contract_revision"] =
       "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|packed-gemm-v1|int8-target-v1|tuning-v1|attribution-v1";
+      "depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|"
+      "attribution-v1";
     root["attribution_revision"] = attribution_revision.str();
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen

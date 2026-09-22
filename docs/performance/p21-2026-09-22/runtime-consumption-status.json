@@ -1,0 +1,14 @@
+{
+  "status": "incomplete",
+  "reason": "The selected allocation-audit runs collect ncnn allocator bytes, but compiled runtime counters are not collected by this profile path.",
+  "compiled_profile": "not_collected",
+  "candidate_plan_static_islands": 359,
+  "candidate_plan_packed_conv_gemm": 196,
+  "candidate_plan_packed_depthwise": 359,
+  "candidate_plan_packed_constant_bytes": 330850560,
+  "candidate_plan_static_pack_bytes": 330850560,
+  "selected_model": "efficientnet_b0",
+  "candidate_allocation_audit": "efficientnet_b0-candidate-allocation-audit.ndjson",
+  "baseline_allocation_audit": "efficientnet_b0-baseline-allocation-audit.ndjson",
+  "interpretation": "Static plan selection and allocation diagnostics are retained as audit evidence only; they are not claimed as proof of runtime packed-kernel consumption or elimination of materialized conversions."
+}

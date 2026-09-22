@@ -241,6 +241,28 @@ class PackStaticMatmulNCNNPass final
       matmul.getOperation(), contract::kPackRuntime, "compile_time_B");
     contract::setString(matmul.getOperation(), contract::kAlignment, "64");
     contract::setString(matmul.getOperation(), contract::kContract, "selected");
+
+    // A StrategyNCNN-produced convolution matmul is the Conv side of P21.
+    // The packed constant remains consumed by MatmulKernelNCNN; these fields
+    // describe that physical contract rather than a metadata-only selection.
+    auto family = matmul->getAttrOfType<StringAttr>(contract::kOperationFamily);
+    auto packedLayout =
+      matmul->getParentOfType<ModuleOp>()->getAttrOfType<BoolAttr>(
+        "ncnn.packed_conv_depthwise");
+    if (family && family.getValue() == "conv" && packedLayout &&
+        packedLayout.getValue()) {
+      contract::annotateOperationFamily(
+        matmul.getOperation(), "conv", "conv_packed_gemm");
+      contract::annotateLayoutIsland(matmul.getOperation(),
+                                     "conv-packed-gemm",
+                                     "selected",
+                                     "abi_to_panel_nk",
+                                     "panel_nk_to_abi",
+                                     "packed_rhs_only",
+                                     "static_conv_gemm",
+                                     packN,
+                                     columns / packN);
+    }
   }
 };
 

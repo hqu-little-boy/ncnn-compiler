@@ -1,0 +1,11 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-stage-p21-repair-20260922-a
+Test project /tmp/ncnn-compiler-stage-p21-repair-20260922-a
+    Start 416: PerformanceModel.EfficientNetB0
+1/1 Test #416: PerformanceModel.EfficientNetB0 ...   Passed    1.07 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+performance    =   1.07 sec*proc (1 test)
+
+Total Test time (real) =   1.08 sec

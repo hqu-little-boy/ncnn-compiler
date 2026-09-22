@@ -17,6 +17,13 @@ set(NCNN_DISABLE_RTTI ON CACHE BOOL "" FORCE)
 set(NCNN_MATMUL_PACKING "auto" CACHE STRING
     "Static f32 RHS packing policy for numerical model fixtures")
 set_property(CACHE NCNN_MATMUL_PACKING PROPERTY STRINGS off auto)
+set(NCNN_PACKED_CONV_DEPTHWISE OFF CACHE BOOL
+    "Enable guarded f32 packed Conv/Depthwise layout islands")
+if(NCNN_PACKED_CONV_DEPTHWISE)
+    set(NCNN_PACKED_CONV_DEPTHWISE_ARG --packed-conv-depthwise)
+else()
+    set(NCNN_PACKED_CONV_DEPTHWISE_ARG)
+endif()
 if(NOT NCNN_MATMUL_PACKING STREQUAL "off" AND
    NOT NCNN_MATMUL_PACKING STREQUAL "auto")
     message(FATAL_ERROR "NCNN_MATMUL_PACKING must be off or auto")
@@ -37,7 +44,8 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     if(NOT "${input_shape}" STREQUAL "")
         list(REMOVE_AT input_constraints 0)
     endif()
-    set(precision_args --matmul-packing ${NCNN_MATMUL_PACKING})
+    set(precision_args --matmul-packing ${NCNN_MATMUL_PACKING}
+                        ${NCNN_PACKED_CONV_DEPTHWISE_ARG})
     set(clang_args)
     set(linker_args)
     set(filtered_constraints)

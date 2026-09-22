@@ -117,6 +117,22 @@ class ConvertNestedLinalgToLoopsPass final
   }
 };
 
+class SetPackedLayoutOptionsPass final
+  : public PassWrapper<SetPackedLayoutOptionsPass, OperationPass<ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SetPackedLayoutOptionsPass)
+  explicit SetPackedLayoutOptionsPass(bool enabled) : enabled(enabled) {}
+
+  void runOnOperation() final {
+    Builder builder(&getContext());
+    getOperation()->setAttr("ncnn.packed_conv_depthwise",
+                            builder.getBoolAttr(enabled));
+  }
+
+ private:
+  bool enabled;
+};
+
 class SetLowPrecisionOptionsPass final
   : public PassWrapper<SetLowPrecisionOptionsPass, OperationPass<ModuleOp>> {
  public:
@@ -212,6 +228,8 @@ void buildNCNNLinalgToMemRefPipeline(
   OpPassManager& passManager,
   const NCNNLinalgToMemRefPipelineOptions& options) {
   passManager.addPass(
+    std::make_unique<SetPackedLayoutOptionsPass>(options.packedConvDepthwise));
+  passManager.addPass(
     std::make_unique<SetLowPrecisionOptionsPass>(options.int8Depthwise,
                                                  false,
                                                  options.int8KernelPolicy,
@@ -241,6 +259,7 @@ void buildNCNNLinalgToMemRefPipeline(
     VectorizeNCNNPassOptions vectorizeOptions;
     vectorizeOptions.lanes = options.vectorLanes;
     vectorizeOptions.scalable = options.vectorScalable;
+    vectorizeOptions.packedConvDepthwise = options.packedConvDepthwise;
     passManager.addPass(createVectorizeNCNNPass(vectorizeOptions));
     passManager.addPass(createCanonicalizerPass());
     passManager.addPass(createCSEPass());

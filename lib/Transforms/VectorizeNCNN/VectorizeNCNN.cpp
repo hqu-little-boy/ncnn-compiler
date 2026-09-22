@@ -434,10 +434,15 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                                          unsigned lanes) {
   auto int8Attribute = module->getAttrOfType<BoolAttr>("ncnn.int8_depthwise");
   const bool enableInt8 = int8Attribute && int8Attribute.getValue();
+  auto packedAttribute =
+    module->getAttrOfType<BoolAttr>("ncnn.packed_conv_depthwise");
+  const bool enablePacked = packedAttribute && packedAttribute.getValue();
   struct DepthwiseCandidate {
     linalg::DepthwiseConv2DNhwcHwcmOp op;
     int64_t chunkWidth;
+    int64_t packFactor;
     bool int8;
+    bool packed;
   };
   SmallVector<DepthwiseCandidate> candidates;
   module.walk([&](linalg::DepthwiseConv2DNhwcHwcmOp op) {
@@ -475,6 +480,12 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                            weightType.getElementType().isF32() &&
                            initType.getElementType().isF32();
     if (!isFloat32 && !(enableInt8 && isInt8)) {
+      return;
+    }
+    // P21 is deliberately limited to the f32 multiplier=1 path.  The packed
+    // view is a zero-copy blocked channel view, so integer and non-canonical
+    // depthwise variants retain the established fallback behavior.
+    if (enablePacked && !isFloat32) {
       return;
     }
     const int64_t channels = inputType.getShape()[3];
@@ -557,18 +568,37 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
         }
       }
     }
-    // 分块宽沿用逐元素路径的位宽预算（f32 / i32 accumulator → 4×lanes）；
-    // 非 2 幂时退到 lanes，仍非 2 幂（窄于 lanes 的奇数宽通道）保持标量。
-    const auto laneBudget = static_cast<int64_t>(lanes);
-    int64_t chunkWidth = std::min(4 * laneBudget, channels);
-    if (!isVectorWidth(chunkWidth)) {
-      chunkWidth = std::min(laneBudget, channels);
+    int64_t chunkWidth = 0;
+    int64_t packFactor = 1;
+    if (enablePacked) {
+      // Prefer pack8 and fall back to pack4.  Both are physical views of the
+      // original contiguous NHWC/HWCM storage; no materialized repack is
+      // introduced.  A non-divisible channel count remains unpacked.
+      if (channels % 8 == 0) {
+        packFactor = 8;
+      } else if (channels % 4 == 0) {
+        packFactor = 4;
+      } else {
+        return;
+      }
+      chunkWidth = packFactor;
+    } else {
+      // 分块宽沿用逐元素路径的位宽预算（f32 / i32 accumulator → 4×lanes）；
+      // 非 2 幂时退到 lanes，仍非 2 幂（窄于 lanes 的奇数宽通道）保持标量。
+      const auto laneBudget = static_cast<int64_t>(lanes);
+      chunkWidth = std::min(4 * laneBudget, channels);
+      if (!isVectorWidth(chunkWidth)) {
+        chunkWidth = std::min(laneBudget, channels);
+      }
+      if (!isVectorWidth(chunkWidth)) {
+        return;
+      }
     }
-    if (!isVectorWidth(chunkWidth)) {
-      return;
-    }
-    candidates.push_back(
-      DepthwiseCandidate{.op = op, .chunkWidth = chunkWidth, .int8 = isInt8});
+    candidates.push_back(DepthwiseCandidate{.op = op,
+                                            .chunkWidth = chunkWidth,
+                                            .packFactor = packFactor,
+                                            .int8 = isInt8,
+                                            .packed = enablePacked});
   });
   if (candidates.empty()) {
     return success();
@@ -609,31 +639,88 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     Value weight = op.getDpsInputOperand(1)->get();
     Value init = op.getDpsInitOperand(0)->get();
 
-    // 权重/初始化的 C 行视图（无拷贝）：named op 的最内维是 m=1，行向
-    // 量 transfer 需要沿 C 连续的形态。输出同样以折叠 4D 计算，替换时
-    // expand 回 5D——下游既有 collapse_shape 消费者与该 expand 对消。
-    auto weightRowsType = RankedTensorType::get(
-      {kernelHeight * kernelWidth, channels}, inputElementType);
-    Value weightRows = rewriter.create<tensor::CollapseShapeOp>(
-      location,
-      weightRowsType,
-      weight,
-      SmallVector<ReassociationIndices>{{0, 1}, {2, 3}});
-    auto initCollapsedType = RankedTensorType::get(
-      {batch, outputHeight, outputWidth, channels}, accumulatorElementType);
-    Value initCollapsed = rewriter.create<tensor::CollapseShapeOp>(
-      location,
-      initCollapsedType,
-      init,
-      SmallVector<ReassociationIndices>{{0}, {1}, {2}, {3, 4}});
+    // The P21 path uses zero-copy blocked channel views.  The logical NHWC /
+    // HWCM tensors remain the ABI-facing values; expand/collapse merely exposes
+    // the contiguous [channel_block, lane] suffix to the vector consumer.
+    Value inputForTransfer = input;
+    Value weightRows;
+    Value initCollapsed;
+    RankedTensorType resultBufferType;
+    if (candidate.packed) {
+      const int64_t channelBlocks = channels / candidate.packFactor;
+      auto inputPackedType = RankedTensorType::get({batch,
+                                                    inputShape[1],
+                                                    inputShape[2],
+                                                    channelBlocks,
+                                                    candidate.packFactor},
+                                                   inputElementType);
+      inputForTransfer = rewriter.create<tensor::ExpandShapeOp>(
+        location,
+        inputPackedType,
+        input,
+        SmallVector<ReassociationIndices>{{0}, {1}, {2}, {3, 4}});
+      auto weightPackedType = RankedTensorType::get(
+        {kernelHeight, kernelWidth, channelBlocks, candidate.packFactor, 1},
+        inputElementType);
+      Value weightPacked = rewriter.create<tensor::ExpandShapeOp>(
+        location,
+        weightPackedType,
+        weight,
+        SmallVector<ReassociationIndices>{{0}, {1}, {2, 3}, {4}});
+      auto weightRowsPackedType = RankedTensorType::get(
+        {kernelHeight * kernelWidth, channelBlocks, candidate.packFactor},
+        inputElementType);
+      weightRows = rewriter.create<tensor::CollapseShapeOp>(
+        location,
+        weightRowsPackedType,
+        weightPacked,
+        SmallVector<ReassociationIndices>{{0, 1}, {2}, {3, 4}});
+      auto initPackedType = RankedTensorType::get({batch,
+                                                   outputHeight,
+                                                   outputWidth,
+                                                   channelBlocks,
+                                                   candidate.packFactor,
+                                                   1},
+                                                  accumulatorElementType);
+      Value initPacked = rewriter.create<tensor::ExpandShapeOp>(
+        location,
+        initPackedType,
+        init,
+        SmallVector<ReassociationIndices>{{0}, {1}, {2}, {3, 4}, {5}});
+      auto initCollapsedPackedType = RankedTensorType::get(
+        {batch, outputHeight, outputWidth, channelBlocks, candidate.packFactor},
+        accumulatorElementType);
+      initCollapsed = rewriter.create<tensor::CollapseShapeOp>(
+        location,
+        initCollapsedPackedType,
+        initPacked,
+        SmallVector<ReassociationIndices>{{0}, {1}, {2}, {3}, {4, 5}});
+      resultBufferType = initCollapsedPackedType;
+    } else {
+      auto weightRowsType = RankedTensorType::get(
+        {kernelHeight * kernelWidth, channels}, inputElementType);
+      weightRows = rewriter.create<tensor::CollapseShapeOp>(
+        location,
+        weightRowsType,
+        weight,
+        SmallVector<ReassociationIndices>{{0, 1}, {2, 3}});
+      auto initCollapsedType = RankedTensorType::get(
+        {batch, outputHeight, outputWidth, channels}, accumulatorElementType);
+      initCollapsed = rewriter.create<tensor::CollapseShapeOp>(
+        location,
+        initCollapsedType,
+        init,
+        SmallVector<ReassociationIndices>{{0}, {1}, {2}, {3, 4}});
+      resultBufferType = initCollapsedType;
+    }
     Value resultBuffer = rewriter.create<tensor::EmptyOp>(
-      location,
-      ArrayRef<int64_t>{batch, outputHeight, outputWidth, channels},
-      accumulatorElementType);
+      location, resultBufferType.getShape(), accumulatorElementType);
     Value zeroIndex = rewriter.create<arith::ConstantIndexOp>(location, 0);
     Value stepOneIndex = rewriter.create<arith::ConstantIndexOp>(location, 1);
-    Value chunkWidthIndex =
-      rewriter.create<arith::ConstantIndexOp>(location, chunkWidth);
+    // Packed transfers index channel blocks; the logical output write below
+    // applies the pack-factor scale explicitly.
+    Value chunkWidthIndex = rewriter.create<arith::ConstantIndexOp>(
+      location, candidate.packed ? 1 : chunkWidth);
     Value kernelWidthIndex =
       rewriter.create<arith::ConstantIndexOp>(location, kernelWidth);
     Value kernelHeightIndex =
@@ -679,13 +766,21 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                                 Value ohStride,
                                 Value owStride,
                                 Value offset) -> Value {
-      Value accumulator = builder.create<vector::TransferReadOp>(
-        location,
-        accumulatorChunkType,
-        initCollapsed,
-        ValueRange{gridIndices[0], gridIndices[1], gridIndices[2], offset},
-        accumulatorPoison,
-        inBounds);
+      SmallVector<Value> accumulatorIndices;
+      if (candidate.packed) {
+        accumulatorIndices = {
+          gridIndices[0], gridIndices[1], gridIndices[2], offset, zeroIndex};
+      } else {
+        accumulatorIndices = {
+          gridIndices[0], gridIndices[1], gridIndices[2], offset};
+      }
+      Value accumulator =
+        builder.create<vector::TransferReadOp>(location,
+                                               accumulatorChunkType,
+                                               initCollapsed,
+                                               accumulatorIndices,
+                                               accumulatorPoison,
+                                               inBounds);
       auto kernelHeightLoop = builder.create<scf::ForOp>(
         location,
         zeroIndex,
@@ -715,20 +810,29 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                 innerLoc,
                 inner.create<arith::MulIOp>(innerLoc, kh, kernelWidthIndex),
                 kw);
-              Value inputChunk = inner.create<vector::TransferReadOp>(
-                innerLoc,
-                inputChunkType,
-                input,
-                ValueRange{gridIndices[0], ih, iw, offset},
-                inputPoison,
-                inBounds);
-              Value weightChunk = inner.create<vector::TransferReadOp>(
-                innerLoc,
-                inputChunkType,
-                weightRows,
-                ValueRange{weightRow, offset},
-                inputPoison,
-                inBounds);
+              SmallVector<Value> inputIndices;
+              SmallVector<Value> weightIndices;
+              if (candidate.packed) {
+                inputIndices = {gridIndices[0], ih, iw, offset, zeroIndex};
+                weightIndices = {weightRow, offset, zeroIndex};
+              } else {
+                inputIndices = {gridIndices[0], ih, iw, offset};
+                weightIndices = {weightRow, offset};
+              }
+              Value inputChunk =
+                inner.create<vector::TransferReadOp>(innerLoc,
+                                                     inputChunkType,
+                                                     inputForTransfer,
+                                                     inputIndices,
+                                                     inputPoison,
+                                                     inBounds);
+              Value weightChunk =
+                inner.create<vector::TransferReadOp>(innerLoc,
+                                                     inputChunkType,
+                                                     weightRows,
+                                                     weightIndices,
+                                                     inputPoison,
+                                                     inBounds);
               Value fused;
               if (isInt8) {
                 fused = buildIntegerMac(
@@ -819,6 +923,10 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
       Value owStride = builder.create<arith::MulIOp>(
         location, gridIndices[2], strideWidthIndex);
       auto writeIndices = [&](Value offset) {
+        if (candidate.packed) {
+          return SmallVector<Value>{
+            zeroIndex, zeroIndex, zeroIndex, offset, zeroIndex};
+        }
         return SmallVector<Value>{zeroIndex, zeroIndex, zeroIndex, offset};
       };
       Value current = dest;
@@ -896,8 +1004,13 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     auto forall = rewriter.create<scf::ForallOp>(
       location, upperBounds, ValueRange{resultBuffer}, std::nullopt);
     copySourceProvenance(op.getOperation(), forall.getOperation());
+    const StringRef implementation =
+      candidate.packed ? "depthwise_packed" : "depthwise_simd";
+    const StringRef inputLayout = candidate.packed ? "nhwc_blocked" : "nhwc";
+    const StringRef weightLayout = candidate.packed ? "hwcm_blocked" : "hwcm";
+    const StringRef outputLayout = candidate.packed ? "nhwc_blocked" : "nhwc";
     contract::annotateOperationFamily(
-      forall.getOperation(), "depthwise", "depthwise_simd");
+      forall.getOperation(), "depthwise", implementation);
     contract::annotateGeometry(forall.getOperation(),
                                kernelHeight,
                                kernelWidth,
@@ -908,17 +1021,33 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                                channels,
                                channels,
                                1);
-    contract::annotateTile(forall.getOperation(),
-                           "depthwise_simd",
-                           "nhwc",
-                           "hwcm",
-                           "nhwc",
-                           1,
-                           channels,
-                           kernelHeight * kernelWidth,
-                           "outer_tile+inner_simd",
-                           tailWidth > 0 ? "scalar_tail" : "none");
-    contract::annotatePacking(forall.getOperation(), "unpacked", 1, 0, 0);
+    contract::annotateTile(
+      forall.getOperation(),
+      implementation,
+      inputLayout,
+      weightLayout,
+      outputLayout,
+      1,
+      candidate.packed ? channels / candidate.packFactor : channels,
+      kernelHeight * kernelWidth,
+      "outer_tile+inner_simd",
+      tailWidth > 0 ? "scalar_tail" : "none");
+    contract::annotatePacking(forall.getOperation(),
+                              candidate.packed ? implementation : "unpacked",
+                              candidate.packed ? candidate.packFactor : 1,
+                              0,
+                              0);
+    if (candidate.packed) {
+      contract::annotateLayoutIsland(forall.getOperation(),
+                                     "depthwise-packed",
+                                     "selected",
+                                     "zero_copy_expand_view",
+                                     "zero_copy_collapse_view",
+                                     "zero_copy",
+                                     "static_f32_multiplier1",
+                                     candidate.packFactor,
+                                     channels / candidate.packFactor);
+    }
     contract::setInteger(forall.getOperation(), contract::kSimdLanes, lanes);
     contract::setInteger(
       forall.getOperation(), contract::kSimdChunk, chunkWidth);
@@ -932,8 +1061,13 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     SmallVector<Value> gridIndices;
     llvm::append_range(gridIndices, forall.getInductionVars());
 
-    SmallVector<int64_t> tileShape(4, 1);
-    tileShape.back() = channels;
+    SmallVector<int64_t> tileShape =
+      candidate.packed ? SmallVector<int64_t>{1,
+                                              1,
+                                              1,
+                                              channels / candidate.packFactor,
+                                              candidate.packFactor}
+                       : SmallVector<int64_t>{1, 1, 1, channels};
     Value emptyTile = rewriter.create<tensor::EmptyOp>(
       location, tileShape, accumulatorElementType);
     Value tile = buildRow(rewriter, gridIndices, emptyTile);
@@ -947,15 +1081,32 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
       strides.push_back(rewriter.getIndexAttr(1));
     }
     offsets.push_back(rewriter.getIndexAttr(0));
-    sizes.push_back(rewriter.getIndexAttr(channels));
-    strides.push_back(rewriter.getIndexAttr(1));
-
+    if (candidate.packed) {
+      offsets.push_back(rewriter.getIndexAttr(0));
+      sizes.push_back(rewriter.getIndexAttr(channels / candidate.packFactor));
+      sizes.push_back(rewriter.getIndexAttr(candidate.packFactor));
+      strides.push_back(rewriter.getIndexAttr(1));
+      strides.push_back(rewriter.getIndexAttr(1));
+    } else {
+      sizes.push_back(rewriter.getIndexAttr(channels));
+      strides.push_back(rewriter.getIndexAttr(1));
+    }
     scf::InParallelOp inParallel = forall.getTerminator();
     rewriter.setInsertionPointToEnd(&inParallel.getRegion().front());
     rewriter.create<tensor::ParallelInsertSliceOp>(
       location, tile, sharedOut, offsets, sizes, strides);
 
     rewriter.setInsertionPointAfter(forall);
+    Value logicalResult = forall.getResult(0);
+    if (candidate.packed) {
+      auto logicalResultType = RankedTensorType::get(
+        {batch, outputHeight, outputWidth, channels}, accumulatorElementType);
+      logicalResult = rewriter.create<tensor::CollapseShapeOp>(
+        location,
+        logicalResultType,
+        logicalResult,
+        SmallVector<ReassociationIndices>{{0}, {1}, {2}, {3, 4}});
+    }
     SmallVector<OpFoldResult> expandedShape;
     for (int64_t extent : resultType.getShape()) {
       expandedShape.push_back(rewriter.getIndexAttr(extent));
@@ -963,7 +1114,7 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
     Value expanded = rewriter.create<tensor::ExpandShapeOp>(
       location,
       resultType,
-      forall.getResult(0),
+      logicalResult,
       SmallVector<ReassociationIndices>{{0}, {1}, {2}, {3, 4}},
       expandedShape);
     rewriter.replaceOp(op, expanded);
@@ -978,6 +1129,10 @@ class VectorizeNCNNPass final
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
+    if (this->packedConvDepthwise.getValue()) {
+      module->setAttr("ncnn.packed_conv_depthwise",
+                      BoolAttr::get(&getContext(), true));
+    }
     const unsigned lanes = this->lanes.getValue();
     if (this->scalable.getValue()) {
       // The implementation below intentionally emits fixed-width vectors.  Do

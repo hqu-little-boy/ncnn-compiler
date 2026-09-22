@@ -1,0 +1,29 @@
+{
+  "date": "2026-09-22",
+  "baseline_stage": "/tmp/ncnn-compiler-stage-p21-baseline-20260922-a",
+  "candidate_stage": "/tmp/ncnn-compiler-stage-p21-repair-20260922-a",
+  "build_type": "Release",
+  "llvm_dir": "/usr/lib/llvm-21/lib/cmake/llvm",
+  "target": "x86_64-pc-linux-gnu",
+  "compiler_commit": "38808ea40c9055f421b7ddbf7ae547ae4087e9e0",
+  "compiler_branch": "p8-implementation",
+  "source_diff_sha256": "d6f357ab167e70eed92a281cbb17da4ce8187927ffc3da2de2529f88cfb4ba23",
+  "candidate_options": {
+    "NCNN_PACKED_CONV_DEPTHWISE": true,
+    "packed_conv_depthwise_cli": true
+  },
+  "baseline_options": {
+    "NCNN_PACKED_CONV_DEPTHWISE": false,
+    "packed_conv_depthwise_cli": false
+  },
+  "threads": 6,
+  "warmup": 10,
+  "iterations": 20,
+  "round_order": [
+    "baseline,candidate",
+    "candidate,baseline",
+    "baseline,candidate",
+    "candidate,baseline",
+    "baseline,candidate"
+  ]
+}

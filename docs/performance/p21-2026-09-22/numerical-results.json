@@ -1,0 +1,21 @@
+{
+  "stage": "/tmp/ncnn-compiler-stage-p21-repair-20260922-a",
+  "format_check": "passed",
+  "tidy": "passed",
+  "numerical_targets": "built",
+  "ctest_exit_code": 0,
+  "ctest_tests": 449,
+  "ctest_failed": 0,
+  "ctest_skipped": 2,
+  "ctest_total_time_seconds": 1144.71,
+  "known_skips": [
+    "PerformanceModel.PPLCNetDocOriInt8",
+    "PerformanceModel.PPLCNetTextlineOriInt8"
+  ],
+  "commands": [
+    "cmake --build ... --target format_check --parallel 16",
+    "cmake --build ... --target tidy --parallel 16",
+    "cmake --build ... --target numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests --parallel 16",
+    "ctest --test-dir ... --output-on-failure"
+  ]
+}

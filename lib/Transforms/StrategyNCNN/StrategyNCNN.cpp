@@ -45,19 +45,18 @@ namespace {
 enum class ConvStrategy { Auto, Gemm, Conv, Winograd };
 
 void copyConvContract(Operation* source, Operation* target) {
-  for (StringRef attribute : {contract::kOperationFamily,
-                              contract::kImplementation,
-                              contract::kKernelStatic,
-                              contract::kKernelHeight,
-                              contract::kKernelWidth,
-                              contract::kStrideHeight,
-                              contract::kStrideWidth,
-                              contract::kDilationHeight,
-                              contract::kDilationWidth,
-                              contract::kInputChannels,
-                              contract::kOutputChannels,
-                              contract::kMultiplier,
-                              contract::kFallback}) {
+  for (StringRef attribute :
+       {contract::kOperationFamily,    contract::kImplementation,
+        contract::kKernelStatic,       contract::kKernelHeight,
+        contract::kKernelWidth,        contract::kStrideHeight,
+        contract::kStrideWidth,        contract::kDilationHeight,
+        contract::kDilationWidth,      contract::kInputChannels,
+        contract::kOutputChannels,     contract::kMultiplier,
+        contract::kFallback,           contract::kLayoutIslandId,
+        contract::kLayoutIslandStatus, contract::kLayoutIslandEntry,
+        contract::kLayoutIslandExit,   contract::kLayoutIslandCost,
+        contract::kLayoutIslandReason, contract::kLayoutPackFactor,
+        contract::kLayoutChannelBlocks}) {
     if (Attribute value = source->getAttr(attribute)) {
       target->setAttr(attribute, value);
     }

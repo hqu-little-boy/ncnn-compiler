@@ -139,6 +139,11 @@ llvm::cl::opt<bool> g_int8_depthwise(
   llvm::cl::desc("Enable static INT8 depthwise SIMD"),
   llvm::cl::init(false),
   llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_packed_conv_depthwise(
+  "packed-conv-depthwise",
+  llvm::cl::desc("Enable guarded f32 packed Conv/Depthwise layout islands"),
+  llvm::cl::init(false),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<bool> g_int8_cast_chain(
   "int8-cast-chain",
   llvm::cl::desc("Fuse proven static cast map consumers"),
@@ -1993,6 +1998,8 @@ std::string build_codegen_identity(std::string_view target_triple,
     "|int8-kernel=" + g_int8_kernel.getValue() +
     "|int8-target=" + std::string(resolved_int8_target) +
     "|int8-depthwise=" + std::to_string(g_int8_depthwise.getValue()) +
+    "|packed-conv-depthwise=" +
+    std::to_string(g_packed_conv_depthwise.getValue()) +
     "|int8-cast-chain=" + std::to_string(g_int8_cast_chain.getValue()) +
     "|threads=" + std::to_string(effective_threads);
   for (const std::string& feature : g_target_features) {
@@ -2661,6 +2668,8 @@ int main(int argc, char** argv) {
     linalgOptions.push_back("int8-kernel=" + g_int8_kernel.getValue());
     linalgOptions.push_back("int8-target=" + resolved_int8_target);
     linalgOptions.push_back("matmul-packing=" + tuning.matmulPacking);
+    linalgOptions.push_back(std::string("packed-conv-depthwise=") +
+                            (g_packed_conv_depthwise ? "true" : "false"));
     linalgOptions.push_back(std::string("int8-depthwise=") +
                             (g_int8_depthwise ? "true" : "false"));
     linalgOptions.push_back("tuning-profile=" + tuning.profile);

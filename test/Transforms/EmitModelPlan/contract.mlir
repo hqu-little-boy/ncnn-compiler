@@ -77,8 +77,8 @@ module attributes {
 // CHECK-DAG: "matmul_i8_rows": 2
 // CHECK-DAG: "matmul_i8_acc_columns": 4
 // CHECK-DAG: "operations": [
-// CHECK-DAG: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|int8-target-v1|tuning-v1|attribution-v1"
-// CHECK-DAG: "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|int8-target-v1|tuning-v1|attribution-v1"
+// CHECK-DAG: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v1"
+// CHECK-DAG: "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v1"
 // CHECK-DAG: "attribution_revision": "attribution-v1"
 // CHECK-DAG: "static_pack_count": 1
 // CHECK-DAG: "static_pack_bytes": 64

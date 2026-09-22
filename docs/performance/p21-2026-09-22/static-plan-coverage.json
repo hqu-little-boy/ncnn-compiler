@@ -1,0 +1,12 @@
+{
+  "models": 45,
+  "layout_island_count": 359,
+  "layout_island_selected_count": 359,
+  "layout_island_rejected_count": 0,
+  "layout_pack4_count": 0,
+  "layout_pack8_count": 359,
+  "conv_packed_gemm_count": 196,
+  "depthwise_packed_count": 359,
+  "packed_constant_bytes": 330850560,
+  "static_pack_bytes": 330850560
+}

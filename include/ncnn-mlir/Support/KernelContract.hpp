@@ -89,6 +89,21 @@ inline constexpr llvm::StringLiteral kAttentionRevision =
 inline constexpr llvm::StringLiteral kAttentionPhase = "ncnn.attention_phase";
 inline constexpr llvm::StringLiteral kAttentionSegmentId =
   "ncnn.attention_segment_id";
+inline constexpr llvm::StringLiteral kLayoutIslandId = "ncnn.layout_island_id";
+inline constexpr llvm::StringLiteral kLayoutIslandStatus =
+  "ncnn.layout_island_status";
+inline constexpr llvm::StringLiteral kLayoutIslandEntry =
+  "ncnn.layout_island_entry";
+inline constexpr llvm::StringLiteral kLayoutIslandExit =
+  "ncnn.layout_island_exit";
+inline constexpr llvm::StringLiteral kLayoutIslandCost =
+  "ncnn.layout_island_cost";
+inline constexpr llvm::StringLiteral kLayoutIslandReason =
+  "ncnn.layout_island_reason";
+inline constexpr llvm::StringLiteral kLayoutPackFactor =
+  "ncnn.layout_pack_factor";
+inline constexpr llvm::StringLiteral kLayoutChannelBlocks =
+  "ncnn.layout_channel_blocks";
 
 inline void setString(Operation* operation, StringRef name, StringRef value) {
   operation->setAttr(name, StringAttr::get(operation->getContext(), value));
@@ -102,6 +117,25 @@ inline void setInteger(Operation* operation, StringRef name, int64_t value) {
   operation->setAttr(
     name,
     IntegerAttr::get(IntegerType::get(operation->getContext(), 64), value));
+}
+
+inline void annotateLayoutIsland(Operation* operation,
+                                 StringRef islandId,
+                                 StringRef status,
+                                 StringRef entry,
+                                 StringRef exit,
+                                 StringRef cost,
+                                 StringRef reason,
+                                 int64_t packFactor,
+                                 int64_t channelBlocks) {
+  setString(operation, kLayoutIslandId, islandId);
+  setString(operation, kLayoutIslandStatus, status);
+  setString(operation, kLayoutIslandEntry, entry);
+  setString(operation, kLayoutIslandExit, exit);
+  setString(operation, kLayoutIslandCost, cost);
+  setString(operation, kLayoutIslandReason, reason);
+  setInteger(operation, kLayoutPackFactor, packFactor);
+  setInteger(operation, kLayoutChannelBlocks, channelBlocks);
 }
 
 inline void annotateTile(Operation* operation,

@@ -67,6 +67,11 @@ struct NCNNLinalgToMemRefPipelineOptions
     "matmul-packing",
     llvm::cl::desc("Static f32 B packing policy: off or auto"),
     llvm::cl::init("auto")};
+  Option<bool> packedConvDepthwise{
+    *this,
+    "packed-conv-depthwise",
+    llvm::cl::desc("Enable guarded f32 packed Conv/Depthwise layout islands"),
+    llvm::cl::init(false)};
   Option<std::string> int8KernelPolicy{
     *this,
     "int8-kernel",

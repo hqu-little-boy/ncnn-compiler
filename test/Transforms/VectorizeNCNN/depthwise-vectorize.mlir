@@ -1,4 +1,5 @@
 // RUN: ncnn-mlir-opt --vectorize-ncnn=lanes=4 %s | FileCheck %s
+// RUN: ncnn-mlir-opt --vectorize-ncnn='lanes=4 packed-conv-depthwise=true' %s | FileCheck --check-prefix=PACKED %s
 
 // P5 depthwise 行向量化：multiplier=1 的 depthwise_conv_2d_nhwc_hwcm
 // 改写为 forall(n,oh,ow) 网格 + C 维分块 rank-1 transfer——权重折叠为
@@ -105,3 +106,24 @@ func.func @depthwise_dynamic(%arg0: tensor<1x?x9x4xf32>) -> tensor<1x?x7x4xf32> 
 // CHECK-LABEL: func.func @depthwise_dynamic
 // CHECK: linalg.depthwise_conv_2d_nhwc_hwcm
 // CHECK-NOT: vector.fma
+
+// CHECK-LABEL: func.func @depthwise_packed_pack8
+func.func @depthwise_packed_pack8(%arg0: tensor<1x7x9x8xf32>) -> tensor<1x3x7x8xf32> {
+  %cst = arith.constant dense<0.5> : tensor<3x3x8x1xf32>
+  %empty = tensor.empty() : tensor<1x3x7x8x1xf32>
+  %0 = linalg.depthwise_conv_2d_nhwc_hwcm {dilations = dense<1> : tensor<2xi64>, strides = dense<1> : tensor<2xi64>} ins(%arg0, %cst : tensor<1x7x9x8xf32>, tensor<3x3x8x1xf32>) outs(%empty : tensor<1x3x7x8x1xf32>) -> tensor<1x3x7x8x1xf32>
+  %1 = tensor.collapse_shape %0 [[0], [1], [2], [3, 4]] : tensor<1x3x7x8x1xf32> into tensor<1x3x7x8xf32>
+  return %1 : tensor<1x3x7x8xf32>
+}
+
+// PACKED-LABEL: func.func @depthwise_packed_pack8
+// PACKED: arith.constant dense<{{.*}}> : tensor<9x1x8xf32>
+// PACKED: tensor.expand_shape {{.*}} tensor<1x7x9x8xf32> into tensor<1x7x9x1x8xf32>
+// PACKED: tensor.expand_shape {{.*}} tensor<1x3x7x8x1xf32> into tensor<1x3x7x1x8x1xf32>
+// PACKED: vector.transfer_read {{.*}} vector<8xf32>
+// PACKED: ncnn.implementation = "depthwise_packed"
+// PACKED-SAME: ncnn.layout_island_id = "depthwise-packed"
+// PACKED-SAME: ncnn.layout_pack_factor = 8 : i64
+// PACKED-SAME: ncnn.packing = "depthwise_packed"
+// PACKED: tensor.collapse_shape {{.*}} tensor<1x3x7x1x8xf32> into tensor<1x3x7x8xf32>
+// PACKED-NOT: linalg.depthwise_conv_2d_nhwc_hwcm

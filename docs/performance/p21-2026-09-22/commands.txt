@@ -1,0 +1,19 @@
+# P21 fresh validation and performance evidence commands (2026-09-22)
+cmake -S /mnt/ncnn-compiler/compiler -B /tmp/ncnn-compiler-stage-p21-repair-20260922-a -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm -DCOMPILER_ENABLE_FORMAT_TARGETS=ON -DCOMPILER_INSTALL_RPATH=ON -DBUILD_TESTING=ON -DNCNN_PACKED_CONV_DEPTHWISE=ON
+cmake --build /tmp/ncnn-compiler-stage-p21-repair-20260922-a --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p21-repair-20260922-a --target format_check --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p21-repair-20260922-a --target tidy --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p21-repair-20260922-a --target numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests --parallel 16
+ctest --test-dir /tmp/ncnn-compiler-stage-p21-repair-20260922-a --output-on-failure
+
+# Unpacked comparison stage
+cmake -S /mnt/ncnn-compiler/compiler -B /tmp/ncnn-compiler-stage-p21-baseline-20260922-a -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm -DCOMPILER_ENABLE_FORMAT_TARGETS=ON -DCOMPILER_INSTALL_RPATH=ON -DBUILD_TESTING=ON -DNCNN_PACKED_CONV_DEPTHWISE=OFF
+cmake --build /tmp/ncnn-compiler-stage-p21-baseline-20260922-a --target performance_tests --parallel 16
+cmake --build /tmp/ncnn-compiler-stage-p21-baseline-20260922-a --target compile_resnet18_winograd --parallel 16
+
+# Each of the ten paired runs used the following environment and filter:
+NCNN_PERF_THREADS=6 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 NCNN_PERF_MAX_RATIO=0 NCNN_PERF_MODE=end_to_end NCNN_PERF_JSON=/path/to/round.ndjson ctest --test-dir /path/to/stage -R '^PerformanceModel\.' --output-on-failure
+
+# Summary
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py round-5-baseline.ndjson --official-only
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py round-5-candidate.ndjson --official-only

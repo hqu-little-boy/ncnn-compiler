@@ -144,7 +144,10 @@ def VectorizeNCNNPass
     Option<"scalable", "scalable", "bool", /*default=*/"false",
            "Reserved for scalable-vector emission (SVE/RVV)">,
     Option<"unroll", "unroll", "bool", /*default=*/"false",
-           "Reserved for lane-width contraction splitting">
+           "Reserved for lane-width contraction splitting">,
+    Option<"packedConvDepthwise", "packed-conv-depthwise", "bool",
+           /*default=*/"false",
+           "Enable guarded f32 packed Conv/Depthwise layout islands">
   ];
 }
 
