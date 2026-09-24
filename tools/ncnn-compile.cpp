@@ -176,7 +176,8 @@ llvm::cl::opt<unsigned> g_selective_fusion_max_chain(
   llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_tuning_profile(
   "tuning-profile",
-  llvm::cl::desc("Bounded compile-time tuning profile: stable or p16-int8"),
+  llvm::cl::desc(
+    "Bounded compile-time tuning profile: stable, p16-int8, or native-int8"),
   llvm::cl::init("stable"),
   llvm::cl::cat(g_category));
 llvm::cl::opt<int64_t> g_matmul_m_rows(
@@ -1931,7 +1932,20 @@ ClangTargetArguments build_clang_target_arguments(
       }
       const ncnn_mlir::Int8DotTarget probed =
         ncnn_mlir::resolve_int8_dot_target(*macro_text);
-      if (probed == ncnn_mlir::Int8DotTarget::Portable) {
+      if (probed == ncnn_mlir::Int8DotTarget::AVXVNNIINT8) {
+        resolved_int8_target =
+          std::string(ncnn_mlir::int8_dot_target_name(probed));
+        if (g_int8_kernel == "vnni") {
+          return std::unexpected(
+            "--int8-kernel=vnni has no matching vpdpbusd backend for the "
+            "AVX-VNNI-INT8 capability; use AVX-VNNI/AVX512-VNNI or keep "
+            "portable row-dot");
+        }
+        llvm::errs() << "ncnn-compile: info: target reports "
+                     << resolved_int8_target
+                     << " but no matching INT8 dot backend is implemented; "
+                        "keeping portable row-dot\n";
+      } else if (probed == ncnn_mlir::Int8DotTarget::Portable) {
         if (g_int8_kernel == "vnni") {
           return std::unexpected(
             "--int8-kernel=vnni requires AVX2 plus AVX-VNNI or "
@@ -1980,6 +1994,10 @@ ClangTargetArguments build_clang_target_arguments(
   return resolved_int8_target;
 }
 
+bool hasImplementedVnniBackend(std::string_view capability) {
+  return capability == "avx-vnni" || capability == "avx512-vnni";
+}
+
 struct TuningSettings {
   std::string profile;
   std::string status = "stable";
@@ -2012,7 +2030,9 @@ std::string build_codegen_identity(std::string_view target_triple,
     "|vector-math-lanes=" + std::to_string(vector_math_lanes) +
     "|sysroot=" + g_sysroot + "|conv-strategy=" + g_conv_strategy +
     "|conv-gemm-l2-bytes=" + std::to_string(g_conv_gemm_l2_bytes) +
-    "|tuning-profile=" + tuning.profile + "|tuning-status=" + tuning.status +
+    "|tuning-profile=" + tuning.profile + "|tuning-profile-revision=" +
+    (tuning.profile == "native-int8" ? "native-int8-v1" : "none") +
+    "|tuning-status=" + tuning.status +
     "|tuning-fallback-reason=" + tuning.fallbackReason +
     "|matmul-m-rows=" + std::to_string(tuning.matmulMRows) +
     "|matmul-acc-columns=" + std::to_string(tuning.matmulAccColumns) +
@@ -2101,8 +2121,10 @@ int main(int argc, char** argv) {
   if (g_vector_width != 0 && g_vector_width % 64 != 0) {
     return fail("--vector-width must be 0 or a multiple of 64 bits");
   }
-  if (g_tuning_profile != "stable" && g_tuning_profile != "p16-int8") {
-    return fail("--tuning-profile must be one of stable or p16-int8");
+  if (g_tuning_profile != "stable" && g_tuning_profile != "p16-int8" &&
+      g_tuning_profile != "native-int8") {
+    return fail(
+      "--tuning-profile must be one of stable, p16-int8, or native-int8");
   }
   if ((g_matmul_m_rows.getNumOccurrences() != 0 && g_matmul_m_rows <= 0) ||
       (g_matmul_acc_columns.getNumOccurrences() != 0 &&
@@ -2347,10 +2369,17 @@ int main(int argc, char** argv) {
     tuning.matmulI8AccColumns = g_matmul_i8_acc_columns;
   }
   const bool explicitInt8Kernel = g_int8_kernel.getNumOccurrences() != 0;
+  const std::string requestedInt8Kernel = g_int8_kernel.getValue();
   const bool explicitInt8Depthwise = g_int8_depthwise.getNumOccurrences() != 0;
   const bool explicitInt8CastChain = g_int8_cast_chain.getNumOccurrences() != 0;
   const bool requestedP16Profile = g_tuning_profile == "p16-int8";
-  if (requestedP16Profile && !explicitInt8Kernel) {
+  const bool requestedNativeInt8Profile = g_tuning_profile == "native-int8";
+  const bool probeNativeProfileWithPortableOverride =
+    requestedNativeInt8Profile && explicitInt8Kernel &&
+    requestedInt8Kernel == "portable";
+  if (((requestedP16Profile || requestedNativeInt8Profile) &&
+       !explicitInt8Kernel) ||
+      probeNativeProfileWithPortableOverride) {
     // Ask the same target probe used by explicit auto/VNNI selection to resolve
     // the capability.  The policy is finalized below only after the probe and
     // vector/OpenMP constraints are known.
@@ -2369,10 +2398,13 @@ int main(int argc, char** argv) {
     return fail(int8_target.error());
   }
   const std::string& resolved_int8_target = *int8_target;
+  if (probeNativeProfileWithPortableOverride) {
+    g_int8_kernel = requestedInt8Kernel;
+  }
   if (requestedP16Profile && !explicitInt8Kernel) {
-    const bool canSelectVnni = resolved_int8_target != "portable" &&
-                               effective_threads != 1 && vector_active &&
-                               !vector_scalable;
+    const bool canSelectVnni =
+      hasImplementedVnniBackend(resolved_int8_target) &&
+      effective_threads != 1 && vector_active && !vector_scalable;
     if (canSelectVnni) {
       g_int8_kernel = "vnni";
       tuning.status = "selected";
@@ -2387,11 +2419,39 @@ int main(int argc, char** argv) {
       tuning.status = "fallback";
       tuning.fallbackReason = resolved_int8_target == "portable"
                                 ? "unsupported_vnni_target"
+                              : !hasImplementedVnniBackend(resolved_int8_target)
+                                ? "unimplemented_vnni_int8_backend"
                               : effective_threads == 1 ? "serial_thread_policy"
                               : !vector_active ? "fixed_width_vector_required"
                                                : "scalable_vector_unsupported";
     }
-  } else if (requestedP16Profile) {
+  } else if (requestedNativeInt8Profile && !explicitInt8Kernel) {
+    // native-int8 is a target-bound AOT profile, not a runtime dispatcher.
+    // Select the proven VNNI backend only when the resolved target and fixed-
+    // width vector lowering agree; otherwise keep the entire profile portable.
+    const bool canSelectVnni =
+      hasImplementedVnniBackend(resolved_int8_target) && vector_active &&
+      !vector_scalable;
+    if (canSelectVnni) {
+      g_int8_kernel = "vnni";
+      tuning.status = "selected";
+      if (!explicitInt8Depthwise) {
+        g_int8_depthwise = true;
+      }
+      if (!explicitInt8CastChain) {
+        g_int8_cast_chain = true;
+      }
+    } else {
+      g_int8_kernel = "portable";
+      tuning.status = "fallback";
+      tuning.fallbackReason = resolved_int8_target == "portable"
+                                ? "unsupported_vnni_target"
+                              : !hasImplementedVnniBackend(resolved_int8_target)
+                                ? "unimplemented_vnni_int8_backend"
+                              : !vector_active ? "fixed_width_vector_required"
+                                               : "scalable_vector_unsupported";
+    }
+  } else if (requestedP16Profile || requestedNativeInt8Profile) {
     tuning.status = "explicit_override";
     tuning.fallbackReason = "explicit_int8_policy";
   }
@@ -2401,8 +2461,14 @@ int main(int argc, char** argv) {
   // fallback explicit and identity-visible instead of allowing a timeout.
   if (g_conv_strategy == "winograd" && tuning.matmulPacking == "auto") {
     tuning.matmulPacking = "off";
-    tuning.status = "fallback";
-    tuning.fallbackReason = "winograd_packing_compile_budget";
+    if (tuning.status == "stable") {
+      tuning.status = "fallback";
+      tuning.fallbackReason = "winograd_packing_compile_budget";
+    } else if (tuning.fallbackReason.empty()) {
+      tuning.fallbackReason = "winograd_packing_compile_budget";
+    } else {
+      tuning.fallbackReason += ";winograd_packing_compile_budget";
+    }
   }
 
   // 解析向量数学后端：auto 按目标探测 libmvec，缺失时静默降级 vendored

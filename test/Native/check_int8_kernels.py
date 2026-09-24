@@ -201,6 +201,77 @@ class Matmul:
 
 
 @dataclasses.dataclass(frozen=True)
+class PackedMatmul:
+    m: int
+    n: int
+    k: int
+
+    @property
+    def name(self):
+        return f"packed_mm_{self.m}_{self.n}_{self.k}"
+
+    @property
+    def weight_name(self):
+        return f"weights_{self.n}_{self.k}"
+
+    @property
+    def weights(self):
+        return [EDGES[(n * 3 + k * 2) % len(EDGES)]
+                for n in range(self.n) for k in range(self.k)]
+
+    def source(self):
+        rows = [self.weights[n * self.k:(n + 1) * self.k]
+                for n in range(self.n)]
+        initializer = "[" + ", ".join(
+            "[" + ", ".join(map(str, row)) + "]" for row in rows) + "]"
+        row_count = self.m * 2
+        return f"""
+  memref.global constant @{self.weight_name} : memref<{self.n}x{self.k}xi8> = dense<{initializer}>
+  func.func @{self.name}(%a: memref<{row_count}x{self.k}xi8>,
+                         %c: memref<{row_count}x{self.n}xi32>) attributes {{llvm.emit_c_interface}} {{
+    %b = memref.get_global @{self.weight_name} : memref<{self.n}x{self.k}xi8>
+    %tile_rows = arith.constant {self.m} : index
+    scf.forall (%tile) in (2) {{
+      %row = arith.muli %tile, %tile_rows : index
+      %av = memref.subview %a[%row, 0][{self.m}, {self.k}][1, 1]
+        : memref<{row_count}x{self.k}xi8> to memref<{self.m}x{self.k}xi8, strided<[{self.k}, 1], offset: ?>>
+      %cv = memref.subview %c[%row, 0][{self.m}, {self.n}][1, 1]
+        : memref<{row_count}x{self.n}xi32> to memref<{self.m}x{self.n}xi32, strided<[{self.n}, 1], offset: ?>>
+      linalg.matmul_transpose_b ins(%av, %b : memref<{self.m}x{self.k}xi8, strided<[{self.k}, 1], offset: ?>>,
+                                                   memref<{self.n}x{self.k}xi8>)
+                                outs(%cv : memref<{self.m}x{self.n}xi32, strided<[{self.n}, 1], offset: ?>>)
+    }}
+    return
+  }}
+"""
+
+    def execute(self, library):
+        row_count = self.m * 2
+        weights = self.weights
+        rng = random.Random(17000 + self.m * 100 + self.n * 10 + self.k)
+        for trial in range(8):
+            a = values(rng, row_count * self.k, trial)
+            c = initial(rng, row_count * self.n, trial)
+            if trial in (2, 3):
+                a = [-128] * len(a)
+            sums = [sum(a[row * self.k + k] *
+                        weights[column * self.k + k]
+                        for k in range(self.k))
+                    for row in range(row_count) for column in range(self.n)]
+            expected = list(c)
+            buffers = [Buffer(ctypes.c_int8, (row_count, self.k), a),
+                       Buffer(ctypes.c_int32, (row_count, self.n), c)]
+            for repeat in range(3):
+                expected = [i32(value + total)
+                            for value, total in zip(expected, sums)]
+                invoke(library, self.name, buffers)
+                require(buffers[1].read() == expected,
+                        f"{self.name}: trial={trial}, repeat={repeat} != integer oracle")
+                for index, buffer in enumerate(buffers):
+                    buffer.check(writable=index == 1)
+
+
+@dataclasses.dataclass(frozen=True)
 class Depthwise:
     c: int
     sh: int = 1
@@ -297,6 +368,23 @@ def check_kernel_ir(text, cases, mode):
                 require("llvm.call_intrinsic" not in body, "must exercise actual LLVM CallOp")
                 if case.k % 32:
                     require("arith.extsi" in body, f"{case.name}: missing scalar K tail")
+        elif isinstance(case, PackedMatmul):
+            selected = mode == "vnni"
+            schema = "p23-int8-panel-row-kpad64-v1"
+            require((f'ncnn.pack_schema = "{schema}"' in body) == selected,
+                    f"{case.name}: incorrect physical RHS packing for {mode}")
+            if selected:
+                require('ncnn.packing = "prepacked_B"' in body,
+                        f"{case.name}: missing prepacked RHS contract")
+                require("strided<[64, 1]" in body,
+                        f"{case.name}: missing K-padded contiguous row view")
+                require(f"llvm.call @{INTRINSIC}" in body,
+                        f"{case.name}: missing VNNI consumer")
+                require("ncnn.int8_k_alignment = 64 : i64" in body,
+                        f"{case.name}: missing packed K alignment")
+            else:
+                require(INTRINSIC not in body,
+                        f"{case.name}: portable packed RHS unexpectedly selected")
         else:
             selected = mode == "depthwise" and case.c >= 4
             require(('ncnn.implementation = "depthwise_simd"' in body) == selected,
@@ -320,6 +408,8 @@ def build(args, root, cases, mode):
     options = "vector-tail=true"
     if args.kind == "matmul":
         options += f" int8-kernel={mode} int8-target={'avx-vnni' if mode == 'vnni' else 'portable'}"
+        if mode == "vnni":
+            options += " tuning-profile=native-int8"
     else:
         options += f" vector-lanes=4 int8-depthwise={'true' if mode == 'depthwise' else 'false'}"
     run([args.opt, source, "--ncnn-linalg-to-memref-pipeline=" + options, "-o", memref])
@@ -376,6 +466,7 @@ def main():
                  for m, n in ((1, 1), (3, 5), (5, 7))]
         cases += [Matmul(3, 5, 33, "strided"), Matmul(5, 7, 72, "unknown")]
         cases += [Matmul(3, 5, 33, unsigned=True)]
+        cases += [PackedMatmul(3, 16, 33), PackedMatmul(5, 22, 64)]
         modes = ("portable", "vnni")
     else:
         cases = [Depthwise(3), Depthwise(4), Depthwise(5, 2, 1),

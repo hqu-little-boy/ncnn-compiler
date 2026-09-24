@@ -1,0 +1,888 @@
+{
+  "schema_version": 1,
+  "measurement_date": "2026-09-24",
+  "host": {
+    "cpu": "12th Gen Intel(R) Core(TM) i5-12600KF",
+    "architecture": "x86_64",
+    "native_int8_capability": "avx-vnni",
+    "avx512_vnni": false
+  },
+  "ncnn_reference": {
+    "source": "compiler/test/third_party/ncnn",
+    "submodule_commit": "a4d2ea1d4422c9e849f166fd7a4aefb52f942f6a",
+    "runtime": "libgomp"
+  },
+  "portable_baseline_p22": {
+    "source_commit": "1eea764073e0dd93c2ccdb93043079775479ff86",
+    "source_description": "clean git archive of HEAD; P22 baseline",
+    "build_dir": "/tmp/ncnn-compiler-stage-p23-portable-baseline-20260924-b",
+    "source_dir": "/tmp/ncnn-compiler-p23-baseline-20260924-src/compiler",
+    "profile": "portable/default",
+    "cmake_build_type": "Release",
+    "compiler": "GNU 14.2.0",
+    "llvm_mlir": "21.1.8",
+    "install_rpath": true,
+    "build_testing": true,
+    "model_build_identities": {
+      "chineseocr_lite_anglenet": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5632897872727456227",
+        "build_identity": "5632897872727456227"
+      },
+      "efficientnet_b0": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5662057372644466029",
+        "build_identity": "5662057372644466029"
+      },
+      "efficientnet_b1": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3965411890020000976",
+        "build_identity": "3965411890020000976"
+      },
+      "efficientnet_b2": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "126570131263111",
+        "build_identity": "126570131263111"
+      },
+      "efficientnet_b3": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "1748357132826815330",
+        "build_identity": "1748357132826815330"
+      },
+      "pp_formulanet_plus_s_encoder": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "9511442781884820381",
+        "build_identity": "9511442781884820381"
+      },
+      "pp_lcnet_x1_0_doc_ori": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "12820119713387125207",
+        "build_identity": "12820119713387125207"
+      },
+      "pp_lcnet_x1_0_textline_ori": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3398469828196956714",
+        "build_identity": "3398469828196956714"
+      },
+      "pp_ocrv5_mobile_det_static": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "14032054497903333846",
+        "build_identity": "14032054497903333846"
+      },
+      "pp_ocrv5_mobile_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "7361923808781957905",
+        "build_identity": "7361923808781957905"
+      },
+      "pp_ocrv5_mobile_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5036384935643275441",
+        "build_identity": "5036384935643275441"
+      },
+      "pp_ocrv5_server_det_static": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "9362369434426107444",
+        "build_identity": "9362369434426107444"
+      },
+      "pp_ocrv5_server_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "19087824043256578",
+        "build_identity": "19087824043256578"
+      },
+      "pp_ocrv6_medium_det": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "6166650556908436082",
+        "build_identity": "6166650556908436082"
+      },
+      "pp_ocrv6_medium_det_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "16409341273298765868",
+        "build_identity": "16409341273298765868"
+      },
+      "pp_ocrv6_medium_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "7990294689899296605",
+        "build_identity": "7990294689899296605"
+      },
+      "pp_ocrv6_medium_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3606300094659576661",
+        "build_identity": "3606300094659576661"
+      },
+      "pp_ocrv6_small_det": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10332474043826472332",
+        "build_identity": "10332474043826472332"
+      },
+      "pp_ocrv6_small_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "2636915712649359339",
+        "build_identity": "2636915712649359339"
+      },
+      "pp_ocrv6_small_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "17299890746998437841",
+        "build_identity": "17299890746998437841"
+      },
+      "pp_ocrv6_tiny_det": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "17545096665269700772",
+        "build_identity": "17545096665269700772"
+      },
+      "pp_ocrv6_tiny_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "16417432185321776407",
+        "build_identity": "16417432185321776407"
+      },
+      "pp_ocrv6_tiny_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "18250806784963099469",
+        "build_identity": "18250806784963099469"
+      },
+      "pp_structrurev2_slanet_plus_cnn": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "9947477410731345614",
+        "build_identity": "9947477410731345614"
+      },
+      "resnet101": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "8133416490958768131",
+        "build_identity": "8133416490958768131"
+      },
+      "resnet18": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5245567668730410289",
+        "build_identity": "5245567668730410289"
+      },
+      "resnet18_winograd": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "18084576680929436662",
+        "build_identity": "18084576680929436662"
+      },
+      "resnet34": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3428377807457879430",
+        "build_identity": "3428377807457879430"
+      },
+      "resnet50": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "11770564811942324166",
+        "build_identity": "11770564811942324166"
+      },
+      "squeezenet_v1_1": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "16496309471060132200",
+        "build_identity": "16496309471060132200"
+      },
+      "yolov5l": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "12012757946268869080",
+        "build_identity": "12012757946268869080"
+      },
+      "yolov5l_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "2402665855768961774",
+        "build_identity": "2402665855768961774"
+      },
+      "yolov5l_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "9296276497888309604",
+        "build_identity": "9296276497888309604"
+      },
+      "yolov5m": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3209233647586103195",
+        "build_identity": "3209233647586103195"
+      },
+      "yolov5m_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "2329662357116166050",
+        "build_identity": "2329662357116166050"
+      },
+      "yolov5m_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "8958574510295200901",
+        "build_identity": "8958574510295200901"
+      },
+      "yolov5n": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "6390208372716516498",
+        "build_identity": "6390208372716516498"
+      },
+      "yolov5n_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "16116292261108911089",
+        "build_identity": "16116292261108911089"
+      },
+      "yolov5n_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10928814529511658798",
+        "build_identity": "10928814529511658798"
+      },
+      "yolov5s": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5760300715191219133",
+        "build_identity": "5760300715191219133"
+      },
+      "yolov5s_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "8902062785813366039",
+        "build_identity": "8902062785813366039"
+      },
+      "yolov5s_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "12453574389595879638",
+        "build_identity": "12453574389595879638"
+      },
+      "yolov5x": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "11932919543873519192",
+        "build_identity": "11932919543873519192"
+      },
+      "yolov5x_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10931580511496699073",
+        "build_identity": "10931580511496699073"
+      },
+      "yolov5x_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "11009036821730281276",
+        "build_identity": "11009036821730281276"
+      }
+    }
+  },
+  "p23_portable_candidate": {
+    "source_commit": "1eea764073e0dd93c2ccdb93043079775479ff86",
+    "source_description": "P23 working tree, native profile disabled",
+    "build_dir": "/tmp/ncnn-compiler-stage-p23-portable-final-20260924-b",
+    "profile": "stable portable",
+    "cmake_build_type": "Release",
+    "compiler": "GNU 14.2.0",
+    "llvm_mlir": "21.1.8",
+    "install_rpath": true,
+    "build_testing": true,
+    "model_build_identities": {
+      "chineseocr_lite_anglenet": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "17261801079010566541",
+        "build_identity": "17261801079010566541"
+      },
+      "efficientnet_b0": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10502252507316914295",
+        "build_identity": "10502252507316914295"
+      },
+      "efficientnet_b1": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "8704732518601413698",
+        "build_identity": "8704732518601413698"
+      },
+      "efficientnet_b2": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "613492251247337505",
+        "build_identity": "613492251247337505"
+      },
+      "efficientnet_b3": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "9208765635259995864",
+        "build_identity": "9208765635259995864"
+      },
+      "pp_formulanet_plus_s_encoder": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "6221637130944213035",
+        "build_identity": "6221637130944213035"
+      },
+      "pp_lcnet_x1_0_doc_ori": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3479411233776438561",
+        "build_identity": "3479411233776438561"
+      },
+      "pp_lcnet_x1_0_textline_ori": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "14397052699858365072",
+        "build_identity": "14397052699858365072"
+      },
+      "pp_ocrv5_mobile_det_static": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "12949930049726230040",
+        "build_identity": "12949930049726230040"
+      },
+      "pp_ocrv5_mobile_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "15532145683476640387",
+        "build_identity": "15532145683476640387"
+      },
+      "pp_ocrv5_mobile_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "1488575424881021873",
+        "build_identity": "1488575424881021873"
+      },
+      "pp_ocrv5_server_det_static": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10816972410504313802",
+        "build_identity": "10816972410504313802"
+      },
+      "pp_ocrv5_server_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "15942105265047935480",
+        "build_identity": "15942105265047935480"
+      },
+      "pp_ocrv6_medium_det": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "6269441423426270176",
+        "build_identity": "6269441423426270176"
+      },
+      "pp_ocrv6_medium_det_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5608609578571280460",
+        "build_identity": "5608609578571280460"
+      },
+      "pp_ocrv6_medium_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5657970798866493287",
+        "build_identity": "5657970798866493287"
+      },
+      "pp_ocrv6_medium_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "7253347797197490251",
+        "build_identity": "7253347797197490251"
+      },
+      "pp_ocrv6_small_det": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "14514395466721089018",
+        "build_identity": "14514395466721089018"
+      },
+      "pp_ocrv6_small_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "15769165545025649525",
+        "build_identity": "15769165545025649525"
+      },
+      "pp_ocrv6_small_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "1558104959919746020",
+        "build_identity": "1558104959919746020"
+      },
+      "pp_ocrv6_tiny_det": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "9989506685160636802",
+        "build_identity": "9989506685160636802"
+      },
+      "pp_ocrv6_tiny_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "4945072022146707069",
+        "build_identity": "4945072022146707069"
+      },
+      "pp_ocrv6_tiny_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "18094275910433112681",
+        "build_identity": "18094275910433112681"
+      },
+      "pp_structrurev2_slanet_plus_cnn": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "8777809986115441732",
+        "build_identity": "8777809986115441732"
+      },
+      "resnet101": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "13601578088372171749",
+        "build_identity": "13601578088372171749"
+      },
+      "resnet18": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "16553626242613203063",
+        "build_identity": "16553626242613203063"
+      },
+      "resnet18_winograd": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "1273117446257589120",
+        "build_identity": "1273117446257589120"
+      },
+      "resnet34": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5845753669868198016",
+        "build_identity": "5845753669868198016"
+      },
+      "resnet50": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3708864869848472604",
+        "build_identity": "3708864869848472604"
+      },
+      "squeezenet_v1_1": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "4005353099243632702",
+        "build_identity": "4005353099243632702"
+      },
+      "yolov5l": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5658793010790233930",
+        "build_identity": "5658793010790233930"
+      },
+      "yolov5l_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10934961543485483388",
+        "build_identity": "10934961543485483388"
+      },
+      "yolov5l_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "11978266051308525554",
+        "build_identity": "11978266051308525554"
+      },
+      "yolov5m": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "776131431123630017",
+        "build_identity": "776131431123630017"
+      },
+      "yolov5m_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "1340325498134445424",
+        "build_identity": "1340325498134445424"
+      },
+      "yolov5m_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10330648284801599675",
+        "build_identity": "10330648284801599675"
+      },
+      "yolov5n": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "14348937519199877504",
+        "build_identity": "14348937519199877504"
+      },
+      "yolov5n_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "7875494430948112463",
+        "build_identity": "7875494430948112463"
+      },
+      "yolov5n_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10183297999602847500",
+        "build_identity": "10183297999602847500"
+      },
+      "yolov5s": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "8007529842862552599",
+        "build_identity": "8007529842862552599"
+      },
+      "yolov5s_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "6389781125224385901",
+        "build_identity": "6389781125224385901"
+      },
+      "yolov5s_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "2772198485284712976",
+        "build_identity": "2772198485284712976"
+      },
+      "yolov5x": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3335881880190042382",
+        "build_identity": "3335881880190042382"
+      },
+      "yolov5x_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "4738624293399984547",
+        "build_identity": "4738624293399984547"
+      },
+      "yolov5x_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "11063019972887534906",
+        "build_identity": "11063019972887534906"
+      }
+    }
+  },
+  "p23_native_int8_candidate": {
+    "source_commit": "1eea764073e0dd93c2ccdb93043079775479ff86",
+    "source_description": "P23 working tree; native-int8-v1 profile on five INT8 target fixtures",
+    "build_dir": "/tmp/ncnn-compiler-stage-p23-native-final-20260924-c",
+    "profile": "native-int8-v1",
+    "capability": "avx-vnni",
+    "target_features": [
+      "+avx2",
+      "+fma",
+      "+avxvnni"
+    ],
+    "cmake_build_type": "Release",
+    "compiler": "GNU 14.2.0",
+    "llvm_mlir": "21.1.8",
+    "install_rpath": true,
+    "build_testing": true,
+    "model_build_identities": {
+      "chineseocr_lite_anglenet": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "17261801079010566541",
+        "build_identity": "17261801079010566541"
+      },
+      "efficientnet_b0": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10502252507316914295",
+        "build_identity": "10502252507316914295"
+      },
+      "efficientnet_b1": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "8704732518601413698",
+        "build_identity": "8704732518601413698"
+      },
+      "efficientnet_b2": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "613492251247337505",
+        "build_identity": "613492251247337505"
+      },
+      "efficientnet_b3": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "9208765635259995864",
+        "build_identity": "9208765635259995864"
+      },
+      "pp_formulanet_plus_s_encoder": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "6221637130944213035",
+        "build_identity": "6221637130944213035"
+      },
+      "pp_lcnet_x1_0_doc_ori": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3479411233776438561",
+        "build_identity": "3479411233776438561"
+      },
+      "pp_lcnet_x1_0_textline_ori": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "14397052699858365072",
+        "build_identity": "14397052699858365072"
+      },
+      "pp_ocrv5_mobile_det_static": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "12949930049726230040",
+        "build_identity": "12949930049726230040"
+      },
+      "pp_ocrv5_mobile_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "15532145683476640387",
+        "build_identity": "15532145683476640387"
+      },
+      "pp_ocrv5_mobile_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "13201645508298471335",
+        "build_identity": "13201645508298471335"
+      },
+      "pp_ocrv5_server_det_static": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10816972410504313802",
+        "build_identity": "10816972410504313802"
+      },
+      "pp_ocrv5_server_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "15942105265047935480",
+        "build_identity": "15942105265047935480"
+      },
+      "pp_ocrv6_medium_det": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "6269441423426270176",
+        "build_identity": "6269441423426270176"
+      },
+      "pp_ocrv6_medium_det_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "6611142246635674450",
+        "build_identity": "6611142246635674450"
+      },
+      "pp_ocrv6_medium_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5657970798866493287",
+        "build_identity": "5657970798866493287"
+      },
+      "pp_ocrv6_medium_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "14384272281866086388",
+        "build_identity": "14384272281866086388"
+      },
+      "pp_ocrv6_small_det": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "14514395466721089018",
+        "build_identity": "14514395466721089018"
+      },
+      "pp_ocrv6_small_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "15769165545025649525",
+        "build_identity": "15769165545025649525"
+      },
+      "pp_ocrv6_small_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "184876510313257743",
+        "build_identity": "184876510313257743"
+      },
+      "pp_ocrv6_tiny_det": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "9989506685160636802",
+        "build_identity": "9989506685160636802"
+      },
+      "pp_ocrv6_tiny_rec": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "4945072022146707069",
+        "build_identity": "4945072022146707069"
+      },
+      "pp_ocrv6_tiny_rec_int8": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "16466572145648192981",
+        "build_identity": "16466572145648192981"
+      },
+      "pp_structrurev2_slanet_plus_cnn": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "8777809986115441732",
+        "build_identity": "8777809986115441732"
+      },
+      "resnet101": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "13601578088372171749",
+        "build_identity": "13601578088372171749"
+      },
+      "resnet18": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "16553626242613203063",
+        "build_identity": "16553626242613203063"
+      },
+      "resnet18_winograd": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "1273117446257589120",
+        "build_identity": "1273117446257589120"
+      },
+      "resnet34": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5845753669868198016",
+        "build_identity": "5845753669868198016"
+      },
+      "resnet50": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3708864869848472604",
+        "build_identity": "3708864869848472604"
+      },
+      "squeezenet_v1_1": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "4005353099243632702",
+        "build_identity": "4005353099243632702"
+      },
+      "yolov5l": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "5658793010790233930",
+        "build_identity": "5658793010790233930"
+      },
+      "yolov5l_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10934961543485483388",
+        "build_identity": "10934961543485483388"
+      },
+      "yolov5l_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "11978266051308525554",
+        "build_identity": "11978266051308525554"
+      },
+      "yolov5m": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "776131431123630017",
+        "build_identity": "776131431123630017"
+      },
+      "yolov5m_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "1340325498134445424",
+        "build_identity": "1340325498134445424"
+      },
+      "yolov5m_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10330648284801599675",
+        "build_identity": "10330648284801599675"
+      },
+      "yolov5n": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "14348937519199877504",
+        "build_identity": "14348937519199877504"
+      },
+      "yolov5n_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "7875494430948112463",
+        "build_identity": "7875494430948112463"
+      },
+      "yolov5n_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "10183297999602847500",
+        "build_identity": "10183297999602847500"
+      },
+      "yolov5s": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "8007529842862552599",
+        "build_identity": "8007529842862552599"
+      },
+      "yolov5s_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "6389781125224385901",
+        "build_identity": "6389781125224385901"
+      },
+      "yolov5s_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "2772198485284712976",
+        "build_identity": "2772198485284712976"
+      },
+      "yolov5x": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "3335881880190042382",
+        "build_identity": "3335881880190042382"
+      },
+      "yolov5x_cls": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "4738624293399984547",
+        "build_identity": "4738624293399984547"
+      },
+      "yolov5x_seg": {
+        "target": "x86_64-pc-linux-gnu",
+        "threads": 6,
+        "plan_hash": "11063019972887534906",
+        "build_identity": "11063019972887534906"
+      }
+    }
+  },
+  "measurement": {
+    "threads": 6,
+    "warmup": 10,
+    "iterations": 20,
+    "mode": "end_to_end",
+    "paired_rounds": 5,
+    "order": [
+      "baseline,candidate",
+      "candidate,baseline",
+      "baseline,candidate",
+      "candidate,baseline",
+      "baseline,candidate"
+    ],
+    "profile_off": true,
+    "official_models": 44,
+    "diagnostic_rows": 1
+  }
+}

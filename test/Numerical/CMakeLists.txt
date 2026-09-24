@@ -24,6 +24,14 @@ if(NCNN_PACKED_CONV_DEPTHWISE)
 else()
     set(NCNN_PACKED_CONV_DEPTHWISE_ARG)
 endif()
+option(NCNN_NATIVE_INT8_PROFILE
+    "Compile P23 INT8 model fixtures with the native-int8 AOT profile" OFF)
+set(NCNN_NATIVE_INT8_MODEL_FIXTURES
+    pp_ocrv6_tiny_rec_int8
+    pp_ocrv5_mobile_rec_int8
+    pp_ocrv6_medium_rec_int8
+    pp_ocrv6_small_rec_int8
+    pp_ocrv6_medium_det_int8)
 if(NOT NCNN_MATMUL_PACKING STREQUAL "off" AND
    NOT NCNN_MATMUL_PACKING STREQUAL "auto")
     message(FATAL_ERROR "NCNN_MATMUL_PACKING must be off or auto")
@@ -85,6 +93,19 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
         endif()
     endforeach()
     set(input_constraints ${filtered_constraints})
+    if(NCNN_NATIVE_INT8_PROFILE AND
+       name IN_LIST NCNN_NATIVE_INT8_MODEL_FIXTURES)
+        if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
+            message(FATAL_ERROR "NCNN_NATIVE_INT8_PROFILE requires x86-64")
+        endif()
+        # INT8 capability probing rejects opaque --clang-arg values. Express the
+        # same fixed model target with ncnn-compile's dedicated target options.
+        list(REMOVE_ITEM clang_args --clang-arg -march=x86-64-v3)
+        list(APPEND precision_args
+             --march=x86-64-v3
+             --tuning-profile=native-int8
+             --target-feature=+avxvnni)
+    endif()
     set(output_dir ${CMAKE_CURRENT_BINARY_DIR}/generated/${name})
     set(library ${output_dir}/lib${name}.so)
     set(generated_outputs
@@ -1361,6 +1382,33 @@ ncnn_add_compiled_fixture(
     0:1:min=32,multiple=32
     0:2:min=32,multiple=32
     EMIT_IR)
+if(NCNN_NATIVE_INT8_PROFILE)
+    ncnn_add_model_fixture(
+        pp_ocrv6_tiny_rec_int8_portable_p23
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.param
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.bin
+        3x48x320)
+    ncnn_add_model_fixture(
+        pp_ocrv5_mobile_rec_int8_portable_p23
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec_int8.param
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec_int8.bin
+        3x48x320)
+    ncnn_add_model_fixture(
+        pp_ocrv6_medium_rec_int8_portable_p23
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec_int8.param
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec_int8.bin
+        3x48x320)
+    ncnn_add_model_fixture(
+        pp_ocrv6_small_rec_int8_portable_p23
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec_int8.param
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec_int8.bin
+        3x48x320)
+    ncnn_add_model_fixture(
+        pp_ocrv6_medium_det_int8_portable_p23
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det_int8.param
+        ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det_int8.bin
+        3x32x32)
+endif()
 ncnn_add_compiled_shape_pair(
     pp_ocrv5_mobile_det
     ${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param
@@ -2105,10 +2153,14 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_TINY_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.param"
     PP_OCRV6_TINY_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec.bin"
     PP_OCRV6_TINY_REC_LIBRARY_PATH="${pp_ocrv6_tiny_rec_LIBRARY}"
+    PP_OCRV6_TINY_REC_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.param"
+    PP_OCRV6_TINY_REC_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_rec_int8.bin"
     PP_OCRV6_TINY_REC_INT8_LIBRARY_PATH="${pp_ocrv6_tiny_rec_int8_LIBRARY}"
     PP_OCRV5_MOBILE_REC_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.param"
     PP_OCRV5_MOBILE_REC_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec.bin"
     PP_OCRV5_MOBILE_REC_LIBRARY_PATH="${pp_ocrv5_mobile_rec_LIBRARY}"
+    PP_OCRV5_MOBILE_REC_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec_int8.param"
+    PP_OCRV5_MOBILE_REC_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_rec_int8.bin"
     PP_OCRV5_MOBILE_REC_INT8_LIBRARY_PATH="${pp_ocrv5_mobile_rec_int8_LIBRARY}"
     PP_OCRV5_MOBILE_REC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_mobile_rec/pp_ocrv5_mobile_rec.json"
     PP_OCRV5_MOBILE_REC_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv5_mobile_rec/model.ncnn.mlir"
@@ -2131,7 +2183,11 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_SMALL_REC_MANIFEST_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_small_rec/pp_ocrv6_small_rec.json"
     PP_OCRV6_SMALL_REC_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_small_rec/model.ncnn.mlir"
     PP_OCRV6_SMALL_REC_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_ocrv6_small_rec/model.linalg.mlir"
+    PP_OCRV6_SMALL_REC_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec_int8.param"
+    PP_OCRV6_SMALL_REC_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_small_rec_int8.bin"
     PP_OCRV6_SMALL_REC_INT8_LIBRARY_PATH="${pp_ocrv6_small_rec_int8_LIBRARY}"
+    PP_OCRV6_MEDIUM_REC_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec_int8.param"
+    PP_OCRV6_MEDIUM_REC_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec_int8.bin"
     PP_OCRV6_MEDIUM_REC_INT8_LIBRARY_PATH="${pp_ocrv6_medium_rec_int8_LIBRARY}"
     PP_OCRV5_MOBILE_DET_INT8_LIBRARY_PATH="${pp_ocrv5_mobile_det_int8_LIBRARY}"
     PP_OCRV6_TINY_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_tiny_det.param"
@@ -2146,6 +2202,8 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_OCRV6_MEDIUM_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.param"
     PP_OCRV6_MEDIUM_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det.bin"
     PP_OCRV6_MEDIUM_DET_LIBRARY_PATH="${pp_ocrv6_medium_det_LIBRARY}"
+    PP_OCRV6_MEDIUM_DET_INT8_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det_int8.param"
+    PP_OCRV6_MEDIUM_DET_INT8_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv6_medium_det_int8.bin"
     PP_OCRV6_MEDIUM_DET_INT8_LIBRARY_PATH="${pp_ocrv6_medium_det_int8_LIBRARY}"
     PP_OCRV5_MOBILE_DET_PARAM_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.param"
     PP_OCRV5_MOBILE_DET_BIN_PATH="${CMAKE_SOURCE_DIR}/../ncnn_modelzoo/liteocr/PP-OCRv5_mobile_det.bin"
@@ -2192,6 +2250,15 @@ target_compile_definitions(numerical_tests PRIVATE
     PP_FORMULANET_PLUS_S_DECODER_NCNN_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/model.ncnn.mlir"
     PP_FORMULANET_PLUS_S_DECODER_TOSA_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/model.tosa.mlir"
     PP_FORMULANET_PLUS_S_DECODER_LINALG_IR_PATH="${CMAKE_CURRENT_BINARY_DIR}/generated/pp_formulanet_plus_s_decoder/model.linalg.mlir")
+if(NCNN_NATIVE_INT8_PROFILE)
+    target_compile_definitions(numerical_tests PRIVATE
+        NCNN_P23_NATIVE_INT8_PROFILE=1
+        PP_OCRV6_TINY_REC_INT8_PORTABLE_P23_LIBRARY_PATH="${pp_ocrv6_tiny_rec_int8_portable_p23_LIBRARY}"
+        PP_OCRV5_MOBILE_REC_INT8_PORTABLE_P23_LIBRARY_PATH="${pp_ocrv5_mobile_rec_int8_portable_p23_LIBRARY}"
+        PP_OCRV6_MEDIUM_REC_INT8_PORTABLE_P23_LIBRARY_PATH="${pp_ocrv6_medium_rec_int8_portable_p23_LIBRARY}"
+        PP_OCRV6_SMALL_REC_INT8_PORTABLE_P23_LIBRARY_PATH="${pp_ocrv6_small_rec_int8_portable_p23_LIBRARY}"
+        PP_OCRV6_MEDIUM_DET_INT8_PORTABLE_P23_LIBRARY_PATH="${pp_ocrv6_medium_det_int8_portable_p23_LIBRARY}")
+endif()
 add_dependencies(numerical_tests compile_squeezenet_v1_1)
 add_dependencies(numerical_tests compile_sigmoid)
 add_dependencies(numerical_tests compile_sigmoid_vector_fixed)
@@ -2299,6 +2366,20 @@ add_dependencies(numerical_tests
     compile_batch_norm_mixed_bf16
     compile_detection_output_mixed_fp16
     compile_detection_output_mixed_bf16)
+if(NCNN_NATIVE_INT8_PROFILE)
+    add_dependencies(compile_pp_ocrv6_tiny_rec_int8_portable_p23
+                     compile_pp_ocrv6_medium_det_int8)
+    add_dependencies(compile_pp_ocrv5_mobile_rec_int8_portable_p23
+                     compile_pp_ocrv6_tiny_rec_int8_portable_p23)
+    add_dependencies(compile_pp_ocrv6_medium_rec_int8_portable_p23
+                     compile_pp_ocrv5_mobile_rec_int8_portable_p23)
+    add_dependencies(compile_pp_ocrv6_small_rec_int8_portable_p23
+                     compile_pp_ocrv6_medium_rec_int8_portable_p23)
+    add_dependencies(compile_pp_ocrv6_medium_det_int8_portable_p23
+                     compile_pp_ocrv6_small_rec_int8_portable_p23)
+    add_dependencies(numerical_tests
+                     compile_pp_ocrv6_medium_det_int8_portable_p23)
+endif()
 
 add_executable(numerical_dynamic_operator_tests
     operators/dynamic_ops_test.cpp)

@@ -7,9 +7,12 @@ namespace ncnn_mlir {
 
 // Capability from the selected backend's predefined macros, not from the host
 // or a CPU-name substring. Callers must probe with the final target arguments.
+// AVXVNNIINT8 stays distinct: the implemented signed-i8 path uses VPDPBUSD plus
+// correction, and must not be inferred from the signed-dot-product extension.
 enum class Int8DotTarget {
   Portable,
   AVXVNNI,
+  AVXVNNIINT8,
   AVX512VNNI,
 };
 
@@ -47,6 +50,9 @@ inline Int8DotTarget resolve_int8_dot_target(std::string_view macros) {
       has("__AVX512VNNI__")) {
     return Int8DotTarget::AVX512VNNI;
   }
+  if (has("__AVXVNNIINT8__")) {
+    return Int8DotTarget::AVXVNNIINT8;
+  }
   return Int8DotTarget::Portable;
 }
 
@@ -56,6 +62,8 @@ inline std::string_view int8_dot_target_name(Int8DotTarget target) {
       return "avx-vnni";
     case Int8DotTarget::AVX512VNNI:
       return "avx512-vnni";
+    case Int8DotTarget::AVXVNNIINT8:
+      return "avx-vnni-int8";
     case Int8DotTarget::Portable:
       return "portable";
   }

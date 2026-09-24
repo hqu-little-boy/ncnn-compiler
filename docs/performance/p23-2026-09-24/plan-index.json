@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "native_candidate": "native-int8-v1",
+  "portable_candidate": "stable portable",
+  "models": {
+    "pp_ocrv6_tiny_rec_int8": {
+      "native_plan_hash": "16466572145648192981",
+      "native_build_identity": "16466572145648192981",
+      "native_target": {
+        "threads": 0,
+        "triple": "x86_64-pc-linux-gnu",
+        "vector_lanes": 8,
+        "vector_scalable": false,
+        "vector_tail": true
+      },
+      "tuning": {
+        "fallback_reason": null,
+        "matmul_acc_columns": 16,
+        "matmul_i8_acc_columns": 4,
+        "matmul_i8_rows": 2,
+        "matmul_m_rows": 4,
+        "profile": "native-int8",
+        "profile_revision": "native-int8-v1",
+        "revision": "tuning-v1",
+        "row_chunk_lanes": 8,
+        "status": "selected"
+      },
+      "low_precision": {
+        "capability": "avx-vnni",
+        "requested_policy": "vnni",
+        "status": "selected",
+        "depthwise_enabled": true,
+        "cast_chain_enabled": true
+      },
+      "native_packed_constant_bytes": 565248,
+      "native_packed_constant_count": 20,
+      "native_depthwise": {
+        "depthwise_simd": 10
+      },
+      "native_depthwise_operation_count": 10,
+      "portable_plan_hash": "18094275910433112681",
+      "portable_build_identity": "18094275910433112681",
+      "portable_depthwise": {
+        "fallback": 10
+      },
+      "portable_depthwise_operation_count": 10
+    },
+    "pp_ocrv5_mobile_rec_int8": {
+      "native_plan_hash": "13201645508298471335",
+      "native_build_identity": "13201645508298471335",
+      "native_target": {
+        "threads": 0,
+        "triple": "x86_64-pc-linux-gnu",
+        "vector_lanes": 8,
+        "vector_scalable": false,
+        "vector_tail": true
+      },
+      "tuning": {
+        "fallback_reason": null,
+        "matmul_acc_columns": 16,
+        "matmul_i8_acc_columns": 4,
+        "matmul_i8_rows": 2,
+        "matmul_m_rows": 4,
+        "profile": "native-int8",
+        "profile_revision": "native-int8-v1",
+        "revision": "tuning-v1",
+        "row_chunk_lanes": 8,
+        "status": "selected"
+      },
+      "low_precision": {
+        "capability": "avx-vnni",
+        "requested_policy": "vnni",
+        "status": "selected",
+        "depthwise_enabled": true,
+        "cast_chain_enabled": true
+      },
+      "native_packed_constant_bytes": 1507328,
+      "native_packed_constant_count": 18,
+      "native_depthwise": {
+        "depthwise_simd": 14
+      },
+      "native_depthwise_operation_count": 14,
+      "portable_plan_hash": "1488575424881021873",
+      "portable_build_identity": "1488575424881021873",
+      "portable_depthwise": {
+        "fallback": 14
+      },
+      "portable_depthwise_operation_count": 14
+    },
+    "pp_ocrv6_medium_rec_int8": {
+      "native_plan_hash": "14384272281866086388",
+      "native_build_identity": "14384272281866086388",
+      "native_target": {
+        "threads": 0,
+        "triple": "x86_64-pc-linux-gnu",
+        "vector_lanes": 8,
+        "vector_scalable": false,
+        "vector_tail": true
+      },
+      "tuning": {
+        "fallback_reason": null,
+        "matmul_acc_columns": 16,
+        "matmul_i8_acc_columns": 4,
+        "matmul_i8_rows": 2,
+        "matmul_m_rows": 4,
+        "profile": "native-int8",
+        "profile_revision": "native-int8-v1",
+        "revision": "tuning-v1",
+        "row_chunk_lanes": 8,
+        "status": "selected"
+      },
+      "low_precision": {
+        "capability": "avx-vnni",
+        "requested_policy": "vnni",
+        "status": "selected",
+        "depthwise_enabled": true,
+        "cast_chain_enabled": true
+      },
+      "native_packed_constant_bytes": 14974976,
+      "native_packed_constant_count": 42,
+      "native_depthwise": {
+        "depthwise_simd": 15
+      },
+      "native_depthwise_operation_count": 15,
+      "portable_plan_hash": "7253347797197490251",
+      "portable_build_identity": "7253347797197490251",
+      "portable_depthwise": {
+        "fallback": 15
+      },
+      "portable_depthwise_operation_count": 15
+    },
+    "pp_ocrv6_small_rec_int8": {
+      "native_plan_hash": "184876510313257743",
+      "native_build_identity": "184876510313257743",
+      "native_target": {
+        "threads": 0,
+        "triple": "x86_64-pc-linux-gnu",
+        "vector_lanes": 8,
+        "vector_scalable": false,
+        "vector_tail": true
+      },
+      "tuning": {
+        "fallback_reason": null,
+        "matmul_acc_columns": 16,
+        "matmul_i8_acc_columns": 4,
+        "matmul_i8_rows": 2,
+        "matmul_m_rows": 4,
+        "profile": "native-int8",
+        "profile_revision": "native-int8-v1",
+        "revision": "tuning-v1",
+        "row_chunk_lanes": 8,
+        "status": "selected"
+      },
+      "low_precision": {
+        "capability": "avx-vnni",
+        "requested_policy": "vnni",
+        "status": "selected",
+        "depthwise_enabled": true,
+        "cast_chain_enabled": true
+      },
+      "native_packed_constant_bytes": 2628096,
+      "native_packed_constant_count": 32,
+      "native_depthwise": {
+        "depthwise_simd": 14
+      },
+      "native_depthwise_operation_count": 14,
+      "portable_plan_hash": "1558104959919746020",
+      "portable_build_identity": "1558104959919746020",
+      "portable_depthwise": {
+        "fallback": 14
+      },
+      "portable_depthwise_operation_count": 14
+    },
+    "pp_ocrv6_medium_det_int8": {
+      "native_plan_hash": "6611142246635674450",
+      "native_build_identity": "6611142246635674450",
+      "native_target": {
+        "threads": 0,
+        "triple": "x86_64-pc-linux-gnu",
+        "vector_lanes": 8,
+        "vector_scalable": false,
+        "vector_tail": true
+      },
+      "tuning": {
+        "fallback_reason": null,
+        "matmul_acc_columns": 16,
+        "matmul_i8_acc_columns": 4,
+        "matmul_i8_rows": 2,
+        "matmul_m_rows": 4,
+        "profile": "native-int8",
+        "profile_revision": "native-int8-v1",
+        "revision": "tuning-v1",
+        "row_chunk_lanes": 8,
+        "status": "selected"
+      },
+      "low_precision": {
+        "capability": "avx-vnni",
+        "requested_policy": "vnni",
+        "status": "selected",
+        "depthwise_enabled": true,
+        "cast_chain_enabled": true
+      },
+      "native_packed_constant_bytes": 15233024,
+      "native_packed_constant_count": 89,
+      "native_depthwise": {
+        "depthwise_simd": 17
+      },
+      "native_depthwise_operation_count": 17,
+      "portable_plan_hash": "5608609578571280460",
+      "portable_build_identity": "5608609578571280460",
+      "portable_depthwise": {
+        "fallback": 21
+      },
+      "portable_depthwise_operation_count": 21
+    }
+  }
+}

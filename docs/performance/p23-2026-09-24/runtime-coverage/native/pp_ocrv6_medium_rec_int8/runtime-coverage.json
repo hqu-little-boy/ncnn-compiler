@@ -1,0 +1,173 @@
+{
+  "eligible_selected_count": 15,
+  "eligible_selected_calls_observed": 15,
+  "eligible_selected_unjoined_count": 0,
+  "depthwise_sites": [
+    {
+      "id": "model/scf.forall#6",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 17694737476615778818,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#10",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13682867115424176937,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#13",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13682863816889292304,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#16",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13682869314447433359,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#21",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13683719236935851237,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#24",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13683713739377710182,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#29",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13683728033028876925,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#32",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13684712095935936545,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#37",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13684715394470821178,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#40",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13685701656401137220,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#45",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13685698357866252587,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#48",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13685692860308111532,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#51",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13686692316377966106,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#56",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13686686818819825051,
+      "calls": 1,
+      "exclusive_ns": null
+    },
+    {
+      "id": "model/scf.forall#62",
+      "status": "selected",
+      "implementation": "depthwise_simd",
+      "multiplier": 1,
+      "kernel_static": true,
+      "fallback_reason": null,
+      "profile_id": 13687647791982692240,
+      "calls": 1,
+      "exclusive_ns": null
+    }
+  ],
+  "baseline_exclusive_time_status": "unknown_until_stable_source_id_join"
+}

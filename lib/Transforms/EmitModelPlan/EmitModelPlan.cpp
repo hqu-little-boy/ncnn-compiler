@@ -1016,6 +1016,14 @@ class EmitModelPlanPass final
           copy_string(contract::kAlias, "alias");
           copy_string(contract::kContract, "status");
           copy_string(contract::kFallback, "fallback_reason");
+          copy_string(contract::kInt8Isa, "int8_isa");
+          copy_string(contract::kInt8RequiredIsa, "required_isa");
+          copy_string(contract::kInt8Backend, "int8_backend");
+          copy_string(contract::kInt8Intrinsic, "emitted_intrinsic");
+          copy_string(contract::kInt8SignednessCorrection,
+                      "signedness_correction");
+          copy_integer(contract::kInt8KAlignment, "k_alignment");
+          copy_integer(contract::kInt8ReductionTail, "reduction_tail");
           copy_string(contract::kOperationFamily, "operation_family");
           copy_string(contract::kImplementation, "implementation");
           copy_bool(contract::kKernelStatic, "kernel_static");
@@ -1764,6 +1772,9 @@ class EmitModelPlanPass final
 
     JsonObject low_precision;
     low_precision["revision"] = low_precision_revision;
+    low_precision["tuning_profile"] = tuningProfile.getValue();
+    low_precision["tuning_profile_revision"] =
+      tuningProfile.getValue() == "native-int8" ? "native-int8-v1" : "none";
     low_precision["requested_policy"] = int8_kernel;
     low_precision["capability"] = int8_target;
     low_precision["depthwise_enabled"] = int8_depthwise;
@@ -1776,6 +1787,10 @@ class EmitModelPlanPass final
       low_precision["requested_policy_status"] = "fallback";
       low_precision["requested_policy_fallback_reason"] =
         "auto_target_unsupported";
+    } else if (int8_kernel == "auto" && int8_target == "avx-vnni-int8") {
+      low_precision["requested_policy_status"] = "fallback";
+      low_precision["requested_policy_fallback_reason"] =
+        "unimplemented_vnni_int8_backend";
     } else if (int8_kernel == "auto") {
       low_precision["requested_policy_status"] = "pending_defaultization";
       low_precision["requested_policy_fallback_reason"] = nullptr;
@@ -1791,6 +1806,8 @@ class EmitModelPlanPass final
     JsonObject tuning;
     tuning["revision"] = "tuning-v1";
     tuning["profile"] = tuningProfile.getValue();
+    tuning["profile_revision"] =
+      tuningProfile.getValue() == "native-int8" ? "native-int8-v1" : "none";
     tuning["status"] = tuningStatus.getValue();
     if (tuningFallbackReason.getValue().empty()) {
       tuning["fallback_reason"] = nullptr;

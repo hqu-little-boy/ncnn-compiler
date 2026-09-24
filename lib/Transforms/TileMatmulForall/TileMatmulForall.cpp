@@ -1,6 +1,7 @@
 #include "ncnn-mlir/Transforms/TileMatmulForall/TileMatmulForall.hpp"
 
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
 #include "llvm/ADT/STLExtras.h"
@@ -185,7 +186,12 @@ class TopLevelMatmulTile : public OpRewritePattern<MatmulOpT> {
       return extent;
     };
     const int64_t rowChunk = pickDivisor(rows, rowTileSize);
-    const int64_t columnChunk = pickDivisor(columns, columnTileSize);
+    int64_t columnChunk = pickDivisor(columns, columnTileSize);
+    if constexpr (std::is_same_v<MatmulOpT, linalg::MatmulTransposeBOp>) {
+      // Keep the complete [N,K] RHS visible to every tile. Splitting N can
+      // materialize a partial constant panel and lose the dynamic N offset.
+      columnChunk = columns;
+    }
     if (rowChunk >= rows && columnChunk >= columns) {
       // 两维都无可行切分，保持原样。
       return failure();

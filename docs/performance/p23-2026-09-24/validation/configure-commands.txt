@@ -1,0 +1,33 @@
+# P22 clean portable baseline source (HEAD 1eea764, ncnn submodule a4d2ea1d)
+cmake -S /tmp/ncnn-compiler-p23-baseline-20260924-src/compiler \
+  -B /tmp/ncnn-compiler-stage-p23-portable-baseline-20260924-b \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+  -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+  -DCOMPILER_INSTALL_RPATH=ON \
+  -DBUILD_TESTING=ON
+
+# P23 portable candidate
+cmake -S compiler -B /tmp/ncnn-compiler-stage-p23-portable-final-20260924-b \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+  -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+  -DCOMPILER_INSTALL_RPATH=ON \
+  -DBUILD_TESTING=ON \
+  -DNCNN_NATIVE_INT8_PROFILE=OFF
+
+# P23 native-int8 candidate (host-supported AVX-VNNI)
+cmake -S compiler -B /tmp/ncnn-compiler-stage-p23-native-final-20260924-c \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+  -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+  -DCOMPILER_INSTALL_RPATH=ON \
+  -DBUILD_TESTING=ON \
+  -DNCNN_NATIVE_INT8_PROFILE=ON
+
+# Each full stage then ran the following, with --parallel 8 on every build:
+cmake --build <stage> --target format_check --parallel 8
+cmake --build <stage> --target tidy --parallel 8
+cmake --build <stage> --parallel 8
+cmake --build <stage> --target numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests --parallel 8
+ctest --test-dir <stage> --output-on-failure

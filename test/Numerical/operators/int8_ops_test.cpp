@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -44,6 +46,51 @@ void expect_int8_fixture(std::string_view fixture,
   ASSERT_EQ(compiled.run(input, actual), 0);
   EXPECT_TRUE(compare_values(actual, *expected, tolerance, tolerance));
 }
+
+#ifdef NCNN_P23_NATIVE_INT8_PROFILE
+void expect_int8_model_bitwise(std::string_view fixture,
+                               std::string_view native_library_path,
+                               std::string_view portable_library_path,
+                               std::string_view portable_symbol,
+                               TensorShape input_shape,
+                               std::size_t output_elements,
+                               std::uint32_t seed) {
+  const auto input_elements = input_shape.element_count();
+  ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
+  CompiledModel native{std::string(native_library_path), std::string(fixture)};
+  CompiledModel portable{std::string(portable_library_path),
+                         std::string(portable_symbol)};
+  ASSERT_TRUE(native.valid()) << native.error();
+  ASSERT_TRUE(portable.valid()) << portable.error();
+
+  for (std::uint32_t input = 0; input < 3; ++input) {
+    const auto currentSeed = seed + input;
+    const auto values = make_random_input(*input_elements, currentSeed);
+    std::vector<float> nativeOutput(output_elements);
+    std::vector<float> portableOutput(output_elements);
+    ASSERT_EQ(native.run(values, nativeOutput), 0) << fixture;
+    ASSERT_EQ(portable.run(values, portableOutput), 0) << portable_symbol;
+
+    std::size_t mismatchCount = 0;
+    std::size_t firstMismatch = 0;
+    for (std::size_t index = 0; index < output_elements; ++index) {
+      if (std::bit_cast<std::uint32_t>(nativeOutput[index]) ==
+          std::bit_cast<std::uint32_t>(portableOutput[index])) {
+        continue;
+      }
+      if (mismatchCount == 0) {
+        firstMismatch = index;
+      }
+      ++mismatchCount;
+    }
+    EXPECT_EQ(mismatchCount, 0U)
+      << fixture << ": input seed=" << currentSeed
+      << ", first mismatch=" << firstMismatch
+      << ", native=" << nativeOutput[firstMismatch]
+      << ", portable=" << portableOutput[firstMismatch];
+  }
+}
+#endif
 
 std::string read_text(const std::filesystem::path& path) {
   std::ifstream stream(path);
@@ -180,6 +227,58 @@ TEST(Int8Model, CompleteRequantizedChainMatchesNcnn) {
                       1.0e-5F,
                       0x8C11U);
 }
+
+#ifdef NCNN_P23_NATIVE_INT8_PROFILE
+TEST(Int8Model, TinyRecMatchesPortableBitwiseOnThreeInputs) {
+  expect_int8_model_bitwise("pp_ocrv6_tiny_rec_int8",
+                            PP_OCRV6_TINY_REC_INT8_LIBRARY_PATH,
+                            PP_OCRV6_TINY_REC_INT8_PORTABLE_P23_LIBRARY_PATH,
+                            "pp_ocrv6_tiny_rec_int8_portable_p23",
+                            TensorShape(320, 48, 3),
+                            40U * 6906U,
+                            0x230001U);
+}
+
+TEST(Int8Model, MobileRecMatchesPortableBitwiseOnThreeInputs) {
+  expect_int8_model_bitwise("pp_ocrv5_mobile_rec_int8",
+                            PP_OCRV5_MOBILE_REC_INT8_LIBRARY_PATH,
+                            PP_OCRV5_MOBILE_REC_INT8_PORTABLE_P23_LIBRARY_PATH,
+                            "pp_ocrv5_mobile_rec_int8_portable_p23",
+                            TensorShape(320, 48, 3),
+                            40U * 18385U,
+                            0x230101U);
+}
+
+TEST(Int8Model, MediumRecMatchesPortableBitwiseOnThreeInputs) {
+  expect_int8_model_bitwise("pp_ocrv6_medium_rec_int8",
+                            PP_OCRV6_MEDIUM_REC_INT8_LIBRARY_PATH,
+                            PP_OCRV6_MEDIUM_REC_INT8_PORTABLE_P23_LIBRARY_PATH,
+                            "pp_ocrv6_medium_rec_int8_portable_p23",
+                            TensorShape(320, 48, 3),
+                            40U * 18710U,
+                            0x230201U);
+}
+
+TEST(Int8Model, SmallRecMatchesPortableBitwiseOnThreeInputs) {
+  expect_int8_model_bitwise("pp_ocrv6_small_rec_int8",
+                            PP_OCRV6_SMALL_REC_INT8_LIBRARY_PATH,
+                            PP_OCRV6_SMALL_REC_INT8_PORTABLE_P23_LIBRARY_PATH,
+                            "pp_ocrv6_small_rec_int8_portable_p23",
+                            TensorShape(320, 48, 3),
+                            40U * 18710U,
+                            0x230301U);
+}
+
+TEST(Int8Model, MediumDetMatchesPortableBitwiseOnThreeInputs) {
+  expect_int8_model_bitwise("pp_ocrv6_medium_det_int8",
+                            PP_OCRV6_MEDIUM_DET_INT8_LIBRARY_PATH,
+                            PP_OCRV6_MEDIUM_DET_INT8_PORTABLE_P23_LIBRARY_PATH,
+                            "pp_ocrv6_medium_det_int8_portable_p23",
+                            TensorShape(32, 32, 3),
+                            32U * 32U,
+                            0x230401U);
+}
+#endif
 
 TEST(Int8Codegen, UsesI32AccumulationBroadcastScalesAndF32Abi) {
   const std::string tosa = read_text(INT8_COMPLETE_CHAIN_TOSA_IR_PATH);

@@ -16,6 +16,15 @@ inline constexpr llvm::StringLiteral kInt8Kernel = "ncnn.int8_kernel";
 inline constexpr llvm::StringLiteral kInt8Depthwise = "ncnn.int8_depthwise";
 inline constexpr llvm::StringLiteral kInt8CastChain = "ncnn.int8_cast_chain";
 inline constexpr llvm::StringLiteral kInt8Isa = "ncnn.int8_isa";
+inline constexpr llvm::StringLiteral kInt8RequiredIsa =
+  "ncnn.int8_required_isa";
+inline constexpr llvm::StringLiteral kInt8Backend = "ncnn.int8_backend";
+inline constexpr llvm::StringLiteral kInt8Intrinsic = "ncnn.int8_intrinsic";
+inline constexpr llvm::StringLiteral kInt8SignednessCorrection =
+  "ncnn.int8_signedness_correction";
+inline constexpr llvm::StringLiteral kInt8KAlignment = "ncnn.int8_k_alignment";
+inline constexpr llvm::StringLiteral kInt8PanelPackSchema =
+  "p23-int8-panel-row-kpad64-v1";
 // Explicit reduction-tail element count for INT8 dot-product kernels (K % 32
 // for VNNI).  Optional: the plan audit derives it from ncnn.tile_k when the
 // producer does not record it.

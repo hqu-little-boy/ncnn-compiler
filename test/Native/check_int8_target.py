@@ -47,11 +47,17 @@ int main() {
                  "-I", include, "-lstdc++", "-o", executable])
     require(built.returncode == 0, built.stderr)
     avx = ["__x86_64__", "__AVX2__", "__AVXVNNI__"]
+    avxvnniint8 = ["__x86_64__", "__AVX2__", "__AVXVNNIINT8__"]
     avx512 = ["__x86_64__", "__AVX2__", "__AVX512F__", "__AVX512BW__",
               "__AVX512VL__", "__AVX512VNNI__"]
     cases = [(avx, "avx-vnni"), (avx512, "avx512-vnni"),
-             (avx512 + avx, "avx-vnni"), ([], "portable")]
+             (avxvnniint8, "avx-vnni-int8"),
+             (avx512 + avx, "avx-vnni"),
+             (avx + avxvnniint8, "avx-vnni"),
+             (avx512 + avxvnniint8, "avx512-vnni"), ([], "portable")]
     cases += [(avx[:i] + avx[i + 1:], "portable") for i in range(len(avx))]
+    cases += [(avxvnniint8[:i] + avxvnniint8[i + 1:], "portable")
+              for i in range(len(avxvnniint8))]
     cases += [(avx512[:i] + avx512[i + 1:], "portable")
               for i in range(len(avx512))]
     for names, expected in cases:
@@ -59,11 +65,12 @@ int main() {
         result = run([executable], input=text)
         require(result.returncode == 0 and result.stdout == expected,
                 f"parser {names}: {result.stdout} != {expected}")
-    for suffix in (" 0", " 10", "_OTHER 1"):
-        text = "#define __x86_64__ 1\n#define __AVX2__ 1\n#define __AVXVNNI__" + suffix
-        require(run([executable], input=text).stdout == "portable",
-                "parser accepted a non-capability definition")
-    print(f"PASS parser: {len(cases) + 3} dependency/name/value cases", flush=True)
+    for macro in ("__AVXVNNI__", "__AVXVNNIINT8__"):
+        for suffix in (" 0", " 10", "_OTHER 1"):
+            text = "#define __x86_64__ 1\n#define __AVX2__ 1\n#define " + macro + suffix
+            require(run([executable], input=text).stdout == "portable",
+                    f"parser accepted a malformed {macro} definition")
+    print(f"PASS parser: {len(cases) + 6} dependency/name/value cases", flush=True)
 
     base = [args.compiler, args.param, "--bin=" + args.bin,
             "--model-name=target_test", "--threads=1", "--vector-math=none",
@@ -121,7 +128,39 @@ int main() {
                             "--target-feature=-avxvnni"], capability="portable", policy="auto")
     require(auto["low_precision"]["requested_policy_status"] == "pending_defaultization",
             "auto must remain pending, not advertise selected VNNI")
-    require(len({p["plan_hash"] for p in (enabled, auto, fallback)}) == 3,
+    int8_extension_flags = ["--target-feature=+avx2",
+                            "--target-feature=+avxvnniint8"]
+    compile_case(
+        "vnni_int8_without_backend",
+        ["--int8-kernel=vnni"] + int8_extension_flags,
+        "no matching vpdpbusd backend",
+    )
+    int8_extension_auto = compile_case(
+        "auto_avx_vnni_int8",
+        ["--int8-kernel=auto"] + int8_extension_flags,
+        capability="avx-vnni-int8",
+        policy="auto",
+    )
+    require(int8_extension_auto["low_precision"].get("requested_policy_status") ==
+            "fallback" and
+            int8_extension_auto["low_precision"].get(
+                "requested_policy_fallback_reason") ==
+            "unimplemented_vnni_int8_backend",
+            "auto must not conflate AVX-VNNI-INT8 with the vpdpbusd backend")
+    native_int8_extension = compile_case(
+        "native_profile_avx_vnni_int8",
+        ["--tuning-profile=native-int8", "--target-feature=+avx2",
+         "--target-feature=+avxvnniint8", "--vector-mode=fixed-width"],
+        capability="avx-vnni-int8",
+        policy="portable",
+    )
+    require(native_int8_extension["tuning"].get("status") == "fallback" and
+            native_int8_extension["tuning"].get("fallback_reason") ==
+            "unimplemented_vnni_int8_backend",
+            "native-int8 must fall back on an unimplemented capability")
+    require(len({p["plan_hash"] for p in (enabled, auto, fallback,
+                                          int8_extension_auto,
+                                          native_int8_extension)}) == 5,
             "target/policy changes must change plan identity")
     avx512_flags = ["--int8-kernel=vnni", "--march=x86-64-v4",
                    "--target-feature=+avx512vnni"] + fixed
@@ -146,6 +185,83 @@ int main() {
                  "requires fixed-width")
     compile_case("depthwise_fixed", ["--int8-depthwise"] + fixed,
                  capability="portable", policy="portable")
+    native_profile_flags = [
+        "--tuning-profile=native-int8",
+        "--target-feature=+avx2",
+        "--target-feature=+avxvnni",
+        "--vector-mode=fixed-width",
+    ]
+    native_profile = compile_case(
+        "native_int8_selected",
+        native_profile_flags,
+        capability="avx-vnni",
+        policy="vnni",
+    )
+    native_tuning = native_profile.get("tuning", {})
+    require(native_tuning.get("profile_revision") == "native-int8-v1",
+            f"native profile revision was not recorded: {native_tuning}")
+    require(native_tuning.get("status") == "selected",
+            f"native profile was not selected: {native_tuning}")
+    require(native_profile["low_precision"].get("depthwise_enabled") is True and
+            native_profile["low_precision"].get("cast_chain_enabled") is True,
+            "native profile must enable the supported depthwise/cast-chain paths")
+    native_identity = bytes.fromhex(native_profile["codegen_identity"]).decode()
+    require("tuning-profile-revision=native-int8-v1" in native_identity,
+            "native profile revision missing from codegen identity")
+
+    native_unsupported = compile_case(
+        "native_int8_unsupported",
+        ["--tuning-profile=native-int8"],
+        capability="portable",
+        policy="portable",
+    )
+    require(native_unsupported["tuning"].get("status") == "fallback" and
+            native_unsupported["tuning"].get("fallback_reason") ==
+            "unsupported_vnni_target",
+            f"unsupported native profile lacks fallback identity: "
+            f"{native_unsupported['tuning']}")
+
+    native_without_vectors = compile_case(
+        "native_int8_without_vectors",
+        ["--tuning-profile=native-int8", "--target-feature=+avx2",
+         "--target-feature=+avxvnni"],
+        capability="avx-vnni",
+        policy="portable",
+    )
+    require(native_without_vectors["tuning"].get("status") == "fallback" and
+            native_without_vectors["tuning"].get("fallback_reason") ==
+            "fixed_width_vector_required",
+            f"native profile did not record vector fallback: "
+            f"{native_without_vectors['tuning']}")
+
+    native_winograd = compile_case(
+        "native_int8_winograd",
+        native_profile_flags + ["--conv-strategy=winograd"],
+        capability="avx-vnni",
+        policy="vnni",
+    )
+    require(native_winograd["tuning"].get("status") == "selected" and
+            native_winograd["tuning"].get("fallback_reason") ==
+            "winograd_packing_compile_budget",
+            f"Winograd packing fallback masked the native profile: "
+            f"{native_winograd['tuning']}")
+
+    native_override = compile_case(
+        "native_int8_explicit_portable",
+        ["--tuning-profile=native-int8", "--int8-kernel=portable",
+         "--target-feature=+avx2", "--target-feature=+avxvnni"],
+        capability="avx-vnni",
+        policy="portable",
+    )
+    require(native_override["tuning"].get("status") == "explicit_override" and
+            native_override["tuning"].get("fallback_reason") ==
+            "explicit_int8_policy",
+            f"explicit policy did not override native profile: "
+            f"{native_override['tuning']}")
+
+    compile_case("bad_profile", ["--tuning-profile=other"],
+                 "--tuning-profile must be one of")
+
     sidecar = root / "profile-sidecar.json"
     output = root / "profile-identity"
     profile_run = run(base + ["--profile", "--verify-execution",

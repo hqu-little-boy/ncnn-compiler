@@ -296,6 +296,11 @@ void buildNCNNLinalgToMemRefPipeline(
                                                  options.int8KernelPolicy,
                                                  options.int8TargetCapability,
                                                  true));
+  const bool nativeInt8Packing =
+    options.tuningProfile == "native-int8" &&
+    options.int8KernelPolicy == "vnni" &&
+    (options.int8TargetCapability == "avx-vnni" ||
+     options.int8TargetCapability == "avx512-vnni");
   // 并行化单轨化（T4b 配套）：顶层 matmul 沿 M/N 切进 forall 网格，
   // epilogue 分块循环改写为 shared_outs forall——两者都在向量化之前
   // 完成，体内 generic 随后照常被行级向量化。K 维全程不被切分。
@@ -327,6 +332,14 @@ void buildNCNNLinalgToMemRefPipeline(
   }
 
   passManager.addPass(createBufferizeNCNNPass());
+  // P23 INT8 packing follows bufferization so static RHS storage can become a
+  // padded physical global plus a logical [N,K] K-contiguous memref view.
+  if (nativeInt8Packing) {
+    PackStaticMatmulNCNNPassOptions int8PackingOptions;
+    int8PackingOptions.enabled = false;
+    int8PackingOptions.int8Enabled = true;
+    passManager.addPass(createPackStaticMatmulNCNNPass(int8PackingOptions));
+  }
   if (options.vectorTail) {
     // A1b SIMD matmul 内核与 forall 路径标量热点清理。发射 vector/
     // ub.poison op，必须确保下游有向量下降尾（串行遗留路径没有），

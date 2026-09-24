@@ -245,7 +245,8 @@ def MatmulKernelNCNNPass : Pass<"matmul-kernel-ncnn", "mlir::ModuleOp"> {
     Option<"int8Kernel", "int8-kernel", "std::string", /*default=*/"\"portable\"",
            "INT8 row-dot policy: portable, auto, vnni">,
     Option<"int8Target", "int8-target", "std::string", /*default=*/"\"portable\"",
-           "Resolved backend capability: portable, avx-vnni, avx512-vnni">,
+           "Resolved backend capability: portable, avx-vnni, avx-vnni-int8, "
+           "avx512-vnni">,
     Option<"matmulI8Rows", "matmul-i8-rows", "int64_t", /*default=*/"2",
            "M-direction register tile rows of the int8 row-dot kernel "
            "(each (row, column) pair keeps one vector accumulator of K-pair "
@@ -371,12 +372,14 @@ def VerifyNoNestedOpenMPPass
 
 def PackStaticMatmulNCNNPass
     : Pass<"pack-static-matmul-ncnn", "mlir::ModuleOp"> {
-  let summary = "Physically panel-pack static f32 Matmul RHS constants";
+  let summary = "Physically pack static f32 and INT8 Matmul RHS constants";
   let description = [{
     Reorders eligible static f32 rank-2 Matmul RHS constants into a
-    panel-major N-by-K storage layout. The matching bufferized kernel consumes
-    this physical layout; dynamic, non-constant, small, and unsupported shapes
-    remain on the direct fallback path with an explicit contract reason.
+    panel-major N-by-K storage layout. For an explicitly selected native INT8
+    profile, it also repacks static signed-i8 RHS globals into 16-row panels
+    with a 64-byte-padded, K-contiguous row view consumed by the VNNI kernel.
+    Dynamic, non-constant, small, and unsupported shapes remain on the direct
+    fallback path with an explicit contract reason.
   }];
   let options = [
     Option<"packN", "pack-n", "int64_t", "16",
@@ -394,10 +397,13 @@ def PackStaticMatmulNCNNPass
     Option<"maxTotalBytes", "max-total-bytes", "int64_t", "100663296",
            "Maximum aggregate packed B bytes per module (0 disables the budget)">,
     Option<"enabled", "enabled", "bool", "true",
-           "Enable physical static B packing">
+           "Enable physical static f32 B packing">,
+    Option<"int8Enabled", "int8-enabled", "bool", "false",
+           "Enable physical static INT8 RHS packing">
   ];
   let dependentDialects = [
-    "arith::ArithDialect", "linalg::LinalgDialect", "tensor::TensorDialect"
+    "arith::ArithDialect", "linalg::LinalgDialect", "memref::MemRefDialect",
+    "tensor::TensorDialect"
   ];
 }
 

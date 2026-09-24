@@ -1,0 +1,44 @@
+{
+  "p22_portable_baseline": {
+    "stage": "/tmp/ncnn-compiler-stage-p23-portable-baseline-20260924-b",
+    "format_check": "passed",
+    "tidy": "passed",
+    "build": "passed",
+    "numerical_targets": "passed",
+    "ctest_registered": 449,
+    "ctest_failed": 0,
+    "known_skips": [
+      "PerformanceModel.PPLCNetDocOriInt8",
+      "PerformanceModel.PPLCNetTextlineOriInt8"
+    ]
+  },
+  "p23_portable": {
+    "stage": "/tmp/ncnn-compiler-stage-p23-portable-final-20260924-b",
+    "format_check": "passed",
+    "tidy": "passed",
+    "build": "passed",
+    "numerical_targets": "passed",
+    "ctest_registered": 449,
+    "ctest_failed": 0,
+    "known_skips": [
+      "PerformanceModel.PPLCNetDocOriInt8",
+      "PerformanceModel.PPLCNetTextlineOriInt8"
+    ]
+  },
+  "p23_native_int8": {
+    "stage": "/tmp/ncnn-compiler-stage-p23-native-final-20260924-c",
+    "cmake_option": "NCNN_NATIVE_INT8_PROFILE=ON",
+    "format_check": "passed",
+    "tidy": "passed",
+    "build": "passed",
+    "numerical_targets": "passed",
+    "ctest_registered": 454,
+    "ctest_failed": 0,
+    "known_skips": [
+      "PerformanceModel.PPLCNetDocOriInt8",
+      "PerformanceModel.PPLCNetTextlineOriInt8"
+    ],
+    "native_vs_portable_bitwise_models": 5,
+    "random_inputs_per_model": 3
+  }
+}

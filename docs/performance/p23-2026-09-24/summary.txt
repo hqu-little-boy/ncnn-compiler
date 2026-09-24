@@ -1,0 +1,25 @@
+P23 native INT8 qualification — 2026-09-24
+
+Engineering gates: PASS
+- P22 clean baseline: 449/449 CTest; 2 known upstream skips.
+- P23 portable: 449/449 CTest; 2 same skips.
+- P23 native-int8-v1: 454/454 CTest; 2 same skips.
+- format_check, global tidy, full build, and all required numerical targets passed in each fresh stage.
+- Native vs portable bitwise checks: 5 models × 3 random inputs, all passed.
+
+Portable P22→P23 paired regression (5 rounds, 44 official): +0.29% median compiled-time delta; 20/44 faster. Heavy 11: −0.07%. Stable regression gate: FAIL.
+P23 portable vs ncnn: 44 official p50/p90/max/GM = 1.772/2.686/5.526/1.841x; heavy 11 = 1.372/1.655/1.693x.
+
+Native vs P23 portable paired performance (5 rounds, 44 official): −0.83% median compiled-time delta; 29/44 faster. Heavy 11: +0.20%.
+P23 native vs ncnn: 44 official p50/p90/max/GM = 1.786/2.757/4.779/1.804x; heavy 11 = 1.379/1.665/1.706x.
+
+Native target ratios:
+- tiny_rec_int8 2.821x (goal <=2.5x): FAIL
+- mobile_rec_int8 1.487x (no-regression goal): PASS
+- medium_rec_int8 3.026x (goal <=2.5x): FAIL
+- small_rec_int8 2.768x (goal <=2.5x): FAIL
+- medium_det_int8 2.189x (goal <=1.8x): FAIL
+
+Depthwise profile diagnostic: all selected native eligible sites were called (70/70 total) with complete sidecars and zero mismatches. Stable source-op join to the portable baseline is absent; baseline eligible-depthwise exclusive-time coverage is UNKNOWN and the >=90% gate is not proven.
+
+Final status: engineering implementation validated; productized opt-in NO-GO. Keep native-int8 explicit, keep auto portable, do not claim ncnn parity.

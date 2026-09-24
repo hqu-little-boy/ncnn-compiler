@@ -1,0 +1,162 @@
+{
+  "eligible_selected_count": 0,
+  "eligible_selected_calls_observed": 0,
+  "eligible_selected_unjoined_count": 0,
+  "depthwise_sites": [
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#0",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977677787150653929,
+      "calls": 1,
+      "exclusive_ns": 69138
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#1",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977676687639025718,
+      "calls": 1,
+      "exclusive_ns": 113289
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#2",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977675588127397507,
+      "calls": 1,
+      "exclusive_ns": 596778
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#3",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977674488615769296,
+      "calls": 1,
+      "exclusive_ns": 227254
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#4",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977682185197166773,
+      "calls": 1,
+      "exclusive_ns": 410490
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#5",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977681085685538562,
+      "calls": 1,
+      "exclusive_ns": 198922
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#6",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977679986173910351,
+      "calls": 1,
+      "exclusive_ns": 622403
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#7",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977678886662282140,
+      "calls": 1,
+      "exclusive_ns": 365843
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#8",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977686583243679617,
+      "calls": 1,
+      "exclusive_ns": 492380
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#9",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 15977685483732051406,
+      "calls": 1,
+      "exclusive_ns": 764187
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#10",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 9960864965400941106,
+      "calls": 1,
+      "exclusive_ns": 284550
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#11",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 9960866064912569317,
+      "calls": 1,
+      "exclusive_ns": 630868
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#12",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 9960862766377684684,
+      "calls": 1,
+      "exclusive_ns": 582675
+    },
+    {
+      "id": "model/linalg.depthwise_conv_2d_nhwc_hwcm#13",
+      "status": "fallback",
+      "implementation": "fallback",
+      "multiplier": null,
+      "kernel_static": null,
+      "fallback_reason": "not_vectorized",
+      "profile_id": 9960863865889312895,
+      "calls": 1,
+      "exclusive_ns": 950574
+    }
+  ],
+  "baseline_exclusive_time_status": "unknown_until_stable_source_id_join"
+}

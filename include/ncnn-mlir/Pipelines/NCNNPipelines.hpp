@@ -105,8 +105,8 @@ struct NCNNLinalgToMemRefPipelineOptions
   Option<std::string> int8TargetCapability{
     *this,
     "int8-target",
-    llvm::cl::desc(
-      "Resolved backend INT8 capability: portable, avx-vnni, avx512-vnni"),
+    llvm::cl::desc("Resolved backend INT8 capability: portable, avx-vnni, "
+                   "avx-vnni-int8, avx512-vnni"),
     llvm::cl::init("portable")};
   Option<bool> int8Depthwise{
     *this,

@@ -1,0 +1,103 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-stage-p23-native-final-20260924-c
+Test project /tmp/ncnn-compiler-stage-p23-native-final-20260924-c
+      Start 405: PerformanceModel.SqueezeNetV11
+ 1/45 Test #405: PerformanceModel.SqueezeNetV11 .................   Passed    0.51 sec
+      Start 406: PerformanceModel.ResNet18
+ 2/45 Test #406: PerformanceModel.ResNet18 ......................   Passed    1.17 sec
+      Start 407: PerformanceModel.ResNet18Winograd
+ 3/45 Test #407: PerformanceModel.ResNet18Winograd ..............   Passed    2.13 sec
+      Start 408: PerformanceModel.ResNet34
+ 4/45 Test #408: PerformanceModel.ResNet34 ......................   Passed    1.92 sec
+      Start 409: PerformanceModel.ResNet50
+ 5/45 Test #409: PerformanceModel.ResNet50 ......................   Passed    2.54 sec
+      Start 410: PerformanceModel.ResNet101
+ 6/45 Test #410: PerformanceModel.ResNet101 .....................   Passed    3.96 sec
+      Start 411: PerformanceModel.Yolov5nCls
+ 7/45 Test #411: PerformanceModel.Yolov5nCls ....................   Passed    0.31 sec
+      Start 412: PerformanceModel.Yolov5sCls
+ 8/45 Test #412: PerformanceModel.Yolov5sCls ....................   Passed    0.58 sec
+      Start 413: PerformanceModel.Yolov5mCls
+ 9/45 Test #413: PerformanceModel.Yolov5mCls ....................   Passed    1.12 sec
+      Start 414: PerformanceModel.Yolov5lCls
+10/45 Test #414: PerformanceModel.Yolov5lCls ....................   Passed    2.21 sec
+      Start 415: PerformanceModel.Yolov5xCls
+11/45 Test #415: PerformanceModel.Yolov5xCls ....................   Passed    3.74 sec
+      Start 416: PerformanceModel.Yolov5nDet
+12/45 Test #416: PerformanceModel.Yolov5nDet ....................   Passed    2.92 sec
+      Start 417: PerformanceModel.Yolov5sDet
+13/45 Test #417: PerformanceModel.Yolov5sDet ....................   Passed    5.30 sec
+      Start 418: PerformanceModel.Yolov5mDet
+14/45 Test #418: PerformanceModel.Yolov5mDet ....................   Passed   10.56 sec
+      Start 419: PerformanceModel.Yolov5lDet
+15/45 Test #419: PerformanceModel.Yolov5lDet ....................   Passed   21.48 sec
+      Start 420: PerformanceModel.Yolov5xDet
+16/45 Test #420: PerformanceModel.Yolov5xDet ....................   Passed   36.10 sec
+      Start 421: PerformanceModel.EfficientNetB0
+17/45 Test #421: PerformanceModel.EfficientNetB0 ................   Passed    0.94 sec
+      Start 422: PerformanceModel.EfficientNetB1
+18/45 Test #422: PerformanceModel.EfficientNetB1 ................   Passed    1.42 sec
+      Start 423: PerformanceModel.EfficientNetB2
+19/45 Test #423: PerformanceModel.EfficientNetB2 ................   Passed    1.92 sec
+      Start 424: PerformanceModel.EfficientNetB3
+20/45 Test #424: PerformanceModel.EfficientNetB3 ................   Passed    2.96 sec
+      Start 425: PerformanceModel.PPLCNetDocOri
+21/45 Test #425: PerformanceModel.PPLCNetDocOri .................   Passed    0.28 sec
+      Start 426: PerformanceModel.PPLCNetTextlineOri
+22/45 Test #426: PerformanceModel.PPLCNetTextlineOri ............   Passed    0.37 sec
+      Start 427: PerformanceModel.ChineseOCRLiteAngleNet
+23/45 Test #427: PerformanceModel.ChineseOCRLiteAngleNet ........   Passed    0.15 sec
+      Start 428: PerformanceModel.Yolov5nSeg
+24/45 Test #428: PerformanceModel.Yolov5nSeg ....................   Passed    4.13 sec
+      Start 429: PerformanceModel.Yolov5sSeg
+25/45 Test #429: PerformanceModel.Yolov5sSeg ....................   Passed    7.92 sec
+      Start 430: PerformanceModel.Yolov5mSeg
+26/45 Test #430: PerformanceModel.Yolov5mSeg ....................   Passed   15.02 sec
+      Start 431: PerformanceModel.Yolov5lSeg
+27/45 Test #431: PerformanceModel.Yolov5lSeg ....................   Passed   29.57 sec
+      Start 432: PerformanceModel.Yolov5xSeg
+28/45 Test #432: PerformanceModel.Yolov5xSeg ....................   Passed   44.75 sec
+      Start 433: PerformanceModel.PPLCNetDocOriInt8
+29/45 Test #433: PerformanceModel.PPLCNetDocOriInt8 .............***Skipped   0.00 sec
+      Start 434: PerformanceModel.PPLCNetTextlineOriInt8
+30/45 Test #434: PerformanceModel.PPLCNetTextlineOriInt8 ........***Skipped   0.00 sec
+      Start 435: PerformanceModel.PPOcrv6TinyRec
+31/45 Test #435: PerformanceModel.PPOcrv6TinyRec ................   Passed    0.35 sec
+      Start 436: PerformanceModel.PPOcrv6TinyRecInt8
+32/45 Test #436: PerformanceModel.PPOcrv6TinyRecInt8 ............   Passed    0.35 sec
+      Start 437: PerformanceModel.PPOcrv5MobileRec
+33/45 Test #437: PerformanceModel.PPOcrv5MobileRec ..............   Passed    1.42 sec
+      Start 438: PerformanceModel.PPOcrv5MobileRecInt8
+34/45 Test #438: PerformanceModel.PPOcrv5MobileRecInt8 ..........   Passed    1.43 sec
+      Start 440: PerformanceModel.PPOcrv6MediumRec
+35/45 Test #440: PerformanceModel.PPOcrv6MediumRec ..............   Passed    3.01 sec
+      Start 441: PerformanceModel.PPOcrv6MediumRecInt8
+36/45 Test #441: PerformanceModel.PPOcrv6MediumRecInt8 ..........   Passed    2.26 sec
+      Start 442: PerformanceModel.PPOcrv6SmallRec
+37/45 Test #442: PerformanceModel.PPOcrv6SmallRec ...............   Passed    1.16 sec
+      Start 443: PerformanceModel.PPOcrv6SmallRecInt8
+38/45 Test #443: PerformanceModel.PPOcrv6SmallRecInt8 ...........   Passed    1.08 sec
+      Start 444: PerformanceModel.PPOcrv6TinyDet
+39/45 Test #444: PerformanceModel.PPOcrv6TinyDet ................   Passed    4.08 sec
+      Start 445: PerformanceModel.PPOcrv6SmallDet
+40/45 Test #445: PerformanceModel.PPOcrv6SmallDet ...............   Passed    7.09 sec
+      Start 446: PerformanceModel.PPOcrv6MediumDet
+41/45 Test #446: PerformanceModel.PPOcrv6MediumDet ..............   Passed   27.33 sec
+      Start 447: PerformanceModel.PPOcrv6MediumDetInt8
+42/45 Test #447: PerformanceModel.PPOcrv6MediumDetInt8 ..........   Passed    0.36 sec
+      Start 448: PerformanceModel.PPOcrv5MobileDetStatic
+43/45 Test #448: PerformanceModel.PPOcrv5MobileDetStatic ........   Passed    6.46 sec
+      Start 450: PerformanceModel.PPStructrureV2SlanetPlusCnn
+44/45 Test #450: PerformanceModel.PPStructrureV2SlanetPlusCnn ...   Passed    2.87 sec
+      Start 451: PerformanceModel.PPFormulaNetPlusSEncoder
+45/45 Test #451: PerformanceModel.PPFormulaNetPlusSEncoder ......   Passed    5.03 sec
+
+100% tests passed, 0 tests failed out of 45
+
+Label Time Summary:
+performance    = 270.25 sec*proc (45 tests)
+
+Total Test time (real) = 270.27 sec
+
+The following tests did not run:
+	433 - PerformanceModel.PPLCNetDocOriInt8 (Skipped)
+	434 - PerformanceModel.PPLCNetTextlineOriInt8 (Skipped)

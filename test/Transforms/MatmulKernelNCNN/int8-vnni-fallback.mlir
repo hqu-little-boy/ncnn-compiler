@@ -2,6 +2,7 @@
 // RUN: ncnn-mlir-opt --matmul-kernel-ncnn='int8-kernel=auto int8-target=portable' %s | FileCheck %s --check-prefix=PORTABLE
 // RUN: ncnn-mlir-opt --matmul-kernel-ncnn='int8-kernel=vnni int8-target=avx-vnni' %s | FileCheck %s --check-prefix=STRIDED
 // RUN: not ncnn-mlir-opt --matmul-kernel-ncnn='int8-kernel=vnni int8-target=portable' %s 2>&1 | FileCheck %s --check-prefix=INVALID
+// RUN: not ncnn-mlir-opt --matmul-kernel-ncnn='int8-kernel=vnni int8-target=avx-vnni-int8' %s 2>&1 | FileCheck %s --check-prefix=INVALID
 // RUN: not ncnn-mlir-opt --matmul-kernel-ncnn='int8-kernel=invalid' %s 2>&1 | FileCheck %s --check-prefix=INVALID
 // RUN: not ncnn-mlir-opt --matmul-kernel-ncnn='int8-target=invalid' %s 2>&1 | FileCheck %s --check-prefix=INVALID
 

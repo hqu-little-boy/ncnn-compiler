@@ -408,8 +408,13 @@ ncnn-compile model.param -O0 -g --emit=all -o debug/model
 
 探针与最终编译共享 `--target-triple`、`--sysroot`、`--march`、`--mcpu` 和有序
 `--target-feature` 参数。AVX-VNNI 要求 x86-64、AVX2、AVX-VNNI；AVX512-VNNI
-要求 x86-64、AVX2、AVX512F/BW/VL/VNNI。`x86-64-v4` 本身不包含 VNNI。
-重复 feature 由 Clang 按实际顺序和依赖关系解析，最后禁用 VNNI 会使强制策略失败：
+要求 x86-64、AVX2、AVX512F/BW/VL/VNNI。AVX-VNNI-INT8 是独立 capability，当前
+`vpdpbusd` u8×s8 + signed-correction backend 尚未为该 capability-only target 实现：
+`auto` 和 `native-int8` 保持 portable 并记录 `unimplemented_vnni_int8_backend`，显式
+`--int8-kernel=vnni` 拒绝该目标。若同时提供 AVX-VNNI，当前只按已验证的 AVX-VNNI
+backend 解析，不会把 AVX-VNNI-INT8 的 signed×signed semantics 混入。
+`x86-64-v4` 本身不包含 VNNI。重复 feature 由 Clang 按实际顺序和依赖关系解析，最后
+禁用 VNNI 会使强制策略失败：
 
 ```bash
 # AVX-VNNI（部署 CPU 必须支持；不会生成运行时 dispatcher）
@@ -451,6 +456,18 @@ P17 增加了可审计的有限编译期调优入口。默认
 条件满足时自动选择 P16 已配对验证的 INT8 row-dot、静态 depthwise 和 cast-chain
 组合，否则记录 fallback 并回到 stable portable 路径。该 profile 不引入运行时
 dispatcher，亦不改变公共 C ABI。
+
+`--tuning-profile=native-int8` 是 P23 的显式 target-bound AOT profile（策略修订
+`native-int8-v1`）：只有实际目标探针解析到 AVX-VNNI 或 AVX512-VNNI 且固定宽
+MLIR 向量化可用时，才选择 VNNI row-dot 并默认启用受限的静态 INT8 depthwise 与
+cast-chain；否则保持 portable 并在 plan 记录 fallback。显式 `--int8-*` 选项仍优先。
+它不是运行时 dispatcher；部署 CPU 必须支持 plan 所记录的 ISA。该 profile 仅表示
+编译策略选择，必须另行通过 P23 的目标指令、数值、runtime coverage 和全模型性能门禁
+后，才能称为产品化 opt-in。静态 i8 RHS 使用独立 schema
+`p23-int8-panel-row-kpad64-v1`：每 16 个输出行分 panel、K 仍按行连续并将物理行距
+补齐到 64 字节；逻辑 K 不变，K 尾继续按既有标量语义处理。它复用 P20 pack contract
+和字节审计，但**不是** P20 f32 的 `[panel][K][N-lane]` 字节交错顺序；动态、非静态、
+非连续或预算拒绝的 B 继续用原有 `[N,K]` 转置与 VNNI/portable fallback。
 
 ```bash
 ncnn-compile model.param --tuning-profile=p16-int8 \

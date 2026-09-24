@@ -1,0 +1,436 @@
+{
+  "schema_version": 1,
+  "phase": "P23 native INT8 backend productization",
+  "overall_status": "engineering_validated_productization_no_go",
+  "test_gates": {
+    "p22_portable_baseline": {
+      "stage": "/tmp/ncnn-compiler-stage-p23-portable-baseline-20260924-b",
+      "format_check": "passed",
+      "tidy": "passed",
+      "build": "passed",
+      "numerical_targets": "passed",
+      "ctest_registered": 449,
+      "ctest_failed": 0,
+      "known_skips": [
+        "PerformanceModel.PPLCNetDocOriInt8",
+        "PerformanceModel.PPLCNetTextlineOriInt8"
+      ]
+    },
+    "p23_portable": {
+      "stage": "/tmp/ncnn-compiler-stage-p23-portable-final-20260924-b",
+      "format_check": "passed",
+      "tidy": "passed",
+      "build": "passed",
+      "numerical_targets": "passed",
+      "ctest_registered": 449,
+      "ctest_failed": 0,
+      "known_skips": [
+        "PerformanceModel.PPLCNetDocOriInt8",
+        "PerformanceModel.PPLCNetTextlineOriInt8"
+      ]
+    },
+    "p23_native_int8": {
+      "stage": "/tmp/ncnn-compiler-stage-p23-native-final-20260924-c",
+      "cmake_option": "NCNN_NATIVE_INT8_PROFILE=ON",
+      "format_check": "passed",
+      "tidy": "passed",
+      "build": "passed",
+      "numerical_targets": "passed",
+      "ctest_registered": 454,
+      "ctest_failed": 0,
+      "known_skips": [
+        "PerformanceModel.PPLCNetDocOriInt8",
+        "PerformanceModel.PPLCNetTextlineOriInt8"
+      ],
+      "native_vs_portable_bitwise_models": 5,
+      "random_inputs_per_model": 3
+    }
+  },
+  "portable_regression_vs_p22": {
+    "paired_summary": {
+      "count": 44,
+      "baseline_compiled_median_ms_median": 54.447,
+      "candidate_compiled_median_ms_median": 53.978,
+      "compiled_delta_median_percent_median": 0.2855124460657499,
+      "baseline_ratio_p50": 1.8199999999999998,
+      "candidate_ratio_p50": 1.851,
+      "candidate_faster_model_count": 20
+    },
+    "heavy_summary": {
+      "count": 11,
+      "baseline_compiled_median_ms_median": 419.039,
+      "candidate_compiled_median_ms_median": 418.364,
+      "compiled_delta_median_percent_median": -0.06502029164864309,
+      "baseline_ratio_p50": 1.365,
+      "candidate_ratio_p50": 1.372,
+      "candidate_faster_model_count": 6
+    },
+    "ncnn_candidate_metrics": {
+      "measured_rows": 45,
+      "official_count": 44,
+      "official_ratio_p50": 1.7719999999999998,
+      "official_ratio_p90": 2.6862000000000004,
+      "official_ratio_max": 5.526,
+      "official_ratio_geometric_mean": 1.840679728290231,
+      "heavy_count": 11,
+      "heavy_ratio_p50": 1.372,
+      "heavy_ratio_p90": 1.655,
+      "heavy_ratio_max": 1.693,
+      "top_excess_models": [
+        {
+          "model": "yolov5x_seg",
+          "compiled_mean_ms": 879.913,
+          "ncnn_mean_ms": 546.77,
+          "ratio": 1.609,
+          "excess_ms": 333.14300000000003
+        },
+        {
+          "model": "yolov5x",
+          "compiled_mean_ms": 714.15,
+          "ncnn_mean_ms": 431.412,
+          "ratio": 1.655,
+          "excess_ms": 282.738
+        },
+        {
+          "model": "yolov5l_seg",
+          "compiled_mean_ms": 592.39,
+          "ncnn_mean_ms": 349.938,
+          "ratio": 1.693,
+          "excess_ms": 242.452
+        },
+        {
+          "model": "pp_ocrv6_medium_det",
+          "compiled_mean_ms": 512.614,
+          "ncnn_mean_ms": 354.818,
+          "ratio": 1.445,
+          "excess_ms": 157.79600000000005
+        },
+        {
+          "model": "yolov5l",
+          "compiled_mean_ms": 413.448,
+          "ncnn_mean_ms": 267.255,
+          "ratio": 1.547,
+          "excess_ms": 146.19299999999998
+        },
+        {
+          "model": "pp_ocrv6_medium_rec_int8",
+          "compiled_mean_ms": 95.47,
+          "ncnn_mean_ms": 17.277,
+          "ratio": 5.526,
+          "excess_ms": 78.193
+        },
+        {
+          "model": "yolov5m_seg",
+          "compiled_mean_ms": 276.794,
+          "ncnn_mean_ms": 201.764,
+          "ratio": 1.372,
+          "excess_ms": 75.02999999999997
+        },
+        {
+          "model": "pp_ocrv6_small_det",
+          "compiled_mean_ms": 143.242,
+          "ncnn_mean_ms": 81.364,
+          "ratio": 1.761,
+          "excess_ms": 61.877999999999986
+        },
+        {
+          "model": "pp_formulanet_plus_s_encoder",
+          "compiled_mean_ms": 108.347,
+          "ncnn_mean_ms": 48.355,
+          "ratio": 2.241,
+          "excess_ms": 59.992
+        },
+        {
+          "model": "pp_ocrv6_tiny_det",
+          "compiled_mean_ms": 85.229,
+          "ncnn_mean_ms": 44.936,
+          "ratio": 1.897,
+          "excess_ms": 40.293
+        }
+      ],
+      "int8_target_models": {
+        "pp_ocrv5_mobile_rec_int8": {
+          "compiled_mean_ms": 31.222,
+          "ncnn_mean_ms": 19.948,
+          "ratio": 1.565
+        },
+        "pp_ocrv6_medium_det_int8": {
+          "compiled_mean_ms": 7.782,
+          "ncnn_mean_ms": 3.223,
+          "ratio": 2.415
+        },
+        "pp_ocrv6_medium_rec_int8": {
+          "compiled_mean_ms": 95.47,
+          "ncnn_mean_ms": 17.277,
+          "ratio": 5.526
+        },
+        "pp_ocrv6_small_rec_int8": {
+          "compiled_mean_ms": 34.046,
+          "ncnn_mean_ms": 9.4,
+          "ratio": 3.622
+        },
+        "pp_ocrv6_tiny_rec_int8": {
+          "compiled_mean_ms": 9.026,
+          "ncnn_mean_ms": 2.397,
+          "ratio": 3.765
+        }
+      }
+    },
+    "stable_regression_gate": "failed",
+    "blocking_models": [
+      {
+        "model": "pp_lcnet_x1_0_doc_ori",
+        "delta_percent": 15.64,
+        "delta_ms": 0.843
+      },
+      {
+        "model": "pp_lcnet_x1_0_textline_ori",
+        "delta_percent": 10.22,
+        "delta_ms": 0.584
+      },
+      {
+        "model": "pp_ocrv6_medium_rec_int8",
+        "delta_percent": 14.33,
+        "delta_ms": 11.905
+      }
+    ]
+  },
+  "native_int8_vs_p23_portable": {
+    "paired_summary": {
+      "count": 44,
+      "baseline_compiled_median_ms_median": 54.5595,
+      "candidate_compiled_median_ms_median": 52.584500000000006,
+      "compiled_delta_median_percent_median": -0.8327547722760731,
+      "baseline_ratio_p50": 1.9,
+      "candidate_ratio_p50": 1.7265000000000001,
+      "candidate_faster_model_count": 29
+    },
+    "heavy_summary": {
+      "count": 11,
+      "baseline_compiled_median_ms_median": 419.864,
+      "candidate_compiled_median_ms_median": 420.711,
+      "compiled_delta_median_percent_median": 0.20173198940609538,
+      "baseline_ratio_p50": 1.36,
+      "candidate_ratio_p50": 1.367,
+      "candidate_faster_model_count": 5
+    },
+    "ncnn_candidate_metrics": {
+      "measured_rows": 45,
+      "official_count": 44,
+      "official_ratio_p50": 1.786,
+      "official_ratio_p90": 2.7569,
+      "official_ratio_max": 4.779,
+      "official_ratio_geometric_mean": 1.803714335049114,
+      "heavy_count": 11,
+      "heavy_ratio_p50": 1.379,
+      "heavy_ratio_p90": 1.665,
+      "heavy_ratio_max": 1.706,
+      "top_excess_models": [
+        {
+          "model": "yolov5x_seg",
+          "compiled_mean_ms": 884.115,
+          "ncnn_mean_ms": 547.97,
+          "ratio": 1.613,
+          "excess_ms": 336.145
+        },
+        {
+          "model": "yolov5x",
+          "compiled_mean_ms": 719.998,
+          "ncnn_mean_ms": 432.334,
+          "ratio": 1.665,
+          "excess_ms": 287.66400000000004
+        },
+        {
+          "model": "yolov5l_seg",
+          "compiled_mean_ms": 593.281,
+          "ncnn_mean_ms": 347.747,
+          "ratio": 1.706,
+          "excess_ms": 245.53399999999993
+        },
+        {
+          "model": "pp_ocrv6_medium_det",
+          "compiled_mean_ms": 514.165,
+          "ncnn_mean_ms": 356.685,
+          "ratio": 1.442,
+          "excess_ms": 157.47999999999996
+        },
+        {
+          "model": "yolov5l",
+          "compiled_mean_ms": 409.114,
+          "ncnn_mean_ms": 273.622,
+          "ratio": 1.495,
+          "excess_ms": 135.49199999999996
+        },
+        {
+          "model": "yolov5m_seg",
+          "compiled_mean_ms": 277.542,
+          "ncnn_mean_ms": 201.211,
+          "ratio": 1.379,
+          "excess_ms": 76.33099999999996
+        },
+        {
+          "model": "pp_ocrv6_small_det",
+          "compiled_mean_ms": 142.109,
+          "ncnn_mean_ms": 82.911,
+          "ratio": 1.714,
+          "excess_ms": 59.19800000000001
+        },
+        {
+          "model": "pp_formulanet_plus_s_encoder",
+          "compiled_mean_ms": 106.342,
+          "ncnn_mean_ms": 50.336,
+          "ratio": 2.113,
+          "excess_ms": 56.006
+        },
+        {
+          "model": "yolov5m",
+          "compiled_mean_ms": 186.13,
+          "ncnn_mean_ms": 148.626,
+          "ratio": 1.252,
+          "excess_ms": 37.50399999999999
+        },
+        {
+          "model": "pp_ocrv6_medium_rec_int8",
+          "compiled_mean_ms": 54.67,
+          "ncnn_mean_ms": 18.07,
+          "ratio": 3.026,
+          "excess_ms": 36.6
+        }
+      ],
+      "int8_target_models": {
+        "pp_ocrv5_mobile_rec_int8": {
+          "compiled_mean_ms": 27.084,
+          "ncnn_mean_ms": 18.208,
+          "ratio": 1.487
+        },
+        "pp_ocrv6_medium_det_int8": {
+          "compiled_mean_ms": 7.367,
+          "ncnn_mean_ms": 3.365,
+          "ratio": 2.189
+        },
+        "pp_ocrv6_medium_rec_int8": {
+          "compiled_mean_ms": 54.67,
+          "ncnn_mean_ms": 18.07,
+          "ratio": 3.026
+        },
+        "pp_ocrv6_small_rec_int8": {
+          "compiled_mean_ms": 24.998,
+          "ncnn_mean_ms": 9.032,
+          "ratio": 2.768
+        },
+        "pp_ocrv6_tiny_rec_int8": {
+          "compiled_mean_ms": 7.846,
+          "ncnn_mean_ms": 2.782,
+          "ratio": 2.821
+        }
+      }
+    },
+    "target_model_gates": {
+      "pp_ocrv6_tiny_rec_int8": {
+        "ratio": 2.821,
+        "threshold": "<=2.5x",
+        "passed": false
+      },
+      "pp_ocrv5_mobile_rec_int8": {
+        "compiled_delta_percent": -15.91,
+        "threshold": "no regression",
+        "passed": true
+      },
+      "pp_ocrv6_medium_rec_int8": {
+        "ratio": 3.026,
+        "threshold": "<=2.5x",
+        "passed": false
+      },
+      "pp_ocrv6_small_rec_int8": {
+        "ratio": 2.768,
+        "threshold": "<=2.5x",
+        "passed": false
+      },
+      "pp_ocrv6_medium_det_int8": {
+        "ratio": 2.189,
+        "threshold": "<=1.8x",
+        "passed": false
+      }
+    },
+    "native_productization_performance_gate": "failed"
+  },
+  "depthwise_runtime_diagnostic": {
+    "profile_schema": 2,
+    "profile_mode": "end_to_end",
+    "input": "zero-filled direct-ABI diagnostic invocation",
+    "profile_complete": true,
+    "event_mismatch_count": 0,
+    "models": {
+      "pp_ocrv6_tiny_rec_int8": {
+        "portable_profile_complete": true,
+        "portable_event_mismatch_count": 0,
+        "portable_depthwise_calls": 10,
+        "portable_depthwise_exclusive_ns_observed": 800110,
+        "native_profile_complete": true,
+        "native_event_mismatch_count": 0,
+        "native_selected_eligible_depthwise_count": 10,
+        "native_selected_eligible_depthwise_calls": 10,
+        "stable_source_id_join": "unknown",
+        "baseline_eligible_exclusive_time_coverage": "unknown"
+      },
+      "pp_ocrv5_mobile_rec_int8": {
+        "portable_profile_complete": true,
+        "portable_event_mismatch_count": 0,
+        "portable_depthwise_calls": 14,
+        "portable_depthwise_exclusive_ns_observed": 6309351,
+        "native_profile_complete": true,
+        "native_event_mismatch_count": 0,
+        "native_selected_eligible_depthwise_count": 14,
+        "native_selected_eligible_depthwise_calls": 14,
+        "stable_source_id_join": "unknown",
+        "baseline_eligible_exclusive_time_coverage": "unknown"
+      },
+      "pp_ocrv6_medium_rec_int8": {
+        "portable_profile_complete": true,
+        "portable_event_mismatch_count": 0,
+        "portable_depthwise_calls": 15,
+        "portable_depthwise_exclusive_ns_observed": 4579048,
+        "native_profile_complete": true,
+        "native_event_mismatch_count": 0,
+        "native_selected_eligible_depthwise_count": 15,
+        "native_selected_eligible_depthwise_calls": 15,
+        "stable_source_id_join": "unknown",
+        "baseline_eligible_exclusive_time_coverage": "unknown"
+      },
+      "pp_ocrv6_small_rec_int8": {
+        "portable_profile_complete": true,
+        "portable_event_mismatch_count": 0,
+        "portable_depthwise_calls": 14,
+        "portable_depthwise_exclusive_ns_observed": 1193048,
+        "native_profile_complete": true,
+        "native_event_mismatch_count": 0,
+        "native_selected_eligible_depthwise_count": 14,
+        "native_selected_eligible_depthwise_calls": 14,
+        "stable_source_id_join": "unknown",
+        "baseline_eligible_exclusive_time_coverage": "unknown"
+      },
+      "pp_ocrv6_medium_det_int8": {
+        "portable_profile_complete": true,
+        "portable_event_mismatch_count": 0,
+        "portable_depthwise_calls": 89,
+        "portable_depthwise_exclusive_ns_observed": 2059837,
+        "native_profile_complete": true,
+        "native_event_mismatch_count": 0,
+        "native_selected_eligible_depthwise_count": 17,
+        "native_selected_eligible_depthwise_calls": 17,
+        "stable_source_id_join": "unknown",
+        "baseline_eligible_exclusive_time_coverage": "unknown"
+      }
+    },
+    "baseline_eligible_exclusive_time_coverage": "unknown; portable and native plan operation IDs differ and depthwise source_layer is null",
+    "required_threshold": "at least 90% baseline eligible-depthwise exclusive-time coverage; not proven"
+  },
+  "qualification": {
+    "qualified_target": "avx-vnni on Intel Core i5-12600KF",
+    "avx512_vnni_qualified": false,
+    "avx_vnni_int8_backend": "unimplemented; explicit fallback retained",
+    "productized_opt_in": "not approved",
+    "stable_int8_policy": "auto remains portable; transposed-B N tiling was corrected, and its full-table regression gate failed",
+    "runtime_dispatcher": "not implemented"
+  }
+}

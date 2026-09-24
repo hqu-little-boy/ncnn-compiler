@@ -80,8 +80,9 @@ class MatmulKernelNCNNPass final
     if ((int8Kernel != "portable" && int8Kernel != "auto" &&
          int8Kernel != "vnni") ||
         (int8Target != "portable" && int8Target != "avx-vnni" &&
-         int8Target != "avx512-vnni") ||
-        (int8Kernel == "vnni" && int8Target == "portable")) {
+         int8Target != "avx-vnni-int8" && int8Target != "avx512-vnni") ||
+        (int8Kernel == "vnni" &&
+         (int8Target == "portable" || int8Target == "avx-vnni-int8"))) {
       module.emitError("invalid INT8 policy or unavailable VNNI target");
       signalPassFailure();
       return;
@@ -1363,6 +1364,28 @@ class MatmulKernelNCNNPass final
       .flat = flat, .columnOffset = columnOffset, .globalAccess = globalAccess};
   }
 
+  static memref::GetGlobalOp findPackedInt8Global(Value value) {
+    while (Operation* defining = value.getDefiningOp()) {
+      if (auto global = dyn_cast<memref::GetGlobalOp>(defining)) {
+        return global;
+      }
+      if (auto subview = dyn_cast<memref::SubViewOp>(defining)) {
+        value = subview.getSource();
+        continue;
+      }
+      if (auto cast = dyn_cast<memref::CastOp>(defining)) {
+        value = cast.getSource();
+        continue;
+      }
+      if (auto cast = dyn_cast<memref::ReinterpretCastOp>(defining)) {
+        value = cast.getSource();
+        continue;
+      }
+      break;
+    }
+    return {};
+  }
+
   void kernelize(IRRewriter& rewriter, linalg::MatmulOp matmul) const {
     Value lhs = matmul.getInputs()[0];
     Value rhs = matmul.getInputs()[1];
@@ -2094,9 +2117,48 @@ class MatmulKernelNCNNPass final
     const int64_t rows = lhsType.getShape()[0];
     const int64_t depth = lhsType.getShape()[1];
     const int64_t columns = accType.getShape()[1];
-    const bool useVnni = int8Kernel == "vnni" && int8Target != "portable" &&
-                         depth >= 32 && hasContiguousK(lhs) &&
-                         hasContiguousK(rhs);
+    const auto packSchema =
+      matmul->getAttrOfType<StringAttr>(contract::kPackSchema);
+    const bool packedInt8B =
+      packSchema && packSchema.getValue() == contract::kInt8PanelPackSchema;
+    const bool useVnni =
+      int8Kernel == "vnni" &&
+      (int8Target == "avx-vnni" || int8Target == "avx512-vnni") &&
+      depth >= 32 && hasContiguousK(lhs) && hasContiguousK(rhs);
+    memref::GetGlobalOp packedInt8Global;
+    if (packedInt8B) {
+      packedInt8Global = findPackedInt8Global(rhs);
+      SmallVector<int64_t> rhsStrides;
+      int64_t rhsOffset = 0;
+      const auto rhsType = cast<MemRefType>(rhs.getType());
+      if (!packedInt8Global ||
+          failed(rhsType.getStridesAndOffset(rhsStrides, rhsOffset)) ||
+          rhsStrides.size() != 2 || rhsStrides[1] != 1 ||
+          rhsStrides[0] < depth || rhsStrides[0] % 64 != 0) {
+        matmul.emitError(
+          "cannot prove the INT8 K-padded row-panel global view");
+        packingFailure = true;
+        return;
+      }
+      contract::setBool(
+        packedInt8Global.getOperation(), contract::kPackedWeight, true);
+      for (StringRef attribute : {contract::kPackBytes,
+                                  contract::kPackRawBytes,
+                                  contract::kPackFactor,
+                                  contract::kPackTileK}) {
+        if (Attribute value = matmul->getAttr(attribute)) {
+          packedInt8Global->setAttr(attribute, value);
+        }
+      }
+      for (StringRef attribute : {contract::kPackSchema,
+                                  contract::kPackRuntime,
+                                  contract::kAlignment,
+                                  contract::kWeightLayout}) {
+        if (Attribute value = matmul->getAttr(attribute)) {
+          packedInt8Global->setAttr(attribute, value);
+        }
+      }
+    }
 
     // int8 requant epilogue 融合（P4 遗留 / parity-plan §3-P4 附注）：
     // matmul 的 i32 累加缓冲唯一用户是 requant generic（恒等主值 +
@@ -2134,7 +2196,7 @@ class MatmulKernelNCNNPass final
         forall.getOperation(),
         useVnni ? "int8_vnni_row_dot" : "int8_row_dot",
         "identity",
-        "packed_nk",
+        packedInt8B ? "panel_nk_kpad64" : "packed_nk",
         "identity",
         tileRows,
         accColumns,
@@ -2143,8 +2205,30 @@ class MatmulKernelNCNNPass final
         tailColumns > 0 || rows % tileRows != 0 || (useVnni && depth % 32 != 0)
           ? "scalar_tail"
           : "none");
-      contract::annotatePacking(
-        forall.getOperation(), "prepacked_transpose_b", 1, 0, 0);
+      if (packedInt8B) {
+        const auto packFactor =
+          matmul->getAttrOfType<IntegerAttr>(contract::kPackFactor);
+        const auto packBytes =
+          matmul->getAttrOfType<IntegerAttr>(contract::kPackBytes);
+        contract::annotatePacking(forall.getOperation(),
+                                  "prepacked_B",
+                                  packFactor ? packFactor.getInt() : 16,
+                                  packBytes ? packBytes.getInt() : 0,
+                                  0);
+        for (StringRef attribute : {contract::kPackSchema,
+                                    contract::kPackRawBytes,
+                                    contract::kPackTileK,
+                                    contract::kPackRuntime,
+                                    contract::kAlignment,
+                                    contract::kWeightLayout}) {
+          if (Attribute value = matmul->getAttr(attribute)) {
+            forall->setAttr(attribute, value);
+          }
+        }
+      } else {
+        contract::annotatePacking(
+          forall.getOperation(), "prepacked_transpose_b", 1, 0, 0);
+      }
       contract::setInteger(
         forall.getOperation(), contract::kSimdChunk, accColumns);
       contract::setString(
@@ -2152,7 +2236,33 @@ class MatmulKernelNCNNPass final
         contract::kFma,
         useVnni ? "vpdpbusd_signed_correction" : "llvm_auto_vectorized_mac");
       if (useVnni) {
-        contract::setString(forall.getOperation(), "ncnn.int8_isa", int8Target);
+        Operation* kernel = forall.getOperation();
+        contract::setString(kernel, contract::kInt8Isa, int8Target);
+        contract::setString(kernel, contract::kInt8RequiredIsa, int8Target);
+        contract::setString(kernel,
+                            contract::kInt8Backend,
+                            packedInt8B
+                              ? "vpdpbusd_256_kpad64_row_nk_signed_mac"
+                              : "vpdpbusd_256_u8s8_signed_mac");
+        contract::setString(
+          kernel, contract::kInt8Intrinsic, "llvm.x86.avx512.vpdpbusd.256");
+        contract::setString(kernel,
+                            contract::kInt8SignednessCorrection,
+                            "xor_a_signbit_then_subtract_128_sum_b");
+        contract::setInteger(
+          kernel, contract::kInt8KAlignment, packedInt8B ? 64 : 32);
+        contract::setInteger(kernel, contract::kInt8ReductionTail, depth % 32);
+      } else if (int8Kernel == "vnni") {
+        const StringRef reason = depth < 32 ? "reduction_k_lt_32"
+                                 : !hasContiguousK(lhs) || !hasContiguousK(rhs)
+                                   ? "non_contiguous_k"
+                                   : "native_kernel_unavailable";
+        contract::setString(forall.getOperation(), contract::kFallback, reason);
+      }
+      if (auto reason = matmul->getAttrOfType<StringAttr>(contract::kFallback);
+          reason && !forall->hasAttr(contract::kFallback)) {
+        contract::setString(
+          forall.getOperation(), contract::kFallback, reason.getValue());
       }
     }
 
