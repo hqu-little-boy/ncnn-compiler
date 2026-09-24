@@ -11,4 +11,5 @@ target_link_libraries(RewriteLinalgCopies PUBLIC
     MLIRIR
     MLIRPass
     MLIRLinalgDialect
-    MLIRMemRefDialect)
+    MLIRMemRefDialect
+    MLIRVectorDialect)

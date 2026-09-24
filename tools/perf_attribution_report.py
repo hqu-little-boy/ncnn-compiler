@@ -229,7 +229,8 @@ def category_name(category: Any) -> str:
   if not isinstance(category, str) or not category:
     return "unknown"
   if category in {"allocation", "deallocation", "copy", "parallel",
-                  "transpose", "pack", "unpack"}:
+                  "transpose", "pack", "unpack", "materialized_write",
+                  "materialized_read"}:
     return category
   return "kernel" if category == "operation" else category
 
@@ -237,6 +238,23 @@ def category_name(category: Any) -> str:
 def build_report(plan: dict[str, Any], profile: dict[str, Any],
                  perf: dict[str, Any], mode: str) -> dict[str, Any]:
   operations = operation_index(plan)
+  fusion_records = plan.get("fusions", [])
+  if not isinstance(fusion_records, list):
+    raise AttributionError("plan.fusions must be an array")
+  fusion_profile_ids: set[int] = set()
+  for fusion in fusion_records:
+    if not isinstance(fusion, dict):
+      raise AttributionError("plan.fusions contains a non-object")
+    for field in ("profile_id", "tail_profile_id"):
+      identifier = fusion.get(field)
+      if identifier is None:
+        continue
+      if (isinstance(identifier, bool) or not isinstance(identifier, int) or
+          identifier < 0 or identifier > (1 << 64) - 1):
+        raise AttributionError(f"fusion {field} must be an unsigned 64-bit integer")
+      if identifier in fusion_profile_ids:
+        raise AttributionError(f"duplicate fusion profile_id={identifier}")
+      fusion_profile_ids.add(identifier)
   static_allocations = allocation_index(plan)
   allocation_objects = allocation_metadata(plan)
   events = profile.get("events", [])
@@ -249,6 +267,10 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       ("allocation_bytes", "allocation_bytes_known"),
       ("deallocation_bytes", "deallocation_bytes_known"),
       ("copy_bytes", "copy_bytes_known"),
+      ("runtime_materialized_write_bytes", "materialized_write_bytes_known"),
+      ("runtime_materialized_read_bytes", "materialized_read_bytes_known"),
+      ("expected_materialized_read_bytes",
+       "expected_materialized_read_bytes_known"),
       ("runtime_transpose_write_bytes", "runtime_transpose_write_bytes_known"),
       ("pack_bytes", "pack_bytes_known"),
       ("unpack_bytes", "unpack_bytes_known"),
@@ -268,6 +290,25 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
     elif value is not None:
       raise AttributionError(
         f"profile summary {known_field}=false requires null {bytes_field}")
+  if "materialized_read_complete" in profile_summary:
+    materialized_complete = profile_summary["materialized_read_complete"]
+    if materialized_complete is not None and not isinstance(
+        materialized_complete, bool):
+      raise AttributionError(
+        "profile summary materialized_read_complete must be boolean or null")
+    if materialized_complete is True and (
+        profile_summary.get("materialized_read_bytes_known") is not True or
+        profile_summary.get("expected_materialized_read_bytes_known") is not True):
+      raise AttributionError(
+        "complete materialized reads require known observed and expected bytes")
+    if materialized_complete is not None and \
+        profile_summary.get("materialized_read_bytes_known") is True and \
+        profile_summary.get("expected_materialized_read_bytes_known") is True:
+      expected = profile_summary["expected_materialized_read_bytes"]
+      observed = profile_summary["runtime_materialized_read_bytes"]
+      if materialized_complete != (expected == observed):
+        raise AttributionError(
+          "materialized read completeness disagrees with byte totals")
   if ("peak_live_proven" in profile_summary and
       not isinstance(profile_summary["peak_live_proven"], bool)):
     raise AttributionError("profile summary peak_live_proven must be boolean")
@@ -306,7 +347,8 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
     raw_category = event.get("category")
     if raw_category not in {"operation", "allocation", "deallocation",
                             "copy", "parallel", "transpose", "pack",
-                            "unpack"}:
+                            "unpack", "materialized_write",
+                            "materialized_read"}:
       raise AttributionError("profile event category is unsupported")
     bytes_value = event.get("bytes")
     if bytes_value is not None:
@@ -372,8 +414,11 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       attributed_ns = exclusive
     measured_event_time_ns += attributed_ns
     operation = operations.get(identifier)
-    known_non_operation = raw_category in {"allocation", "deallocation"} and \
-      identifier in static_allocations
+    known_non_operation = (
+      (raw_category in {"allocation", "deallocation"} and
+       identifier in static_allocations) or
+      raw_category in {"materialized_write", "materialized_read"} or
+      identifier in fusion_profile_ids)
     if operation is None and not known_non_operation:
       unattributed += 1
       continue
@@ -395,6 +440,57 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       "bytes_known": bytes_known,
       "attributed_ns": attributed_ns,
     })
+  fusion_site_runtime: list[dict[str, Any]] = []
+  for fusion in fusion_records:
+    if not isinstance(fusion, dict):
+      raise AttributionError("plan.fusions contains a non-object")
+    if fusion.get("fusion_status") != "selected":
+      continue
+    profile_ids = []
+    for field in ("profile_id", "tail_profile_id"):
+      identifier = fusion.get(field)
+      if identifier is None:
+        continue
+      if (isinstance(identifier, bool) or not isinstance(identifier, int) or
+          identifier < 0 or identifier > (1 << 64) - 1):
+        raise AttributionError(f"fusion {field} must be an unsigned 64-bit integer")
+      profile_ids.append(identifier)
+    matches = [operation_events.get(identifier) for identifier in profile_ids]
+    matched = [event for event in matches if event is not None]
+    status = (
+      "missing" if not matched else
+      "joined" if len(matched) == len(profile_ids) and profile_ids else
+      "partial")
+    call_count = sum(event["calls"] for event in matched)
+    inclusive_ns = sum(event["inclusive_ns"] for event in matched)
+    exclusive_ns = (
+      sum(event["exclusive_ns"] for event in matched)
+      if matched and len(matched) == len(profile_ids) and
+      all(event["exclusive_ns"] is not None for event in matched) else None)
+    fusion_site_runtime.append({
+      "id": fusion.get("id"),
+      "function": fusion.get("function"),
+      "fusion_kind": fusion.get("fusion_kind"),
+      "profile_ids": profile_ids,
+      "event_join_status": status,
+      "call_count": call_count if matched else None,
+      "runtime_consumed": call_count > 0 if matched else None,
+      "inclusive_ns": inclusive_ns if matched else None,
+      "exclusive_ns": exclusive_ns,
+    })
+  fusion_site_runtime.sort(
+    key=lambda row: (row["inclusive_ns"] or 0, row["id"] or ""), reverse=True)
+  fusion_site_summary = {
+    "selected_count": len(fusion_site_runtime),
+    "joined_count": sum(
+      row["event_join_status"] == "joined" for row in fusion_site_runtime),
+    "partial_count": sum(
+      row["event_join_status"] == "partial" for row in fusion_site_runtime),
+    "missing_count": sum(
+      row["event_join_status"] == "missing" for row in fusion_site_runtime),
+    "complete": all(
+      row["event_join_status"] == "joined" for row in fusion_site_runtime),
+  }
   packed_kernel_runtime: list[dict[str, Any]] = []
   for identifier, operation in operations.items():
     contract = operation.get("kernel_contract")
@@ -484,9 +580,26 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
   if unattributed:
     unknown = list(dict.fromkeys([*unknown, "runtime_unattributed_events"]))
     incomplete_reasons.append("runtime_unattributed_events")
+  if fusion_site_summary["missing_count"] or fusion_site_summary["partial_count"]:
+    unknown = list(dict.fromkeys([*unknown, "runtime_fusion_site_profile_missing"]))
+    incomplete_reasons.append("runtime_fusion_site_profile_missing")
   if unknown_time_ns:
     unknown = list(dict.fromkeys([*unknown, "runtime_exclusive_time_unknown"]))
     incomplete_reasons.append("runtime_exclusive_time_unknown")
+  if profile_summary.get("materialized_read_complete") is False:
+    unknown = list(dict.fromkeys(
+      [*unknown, "runtime_materialized_read_incomplete"]))
+    incomplete_reasons.append("runtime_materialized_read_incomplete")
+  elif profile_summary.get("materialized_write_count", 0) and \
+      profile_summary.get("materialized_read_complete") is None:
+    unknown = list(dict.fromkeys(
+      [*unknown, "runtime_materialized_read_completeness_unknown"]))
+    incomplete_reasons.append("runtime_materialized_read_completeness_unknown")
+  if "materialized_write_count" in profile_summary and \
+      profile_summary.get("materialized_write_count") == 0:
+    unknown = list(dict.fromkeys(
+      [*unknown, "runtime_materialized_bytes_not_observed"]))
+    incomplete_reasons.append("runtime_materialized_bytes_not_observed")
   if missing_allocations:
     unknown = list(dict.fromkeys(
       [*unknown, "runtime_profile_missing_allocation_events"]))
@@ -560,6 +673,14 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
          if value["count"]):
     unknown = list(dict.fromkeys([*unknown, "runtime_movement_bytes_unknown"]))
     incomplete_reasons.append("runtime_movement_bytes_unknown")
+  if any(profile_summary.get(count_field, 0) and
+         profile_summary.get(known_field) is False
+         for count_field, known_field in (
+           ("materialized_write_count", "materialized_write_bytes_known"),
+           ("materialized_read_count", "materialized_read_bytes_known"))):
+    unknown = list(dict.fromkeys(
+      [*unknown, "runtime_materialized_bytes_unknown"]))
+    incomplete_reasons.append("runtime_materialized_bytes_unknown")
   copy_layout = {}
   for kind, value in movement_totals.items():
     observed = value["count"] != 0
@@ -662,6 +783,9 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       "copy_layout": copy_layout,
       "packed_kernels": packed_kernel_runtime,
       "packed_kernel_summary": packed_kernel_summary,
+      "fusion_sites": fusion_site_runtime,
+      "top_fusion_sites": fusion_site_runtime[:5],
+      "fusion_site_summary": fusion_site_summary,
       "peak_live_proven": runtime_peak_live_proven,
       "complete": not incomplete_reasons,
       "incomplete_reasons": incomplete_reasons,
@@ -709,6 +833,9 @@ def aggregate_v2_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
 
   summary_values = {
     "runtime_transpose_write_bytes": [],
+    "runtime_materialized_write_bytes": [],
+    "runtime_materialized_read_bytes": [],
+    "expected_materialized_read_bytes": [],
     "top_level_time_ns": [],
     "peak_live_bytes": [],
   }
@@ -718,6 +845,13 @@ def aggregate_v2_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
         isinstance(summary.get("runtime_transpose_write_bytes"), int):
       summary_values["runtime_transpose_write_bytes"].append(
         summary["runtime_transpose_write_bytes"])
+    for key, known_key in (
+        ("runtime_materialized_write_bytes", "materialized_write_bytes_known"),
+        ("runtime_materialized_read_bytes", "materialized_read_bytes_known"),
+        ("expected_materialized_read_bytes",
+         "expected_materialized_read_bytes_known")):
+      if summary.get(known_key) is True and isinstance(summary.get(key), int):
+        summary_values[key].append(summary[key])
     if summary.get("top_level_time_known") and \
         isinstance(summary.get("top_level_time_ns"), int):
       summary_values["top_level_time_ns"].append(summary["top_level_time_ns"])
@@ -747,10 +881,67 @@ def aggregate_v2_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
     category: runtime["per_invocation"]["category_time_ns"][category]["median"]
     for category in category_names
   }
+  first_fusion_sites = runtime.get("fusion_sites", [])
+  aggregated_fusion_sites = []
+  for first_site in first_fusion_sites:
+    site_id = first_site.get("id")
+    invocation_sites = [
+      next((site for site in report["runtime"].get("fusion_sites", [])
+            if site.get("id") == site_id), None)
+      for report in reports
+    ]
+    joined_invocations = sum(
+      site is not None and site.get("event_join_status") == "joined"
+      for site in invocation_sites)
+    calls = [site["call_count"] for site in invocation_sites
+             if site is not None and isinstance(site.get("call_count"), int)]
+    inclusive = [site["inclusive_ns"] for site in invocation_sites
+                 if site is not None and isinstance(site.get("inclusive_ns"), int)]
+    exclusive = [site["exclusive_ns"] for site in invocation_sites
+                 if site is not None and isinstance(site.get("exclusive_ns"), int)]
+    event_join_status = (
+      "joined" if joined_invocations == len(reports) else
+      "partial" if joined_invocations else "missing")
+    aggregated_fusion_sites.append({
+      **first_site,
+      "event_join_status": event_join_status,
+      "joined_invocation_count": joined_invocations,
+      "invocation_count": len(reports),
+      "call_count": median_scalar(calls) if len(calls) == len(reports) else None,
+      "inclusive_ns": median_scalar(inclusive)
+      if len(inclusive) == len(reports) else None,
+      "exclusive_ns": median_scalar(exclusive)
+      if len(exclusive) == len(reports) else None,
+      "per_invocation": {
+        "call_count": numeric_stats(calls),
+        "inclusive_ns": numeric_stats(inclusive),
+        "exclusive_ns": numeric_stats(exclusive),
+      },
+    })
+  aggregated_fusion_sites.sort(
+    key=lambda row: (row["inclusive_ns"] or 0, row["id"] or ""),
+    reverse=True)
+  runtime["fusion_sites"] = aggregated_fusion_sites
+  runtime["top_fusion_sites"] = aggregated_fusion_sites[:5]
+  fusion_site_summary = {
+    "selected_count": len(aggregated_fusion_sites),
+    "joined_count": sum(
+      site["event_join_status"] == "joined" for site in aggregated_fusion_sites),
+    "partial_count": sum(
+      site["event_join_status"] == "partial" for site in aggregated_fusion_sites),
+    "missing_count": sum(
+      site["event_join_status"] == "missing" for site in aggregated_fusion_sites),
+    "complete": all(
+      site["event_join_status"] == "joined" for site in aggregated_fusion_sites),
+    "invocation_count": len(reports),
+  }
+  runtime["fusion_site_summary"] = fusion_site_summary
+  runtime["per_invocation"]["fusion_site_summary"] = fusion_site_summary
   aggregate_summary = dict(runtime["summary"])
   summary_stats = {}
   for key in (
       "allocation_count", "deallocation_count", "copy_count",
+      "materialized_write_count", "materialized_read_count",
       "transpose_count", "pack_count", "unpack_count",
       "parallel_region_count", "event_mismatch_count"):
     values = [report["runtime"]["summary"].get(key)
@@ -762,6 +953,10 @@ def aggregate_v2_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
       ("allocation_bytes", "allocation_bytes_known"),
       ("deallocation_bytes", "deallocation_bytes_known"),
       ("copy_bytes", "copy_bytes_known"),
+      ("runtime_materialized_write_bytes", "materialized_write_bytes_known"),
+      ("runtime_materialized_read_bytes", "materialized_read_bytes_known"),
+      ("expected_materialized_read_bytes",
+       "expected_materialized_read_bytes_known"),
       ("runtime_transpose_write_bytes", "runtime_transpose_write_bytes_known"),
       ("pack_bytes", "pack_bytes_known"),
       ("unpack_bytes", "unpack_bytes_known"),
@@ -779,6 +974,18 @@ def aggregate_v2_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
     all_known = len(values) == len(reports)
     aggregate_summary[key] = median_scalar(values) if all_known else None
     aggregate_summary[known_key] = all_known
+  materialized_completion = [
+    report["runtime"]["summary"].get("materialized_read_complete")
+    for report in reports
+  ]
+  aggregate_summary["materialized_read_complete"] = (
+    False if any(value is False for value in materialized_completion) else
+    True if all(value is True for value in materialized_completion) else None)
+  summary_stats["materialized_read_complete"] = {
+    "complete_count": sum(value is True for value in materialized_completion),
+    "incomplete_count": sum(value is False for value in materialized_completion),
+    "unknown_count": sum(value is None for value in materialized_completion),
+  }
   runtime["summary"] = aggregate_summary
   runtime["per_invocation"]["summary"] = summary_stats
   for key in ("unattributed_event_count", "unattributed_time_ns",

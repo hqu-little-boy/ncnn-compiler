@@ -19,6 +19,7 @@ extern void __ncnn_profile_alloc(int64_t, int64_t);
 extern void __ncnn_profile_dealloc(int64_t);
 extern void __ncnn_profile_copy(int64_t, int64_t);
 extern void __ncnn_profile_movement(int64_t, int64_t, int64_t);
+extern void __ncnn_profile_materialized(int64_t, int64_t, int64_t, int64_t);
 extern void __ncnn_profile_flush(void);
 int main(void) {
   __ncnn_profile_event_begin(7, 0);
@@ -27,6 +28,8 @@ int main(void) {
   __ncnn_profile_event_end(7);
   __ncnn_profile_alloc(9, 64);
   __ncnn_profile_copy(10, 32);
+  __ncnn_profile_materialized(14, 0, 256, 1);
+  __ncnn_profile_materialized(14, 1, 256, 0);
   __ncnn_profile_movement(11, 0, 128);
   __ncnn_profile_movement(12, 1, 256);
   __ncnn_profile_movement(13, 2, 512);
@@ -38,24 +41,62 @@ int main(void) {
 '''
 
 V2_HARNESS = r'''
+#define _POSIX_C_SOURCE 200809L
+#include <pthread.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 extern void __ncnn_profile_event_begin(int64_t, int64_t);
 extern void __ncnn_profile_event_end(int64_t);
 extern void __ncnn_profile_alloc(int64_t, int64_t);
 extern void __ncnn_profile_dealloc(int64_t);
 extern void __ncnn_profile_movement(int64_t, int64_t, int64_t);
+extern void __ncnn_profile_materialized(int64_t, int64_t, int64_t, int64_t);
 extern void __ncnn_profile_flush(void);
+static void* fusion_worker(void* unused) {
+  const struct timespec delay = {0, 5000000};
+  (void)unused;
+  __ncnn_profile_event_begin(17, 10);
+  nanosleep(&delay, NULL);
+  __ncnn_profile_event_end(17);
+  return NULL;
+}
 static void invoke(int64_t bytes) {
+  pthread_t worker;
   __ncnn_profile_event_begin(7, 0);
+  if (pthread_create(&worker, NULL, fusion_worker, NULL) != 0) abort();
+  if (pthread_join(worker, NULL) != 0) abort();
   __ncnn_profile_alloc(9, bytes);
+  __ncnn_profile_materialized(15, 0, bytes, 1);
+  __ncnn_profile_materialized(15, 1, bytes, 0);
   __ncnn_profile_movement(11, 0, bytes);
   __ncnn_profile_dealloc(9);
   __ncnn_profile_event_end(7);
   __ncnn_profile_flush();
 }
-int main(void) {
+static void invoke_missing_read(int64_t bytes) {
+  __ncnn_profile_event_begin(7, 0);
+  __ncnn_profile_alloc(9, bytes);
+  __ncnn_profile_materialized(15, 0, bytes, 1);
+  __ncnn_profile_event_end(7);
+  __ncnn_profile_flush();
+}
+static void invoke_without_materialized(int64_t bytes) {
+  __ncnn_profile_event_begin(7, 0);
+  __ncnn_profile_alloc(9, bytes);
+  __ncnn_profile_dealloc(9);
+  __ncnn_profile_event_end(7);
+  __ncnn_profile_flush();
+}
+int main(int argc, char** argv) {
+  if (argc > 1 && strcmp(argv[1], "no-materialized") == 0) {
+    invoke_without_materialized(32);
+    return 0;
+  }
   invoke(64);
   invoke(128);
+  if (argc > 1) invoke_missing_read(64);
   return 0;
 }
 '''
@@ -134,7 +175,7 @@ def main() -> int:
     document = json.loads(profile.read_text(encoding="utf-8"))
     assert document["kind"] == "ncnn.model_execution_profile"
     assert document["plan_revision"] == "static-v1|int8-target-v1"
-    assert document["attribution_revision"] == "attribution-v1"
+    assert document["attribution_revision"] == "attribution-v2"
     assert document["instrumentation"]["aggregation"] == "process-cumulative"
     assert document["instrumentation"]["invocation_count"] == 2
     assert document["mode"] == "line\bfeed\f"
@@ -147,6 +188,15 @@ def main() -> int:
     assert summary["deallocation_bytes"] == 64
     assert summary["copy_count"] == 1
     assert summary["copy_bytes"] == 32
+    assert summary["materialized_write_count"] == 1
+    assert summary["runtime_materialized_write_bytes"] == 256
+    assert summary["materialized_write_bytes_known"] is True
+    assert summary["materialized_read_count"] == 1
+    assert summary["runtime_materialized_read_bytes"] == 256
+    assert summary["materialized_read_bytes_known"] is True
+    assert summary["expected_materialized_read_bytes"] == 256
+    assert summary["expected_materialized_read_bytes_known"] is True
+    assert summary["materialized_read_complete"] is True
     assert summary["transpose_count"] == 1
     assert summary["runtime_transpose_write_bytes"] == 128
     assert summary["runtime_transpose_write_bytes_known"] is True
@@ -168,6 +218,8 @@ def main() -> int:
     assert records[(9, "allocation")]["bytes_known"] is True
     assert records[(10, "copy")]["calls"] == 1
     assert records[(10, "copy")]["bytes"] == 32
+    assert records[(14, "materialized_write")]["bytes"] == 256
+    assert records[(14, "materialized_read")]["bytes"] == 256
     assert records[(11, "transpose")]["calls"] == 1
     assert records[(11, "transpose")]["bytes"] == 128
     assert records[(12, "pack")]["calls"] == 1
@@ -197,7 +249,7 @@ def main() -> int:
     v2_profile = root / "profile-v2.ndjson"
     v2_source.write_text(V2_HARNESS, encoding="utf-8")
     subprocess.run([
-      args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror",
+      args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread",
       str(v2_source), args.runtime, "-o", str(v2_binary),
     ], check=True)
     v2_environment = dict(environment)
@@ -211,11 +263,57 @@ def main() -> int:
     assert len(rows) == 2
     assert [row["schema_version"] for row in rows] == [2, 2]
     assert [row["invocation_id"] for row in rows] == [1, 2]
-    assert all(row["attribution_revision"] == "attribution-v1" for row in rows)
+    assert all(row["attribution_revision"] == "attribution-v2" for row in rows)
     assert all(row["complete"] is True for row in rows)
+    for row in rows:
+      events = {(event["id"], event["category"]): event
+                for event in row["events"]}
+      assert events[(17, "operation")]["calls"] == 1
+      assert events[(17, "operation")]["inclusive_ns"] > 0
+      assert (row["summary"]["top_level_time_ns"] ==
+              events[(7, "operation")]["inclusive_ns"])
     assert [row["summary"]["allocation_bytes"] for row in rows] == [64, 128]
     assert [row["summary"]["runtime_transpose_write_bytes"]
             for row in rows] == [64, 128]
+    assert [row["summary"]["runtime_materialized_write_bytes"]
+            for row in rows] == [64, 128]
+    assert [row["summary"]["runtime_materialized_read_bytes"]
+            for row in rows] == [64, 128]
+    assert [row["summary"]["expected_materialized_read_bytes"]
+            for row in rows] == [64, 128]
+    assert all(row["summary"]["materialized_read_complete"] is True
+               for row in rows)
+    no_materialized_profile = root / "profile-v2-no-materialized.ndjson"
+    no_materialized_environment = dict(v2_environment)
+    no_materialized_environment["NCNN_PROFILE_PATH"] = str(no_materialized_profile)
+    subprocess.run([str(v2_binary), "no-materialized"], check=True,
+                   env=no_materialized_environment)
+    no_materialized_rows = [
+      json.loads(line) for line in no_materialized_profile.read_text().splitlines()
+    ]
+    assert len(no_materialized_rows) == 1
+    no_materialized_summary = no_materialized_rows[0]["summary"]
+    assert no_materialized_summary["materialized_write_count"] == 0
+    assert no_materialized_summary["runtime_materialized_write_bytes"] is None
+    assert no_materialized_summary["materialized_write_bytes_known"] is False
+    assert no_materialized_summary["materialized_read_count"] == 0
+    assert no_materialized_summary["runtime_materialized_read_bytes"] is None
+    assert no_materialized_summary["materialized_read_bytes_known"] is False
+    assert no_materialized_summary["expected_materialized_read_bytes"] is None
+    assert no_materialized_summary["expected_materialized_read_bytes_known"] is False
+    assert no_materialized_summary["materialized_read_complete"] is None
+    missing_profile = root / "profile-v2-missing-read.ndjson"
+    missing_environment = dict(v2_environment)
+    missing_environment["NCNN_PROFILE_PATH"] = str(missing_profile)
+    subprocess.run([str(v2_binary), "missing-read"], check=True,
+                   env=missing_environment)
+    missing_rows = [json.loads(line) for line in missing_profile.read_text().splitlines()]
+    assert len(missing_rows) == 3
+    missing_row = missing_rows[-1]
+    assert missing_row["summary"]["runtime_materialized_read_bytes"] is None
+    assert missing_row["summary"]["materialized_read_bytes_known"] is False
+    assert missing_row["summary"]["expected_materialized_read_bytes"] == 64
+    assert missing_row["summary"]["materialized_read_complete"] is False
   return 0
 
 

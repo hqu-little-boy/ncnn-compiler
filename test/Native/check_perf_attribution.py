@@ -69,6 +69,14 @@ def main() -> int:
           "pack_runtime": "compile_time_B",
         },
       }],
+      "fusions": [{
+        "id": "fusion/model/matmul_epilogue#0",
+        "function": "model",
+        "fusion_status": "selected",
+        "fusion_kind": "matmul_epilogue",
+        "profile_id": 6789,
+        "tail_profile_id": 6790,
+      }],
       "summary": {"peak_workspace_bytes": None, "packed_buffer_bytes": 64},
       "diagnostics": {"unknown_fields": []},
       "conv_depthwise_operations": [{
@@ -90,7 +98,19 @@ def main() -> int:
       "threads": 2,
       "mode": "prepared",
       "instrumentation": {"coverage": "explicit-callbacks"},
-      "summary": {"peak_live_proven": True, "peak_live_bytes": 64},
+      "summary": {
+        "peak_live_proven": True,
+        "peak_live_bytes": 64,
+        "materialized_write_count": 1,
+        "runtime_materialized_write_bytes": 64,
+        "materialized_write_bytes_known": True,
+        "materialized_read_count": 1,
+        "runtime_materialized_read_bytes": 64,
+        "materialized_read_bytes_known": True,
+        "expected_materialized_read_bytes": 64,
+        "expected_materialized_read_bytes_known": True,
+        "materialized_read_complete": True,
+      },
       "events": [{
         "id": 16011668676398822909,
         "category": "operation",
@@ -103,6 +123,22 @@ def main() -> int:
         "calls": 1,
         "inclusive_ns": 0,
         "exclusive_ns": 0,
+      }, {
+        "id": 1234,
+        "category": "materialized_write",
+        "calls": 1,
+        "inclusive_ns": 0,
+        "exclusive_ns": 0,
+        "bytes": 64,
+        "bytes_known": True,
+      }, {
+        "id": 1234,
+        "category": "materialized_read",
+        "calls": 1,
+        "inclusive_ns": 0,
+        "exclusive_ns": 0,
+        "bytes": 64,
+        "bytes_known": True,
       }, {
         "id": 99,
         "category": "operation",
@@ -158,6 +194,10 @@ def main() -> int:
       raise RuntimeError("unknown event time was not reported")
     if report["runtime"]["category_time_ns"]["kernel"] != 80:
       raise RuntimeError("nested inclusive time was double-counted")
+    if report["runtime"]["summary"]["runtime_materialized_write_bytes"] != 64 or \
+        report["runtime"]["summary"]["runtime_materialized_read_bytes"] != 64 or \
+        report["runtime"]["summary"]["materialized_read_complete"] is not True:
+      raise RuntimeError("runtime materialized byte metrics were not preserved")
     if not report["runtime"]["allocation_coverage"]["complete"]:
       raise RuntimeError("complete allocation coverage was rejected")
     if report["runtime"]["complete"]:
@@ -168,6 +208,133 @@ def main() -> int:
       raise RuntimeError("top allocation report was not generated")
     if report["runtime"]["copy_layout"]["copy"]["status"] != "not_observed":
       raise RuntimeError("copy layout status was not explicit")
+
+    incomplete_materialized_profile = root / "incomplete-materialized.json"
+    incomplete_materialized = json.loads(profile.read_text())
+    incomplete_materialized["summary"].update({
+      "expected_materialized_read_bytes": 128,
+      "materialized_read_complete": False,
+    })
+    incomplete_materialized_profile.write_text(json.dumps(incomplete_materialized))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(perf), "--plan", str(plan),
+      "--profile", str(incomplete_materialized_profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+      raise RuntimeError(result.stderr)
+    incomplete_materialized_report = json.loads(result.stdout)
+    if "runtime_materialized_read_incomplete" not in \
+        incomplete_materialized_report["runtime"]["incomplete_reasons"]:
+      raise RuntimeError("incomplete materialized reads were not reported")
+
+    no_materialized_profile = root / "no-materialized.json"
+    no_materialized = json.loads(profile.read_text())
+    no_materialized["summary"].update({
+      "materialized_write_count": 0,
+      "runtime_materialized_write_bytes": None,
+      "materialized_write_bytes_known": False,
+      "materialized_read_count": 0,
+      "runtime_materialized_read_bytes": None,
+      "materialized_read_bytes_known": False,
+      "expected_materialized_read_bytes": None,
+      "expected_materialized_read_bytes_known": False,
+      "materialized_read_complete": None,
+    })
+    no_materialized["events"] = [
+      event for event in no_materialized["events"]
+      if not event["category"].startswith("materialized_")
+    ]
+    no_materialized_profile.write_text(json.dumps(no_materialized))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(perf), "--plan", str(plan),
+      "--profile", str(no_materialized_profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+      raise RuntimeError(result.stderr)
+    no_materialized_report = json.loads(result.stdout)
+    if no_materialized_report["runtime"]["complete"] or \
+        "runtime_materialized_bytes_not_observed" not in \
+        no_materialized_report["runtime"]["incomplete_reasons"]:
+      raise RuntimeError("missing materialized evidence was reported as complete")
+
+    site_profile = root / "materialized-sites.json"
+    site_profile_data = json.loads(profile.read_text())
+    site_profile_data["events"] = [
+      {**event, "id": 987654} if event["category"].startswith("materialized_")
+      else event
+      for event in site_profile_data["events"]
+      if event["id"] != 99
+    ]
+    site_profile.write_text(json.dumps(site_profile_data))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(perf), "--plan", str(plan),
+      "--profile", str(site_profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+      raise RuntimeError(result.stderr)
+    site_report = json.loads(result.stdout)
+    if site_report["runtime"]["unattributed_event_count"] != 0:
+      raise RuntimeError("materialized site callbacks were treated as unknown ops")
+
+    fusion_profile = root / "fusion-sites.json"
+    fusion_profile_data = json.loads(site_profile.read_text())
+    fusion_profile_data["events"].extend([{
+      "id": 6789,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 30,
+      "exclusive_ns": 25,
+    }, {
+      "id": 6790,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 5,
+      "exclusive_ns": 4,
+    }])
+    fusion_profile.write_text(json.dumps(fusion_profile_data))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(perf), "--plan", str(plan),
+      "--profile", str(fusion_profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+      raise RuntimeError(result.stderr)
+    fusion_report = json.loads(result.stdout)
+    fusion_runtime = fusion_report["runtime"]
+    if fusion_runtime["fusion_site_summary"] != {
+        "selected_count": 1,
+        "joined_count": 1,
+        "partial_count": 0,
+        "missing_count": 0,
+        "complete": True,
+    }:
+      raise RuntimeError("fusion site runtime coverage was not joined")
+    top_fusion = fusion_runtime["top_fusion_sites"][0]
+    if top_fusion["profile_ids"] != [6789, 6790] or \
+        top_fusion["inclusive_ns"] != 35 or \
+        top_fusion["exclusive_ns"] != 29 or \
+        top_fusion["event_join_status"] != "joined":
+      raise RuntimeError("fusion tail runtime events were not aggregated")
+    if fusion_runtime["unattributed_event_count"] != 0:
+      raise RuntimeError("fusion callbacks without operation rows were unattributed")
+
+    missing_fusion_profile = root / "missing-fusion-sites.json"
+    missing_fusion_data = json.loads(fusion_profile.read_text())
+    missing_fusion_data["events"] = [
+      event for event in missing_fusion_data["events"] if event["id"] != 6790
+    ]
+    missing_fusion_profile.write_text(json.dumps(missing_fusion_data))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(perf), "--plan", str(plan),
+      "--profile", str(missing_fusion_profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+      raise RuntimeError(result.stderr)
+    missing_fusion_report = json.loads(result.stdout)
+    if missing_fusion_report["runtime"]["fusion_sites"][0]["event_join_status"] != \
+        "partial" or \
+        "runtime_fusion_site_profile_missing" not in \
+        missing_fusion_report["runtime"]["incomplete_reasons"]:
+      raise RuntimeError("missing fusion tail profile was reported as complete")
 
     v2_profile = root / "profile-v2.ndjson"
     v2_base = json.loads(profile.read_text())
@@ -211,6 +378,18 @@ def main() -> int:
           "exclusive_ns": 0,
           "bytes": copy_bytes,
           "bytes_known": copy_bytes is not None,
+        }, {
+          "id": 6789,
+          "category": "operation",
+          "calls": 1,
+          "inclusive_ns": 30 * invocation_id,
+          "exclusive_ns": 25 * invocation_id,
+        }, {
+          "id": 6790,
+          "category": "operation",
+          "calls": 1,
+          "inclusive_ns": 5 * invocation_id,
+          "exclusive_ns": 4 * invocation_id,
         }],
       })
       v2_rows.append(row)
@@ -228,6 +407,12 @@ def main() -> int:
     if v2_report["invocation_id"] is not None or \
         v2_report["invocation_ids"] != [1, 2]:
       raise RuntimeError("schema-2 invocation identity was not aggregated")
+    v2_fusion_runtime = v2_runtime["fusion_site_summary"]
+    if v2_fusion_runtime["selected_count"] != 1 or \
+        v2_fusion_runtime["joined_count"] != 1 or \
+        not v2_fusion_runtime["complete"] or \
+        v2_runtime["top_fusion_sites"][0]["inclusive_ns"] != 52.5:
+      raise RuntimeError("schema-2 fusion-site events were not aggregated")
     parallel_profile = root / "parallel-profile.json"
     parallel_value = json.loads(profile.read_text())
     parallel_value["events"] = [

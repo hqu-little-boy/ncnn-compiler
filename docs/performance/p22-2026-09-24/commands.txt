@@ -1,0 +1,82 @@
+# Exact 2026-09-24 fresh-stage validation; commands executed from /mnt/ncnn-compiler/compiler.
+# The clean baseline source was exported from a5c3c57 into
+# /tmp/ncnn-compiler-p22-baseline-source-20260924-b. git archive omits the
+# submodule: its empty test/third_party/ncnn directory was replaced with a
+# symlink to the clean local submodule at a4d2ea1d.
+BASELINE_SOURCE=/tmp/ncnn-compiler-p22-baseline-source-20260924-b
+BASELINE=/tmp/ncnn-compiler-p22-baseline-build-20260924-c
+CANDIDATE=/tmp/ncnn-compiler-p22-candidate-build-20260924-b
+EVIDENCE=/tmp/p22-20260924-paired-c
+STAGE_DOC=/mnt/ncnn-compiler/compiler/docs/performance/p22-2026-09-24
+
+cmake -S ${BASELINE_SOURCE} -B ${BASELINE} -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm -DCOMPILER_INSTALL_RPATH=ON \
+  -DBUILD_TESTING=ON -DNCNN_PACKED_CONV_DEPTHWISE=OFF \
+  -DCOMPILER_ENABLE_FORMAT_TARGETS=ON
+cmake --build ${BASELINE} --parallel 8
+cmake -S /mnt/ncnn-compiler/compiler -B ${CANDIDATE} -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm -DCOMPILER_INSTALL_RPATH=ON \
+  -DBUILD_TESTING=ON -DNCNN_PACKED_CONV_DEPTHWISE=OFF \
+  -DCOMPILER_ENABLE_FORMAT_TARGETS=ON
+cmake --build ${CANDIDATE} --parallel 8
+cmake --build ${CANDIDATE} --target numerical_tests \
+  numerical_dynamic_operator_tests numerical_dynamic_tests --parallel 8
+cmake --build ${CANDIDATE} --target format_check --parallel 8
+cmake --build ${CANDIDATE} --target tidy --parallel 8
+ctest --test-dir ${CANDIDATE} --output-on-failure
+# 449 tests registered; zero failed; exactly two known PerformanceModel INT8 skips.
+
+# Official benchmark: all 30 chunks were run strictly serial, without other
+# tests or profiling competing for CPU. The runner creates each chunk's log
+# and 1/1/43 measured-row NDJSON; the final rest chunk merges to 45 rows.
+for round in 1 2 3 4 5; do
+  if (( round % 2 )); then arm1=baseline; arm2=candidate;
+  else arm1=candidate; arm2=baseline; fi
+  for variant in "$arm1" "$arm2"; do
+    for chunk in serverdet serverrec rest; do
+      python3 ${STAGE_DOC}/run-paired.py \
+        --baseline ${BASELINE} --candidate ${CANDIDATE} \
+        --evidence ${EVIDENCE} --round ${round} \
+        --variant ${variant} --chunk ${chunk}
+    done
+  done
+done
+python3 ${STAGE_DOC}/aggregate-paired.py ${EVIDENCE}
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py \
+  ${EVIDENCE}/round-5-candidate.ndjson --official-only
+# All raw NDJSON/CTest logs and aggregated outputs were copied unmodified to
+# ${STAGE_DOC}/formal-paired/ (1.2 MiB).
+
+# Standalone diagnostic only; NOT a clean-baseline paired byte comparison and
+# NOT included in the profile-off end-to-end performance acceptance.
+PROFILE_ARTIFACT=/tmp/p22-profile-serverdet-20260924-b
+PROFILE_EVIDENCE=/tmp/p22-20260924-profile-serverdet-b
+LD_LIBRARY_PATH=${CANDIDATE}/lib ${CANDIDATE}/tools/ncnn-compile \
+  --driver ${CANDIDATE}/tools/ncnn-mlir-driver \
+  --opt ${CANDIDATE}/bin/ncnn-mlir-opt \
+  --translate /usr/bin/mlir-translate-21 --clang /usr/bin/clang-21 \
+  --nm /usr/bin/llvm-nm-21 --readelf /usr/bin/llvm-readelf-21 \
+  --llvm-as /usr/bin/llvm-as-21 \
+  --param /mnt/ncnn-compiler/ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param \
+  --bin /mnt/ncnn-compiler/ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin \
+  --model-name pp_ocrv5_server_det_static --input-shape 3x640x640 --threads 6 \
+  --matmul-packing auto --vector-mode fixed-width \
+  --target-feature +avx2 --target-feature +fma --clang-arg=-march=x86-64-v3 \
+  --profile --emit-manifest --emit-execution-plan \
+  --output-dir ${PROFILE_ARTIFACT}
+# Executed with this older helper; a byte-for-byte copy is included as
+# ${STAGE_DOC}/profile-serverdet-once.py for standalone reproduction.
+LD_LIBRARY_PATH=${CANDIDATE}/lib python3 \
+  /mnt/ncnn-compiler/compiler/docs/performance/p22-2026-09-23/postfix-validation/runtime-profile/pp_ocrv5_server_det_static/postfix-candidate/run_profile_once.py \
+  --library=${PROFILE_ARTIFACT}/libpp_ocrv5_server_det_static.so \
+  --plan=${PROFILE_ARTIFACT}/pp_ocrv5_server_det_static.plan.json \
+  --profile=${PROFILE_EVIDENCE}/profile.ndjson \
+  --perf=${PROFILE_EVIDENCE}/perf.ndjson
+python3 /mnt/ncnn-compiler/compiler/tools/perf_attribution_report.py \
+  --perf=${PROFILE_EVIDENCE}/perf.ndjson \
+  --plan=${PROFILE_ARTIFACT}/pp_ocrv5_server_det_static.plan.json \
+  --profile=${PROFILE_EVIDENCE}/profile.ndjson \
+  --mode=end_to_end --output=${PROFILE_EVIDENCE}/attribution.json
+
+# Final before commit: git diff --check; git diff --cached --check;
+# inspect git status and exact staged diff. No push.

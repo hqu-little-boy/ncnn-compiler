@@ -1,8 +1,9 @@
 #include "ncnn-mlir/Transforms/TileMatmulForall/TileMatmulForall.hpp"
 
-#include <algorithm>
 #include <cstdint>
+#include <utility>
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -12,6 +13,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/TilingInterface.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -25,14 +27,14 @@ namespace mlir::ncnn {
 
 namespace {
 
-// A1 之后卷积计算大头以 linalg.matmul 形态存在（折叠二维域），其唯一
-// 恒等逐元素消费者（strategy 方案 a 的激活提升产物）以整形 2D generic
-// 紧随其后——fuse-linalg-epilogue 的视图守卫不会二次融合它。本 pass 把
-// 这一对沿 M/N 输出维切进同一个 scf.forall 网格（tile 消费者并融合
-// matmul 生产者），激活随之并行；无消费者的裸 matmul 仅做切分。收缩维
-// K 不在切分维度内——每个输出元素的完整归约保持在单线程单 tile 内，
-// 累加顺序与串行一致（bit-exact）。只处理顶层实例：嵌套实例再切会制
-// 造嵌套并行。
+// A1 之后卷积计算大头以 linalg.matmul 形态存在（折叠二维域）。普通的
+// 恒等逐元素消费者可与 matmul 一起沿 M/N 输出维切进同一个 scf.forall
+// 网格；若多个 DPS 输入都引用同一个 matmul 结果，先把它们规范成一个
+// 输入并映射回同一个 block argument。Strategy 提升产生的宽域 epilogue
+// 保持为独立 2D generic：实测把它与 matmul 一起分块会严重劣化。无可融合
+// 消费者的 matmul 仅做切分。收缩维 K 不在切分维度内——每个输出元素的
+// 完整归约保持在单线程单 tile 内，累加顺序与串行一致（bit-exact）。
+// 只处理顶层实例：嵌套实例再切会制造嵌套并行。
 //
 // 切分尺寸必须是该维 extent 的因子：上游对非整除尾块会生成动态尺寸
 // 切片（affine.min 形态），违反静态形状契约。选不到大于 1 的因子时该
@@ -43,47 +45,50 @@ bool isTopLevel(Operation* operation) {
          operation->getParentOfType<scf::ParallelOp>() == nullptr;
 }
 
-// 不超过 requested 且整除 extent 的最大因子；无更大因子但 extent 为
-// 偶数时取半（仍为因子），否则返回 extent 本身（该维等效不切）。
-int64_t pickDivisor(int64_t extent, int64_t requested) {
-  const int64_t cap = std::min(requested, extent - 1);
-  for (int64_t candidate = cap; candidate > 1; --candidate) {
-    if (extent % candidate == 0) {
-      return candidate;
-    }
-  }
-  // 偶数维可取半分回退（恒为因子）；奇数且无因子时该维等效不切。
-  if (extent % 2 == 0 && extent / 2 >= 2) {
-    return extent / 2;
-  }
-  return extent;
-}
-
-// strategy 方案 a 的激活形态：matmul 结果的唯一用户是恒等映射、全并行
-// 迭代、单输入的静态 2D generic（outs 为独立缓冲）。
-int resultTypeRank(linalg::GenericOp generic) {
-  auto type = dyn_cast<RankedTensorType>(generic.getResult(0).getType());
-  return type ? static_cast<int>(type.getRank()) : -1;
-}
-
+// 普通 matmul 的 sole consumer 须是恒等映射、全并行迭代、静态 2D generic，
+// 且所有输入都引用 matmul 结果；strategy_lifted_epilogue 由性能守卫单独
+// 保持为 2D generic，不在此处与宽域 matmul 一起分块。
 template <typename MatmulOpT>
 bool findSoleIdentityElementwiseConsumer(MatmulOpT matmul,
                                          linalg::GenericOp& out) {
-  auto users = matmul.getResult(0).getUsers();
-  auto first = users.begin();
-  if (first == users.end() || std::next(first) != users.end()) {
-    return false;
+  Value result = matmul.getResult(0);
+  linalg::GenericOp generic;
+  for (OpOperand& use : result.getUses()) {
+    if (!generic) {
+      generic = dyn_cast<linalg::GenericOp>(use.getOwner());
+      if (!generic) {
+        return false;
+      }
+    } else if (use.getOwner() != generic.getOperation()) {
+      return false;
+    }
+    if (!llvm::is_contained(generic.getDpsInputOperands(), &use)) {
+      return false;
+    }
   }
-  auto generic = dyn_cast<linalg::GenericOp>(*first);
   if (!generic) {
     return false;
   }
   auto resultType = dyn_cast<RankedTensorType>(generic.getResult(0).getType());
   if (!resultType || !resultType.hasStaticShape() ||
-      resultType.getRank() != 2 || generic.getNumDpsInputs() != 1 ||
-      generic.getInputs()[0] != matmul.getResult(0) ||
-      generic.getNumDpsInits() != 1) {
+      resultType.getRank() != 2 || generic.getNumDpsInputs() < 1 ||
+      generic.getNumDpsInits() != 1 ||
+      generic->hasAttr("ncnn.strategy_lifted_epilogue")) {
     return false;
+  }
+  for (Value input : generic.getDpsInputs()) {
+    if (input != matmul.getResult(0)) {
+      return false;
+    }
+  }
+  if (generic.getNumDpsInputs() > 1) {
+    for (NamedAttribute attribute : generic->getAttrs()) {
+      StringRef name = attribute.getName().getValue();
+      if (name != "indexing_maps" && name != "iterator_types" &&
+          name != "operandSegmentSizes") {
+        return false;
+      }
+    }
   }
   for (AffineMap map : generic.getIndexingMapsArray()) {
     if (!map.isIdentity()) {
@@ -97,6 +102,49 @@ bool findSoleIdentityElementwiseConsumer(MatmulOpT matmul,
   }
   out = generic;
   return true;
+}
+
+// Only rebuild a repeated-input generic when it has no extra attributes: the
+// replacement has a different operand list, so blindly copying op attributes
+// could retain stale operand-dependent metadata.
+linalg::GenericOp deduplicateRepeatedInputs(PatternRewriter& rewriter,
+                                            linalg::GenericOp consumer,
+                                            Value producerResult) {
+  if (consumer.getNumDpsInputs() == 1) {
+    return consumer;
+  }
+  rewriter.setInsertionPoint(consumer);
+  auto maps = consumer.getIndexingMapsArray();
+  SmallVector<AffineMap> deduplicatedMaps{maps.front(), maps.back()};
+  Block& originalBlock = consumer->getRegion(0).front();
+  auto deduplicated = rewriter.create<linalg::GenericOp>(
+    consumer.getLoc(),
+    consumer.getResultTypes(),
+    ValueRange{producerResult},
+    consumer.getDpsInits(),
+    deduplicatedMaps,
+    consumer.getIteratorTypesArray(),
+    [&](OpBuilder& builder, Location location, ValueRange arguments) {
+      IRMapping mapping;
+      for (unsigned index = 0; index < consumer.getNumDpsInputs(); ++index) {
+        mapping.map(originalBlock.getArgument(index), arguments[0]);
+      }
+      for (unsigned index = 0; index < consumer.getNumDpsInits(); ++index) {
+        mapping.map(
+          originalBlock.getArgument(consumer.getNumDpsInputs() + index),
+          arguments[1 + index]);
+      }
+      for (Operation& operation : originalBlock.without_terminator()) {
+        builder.clone(operation, mapping);
+      }
+      SmallVector<Value> yieldedValues;
+      for (Value yieldedValue : originalBlock.getTerminator()->getOperands()) {
+        yieldedValues.push_back(mapping.lookupOrDefault(yieldedValue));
+      }
+      builder.create<linalg::YieldOp>(location, yieldedValues);
+    });
+  rewriter.replaceOp(consumer, deduplicated.getResults());
+  return deduplicated;
 }
 
 template <typename MatmulOpT>
@@ -159,6 +207,8 @@ class TopLevelMatmulTile : public OpRewritePattern<MatmulOpT> {
     linalg::GenericOp consumer;
     bool hasConsumer = findSoleIdentityElementwiseConsumer(matmul, consumer);
     if (hasConsumer) {
+      consumer =
+        deduplicateRepeatedInputs(rewriter, consumer, matmul.getResult(0));
       scf::SCFTileAndFuseOptions fuseOptions;
       fuseOptions.setTilingOptions(tilingOptions);
       auto fused = scf::tileConsumerAndFuseProducersUsingSCF(

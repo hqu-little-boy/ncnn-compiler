@@ -28,8 +28,17 @@ def BufferizeNCNNPass : Pass<"bufferize-ncnn", "mlir::ModuleOp"> {
 
 def RewriteLinalgCopiesPass : Pass<"rewrite-linalg-copies", "mlir::ModuleOp"> {
   let summary =
-    "Rewrite identity linalg.generic copies into sequential copy loops";
-  let dependentDialects = ["linalg::LinalgDialect", "memref::MemRefDialect"];
+    "Rewrite identity linalg.generic copies into sequential or vector copy loops";
+  let dependentDialects = [
+    "arith::ArithDialect", "linalg::LinalgDialect", "memref::MemRefDialect",
+    "scf::SCFDialect", "vector::VectorDialect"
+  ];
+  let options = [
+    Option<"vectorLanes", "vector-lanes", "unsigned", /*default=*/"0",
+           "Vector lane width for contiguous identity copies; 0 disables">,
+    Option<"vectorize", "vectorize", "bool", /*default=*/"false",
+           "Emit vector transfer copy loops">
+  ];
 }
 
 def GenerateCAPIPass : Pass<"generate-ncnn-c-api", "mlir::ModuleOp"> {
@@ -127,7 +136,15 @@ def FuseLinalgEpiloguePass
     Option<"enable", "enable", "bool", /*default=*/"true",
            "Enable selective producer-to-epilogue fusion">,
     Option<"allowResidual", "allow-residual", "bool", /*default=*/"true",
-           "Allow same-shaped identity-mapped residual inputs">
+           "Allow same-shaped identity-mapped residual inputs">,
+    Option<"allowBroadcast", "allow-broadcast", "bool", /*default=*/"true",
+           "Allow statically proven projected broadcast inputs">,
+    Option<"allowCastChain", "allow-cast-chain", "bool", /*default=*/"true",
+           "Allow ordered arithmetic cast chains">,
+    Option<"layoutAwareFusion", "layout-aware-fusion", "bool", /*default=*/"true",
+           "Require compatible known producer/consumer layout metadata">,
+    Option<"maxChainLength", "max-chain-length", "unsigned", /*default=*/"8",
+           "Maximum number of fused elementwise operations">
   ];
 }
 

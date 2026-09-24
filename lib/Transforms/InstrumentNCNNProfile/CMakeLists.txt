@@ -12,6 +12,7 @@ target_link_libraries(InstrumentNCNNProfile PUBLIC
     MLIRArithDialect
     MLIRFuncDialect
     MLIRIR
+    MLIRLinalgDialect
     MLIRMemRefDialect
     MLIRPass
     MLIRSCFDialect

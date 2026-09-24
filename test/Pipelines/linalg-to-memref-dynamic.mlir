@@ -19,10 +19,15 @@ module {
 // CHECK-SAME: %[[INPUT:.*]]: memref<1x?x?x4xf32>,
 // CHECK-SAME: %[[OUTPUT:.*]]: memref<1x?x?x4xf32> {bufferize.result, ncnn.shape_program = [array<i64>, array<i64>, array<i64>, array<i64>], ncnn.shape_source_input = 0 : i32})
 // CHECK-NOT: ->
+// CHECK-NOT: linalg.copy
 // CHECK: %[[ALLOC:.*]] = memref.alloc
-// CHECK: linalg.copy ins(%[[INPUT]] : memref<1x?x?x4xf32>) outs(%[[ALLOC]] : memref<1x?x?x4xf32>)
-// CHECK: memref.copy %[[ALLOC]], %[[OUTPUT]]
+// CHECK: scf.for
+// CHECK: memref.load %[[INPUT]][
+// CHECK: memref.store {{.*}}, %[[ALLOC]][
+// CHECK: memref.load %[[ALLOC]][
+// CHECK: memref.store {{.*}}, %[[OUTPUT]][
 // CHECK: memref.dealloc %[[ALLOC]]
+// CHECK-NOT: memref.copy
 // CHECK-NOT: memref<1x?x?x4xf32, strided
 // CHECK-NOT: tensor.
 // CHECK-NOT: bufferization.

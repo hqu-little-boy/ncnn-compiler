@@ -17,4 +17,8 @@ module {}
 // CHECK: linalg-fold-into-elementwise
 // CHECK: canonicalize
 // CHECK: fuse-linalg-epilogue
+// CHECK: strategy-ncnn
+// CHECK: linalg-inline-scalar-operands
+// CHECK: linalg-fold-into-elementwise
+// CHECK: canonicalize
 // CHECK: verify-no-tosa-ops

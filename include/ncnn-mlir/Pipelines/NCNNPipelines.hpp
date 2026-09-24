@@ -39,6 +39,31 @@ struct NCNNTosaToLinalgPipelineOptions
     "selective-fusion-residual",
     llvm::cl::desc("Allow same-shaped identity-mapped residual fusion inputs"),
     llvm::cl::init(true)};
+  Option<bool> selectiveFusionBroadcast{
+    *this,
+    "selective-fusion-broadcast",
+    llvm::cl::desc("Allow statically proven projected broadcast fusion inputs"),
+    llvm::cl::init(true)};
+  Option<bool> selectiveFusionCastChain{
+    *this,
+    "selective-fusion-cast-chain",
+    llvm::cl::desc("Allow ordered arithmetic cast chains in epilogues"),
+    llvm::cl::init(true)};
+  Option<bool> layoutAwareFusion{
+    *this,
+    "layout-aware-fusion",
+    llvm::cl::desc("Require compatible known producer/consumer layouts"),
+    llvm::cl::init(true)};
+  Option<unsigned> selectiveFusionMaxChain{
+    *this,
+    "selective-fusion-max-chain",
+    llvm::cl::desc("Maximum number of elementwise operations in a fusion"),
+    llvm::cl::init(8)};
+  Option<bool> profileMaterializedSites{
+    *this,
+    "profile-materialized-sites",
+    llvm::cl::desc("Measure static Linalg producer-consumer materializations"),
+    llvm::cl::init(false)};
 };
 
 struct NCNNLinalgToMemRefPipelineOptions

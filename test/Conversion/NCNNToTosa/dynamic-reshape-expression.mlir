@@ -29,7 +29,10 @@ module {
 // MEMREF-SAME: %[[REFERENCE:[A-Za-z0-9_]+]]: memref<1x?x?xf32>,
 // MEMREF-SAME: %[[OUTPUT:[A-Za-z0-9_]+]]: memref<1x?x?xf32> {bufferize.result, ncnn.shape_program = [array<i64>, array<i64>, array<i64>], ncnn.shape_source_input = 1 : i32})
 // MEMREF: %[[RESHAPE:.*]] = memref.reshape %[[DATA]]
-// MEMREF: memref.copy %[[RESHAPE]], %[[OUTPUT]]
+// MEMREF: scf.for
+// MEMREF: memref.load %[[RESHAPE]]
+// MEMREF: memref.store {{.*}}, %[[OUTPUT]]
+// MEMREF-NOT: memref.copy
 // MEMREF-NOT: memref<1x?x?xf32, strided
 // MEMREF-NOT: tensor.
 // MEMREF-NOT: bufferization.

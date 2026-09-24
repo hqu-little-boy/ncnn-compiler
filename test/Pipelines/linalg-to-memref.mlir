@@ -12,7 +12,10 @@ module {
 // CHECK-SAME: %[[INPUT:.*]]: memref<4xf32>,
 // CHECK-SAME: %[[OUTPUT:.*]]: memref<4xf32> {bufferize.result})
 // CHECK-NOT: ->
-// CHECK: linalg.copy ins(%[[INPUT]] : memref<4xf32>) outs(%[[OUTPUT]] : memref<4xf32>)
+// CHECK-NOT: linalg.copy
+// CHECK: scf.for
+// CHECK: memref.load %[[INPUT]][
+// CHECK: memref.store {{.*}}, %[[OUTPUT]][
 // CHECK-NOT: memref.alloc
 // CHECK-NOT: memref.copy
 // CHECK-NOT: memref.dealloc %[[INPUT]]

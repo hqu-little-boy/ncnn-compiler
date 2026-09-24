@@ -1,9 +1,11 @@
 #include "ncnn-mlir/Transforms/StrategyNCNN/StrategyNCNN.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -26,7 +28,77 @@ namespace mlir::ncnn {
 
 namespace {
 
-// 算子形态策略（A1）：卷积的窗口索引映射含加法算术，不满足
+// Keep strategy rewrites bounded: all of them materialize tensor views or
+// temporary buffers whose static element counts must be both representable and
+// reasonably sized.  A failed proof leaves the original convolution in place.
+constexpr int64_t kMaxStrategyElements = 1LL << 28;
+// Keep im2col bounded separately: a window buffer may exceed the per-tensor
+// strategy limit even when the GEMM path is the established faster lowering.
+constexpr int64_t kMaxIm2colWindowElements = 1LL << 29;
+
+bool checkedMul(int64_t lhs, int64_t rhs, int64_t& result) {
+  if (lhs < 0 || rhs < 0 ||
+      (lhs != 0 && rhs > std::numeric_limits<int64_t>::max() / lhs)) {
+    return false;
+  }
+  result = lhs * rhs;
+  return true;
+}
+
+bool checkedAdd(int64_t lhs, int64_t rhs, int64_t& result) {
+  if (lhs < 0 || rhs < 0 || rhs > std::numeric_limits<int64_t>::max() - lhs) {
+    return false;
+  }
+  result = lhs + rhs;
+  return true;
+}
+
+bool checkedProduct(ArrayRef<int64_t> shape,
+                    int64_t& result,
+                    int64_t limit = kMaxStrategyElements) {
+  result = 1;
+  for (int64_t extent : shape) {
+    if (!checkedMul(result, extent, result) || result > limit) {
+      return false;
+    }
+  }
+  return true;
+}
+
+StringRef knownLayout(Operation* operation) {
+  for (StringRef attribute :
+       {contract::kOutputLayout, contract::kLayout, contract::kInputLayout}) {
+    if (auto value = operation->getAttrOfType<StringAttr>(attribute)) {
+      return value.getValue();
+    }
+  }
+  return {};
+}
+
+std::optional<int64_t> knownPackFactor(Operation* operation) {
+  for (StringRef attribute :
+       {contract::kPackFactor, contract::kLayoutPackFactor}) {
+    if (auto value = operation->getAttrOfType<IntegerAttr>(attribute)) {
+      return value.getInt();
+    }
+  }
+  return std::nullopt;
+}
+
+bool layoutMetadataCompatible(Operation* producer, Operation* consumer) {
+  StringRef producerLayout = knownLayout(producer);
+  StringRef consumerLayout = knownLayout(consumer);
+  if (!producerLayout.empty() && !consumerLayout.empty() &&
+      producerLayout != consumerLayout) {
+    return false;
+  }
+  auto producerFactor = knownPackFactor(producer);
+  auto consumerFactor = knownPackFactor(consumer);
+  return !producerFactor || !consumerFactor ||
+         *producerFactor == *consumerFactor;
+}
+
+// 算子形态策略（A1）：卷积的窗口索引映射含加法
 // vector.contract 的投影置换前置条件，也无法进入 GEMM 的循环序访存。
 // 本 pass 在向量化之前把可改写的 linalg.conv_2d_nhwc_hwcf 变换为
 // matmul 形态：
@@ -174,8 +246,8 @@ DenseFPElementsAttr transformWeight(RankedTensorType weightType,
   const int64_t inputChannels = weightType.getShape()[2];
   const int64_t outputChannels = weightType.getShape()[3];
   const int64_t depth = inputChannels * outputChannels;
-  const llvm::fltSemantics& semantics =
-    cast<FloatType>(weightType.getElementType()).getFloatSemantics();
+  FloatType elementType = cast<FloatType>(weightType.getElementType());
+  const llvm::fltSemantics& semantics = elementType.getFloatSemantics();
   SmallVector<APFloat> transformed(kBatch * depth, APFloat(semantics));
   auto values = weights.getValues<APFloat>();
   // 先行段（kw 方向）：W1[kh][jp][ic][oc] = Σ_kw G[jp][kw]·w[kh][kw][ic][oc]
@@ -238,21 +310,44 @@ bool isLiftableElementwiseBody(linalg::GenericOp consumer) {
   }
   Block& block = region.front();
   auto yield = dyn_cast<linalg::YieldOp>(block.getTerminator());
-  if (!yield || yield.getValues().size() != 1) {
+  if (!yield || yield.getValues().size() != 1 ||
+      block.getNumArguments() !=
+        consumer.getNumDpsInputs() + consumer.getNumDpsInits()) {
     return false;
   }
-  if (block.getNumArguments() != 2) {
+  bool hasInputUse = false;
+  for (unsigned index = 0; index < consumer.getNumDpsInputs(); ++index) {
+    hasInputUse |= !block.getArgument(index).use_empty();
+  }
+  if (!hasInputUse) {
     return false;
   }
-  Value input = block.getArgument(0);
-  Value output = block.getArgument(1);
-  if (input.use_empty() || !output.use_empty()) {
-    return false;
+  for (unsigned index = consumer.getNumDpsInputs();
+       index < block.getNumArguments();
+       ++index) {
+    if (!block.getArgument(index).use_empty()) {
+      return false;
+    }
   }
   bool hasComputation = false;
+  unsigned bodyOperations = 0;
   for (Operation& operation : block.without_terminator()) {
-    const StringRef dialect = operation.getName().getDialect()->getNamespace();
-    if (dialect != "arith" && dialect != "math") {
+    if (++bodyOperations > 8) {
+      return false;
+    }
+    if (!isa<arith::MaximumFOp,
+             arith::MinimumFOp,
+             arith::SelectOp,
+             arith::CmpFOp,
+             arith::MulFOp,
+             arith::AddFOp,
+             arith::SubFOp,
+             arith::DivFOp,
+             arith::NegFOp,
+             arith::ConstantOp,
+             math::ExpOp,
+             math::TanhOp,
+             math::ErfOp>(operation)) {
       return false;
     }
     hasComputation |= !isa<arith::ConstantOp>(operation);
@@ -260,35 +355,144 @@ bool isLiftableElementwiseBody(linalg::GenericOp consumer) {
   return hasComputation;
 }
 
-// conv 结果的唯一消费者须是静态、恒等映射、单输入单初始化的逐元素
-// generic——与 fuse-linalg-epilogue 的匹配条件一致，保证改写进折叠域后
-// 仍处于既有融合/向量化设施的可处理形态。
+bool isIdentityMapForRank(AffineMap map, int64_t rank) {
+  return map.isIdentity() && std::cmp_equal(map.getNumDims(), rank) &&
+         std::cmp_equal(map.getNumResults(), rank);
+}
+
+// Do not lift a residual that is itself another computed convolution branch.
+// Such branches can be rewritten later in this pass; retaining the direct
+// producer/consumer form lets the epilogue pass handle them without creating a
+// collapse view whose operand is subsequently replaced by a 2-D contraction.
+bool hasUnsafeTensorView(Value value) {
+  Operation* definition = value.getDefiningOp();
+  return definition && isa<tensor::CollapseShapeOp,
+                           tensor::ExpandShapeOp,
+                           tensor::ExtractSliceOp,
+                           tensor::InsertSliceOp,
+                           tensor::CastOp,
+                           tensor::ReshapeOp>(definition);
+}
+
+bool hasComputedTensorProducer(Value value) {
+  Operation* definition = value.getDefiningOp();
+  for (unsigned depth = 0; definition && depth < 8; ++depth) {
+    StringRef name = definition->getName().getStringRef();
+    if (name == "linalg.conv_2d_nhwc_hwcf" || name == "linalg.matmul" ||
+        name == "linalg.matmul_transpose_b" || name == "linalg.batch_matmul") {
+      return true;
+    }
+    if (isa<tensor::CollapseShapeOp,
+            tensor::ExpandShapeOp,
+            tensor::ExtractSliceOp,
+            tensor::CastOp,
+            tensor::ReshapeOp>(definition) &&
+        definition->getNumOperands() == 1) {
+      definition = definition->getOperand(0).getDefiningOp();
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+bool hasOnlyDpsInputUses(Value result, linalg::GenericOp consumer) {
+  for (OpOperand& use : result.getUses()) {
+    if (use.getOwner() != consumer.getOperation()) {
+      return false;
+    }
+    bool isDpsInput = false;
+    for (OpOperand* input : consumer.getDpsInputOperands()) {
+      if (input == &use) {
+        isDpsInput = true;
+        break;
+      }
+    }
+    if (!isDpsInput) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// conv 结果的全部使用须落在同一个静态、并行、可保序搬到二维域的逐元素
+// generic DPS 输入中；允许该输入值在 consumer 内重复出现。除同形状 residual
+// 外，只接受最后 channel 的 rank-1 广播；其它 map 由前置 FuseLinalgEpilogue
+// 尝试融合，拒绝后保留独立 generic。
 bool isCollapsibleElementwiseConsumer(linalg::GenericOp consumer,
                                       linalg::Conv2DNhwcHwcfOp convolution) {
   Value producerResult = convolution.getResult(0);
   auto producerType = dyn_cast<RankedTensorType>(producerResult.getType());
-  if (!producerResult.hasOneUse() ||
-      *producerResult.user_begin() != consumer.getOperation()) {
+  if (!producerType || !hasOnlyDpsInputUses(producerResult, consumer) ||
+      consumer.getNumDpsInputs() < 1 || consumer.getNumDpsInits() != 1 ||
+      consumer.getDpsInputOperand(0)->get() != producerResult) {
     return false;
   }
-  if (consumer.getNumDpsInputs() != 1 || consumer.getNumDpsInits() != 1) {
+  Value consumerInit = consumer.getDpsInitOperand(0)->get();
+  if (!layoutMetadataCompatible(convolution, consumer) ||
+      hasUnsafeTensorView(consumerInit)) {
     return false;
+  }
+  for (Value input : consumer.getDpsInputs()) {
+    if (input == consumerInit) {
+      return false;
+    }
   }
   const unsigned rank = producerType.getRank();
+  // This rewrite is defined for the original NHWC convolution result only.
+  // A previous Strategy rewrite may leave a 2-D matmul result feeding a
+  // generated generic; never try to collapse that already-collapsed domain a
+  // second time.
+  if (rank != 4 || consumer->hasAttr("ncnn.strategy_lifted_epilogue")) {
+    return false;
+  }
   for (utils::IteratorType iteratorType : consumer.getIteratorTypesArray()) {
     if (iteratorType != utils::IteratorType::parallel) {
       return false;
     }
   }
   auto maps = consumer.getIndexingMapsArray();
-  if (maps.size() != 2 || !maps[0].isIdentity() || !maps[1].isIdentity() ||
-      maps[0].getNumDims() != rank || maps[0].getNumResults() != rank) {
+  if (!std::cmp_equal(maps.size(), consumer.getNumDpsInputs() + 1) ||
+      !isIdentityMapForRank(maps.front(), rank) ||
+      !isIdentityMapForRank(maps.back(), rank)) {
     return false;
   }
   auto resultType = dyn_cast<RankedTensorType>(consumer.getResult(0).getType());
-  if (!resultType || !resultType.hasStaticShape() ||
-      resultType != producerType) {
+  auto initType =
+    dyn_cast<RankedTensorType>(consumer.getDpsInitOperand(0)->get().getType());
+  if (!resultType || !initType || !resultType.hasStaticShape() ||
+      resultType != producerType || initType != producerType ||
+      !producerType.hasStaticShape() ||
+      !producerType.getElementType().isF32() ||
+      producerType.getShape()[3] <= 0) {
     return false;
+  }
+  for (unsigned index = 1; index < consumer.getNumDpsInputs(); ++index) {
+    auto operandType =
+      dyn_cast<RankedTensorType>(consumer.getDpsInputs()[index].getType());
+    if (!operandType || !operandType.hasStaticShape() ||
+        !operandType.getElementType().isF32() ||
+        hasUnsafeTensorView(consumer.getDpsInputs()[index])) {
+      return false;
+    }
+    if (operandType.getRank() == static_cast<int64_t>(rank)) {
+      if (operandType != producerType ||
+          !isIdentityMapForRank(maps[index], rank) ||
+          (consumer.getDpsInputs()[index] != producerResult &&
+           hasComputedTensorProducer(consumer.getDpsInputs()[index]))) {
+        return false;
+      }
+      continue;
+    }
+    if (operandType.getRank() != 1 || maps[index].getNumResults() != 1 ||
+        !std::cmp_equal(maps[index].getNumDims(), rank)) {
+      return false;
+    }
+    auto channel = dyn_cast<AffineDimExpr>(maps[index].getResult(0));
+    if (!channel || channel.getPosition() != rank - 1 ||
+        operandType.getShape()[0] != producerType.getShape()[rank - 1]) {
+      return false;
+    }
   }
   return isLiftableElementwiseBody(consumer);
 }
@@ -301,8 +505,31 @@ Value collapseToRows(RewriterBase& rewriter,
                      Location location,
                      Value tensorValue,
                      ArrayRef<int64_t> shape) {
-  auto elementType =
-    cast<RankedTensorType>(tensorValue.getType()).getElementType();
+  auto tensorType = dyn_cast<RankedTensorType>(tensorValue.getType());
+  if (!tensorType || tensorType.getRank() != 4 || shape.size() != 4 ||
+      ShapedType::isDynamic(shape[3]) ||
+      ShapedType::isDynamic(tensorType.getShape()[3]) ||
+      tensorType.getShape()[3] != shape[3]) {
+    return {};
+  }
+  auto elementType = tensorType.getElementType();
+  // Avoid forming collapse(expand(x)) around a view already produced by an
+  // earlier Strategy rewrite. Canonicalization may replace the expand operand
+  // with x while retaining the collapse shell, yielding an invalid rank-2 to
+  // rank-2 collapse with rank-4 reassociation.
+  if (auto expand = tensorValue.getDefiningOp<tensor::ExpandShapeOp>()) {
+    auto sourceType = dyn_cast<RankedTensorType>(expand.getSrc().getType());
+    if (sourceType && sourceType.getRank() == 2 &&
+        tensorType.hasStaticShape() && sourceType.hasStaticShape()) {
+      int64_t rows = 0;
+      if (checkedProduct(ArrayRef<int64_t>{shape[0], shape[1], shape[2]},
+                         rows) &&
+          sourceType.getShape()[0] == rows &&
+          sourceType.getShape()[1] == shape[3]) {
+        return expand.getSrc();
+      }
+    }
+  }
   int64_t rows = 1;
   bool dynamicRows = false;
   for (unsigned dimension : {0u, 1u, 2u}) {
@@ -310,7 +537,12 @@ Value collapseToRows(RewriterBase& rewriter,
       dynamicRows = true;
       break;
     }
-    rows *= shape[dimension];
+    if (!checkedMul(rows, shape[dimension], rows)) {
+      return {};
+    }
+  }
+  if (!dynamicRows && rows > kMaxStrategyElements) {
+    return {};
   }
   if (!dynamicRows) {
     return rewriter.create<tensor::CollapseShapeOp>(
@@ -354,14 +586,31 @@ Value expandFromRows(RewriterBase& rewriter,
                      Value tensorValue,
                      ArrayRef<int64_t> shape,
                      Value referenceForDynamicDims) {
-  auto elementType =
-    cast<RankedTensorType>(tensorValue.getType()).getElementType();
+  auto tensorType = dyn_cast<RankedTensorType>(tensorValue.getType());
+  auto referenceType =
+    dyn_cast<RankedTensorType>(referenceForDynamicDims.getType());
+  if (!tensorType || !referenceType || tensorType.getRank() != 2 ||
+      referenceType.getRank() != 4 || shape.size() != 4 ||
+      ShapedType::isDynamic(shape[3]) ||
+      ShapedType::isDynamic(tensorType.getShape()[1]) ||
+      ShapedType::isDynamic(referenceType.getShape()[3]) ||
+      tensorType.getShape()[1] != shape[3] ||
+      referenceType.getShape()[3] != shape[3]) {
+    return {};
+  }
+  auto elementType = tensorType.getElementType();
   auto expandedType = RankedTensorType::get(shape, elementType);
   bool dynamicSpatial =
     llvm::any_of(ArrayRef<unsigned>{0u, 1u, 2u}, [&](unsigned dimension) {
       return shape[dimension] == ShapedType::kDynamic;
     });
   if (!dynamicSpatial) {
+    int64_t rows = 0;
+    if (!checkedProduct(ArrayRef<int64_t>{shape[0], shape[1], shape[2]},
+                        rows) ||
+        tensorType.getShape()[0] != rows) {
+      return {};
+    }
     SmallVector<OpFoldResult> outputShape;
     for (unsigned dimension : {0u, 1u, 2u, 3u}) {
       outputShape.push_back(
@@ -448,7 +697,16 @@ class StrategyNCNNPass final
       // TileMatmulForall + A1b 内核的既有路径。
       function.walk([&](linalg::BatchMatmulOp batch) {
         auto aType = dyn_cast<RankedTensorType>(batch.getInputs()[0].getType());
-        if (aType && aType.hasStaticShape() && aType.getShape()[0] == 1 &&
+        auto bType = dyn_cast<RankedTensorType>(batch.getInputs()[1].getType());
+        auto cType =
+          dyn_cast<RankedTensorType>(batch.getOutputs().front().getType());
+        if (aType && bType && cType && aType.hasStaticShape() &&
+            bType.hasStaticShape() && cType.hasStaticShape() &&
+            aType.getShape()[0] == 1 && bType.getShape()[0] == 1 &&
+            cType.getShape()[0] == 1 &&
+            cType.getShape()[1] == aType.getShape()[1] &&
+            aType.getShape()[2] == bType.getShape()[1] &&
+            cType.getShape()[2] == bType.getShape()[2] &&
             batch.hasPureTensorSemantics()) {
           unitBatches.push_back(batch);
         }
@@ -476,6 +734,14 @@ class StrategyNCNNPass final
     const auto bType = cast<RankedTensorType>(batch.getInputs()[1].getType());
     const auto cType =
       cast<RankedTensorType>(batch.getOutputs().front().getType());
+    int64_t ignoredElements = 0;
+    if (!aType.hasStaticShape() || !bType.hasStaticShape() ||
+        !cType.hasStaticShape() ||
+        !checkedProduct(aType.getShape(), ignoredElements) ||
+        !checkedProduct(bType.getShape(), ignoredElements) ||
+        !checkedProduct(cType.getShape(), ignoredElements)) {
+      return;
+    }
     const int64_t rows = aType.getShape()[1];
     const int64_t depth = aType.getShape()[2];
     const int64_t columns = bType.getShape()[2];
@@ -525,9 +791,23 @@ class StrategyNCNNPass final
                   int64_t dilationWidth,
                   int64_t strideHeight,
                   int64_t strideWidth) const {
-    const int64_t weightBytes = inputChannels * outputChannels * kernelHeight *
-                                kernelWidth * dilationHeight * dilationWidth *
-                                strideHeight * strideWidth * sizeof(float) * 2;
+    int64_t weightElements = 0;
+    if (!checkedProduct(ArrayRef<int64_t>{inputChannels,
+                                          outputChannels,
+                                          kernelHeight,
+                                          kernelWidth,
+                                          dilationHeight,
+                                          dilationWidth,
+                                          strideHeight,
+                                          strideWidth},
+                        weightElements,
+                        std::numeric_limits<int64_t>::max())) {
+      return true;
+    }
+    int64_t weightBytes = 0;
+    if (!checkedMul(weightElements, sizeof(float) * 2, weightBytes)) {
+      return true;
+    }
     return weightBytes > this->gemmL2Bytes.getValue() || inputChannels > 16 ||
            outputChannels > 16;
   }
@@ -554,8 +834,17 @@ class StrategyNCNNPass final
       return std::nullopt;
     }
     const unsigned bitWidth = elements.getElementType().getIntOrFloatBitWidth();
-    const int64_t depthExtent = kernelHeight * kernelWidth * inputChannels;
-    SmallVector<APInt> transposed(outputChannels * depthExtent,
+    int64_t depthExtent = 0;
+    int64_t elementCount = 0;
+    if (!checkedProduct(
+          ArrayRef<int64_t>{kernelHeight, kernelWidth, inputChannels},
+          depthExtent) ||
+        !checkedMul(outputChannels, depthExtent, elementCount) ||
+        elementCount > kMaxStrategyElements ||
+        !std::cmp_equal(elements.getNumElements(), elementCount)) {
+      return std::nullopt;
+    }
+    SmallVector<APInt> transposed(static_cast<size_t>(elementCount),
                                   APInt(bitWidth, 0));
     auto values = elements.getValues<APInt>();
     int64_t sourceIndex = 0;
@@ -610,12 +899,12 @@ class StrategyNCNNPass final
     auto rhsType = cast<RankedTensorType>(matmul.getInputs()[1].getType());
     const int64_t depth = rhsType.getShape()[0];
     const int64_t columns = rhsType.getShape()[1];
+    rewriter.setInsertionPoint(matmul);
     auto weightNK = buildTransposedWeightConstant(
       rewriter, matmul.getLoc(), matmul.getInputs()[1], 1, 1, depth, columns);
     if (!weightNK) {
       return;
     }
-    rewriter.setInsertionPoint(matmul);
     auto transposed = rewriter.create<linalg::MatmulTransposeBOp>(
       matmul.getLoc(),
       TypeRange{matmul.getResult(0).getType()},
@@ -655,10 +944,16 @@ class StrategyNCNNPass final
       dyn_cast<RankedTensorType>(convolution.getInputs()[1].getType());
     auto resultType =
       dyn_cast<RankedTensorType>(convolution.getResult(0).getType());
-    if (!imageType || !weightType || !resultType || imageType.getRank() != 4 ||
-        weightType.getRank() != 4 || resultType.getRank() != 4 ||
+    auto initType = dyn_cast<RankedTensorType>(
+      convolution.getDpsInitOperand(0)->get().getType());
+    if (!imageType || !weightType || !resultType || !initType ||
+        imageType.getRank() != 4 || weightType.getRank() != 4 ||
+        resultType.getRank() != 4 || initType.getRank() != 4 ||
         !imageType.hasStaticShape() || !resultType.hasStaticShape() ||
-        !weightType.hasStaticShape()) {
+        !initType.hasStaticShape() || !weightType.hasStaticShape() ||
+        !imageType.getElementType().isF32() ||
+        !weightType.getElementType().isF32() ||
+        !resultType.getElementType().isF32() || initType != resultType) {
       return false;
     }
     const ArrayRef<int64_t> imageShape = imageType.getShape();
@@ -670,7 +965,11 @@ class StrategyNCNNPass final
     const int64_t outputWidth = resultShape[2];
     const auto strides = convolution.getStrides().getValues<int64_t>();
     const auto dilations = convolution.getDilations().getValues<int64_t>();
-    if (batches != 1 || inputChannels < 1 || outputChannels < 1) {
+    if (batches != 1 || inputChannels < 1 || outputChannels < 1 ||
+        imageShape[3] != inputChannels || resultShape[0] != 1 ||
+        resultShape[3] != outputChannels || strides.size() != 2 ||
+        dilations.size() != 2 || strides[0] != 1 || strides[1] != 1 ||
+        dilations[0] != 1 || dilations[1] != 1) {
       // tile 域以 N=1 折叠展开；批维实例回退既有路径。
       return false;
     }
@@ -680,7 +979,7 @@ class StrategyNCNNPass final
       weightConstant
         ? dyn_cast<DenseFPElementsAttr>(weightConstant.getValueAttr())
         : nullptr;
-    if (!weightElements) {
+    if (!weightElements || !weightElements.getElementType().isF32()) {
       return false;
     }
     annotateConvContract(convolution,
@@ -694,13 +993,50 @@ class StrategyNCNNPass final
                          inputChannels,
                          outputChannels);
 
-    const int64_t tileRows = (outputHeight + kTile - 1) / kTile;
-    const int64_t tileColumns = (outputWidth + kTile - 1) / kTile;
-    const int64_t paddedHeight = (tileRows * kTile) + 2;
-    const int64_t paddedWidth = (tileColumns * kTile) + 2;
-    const int64_t tiles = tileRows * tileColumns;
+    int64_t roundedHeight = 0;
+    int64_t roundedWidth = 0;
+    if (!checkedAdd(outputHeight, kTile - 1, roundedHeight) ||
+        !checkedAdd(outputWidth, kTile - 1, roundedWidth)) {
+      return false;
+    }
+    const int64_t tileRows = roundedHeight / kTile;
+    const int64_t tileColumns = roundedWidth / kTile;
+    int64_t paddedHeight = 0;
+    int64_t paddedWidth = 0;
+    int64_t tileHeight = 0;
+    int64_t tileWidth = 0;
+    int64_t tiles = 0;
+    if (!checkedMul(tileRows, kTile, tileHeight) ||
+        !checkedMul(tileColumns, kTile, tileWidth) ||
+        !checkedAdd(tileHeight, 2, paddedHeight) ||
+        !checkedAdd(tileWidth, 2, paddedWidth) ||
+        !checkedMul(tileRows, tileColumns, tiles)) {
+      return false;
+    }
+    auto safeShape = [](ArrayRef<int64_t> shape) {
+      int64_t elements = 0;
+      return checkedProduct(shape, elements);
+    };
+    if (!safeShape(
+          ArrayRef<int64_t>{1, paddedHeight, paddedWidth, inputChannels}) ||
+        !safeShape(ArrayRef<int64_t>{
+          tileRows, tileColumns, kAlpha, kAlpha, inputChannels}) ||
+        !safeShape(ArrayRef<int64_t>{tiles, kBatch, inputChannels}) ||
+        !safeShape(ArrayRef<int64_t>{kBatch, inputChannels, tiles}) ||
+        !safeShape(ArrayRef<int64_t>{kBatch, outputChannels, inputChannels}) ||
+        !safeShape(ArrayRef<int64_t>{kBatch, outputChannels, tiles}) ||
+        !safeShape(ArrayRef<int64_t>{tiles, outputChannels, kBatch}) ||
+        !safeShape(ArrayRef<int64_t>{
+          tileRows, tileColumns, outputChannels, kAlpha, kAlpha}) ||
+        !safeShape(ArrayRef<int64_t>{
+          tileRows, kTile, tileColumns, kTile, outputChannels})) {
+      return false;
+    }
     const int64_t inputHeight = imageShape[1];
     const int64_t inputWidth = imageShape[2];
+    if (paddedHeight < inputHeight || paddedWidth < inputWidth) {
+      return false;
+    }
 
     Location location = convolution.getLoc();
     rewriter.setInsertionPoint(convolution);
@@ -1091,8 +1427,11 @@ class StrategyNCNNPass final
       dyn_cast<RankedTensorType>(convolution.getInputs()[1].getType());
     auto resultType =
       dyn_cast<RankedTensorType>(convolution.getResult(0).getType());
-    if (!imageType || !weightType || !resultType || imageType.getRank() != 4 ||
-        weightType.getRank() != 4 || resultType.getRank() != 4 ||
+    auto initType = dyn_cast<RankedTensorType>(
+      convolution.getDpsInitOperand(0)->get().getType());
+    if (!imageType || !weightType || !resultType || !initType ||
+        imageType.getRank() != 4 || weightType.getRank() != 4 ||
+        resultType.getRank() != 4 || initType.getRank() != 4 ||
         llvm::any_of(weightType.getShape(), [](int64_t extent) {
           return ShapedType::isDynamic(extent);
         })) {
@@ -1113,6 +1452,13 @@ class StrategyNCNNPass final
     llvm::append_range(strides, convolution.getStrides().getValues<int64_t>());
     llvm::append_range(dilations,
                        convolution.getDilations().getValues<int64_t>());
+    if (strides.size() != 2 || dilations.size() != 2 ||
+        llvm::any_of(strides, [](int64_t value) { return value <= 0; }) ||
+        llvm::any_of(dilations, [](int64_t value) { return value <= 0; })) {
+      contract::annotateOperationFamily(convolution, "conv", "fallback");
+      contract::annotateFallback(convolution, "invalid_geometry");
+      return;
+    }
     annotateConvContract(convolution,
                          "unknown",
                          kernelHeight,
@@ -1156,12 +1502,48 @@ class StrategyNCNNPass final
                                !ShapedType::isDynamic(imageShape[2]) &&
                                !ShapedType::isDynamic(resultShape[1]) &&
                                !ShapedType::isDynamic(resultShape[2]);
+    const ArrayRef<int64_t> initShape = initType.getShape();
+    const bool staticChannels =
+      !ShapedType::isDynamic(imageShape[3]) &&
+      !ShapedType::isDynamic(resultShape[3]) &&
+      !ShapedType::isDynamic(initShape[3]) && imageShape[3] == inputChannels &&
+      resultShape[3] == outputChannels && initShape[3] == outputChannels;
+    int64_t ignoredElements = 0;
+    const bool staticBatchOne =
+      !ShapedType::isDynamic(imageShape[0]) && imageShape[0] == 1 &&
+      !ShapedType::isDynamic(resultShape[0]) && resultShape[0] == 1 &&
+      !ShapedType::isDynamic(initShape[0]) && initShape[0] == 1;
+    const bool unitViewShapesSafe =
+      staticChannels && imageType.hasStaticShape() &&
+      resultType.hasStaticShape() && initType.hasStaticShape() &&
+      imageShape[0] == resultShape[0] && imageShape[0] == initShape[0] &&
+      imageShape[1] == resultShape[1] && imageShape[1] == initShape[1] &&
+      imageShape[2] == resultShape[2] && imageShape[2] == initShape[2] &&
+      checkedProduct(imageShape, ignoredElements) &&
+      checkedProduct(weightShape, ignoredElements) &&
+      checkedProduct(resultShape, ignoredElements) &&
+      checkedProduct(initShape, ignoredElements);
+    const bool im2colShapesSafe =
+      staticChannels && staticSpatial && staticBatchOne &&
+      imageType.hasStaticShape() && resultType.hasStaticShape() &&
+      initType.hasStaticShape() && initType == resultType &&
+      checkedProduct(imageShape, ignoredElements) &&
+      checkedProduct(weightShape, ignoredElements) &&
+      checkedProduct(resultShape, ignoredElements) &&
+      checkedProduct(initShape, ignoredElements) &&
+      checkedProduct(ArrayRef<int64_t>{resultShape[1],
+                                       resultShape[2],
+                                       kernelHeight,
+                                       kernelWidth,
+                                       inputChannels},
+                     ignoredElements,
+                     kMaxIm2colWindowElements);
     bool useUnitView = false;
     bool useIm2col = false;
     switch (strategy) {
       case ConvStrategy::Auto:
-        useUnitView = unitKernelStrideOne;
-        useIm2col = !unitKernelStrideOne && staticSpatial &&
+        useUnitView = unitKernelStrideOne && unitViewShapesSafe;
+        useIm2col = !unitKernelStrideOne && im2colShapesSafe &&
                     (integerElements || preferGemm(inputChannels,
                                                    outputChannels,
                                                    kernelHeight,
@@ -1172,8 +1554,8 @@ class StrategyNCNNPass final
                                                    strides[1]));
         break;
       case ConvStrategy::Gemm:
-        useUnitView = unitKernelStrideOne;
-        useIm2col = !unitKernelStrideOne && staticSpatial;
+        useUnitView = unitKernelStrideOne && unitViewShapesSafe;
+        useIm2col = !unitKernelStrideOne && im2colShapesSafe;
         break;
       case ConvStrategy::Conv:
         // 直接卷积：保持 linalg.conv_2d_nhwc_hwcf 原路径。
@@ -1192,8 +1574,8 @@ class StrategyNCNNPass final
         // 判据外实例（非 3×3 s1 d1、批维非 1、动态空间维、int8）在
         // rewriteWinograd 守卫中未被改写时落回常规 dispatch：显式
         // 策略不比 auto 更少优化。
-        useUnitView = unitKernelStrideOne;
-        useIm2col = !unitKernelStrideOne && staticSpatial &&
+        useUnitView = unitKernelStrideOne && unitViewShapesSafe;
+        useIm2col = !unitKernelStrideOne && im2colShapesSafe &&
                     (integerElements || preferGemm(inputChannels,
                                                    outputChannels,
                                                    kernelHeight,
@@ -1331,8 +1713,18 @@ class StrategyNCNNPass final
     // 不会二次融合。
     Value convResult = convolution.getResult(0);
     linalg::GenericOp consumer;
-    if (convResult.hasOneUse()) {
-      consumer = dyn_cast<linalg::GenericOp>(*convResult.getUsers().begin());
+    Operation* onlyUser = nullptr;
+    bool hasMultipleUsers = false;
+    for (OpOperand& use : convResult.getUses()) {
+      if (!onlyUser) {
+        onlyUser = use.getOwner();
+      } else if (onlyUser != use.getOwner()) {
+        hasMultipleUsers = true;
+        break;
+      }
+    }
+    if (!hasMultipleUsers) {
+      consumer = dyn_cast_or_null<linalg::GenericOp>(onlyUser);
     }
     if (consumer && isCollapsibleElementwiseConsumer(consumer, convolution)) {
       // 折叠后的激活须位于 consumer 之前：其 outs 初始化可能定义在 conv
@@ -1347,17 +1739,41 @@ class StrategyNCNNPass final
           : collapseToRows(rewriter, location, consumerInit, resultShape);
       auto identityTwoDim =
         AffineMap::getMultiDimIdentityMap(2, rewriter.getContext());
-      Value consumerBuffer = rewriter.create<tensor::EmptyOp>(
-        location,
-        contractionOutputType.getShape(),
-        contractionOutputType.getElementType());
+      SmallVector<Value> liftedInputs{contracted};
+      SmallVector<AffineMap> liftedMaps{identityTwoDim};
+      for (unsigned index = 1; index < consumer.getNumDpsInputs(); ++index) {
+        Value input = consumer.getDpsInputs()[index];
+        if (input == convResult) {
+          liftedInputs.push_back(contracted);
+          liftedMaps.push_back(identityTwoDim);
+          continue;
+        }
+        auto inputType = cast<RankedTensorType>(input.getType());
+        if (inputType.getRank() == resultType.getRank()) {
+          liftedInputs.push_back(
+            collapseToRows(rewriter, location, input, resultShape));
+          liftedMaps.push_back(identityTwoDim);
+          continue;
+        }
+        // A rank-1 channel/column operand is already in the collapsed
+        // coordinate space. Its original map was proven to select the last
+        // output dimension by isCollapsibleElementwiseConsumer.
+        liftedInputs.push_back(input);
+        liftedMaps.push_back(
+          AffineMap::get(2,
+                         0,
+                         {getAffineDimExpr(1, rewriter.getContext())},
+                         rewriter.getContext()));
+      }
+      liftedMaps.push_back(identityTwoDim);
       auto lifted = rewriter.create<linalg::GenericOp>(
         consumer.getLoc(),
-        TypeRange{consumerBuffer.getType()},
-        ValueRange{contracted},
+        TypeRange{collapsedConsumerInit.getType()},
+        liftedInputs,
         ValueRange{collapsedConsumerInit},
-        SmallVector<AffineMap>{identityTwoDim, identityTwoDim},
+        liftedMaps,
         SmallVector<utils::IteratorType>(2, utils::IteratorType::parallel));
+      lifted->setAttr("ncnn.strategy_lifted_epilogue", rewriter.getUnitAttr());
       IRMapping mapping;
       consumer->getRegion(0).cloneInto(&lifted->getRegion(0), mapping);
       Value expanded = expandFromRows(rewriter,

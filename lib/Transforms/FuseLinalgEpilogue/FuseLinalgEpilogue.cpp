@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -10,6 +11,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
@@ -26,7 +28,9 @@ namespace mlir::ncnn {
 
 namespace {
 
-bool isFusableElementwiseBody(linalg::GenericOp consumer) {
+bool isFusableElementwiseBody(linalg::GenericOp consumer,
+                              bool allowCastChain,
+                              unsigned maxBodyOperations) {
   Region& region = consumer->getRegion(0);
   if (!region.hasOneBlock()) {
     return false;
@@ -49,14 +53,34 @@ bool isFusableElementwiseBody(linalg::GenericOp consumer) {
     }
   }
   bool hasComputation = false;
+  unsigned bodyOperations = 0;
   for (Operation& operation : block.without_terminator()) {
+    if (++bodyOperations > maxBodyOperations) {
+      return false;
+    }
+    const bool castOperation = isa<arith::ExtFOp,
+                                   arith::TruncFOp,
+                                   arith::SIToFPOp,
+                                   arith::UIToFPOp,
+                                   arith::FPToSIOp,
+                                   arith::FPToUIOp,
+                                   arith::ExtSIOp,
+                                   arith::ExtUIOp,
+                                   arith::TruncIOp>(operation);
     if (!isa<arith::MaximumFOp,
              arith::MinimumFOp,
              arith::SelectOp,
              arith::CmpFOp,
              arith::MulFOp,
              arith::AddFOp,
-             arith::ConstantOp>(operation)) {
+             arith::SubFOp,
+             arith::DivFOp,
+             arith::NegFOp,
+             arith::ConstantOp,
+             math::ExpOp,
+             math::TanhOp,
+             math::ErfOp>(operation) &&
+        (!allowCastChain || !castOperation)) {
       return false;
     }
     hasComputation |= !isa<arith::ConstantOp>(operation);
@@ -73,6 +97,144 @@ bool isIdentityMap(AffineMap map, int64_t rank) {
   return dimensions == rank && results == rank;
 }
 
+// P22 广播映射只允许投影一个迭代维，或投影到静态 extent=1 的常量维。
+// 这使 tile slice 的 offset/size 可在不猜测 alias 的情况下逐维推导。
+bool isProjectedBroadcastMap(AffineMap map,
+                             RankedTensorType sourceType,
+                             int64_t loopRank) {
+  if (!std::cmp_equal(map.getNumDims(), loopRank) ||
+      !std::cmp_equal(map.getNumResults(), sourceType.getRank())) {
+    return false;
+  }
+  SmallVector<bool> usedDimensions(loopRank, false);
+  bool hasProjectedConstant = false;
+  for (unsigned sourceDimension = 0; sourceDimension < sourceType.getRank();
+       ++sourceDimension) {
+    AffineExpr expression = map.getResult(sourceDimension);
+    if (auto dimension = dyn_cast<AffineDimExpr>(expression)) {
+      const unsigned position = dimension.getPosition();
+      if (std::cmp_greater_equal(position, loopRank) ||
+          usedDimensions[position]) {
+        return false;
+      }
+      usedDimensions[position] = true;
+      continue;
+    }
+    auto constant = dyn_cast<AffineConstantExpr>(expression);
+    if (!constant || constant.getValue() != 0 ||
+        sourceType.getShape()[sourceDimension] != 1) {
+      return false;
+    }
+    hasProjectedConstant = true;
+  }
+  return sourceType.getRank() < loopRank || hasProjectedConstant;
+}
+
+bool isSupportedOperandMap(AffineMap map,
+                           RankedTensorType sourceType,
+                           int64_t loopRank,
+                           bool allowBroadcast) {
+  if (isIdentityMap(map, sourceType.getRank())) {
+    return std::cmp_equal(map.getNumDims(), loopRank);
+  }
+  return allowBroadcast && isProjectedBroadcastMap(map, sourceType, loopRank);
+}
+
+StringRef fusionBroadcastKind(linalg::GenericOp consumer) {
+  for (unsigned index = 1; index < consumer.getNumDpsInputs(); ++index) {
+    auto type =
+      dyn_cast<RankedTensorType>(consumer.getDpsInputs()[index].getType());
+    if (type && !isIdentityMap(consumer.getIndexingMapsArray()[index],
+                               type.getRank())) {
+      return "projected_broadcast";
+    }
+  }
+  return "none";
+}
+
+StringRef getKnownLayout(Operation* operation) {
+  for (StringRef attribute :
+       {contract::kOutputLayout, contract::kLayout, contract::kInputLayout}) {
+    if (auto value = operation->getAttrOfType<StringAttr>(attribute)) {
+      return value.getValue();
+    }
+  }
+  return {};
+}
+
+std::optional<int64_t> getKnownPackFactor(Operation* operation) {
+  for (StringRef attribute :
+       {contract::kPackFactor, contract::kLayoutPackFactor}) {
+    if (auto value = operation->getAttrOfType<IntegerAttr>(attribute)) {
+      return value.getInt();
+    }
+  }
+  return std::nullopt;
+}
+
+bool isFusionLayoutCompatible(Operation* producer, Operation* consumer) {
+  StringRef producerLayout = getKnownLayout(producer);
+  StringRef consumerLayout = getKnownLayout(consumer);
+  if (!producerLayout.empty() && !consumerLayout.empty() &&
+      producerLayout != consumerLayout) {
+    return false;
+  }
+  auto producerFactor = getKnownPackFactor(producer);
+  auto consumerFactor = getKnownPackFactor(consumer);
+  return !producerFactor || !consumerFactor ||
+         *producerFactor == *consumerFactor;
+}
+
+StringRef fusionLayoutKind(Operation* producer, Operation* consumer) {
+  StringRef producerLayout = getKnownLayout(producer);
+  StringRef consumerLayout = getKnownLayout(consumer);
+  if (!producerLayout.empty() || !consumerLayout.empty()) {
+    return "metadata_compatible";
+  }
+  return "identity_contiguous";
+}
+
+Value sliceOperandForTile(RewriterBase& rewriter,
+                          Location location,
+                          Value operand,
+                          AffineMap map,
+                          ArrayRef<OpFoldResult> tileOffsets,
+                          ArrayRef<OpFoldResult> tileSizes,
+                          bool& isBroadcast) {
+  auto type = dyn_cast<RankedTensorType>(operand.getType());
+  if (!type || type.getRank() == 0) {
+    return operand;
+  }
+  isBroadcast = !isIdentityMap(map, type.getRank());
+  SmallVector<OpFoldResult> offsets;
+  SmallVector<OpFoldResult> sizes;
+  SmallVector<OpFoldResult> strides;
+  offsets.reserve(type.getRank());
+  sizes.reserve(type.getRank());
+  strides.assign(type.getRank(), rewriter.getIndexAttr(1));
+  for (unsigned dimension = 0; dimension < type.getRank(); ++dimension) {
+    AffineExpr expression = map.getResult(dimension);
+    if (auto projected = dyn_cast<AffineDimExpr>(expression)) {
+      const unsigned position = projected.getPosition();
+      offsets.push_back(tileOffsets[position]);
+      sizes.push_back(tileSizes[position]);
+    } else {
+      offsets.push_back(rewriter.getIndexAttr(0));
+      sizes.push_back(rewriter.getIndexAttr(1));
+    }
+  }
+  SmallVector<int64_t> resultShape;
+  resultShape.reserve(type.getRank());
+  for (OpFoldResult size : sizes) {
+    auto attribute = dyn_cast_if_present<Attribute>(size);
+    auto integer = attribute ? dyn_cast<IntegerAttr>(attribute) : nullptr;
+    resultShape.push_back(integer ? integer.getInt() : ShapedType::kDynamic);
+  }
+  auto resultType = RankedTensorType::get(resultShape, type.getElementType());
+  return {rewriter.create<tensor::ExtractSliceOp>(
+    location, resultType, operand, offsets, sizes, strides)};
+}
+
 bool hasTensorViewProducer(Value value) {
   Operation* definition = value.getDefiningOp();
   if (!definition) {
@@ -83,6 +245,24 @@ bool hasTensorViewProducer(Value value) {
              tensor::ExtractSliceOp,
              tensor::InsertSliceOp,
              tensor::CastOp>(definition);
+}
+
+bool hasOnlyDpsInputUses(Value result, linalg::GenericOp consumer) {
+  for (OpOperand& use : result.getUses()) {
+    if (use.getOwner() != consumer.getOperation() ||
+        !llvm::is_contained(consumer.getDpsInputOperands(), &use)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+int64_t countResidualInputs(linalg::GenericOp consumer, Value producerResult) {
+  int64_t count = 0;
+  for (unsigned index = 1; index < consumer.getNumDpsInputs(); ++index) {
+    count += consumer.getDpsInputs()[index] != producerResult;
+  }
+  return count;
 }
 
 bool hasRepeatedOperand(Operation* producer, linalg::GenericOp consumer) {
@@ -112,7 +292,10 @@ bool hasRepeatedOperand(Operation* producer, linalg::GenericOp consumer) {
 const char* fusableConsumerFailure(linalg::GenericOp consumer,
                                    Operation* producer,
                                    int64_t producerRank,
-                                   bool allowResidual) {
+                                   bool allowResidual,
+                                   bool allowBroadcast,
+                                   bool allowCastChain,
+                                   unsigned maxChainLength) {
   if (consumer.getNumDpsInputs() < 1 || consumer.getNumDpsInits() != 1) {
     return "unsupported_consumer_arity";
   }
@@ -122,19 +305,20 @@ const char* fusableConsumerFailure(linalg::GenericOp consumer,
   if (consumer.getDpsInputOperand(0)->get() != producer->getResult(0)) {
     return "producer_not_flowing_input";
   }
+  for (unsigned index = 1; index < consumer.getNumDpsInputs(); ++index) {
+    if (consumer.getDpsInputs()[index] == producer->getResult(0)) {
+      return "repeated_producer_input";
+    }
+  }
   for (utils::IteratorType iteratorType : consumer.getIteratorTypesArray()) {
     if (iteratorType != utils::IteratorType::parallel) {
       return "non_parallel_consumer";
     }
   }
   auto maps = consumer.getIndexingMapsArray();
+  const int64_t loopRank = consumer.getNumLoops();
   if (maps.size() != static_cast<size_t>(consumer.getNumDpsInputs() + 1)) {
     return "indexing_map_arity";
-  }
-  for (AffineMap map : maps) {
-    if (!isIdentityMap(map, producerRank)) {
-      return "non_identity_map";
-    }
   }
   auto resultType = dyn_cast<RankedTensorType>(consumer.getResult(0).getType());
   auto producerType =
@@ -143,22 +327,36 @@ const char* fusableConsumerFailure(linalg::GenericOp consumer,
     dyn_cast<RankedTensorType>(consumer.getDpsInits()[0].getType());
   if (!resultType || !producerType || !initType ||
       !resultType.hasStaticShape() || resultType != producerType ||
-      initType != resultType) {
+      initType != resultType ||
+      !std::cmp_equal(maps.back().getNumDims(), loopRank) ||
+      !isIdentityMap(maps.back(), producerRank)) {
     return "shape_mismatch";
   }
   if (!resultType.getElementType().isF32() ||
       !producerType.getElementType().isF32()) {
     return "unsupported_type";
   }
+  auto producerMap = maps.front();
+  if (!isIdentityMap(producerMap, producerRank) ||
+      !std::cmp_equal(producerMap.getNumDims(), loopRank)) {
+    return "producer_map";
+  }
   for (unsigned index = 1; index < consumer.getNumDpsInputs(); ++index) {
     auto residualType =
       dyn_cast<RankedTensorType>(consumer.getDpsInputs()[index].getType());
     if (!residualType || !residualType.hasStaticShape() ||
-        residualType != producerType) {
-      return "shape_mismatch";
+        !residualType.getElementType().isF32() ||
+        !isSupportedOperandMap(
+          maps[index], residualType, loopRank, allowBroadcast)) {
+      if (residualType && std::cmp_equal(residualType.getRank(), loopRank) &&
+          !isIdentityMap(maps[index], residualType.getRank())) {
+        return "non_identity_map";
+      }
+      return allowBroadcast ? "unsupported_broadcast_map"
+                            : "broadcast_disabled";
     }
   }
-  if (!isFusableElementwiseBody(consumer)) {
+  if (!isFusableElementwiseBody(consumer, allowCastChain, maxChainLength)) {
     return "unsupported_body";
   }
   for (Value value : producer->getOperands()) {
@@ -234,6 +432,19 @@ Value indexConstant(RewriterBase& rewriter, Location location, int64_t value) {
   return rewriter.create<arith::ConstantIndexOp>(location, value);
 }
 
+int64_t fusionProfileId(StringRef functionName,
+                        uint64_t ordinal,
+                        StringRef suffix = {}) {
+  const std::string key = functionName.str() + "/fusion-site#" +
+                          std::to_string(ordinal) + suffix.str();
+  uint64_t hash = 14695981039346656037ULL;
+  for (unsigned char character : key) {
+    hash ^= character;
+    hash *= 1099511628211ULL;
+  }
+  return static_cast<int64_t>(hash & 0x7fffffffffffffffULL);
+}
+
 linalg::GenericOp cloneEpilogue(RewriterBase& rewriter,
                                 linalg::GenericOp consumer,
                                 ValueRange tiledInputs,
@@ -258,6 +469,8 @@ Value buildStaticTiledSequence(RewriterBase& rewriter,
                                Operation* producer,
                                int64_t totalExtent,
                                int64_t tileSize,
+                               int64_t profileId,
+                               int64_t tailProfileId,
                                const TileChunkBuilder& buildChunk) {
   Location location = producer->getLoc();
   Value acc = consumer.getDpsInitOperand(0)->get();
@@ -270,6 +483,7 @@ Value buildStaticTiledSequence(RewriterBase& rewriter,
                                   indexConstant(rewriter, location, mainTiles),
                                   indexConstant(rewriter, location, 1),
                                   ValueRange{acc});
+    contract::setInteger(loop, contract::kFusionSiteId, profileId);
     Block* body = loop.getBody();
     rewriter.setInsertionPointToStart(body);
     Value chunkResult = buildChunk(rewriter,
@@ -285,6 +499,13 @@ Value buildStaticTiledSequence(RewriterBase& rewriter,
   if (tailWidth > 0) {
     acc = buildChunk(
       rewriter, location, Value(), mainTiles * tileSize, tailWidth, acc);
+    if (auto insertSlice = acc.getDefiningOp<tensor::InsertSliceOp>()) {
+      if (Operation* epilogue = insertSlice.getSource().getDefiningOp()) {
+        contract::setInteger(epilogue,
+                             contract::kFusionSiteId,
+                             mainTiles > 0 ? tailProfileId : profileId);
+      }
+    }
   }
   return acc;
 }
@@ -293,6 +514,8 @@ Value tileConvolution(RewriterBase& rewriter,
                       linalg::Conv2DNhwcHwcfOp convolution,
                       linalg::GenericOp consumer,
                       int64_t tileWidth,
+                      int64_t profileId,
+                      int64_t tailProfileId,
                       bool& fusionAnnotated) {
   Location location = convolution.getLoc();
   auto resultType = cast<RankedTensorType>(convolution.getResult(0).getType());
@@ -378,22 +601,27 @@ Value tileConvolution(RewriterBase& rewriter,
                                                 ValueRange{initTile},
                                                 convolution.getStrides(),
                                                 convolution.getDilations());
+    SmallVector<OpFoldResult> tileOffsets{zero, zero, outputOffsetWidth, zero};
+    SmallVector<OpFoldResult> tileSizes{rewriter.getIndexAttr(1),
+                                        rewriter.getIndexAttr(outputHeight),
+                                        rewriter.getIndexAttr(tileWidth),
+                                        rewriter.getIndexAttr(channels)};
     SmallVector<Value> tiledInputs{tileConvolution.getResult(0)};
     for (unsigned index = 1; index < consumer.getNumDpsInputs(); ++index) {
       Value residual = consumer.getDpsInputs()[index];
-      auto residualTile = rewriter.create<tensor::ExtractSliceOp>(
-        location,
-        initTileType,
-        residual,
-        SmallVector<OpFoldResult>{zero, zero, outputOffsetWidth, zero},
-        SmallVector<OpFoldResult>{rewriter.getIndexAttr(1),
-                                  rewriter.getIndexAttr(outputHeight),
-                                  rewriter.getIndexAttr(tileWidth),
-                                  rewriter.getIndexAttr(channels)},
-        SmallVector<OpFoldResult>{rewriter.getIndexAttr(1),
-                                  rewriter.getIndexAttr(1),
-                                  rewriter.getIndexAttr(1),
-                                  rewriter.getIndexAttr(1)});
+      if (residual == convolution.getResult(0)) {
+        tiledInputs.push_back(tileConvolution.getResult(0));
+        continue;
+      }
+      bool broadcasted = false;
+      Value residualTile =
+        sliceOperandForTile(rewriter,
+                            location,
+                            residual,
+                            consumer.getIndexingMapsArray()[index],
+                            tileOffsets,
+                            tileSizes,
+                            broadcasted);
       tiledInputs.push_back(residualTile);
     }
     Value emptyTile = rewriter.create<tensor::EmptyOp>(
@@ -407,13 +635,19 @@ Value tileConvolution(RewriterBase& rewriter,
         cast<RankedTensorType>(convolution.getResult(0).getType())
           .getNumElements() *
         4;
-      contract::annotateFusion(tileEpilogue.getOperation(),
-                               "conv2d_epilogue",
-                               "linalg.conv_2d_nhwc_hwcf",
-                               consumer.getNumDpsInputs() - 1,
-                               tileWidth,
-                               bytes,
-                               bytes);
+      contract::annotateFusion(
+        tileEpilogue.getOperation(),
+        "conv2d_epilogue",
+        "linalg.conv_2d_nhwc_hwcf",
+        countResidualInputs(consumer, convolution.getResult(0)),
+        tileWidth,
+        bytes,
+        bytes);
+      contract::annotateFusionPlan(
+        tileEpilogue.getOperation(),
+        "ordered_elementwise",
+        fusionBroadcastKind(consumer),
+        fusionLayoutKind(convolution.getOperation(), consumer));
       fusionAnnotated = true;
     }
     return rewriter.create<tensor::InsertSliceOp>(
@@ -436,6 +670,8 @@ Value tileConvolution(RewriterBase& rewriter,
                                   convolution.getOperation(),
                                   width,
                                   tileWidth,
+                                  profileId,
+                                  tailProfileId,
                                   buildChunk);
 }
 
@@ -443,6 +679,8 @@ Value tileMatmul(RewriterBase& rewriter,
                  linalg::MatmulOp matmul,
                  linalg::GenericOp consumer,
                  int64_t tileWidth,
+                 int64_t profileId,
+                 int64_t tailProfileId,
                  bool& fusionAnnotated) {
   Location location = matmul.getLoc();
   auto resultType = cast<RankedTensorType>(matmul.getResult(0).getType());
@@ -497,18 +735,25 @@ Value tileMatmul(RewriterBase& rewriter,
                                         TypeRange{initTileType},
                                         ValueRange{lhs, rhsTile},
                                         ValueRange{initTile});
+    SmallVector<OpFoldResult> tileOffsets{zero, columnOffset};
+    SmallVector<OpFoldResult> tileSizes{rewriter.getIndexAttr(rows),
+                                        rewriter.getIndexAttr(tileColumns)};
     SmallVector<Value> tiledInputs{tileMatmul.getResult(0)};
     for (unsigned index = 1; index < consumer.getNumDpsInputs(); ++index) {
       Value residual = consumer.getDpsInputs()[index];
-      auto residualTile = rewriter.create<tensor::ExtractSliceOp>(
-        location,
-        initTileType,
-        residual,
-        SmallVector<OpFoldResult>{zero, columnOffset},
-        SmallVector<OpFoldResult>{rewriter.getIndexAttr(rows),
-                                  rewriter.getIndexAttr(tileColumns)},
-        SmallVector<OpFoldResult>{rewriter.getIndexAttr(1),
-                                  rewriter.getIndexAttr(1)});
+      if (residual == matmul.getResult(0)) {
+        tiledInputs.push_back(tileMatmul.getResult(0));
+        continue;
+      }
+      bool broadcasted = false;
+      Value residualTile =
+        sliceOperandForTile(rewriter,
+                            location,
+                            residual,
+                            consumer.getIndexingMapsArray()[index],
+                            tileOffsets,
+                            tileSizes,
+                            broadcasted);
       tiledInputs.push_back(residualTile);
     }
     Value emptyTile = rewriter.create<tensor::EmptyOp>(
@@ -519,13 +764,19 @@ Value tileMatmul(RewriterBase& rewriter,
       const int64_t bytes =
         cast<RankedTensorType>(matmul.getResult(0).getType()).getNumElements() *
         4;
-      contract::annotateFusion(tileEpilogue.getOperation(),
-                               "matmul_epilogue",
-                               "linalg.matmul",
-                               consumer.getNumDpsInputs() - 1,
-                               tileWidth,
-                               bytes,
-                               bytes);
+      contract::annotateFusion(
+        tileEpilogue.getOperation(),
+        "matmul_epilogue",
+        "linalg.matmul",
+        countResidualInputs(consumer, matmul.getResult(0)),
+        tileWidth,
+        bytes,
+        bytes);
+      contract::annotateFusionPlan(
+        tileEpilogue.getOperation(),
+        "ordered_elementwise",
+        fusionBroadcastKind(consumer),
+        fusionLayoutKind(matmul.getOperation(), consumer));
       fusionAnnotated = true;
     }
     return rewriter.create<tensor::InsertSliceOp>(
@@ -539,8 +790,14 @@ Value tileMatmul(RewriterBase& rewriter,
                                 rewriter.getIndexAttr(1)});
   };
 
-  return buildStaticTiledSequence(
-    rewriter, consumer, matmul.getOperation(), columns, tileWidth, buildChunk);
+  return buildStaticTiledSequence(rewriter,
+                                  consumer,
+                                  matmul.getOperation(),
+                                  columns,
+                                  tileWidth,
+                                  profileId,
+                                  tailProfileId,
+                                  buildChunk);
 }
 
 class FuseLinalgEpiloguePass final
@@ -552,11 +809,21 @@ class FuseLinalgEpiloguePass final
     ModuleOp module = getOperation();
     const int64_t tileWidthValue = this->tileWidth.getValue();
     contract::setBool(module, contract::kFusionEnabled, this->enable);
+    contract::setBool(
+      module, contract::kFusionAllowBroadcast, this->allowBroadcast);
+    contract::setBool(
+      module, contract::kFusionAllowCastChain, this->allowCastChain);
+    contract::setBool(
+      module, contract::kFusionLayoutAware, this->layoutAwareFusion);
+    contract::setInteger(
+      module, contract::kFusionMaxChain, this->maxChainLength);
+    contract::setString(module, contract::kFusionRevision, "fusion-v2");
     int64_t selectedCount = 0;
     int64_t residualCount = 0;
     int64_t rejectedCount = 0;
     std::map<std::string, int64_t> rejectionReasons;
     SmallVector<std::pair<Operation*, linalg::GenericOp>> candidates;
+    std::map<Operation*, std::pair<int64_t, int64_t>> fusionProfileIds;
 
     auto reject = [&](const char* reason, Operation* operation = nullptr) {
       ++rejectedCount;
@@ -570,10 +837,15 @@ class FuseLinalgEpiloguePass final
     }
 
     module.walk([&](func::FuncOp function) {
+      uint64_t producerOrdinal = 0;
       function.walk([&](Operation* operation) {
         Value result;
         if (isa<linalg::Conv2DNhwcHwcfOp, linalg::MatmulOp>(operation)) {
           result = operation->getResult(0);
+          const uint64_t ordinal = producerOrdinal++;
+          fusionProfileIds[operation] = {
+            fusionProfileId(function.getName(), ordinal),
+            fusionProfileId(function.getName(), ordinal, "/tail")};
         } else {
           return;
         }
@@ -584,13 +856,15 @@ class FuseLinalgEpiloguePass final
         if (result.use_empty()) {
           return;
         }
-        if (!result.hasOneUse()) {
-          reject("multi_consumer", operation);
+        OpOperand& firstUse = *result.getUses().begin();
+        auto consumer = dyn_cast<linalg::GenericOp>(firstUse.getOwner());
+        if (!consumer) {
+          reject(result.hasOneUse() ? "unsupported_consumer" : "multi_consumer",
+                 operation);
           return;
         }
-        auto consumer = dyn_cast<linalg::GenericOp>(*result.user_begin());
-        if (!consumer) {
-          reject("unsupported_consumer", operation);
+        if (!hasOnlyDpsInputUses(result, consumer)) {
+          reject("multi_consumer", operation);
           return;
         }
         if (operation->getBlock() != consumer->getBlock()) {
@@ -601,13 +875,23 @@ class FuseLinalgEpiloguePass final
           reject("non_dominating_producer", operation);
           return;
         }
+        if (this->layoutAwareFusion &&
+            !isFusionLayoutCompatible(operation, consumer)) {
+          reject("layout_mismatch", operation);
+          return;
+        }
         auto resultType = dyn_cast<RankedTensorType>(result.getType());
         if (!resultType) {
           reject("unsupported_type", operation);
           return;
         }
-        if (const char* reason = fusableConsumerFailure(
-              consumer, operation, resultType.getRank(), this->allowResidual)) {
+        if (const char* reason = fusableConsumerFailure(consumer,
+                                                        operation,
+                                                        resultType.getRank(),
+                                                        this->allowResidual,
+                                                        this->allowBroadcast,
+                                                        this->allowCastChain,
+                                                        this->maxChainLength)) {
           reject(reason, operation);
           return;
         }
@@ -625,24 +909,45 @@ class FuseLinalgEpiloguePass final
           continue;
         }
         rewriter.setInsertionPoint(consumer);
+        const auto [profileId, tailProfileId] = fusionProfileIds.at(producer);
         bool fusionAnnotated = false;
         Value fused;
         if (auto convolution = dyn_cast<linalg::Conv2DNhwcHwcfOp>(producer)) {
-          fused = tileConvolution(
-            rewriter, convolution, consumer, tileWidthValue, fusionAnnotated);
+          fused = tileConvolution(rewriter,
+                                  convolution,
+                                  consumer,
+                                  tileWidthValue,
+                                  profileId,
+                                  tailProfileId,
+                                  fusionAnnotated);
         } else if (auto matmul = dyn_cast<linalg::MatmulOp>(producer)) {
-          fused = tileMatmul(
-            rewriter, matmul, consumer, tileWidthValue, fusionAnnotated);
+          fused = tileMatmul(rewriter,
+                             matmul,
+                             consumer,
+                             tileWidthValue,
+                             profileId,
+                             tailProfileId,
+                             fusionAnnotated);
         } else {
           reject("unsupported_producer");
           continue;
         }
-        const int64_t candidateResidualCount = consumer.getNumDpsInputs() - 1;
+        const int64_t candidateResidualCount =
+          countResidualInputs(consumer, producer->getResult(0));
         const int64_t bytes =
           cast<RankedTensorType>(producer->getResult(0).getType())
             .getNumElements() *
           4;
         const bool isConvolution = isa<linalg::Conv2DNhwcHwcfOp>(producer);
+        auto producerResultType =
+          cast<RankedTensorType>(producer->getResult(0).getType());
+        const int64_t tiledExtent =
+          producerResultType.getShape()[isConvolution ? 2 : 1];
+        std::optional<int64_t> tailProfileIdForRecord;
+        if (tiledExtent / tileWidthValue > 0 &&
+            tiledExtent % tileWidthValue > 0) {
+          tailProfileIdForRecord = tailProfileId;
+        }
         auto function = producer->getParentOfType<func::FuncOp>();
         contract::appendFusionRecord(
           module,
@@ -653,7 +958,9 @@ class FuseLinalgEpiloguePass final
           candidateResidualCount,
           tileWidthValue,
           bytes,
-          bytes);
+          bytes,
+          profileId,
+          tailProfileIdForRecord);
         rewriter.replaceOp(consumer, fused);
         rewriter.eraseOp(producer);
         ++selectedCount;

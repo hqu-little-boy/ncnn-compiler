@@ -35,8 +35,8 @@ module {
 // CHECK-NOT: call @__ncnn_profile_event_begin
 // CHECK: call @__ncnn_profile_alloc
 // CHECK: memref.alloc
-// CHECK: call @__ncnn_profile_copy
 // CHECK: memref.copy
+// CHECK: call @__ncnn_profile_copy
 // CHECK: call @__ncnn_profile_dealloc
 // CHECK: memref.dealloc
 // CHECK-NOT: memref.alloca_scope

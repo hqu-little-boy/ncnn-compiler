@@ -149,6 +149,31 @@ llvm::cl::opt<bool> g_int8_cast_chain(
   llvm::cl::desc("Fuse proven static cast map consumers"),
   llvm::cl::init(false),
   llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_selective_fusion(
+  "selective-fusion",
+  llvm::cl::desc("Enable selective static producer-to-epilogue fusion"),
+  llvm::cl::init(true),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_layout_aware_fusion(
+  "layout-aware-fusion",
+  llvm::cl::desc("Require compatible known producer/consumer layouts"),
+  llvm::cl::init(true),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_selective_fusion_broadcast(
+  "selective-fusion-broadcast",
+  llvm::cl::desc("Allow statically proven projected broadcast fusion inputs"),
+  llvm::cl::init(true),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<bool> g_selective_fusion_cast_chain(
+  "selective-fusion-cast-chain",
+  llvm::cl::desc("Allow ordered arithmetic cast chains in epilogues"),
+  llvm::cl::init(true),
+  llvm::cl::cat(g_category));
+llvm::cl::opt<unsigned> g_selective_fusion_max_chain(
+  "selective-fusion-max-chain",
+  llvm::cl::desc("Maximum number of elementwise operations in a fusion"),
+  llvm::cl::init(8),
+  llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_tuning_profile(
   "tuning-profile",
   llvm::cl::desc("Bounded compile-time tuning profile: stable or p16-int8"),
@@ -2636,11 +2661,24 @@ int main(int argc, char** argv) {
   }
   std::string tosa_linalg_pipeline_option = "--ncnn-tosa-to-linalg-pipeline";
   if (g_conv_strategy != "auto" || g_conv_gemm_l2_bytes != 524288 ||
-      g_int8_cast_chain) {
+      g_int8_cast_chain || !g_selective_fusion || !g_layout_aware_fusion ||
+      !g_selective_fusion_broadcast || !g_selective_fusion_cast_chain ||
+      g_selective_fusion_max_chain != 8 || g_profile) {
     tosa_linalg_pipeline_option +=
       "=conv-strategy=" + g_conv_strategy +
       " conv-gemm-l2-bytes=" + std::to_string(g_conv_gemm_l2_bytes) +
-      " int8-cast-chain=" + (g_int8_cast_chain ? "true" : "false");
+      " int8-cast-chain=" + (g_int8_cast_chain ? "true" : "false") +
+      " selective-fusion=" + (g_selective_fusion ? "true" : "false") +
+      " layout-aware-fusion=" + (g_layout_aware_fusion ? "true" : "false") +
+      " selective-fusion-broadcast=" +
+      (g_selective_fusion_broadcast ? "true" : "false") +
+      " selective-fusion-cast-chain=" +
+      (g_selective_fusion_cast_chain ? "true" : "false") +
+      " selective-fusion-max-chain=" +
+      std::to_string(g_selective_fusion_max_chain);
+    if (g_profile) {
+      tosa_linalg_pipeline_option += " profile-materialized-sites=true";
+    }
   }
   if (int status = run({opt_path,
                         tosa_linalg_pipeline_option,
@@ -2726,7 +2764,7 @@ int main(int argc, char** argv) {
   }
   std::string execution_plan_hash;
   std::string execution_plan_revision;
-  std::string execution_attribution_revision = "attribution-v1";
+  std::string execution_attribution_revision = "attribution-v2";
   if (g_profile) {
     auto hash = read_execution_plan_field(execution_plan_path, "plan_hash");
     if (!hash) {

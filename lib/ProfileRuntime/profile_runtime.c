@@ -26,7 +26,7 @@
 #define NCNN_PROFILE_DEFAULT_PLAN_REVISION ""
 #endif
 #ifndef NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION
-#define NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION "attribution-v1"
+#define NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION "attribution-v2"
 #endif
 
 #define NCNN_PROFILE_MAX_RECORDS 4096
@@ -42,6 +42,9 @@ enum {
   NCNN_PROFILE_TRANSPOSE = 5,
   NCNN_PROFILE_PACK = 6,
   NCNN_PROFILE_UNPACK = 7,
+  NCNN_PROFILE_MATERIALIZED_WRITE = 8,
+  NCNN_PROFILE_MATERIALIZED_READ = 9,
+  NCNN_PROFILE_FUSION_SITE = 10,
 };
 
 typedef struct {
@@ -87,6 +90,14 @@ static int deallocation_bytes_known = 1;
 static uint64_t copy_events;
 static uint64_t copy_bytes;
 static int copy_bytes_known = 1;
+static uint64_t materialized_write_events;
+static uint64_t materialized_write_bytes;
+static int materialized_write_bytes_known = 1;
+static uint64_t materialized_read_events;
+static uint64_t materialized_read_bytes;
+static int materialized_read_bytes_known = 1;
+static uint64_t materialized_expected_read_bytes;
+static int materialized_expected_read_bytes_known = 1;
 static uint64_t transpose_events;
 static uint64_t transpose_write_bytes;
 static int transpose_write_bytes_known = 1;
@@ -133,6 +144,14 @@ static void reset_profile_state_locked(void) {
   copy_events = 0;
   copy_bytes = 0;
   copy_bytes_known = 1;
+  materialized_write_events = 0;
+  materialized_write_bytes = 0;
+  materialized_write_bytes_known = 1;
+  materialized_read_events = 0;
+  materialized_read_bytes = 0;
+  materialized_read_bytes_known = 1;
+  materialized_expected_read_bytes = 0;
+  materialized_expected_read_bytes_known = 1;
   transpose_events = 0;
   transpose_write_bytes = 0;
   transpose_write_bytes_known = 1;
@@ -192,7 +211,9 @@ static int record_for(uint64_t id, int64_t category) {
     category == NCNN_PROFILE_ALLOCATION ||
     category == NCNN_PROFILE_DEALLOCATION || category == NCNN_PROFILE_COPY ||
     category == NCNN_PROFILE_TRANSPOSE || category == NCNN_PROFILE_PACK ||
-    category == NCNN_PROFILE_UNPACK;
+    category == NCNN_PROFILE_UNPACK ||
+    category == NCNN_PROFILE_MATERIALIZED_WRITE ||
+    category == NCNN_PROFILE_MATERIALIZED_READ;
   return (int)record_count++;
 }
 
@@ -294,7 +315,8 @@ void __ncnn_profile_event_end(int64_t signed_id) {
   }
   if (stack_depth != 0) {
     stack[stack_depth - 1].child_ns += elapsed;
-  } else if (top_level_time_known) {
+  } else if (frame.category != NCNN_PROFILE_FUSION_SITE &&
+             top_level_time_known) {
     if (top_level_time_ns <= UINT64_MAX - elapsed) {
       top_level_time_ns += elapsed;
     } else {
@@ -415,6 +437,64 @@ void __ncnn_profile_copy(int64_t signed_id, int64_t bytes) {
   unlock_profile();
 }
 
+void __ncnn_profile_materialized(int64_t signed_id,
+                                 int64_t kind,
+                                 int64_t bytes,
+                                 int64_t expected_readers) {
+  const uint64_t id = (uint64_t)signed_id;
+  lock_profile();
+  uint64_t* events = NULL;
+  uint64_t* total_bytes = NULL;
+  int* bytes_known = NULL;
+  int64_t category = NCNN_PROFILE_OPERATION;
+  if (kind == 0) {
+    events = &materialized_write_events;
+    total_bytes = &materialized_write_bytes;
+    bytes_known = &materialized_write_bytes_known;
+    category = NCNN_PROFILE_MATERIALIZED_WRITE;
+  } else if (kind == 1) {
+    events = &materialized_read_events;
+    total_bytes = &materialized_read_bytes;
+    bytes_known = &materialized_read_bytes_known;
+    category = NCNN_PROFILE_MATERIALIZED_READ;
+  }
+  if (events && total_bytes && bytes_known) {
+    ++*events;
+    if (bytes < 0) {
+      *bytes_known = 0;
+    } else if (*bytes_known && *total_bytes <= UINT64_MAX - (uint64_t)bytes) {
+      *total_bytes += (uint64_t)bytes;
+    } else {
+      *bytes_known = 0;
+    }
+    if (kind == 0) {
+      if (bytes < 0 || expected_readers < 0 ||
+          (expected_readers != 0 &&
+           (uint64_t)bytes > UINT64_MAX / (uint64_t)expected_readers)) {
+        materialized_expected_read_bytes_known = 0;
+      } else {
+        const uint64_t expected = (uint64_t)bytes * (uint64_t)expected_readers;
+        if (materialized_expected_read_bytes_known &&
+            materialized_expected_read_bytes <= UINT64_MAX - expected) {
+          materialized_expected_read_bytes += expected;
+        } else {
+          materialized_expected_read_bytes_known = 0;
+        }
+      }
+    } else if (expected_readers != 0) {
+      materialized_expected_read_bytes_known = 0;
+    }
+    const int record = record_for(id, category);
+    if (record >= 0) {
+      records[record].calls++;
+      add_record_bytes(record, bytes);
+    }
+  } else {
+    mismatch_events++;
+  }
+  unlock_profile();
+}
+
 void __ncnn_profile_movement(int64_t signed_id, int64_t kind, int64_t bytes) {
   const uint64_t id = (uint64_t)signed_id;
   lock_profile();
@@ -522,6 +602,12 @@ static const char* category_name(int64_t category) {
       return "pack";
     case NCNN_PROFILE_UNPACK:
       return "unpack";
+    case NCNN_PROFILE_MATERIALIZED_WRITE:
+      return "materialized_write";
+    case NCNN_PROFILE_MATERIALIZED_READ:
+      return "materialized_read";
+    case NCNN_PROFILE_FUSION_SITE:
+      return "operation";
     default:
       return "operation";
   }
@@ -577,6 +663,14 @@ static void flush_profile_v2(const char* path) {
   uint64_t local_copy_events;
   uint64_t local_copy_bytes;
   int local_copy_bytes_known;
+  uint64_t local_materialized_write_events;
+  uint64_t local_materialized_write_bytes;
+  int local_materialized_write_bytes_known;
+  uint64_t local_materialized_read_events;
+  uint64_t local_materialized_read_bytes;
+  int local_materialized_read_bytes_known;
+  uint64_t local_materialized_expected_read_bytes;
+  int local_materialized_expected_read_bytes_known;
   uint64_t local_transpose_events;
   uint64_t local_transpose_write_bytes;
   int local_transpose_write_bytes_known;
@@ -601,8 +695,10 @@ static void flush_profile_v2(const char* path) {
   lock_profile();
   if (active_roots != 0 ||
       (!invocation_active && record_count == 0 && allocation_events == 0 &&
-       deallocation_events == 0 && copy_events == 0 && transpose_events == 0 &&
-       pack_events == 0 && unpack_events == 0 && parallel_events == 0)) {
+       deallocation_events == 0 && copy_events == 0 &&
+       materialized_write_events == 0 && materialized_read_events == 0 &&
+       transpose_events == 0 && pack_events == 0 && unpack_events == 0 &&
+       parallel_events == 0)) {
     unlock_profile();
     return;
   }
@@ -624,6 +720,15 @@ static void flush_profile_v2(const char* path) {
   local_copy_events = copy_events;
   local_copy_bytes = copy_bytes;
   local_copy_bytes_known = copy_bytes_known;
+  local_materialized_write_events = materialized_write_events;
+  local_materialized_write_bytes = materialized_write_bytes;
+  local_materialized_write_bytes_known = materialized_write_bytes_known;
+  local_materialized_read_events = materialized_read_events;
+  local_materialized_read_bytes = materialized_read_bytes;
+  local_materialized_read_bytes_known = materialized_read_bytes_known;
+  local_materialized_expected_read_bytes = materialized_expected_read_bytes;
+  local_materialized_expected_read_bytes_known =
+    materialized_expected_read_bytes_known;
   local_transpose_events = transpose_events;
   local_transpose_write_bytes = transpose_write_bytes;
   local_transpose_write_bytes_known = transpose_write_bytes_known;
@@ -776,6 +881,66 @@ static void flush_profile_v2(const char* path) {
           "    \"copy_bytes_known\": %s,\n",
           local_copy_bytes_known ? "true" : "false");
   fprintf(file,
+          "    \"materialized_write_count\": %llu,\n",
+          (unsigned long long)local_materialized_write_events);
+  if (local_materialized_write_events != 0 &&
+      local_materialized_write_bytes_known) {
+    fprintf(file,
+            "    \"runtime_materialized_write_bytes\": %llu,\n",
+            (unsigned long long)local_materialized_write_bytes);
+  } else {
+    fputs("    \"runtime_materialized_write_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"materialized_write_bytes_known\": %s,\n",
+          (local_materialized_write_events != 0 &&
+           local_materialized_write_bytes_known)
+            ? "true"
+            : "false");
+  fprintf(file,
+          "    \"materialized_read_count\": %llu,\n",
+          (unsigned long long)local_materialized_read_events);
+  if (local_materialized_read_events != 0 &&
+      local_materialized_read_bytes_known) {
+    fprintf(file,
+            "    \"runtime_materialized_read_bytes\": %llu,\n",
+            (unsigned long long)local_materialized_read_bytes);
+  } else {
+    fputs("    \"runtime_materialized_read_bytes\": null,\n", file);
+  }
+  fprintf(
+    file,
+    "    \"materialized_read_bytes_known\": %s,\n",
+    (local_materialized_read_events != 0 && local_materialized_read_bytes_known)
+      ? "true"
+      : "false");
+  if (local_materialized_write_events != 0 &&
+      local_materialized_expected_read_bytes_known) {
+    fprintf(file,
+            "    \"expected_materialized_read_bytes\": %llu,\n",
+            (unsigned long long)local_materialized_expected_read_bytes);
+  } else {
+    fputs("    \"expected_materialized_read_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"expected_materialized_read_bytes_known\": %s,\n",
+          (local_materialized_write_events != 0 &&
+           local_materialized_expected_read_bytes_known)
+            ? "true"
+            : "false");
+  if (local_materialized_write_events == 0 ||
+      !local_materialized_expected_read_bytes_known ||
+      !local_materialized_read_bytes_known) {
+    fputs("    \"materialized_read_complete\": null,\n", file);
+  } else {
+    fprintf(
+      file,
+      "    \"materialized_read_complete\": %s,\n",
+      local_materialized_expected_read_bytes == local_materialized_read_bytes
+        ? "true"
+        : "false");
+  }
+  fprintf(file,
           "    \"transpose_count\": %llu,\n",
           (unsigned long long)local_transpose_events);
   if (local_transpose_write_bytes_known) {
@@ -916,6 +1081,14 @@ void __ncnn_profile_flush(void) {
   uint64_t local_copy_events;
   uint64_t local_copy_bytes;
   int local_copy_bytes_known;
+  uint64_t local_materialized_write_events;
+  uint64_t local_materialized_write_bytes;
+  int local_materialized_write_bytes_known;
+  uint64_t local_materialized_read_events;
+  uint64_t local_materialized_read_bytes;
+  int local_materialized_read_bytes_known;
+  uint64_t local_materialized_expected_read_bytes;
+  int local_materialized_expected_read_bytes_known;
   uint64_t local_transpose_events;
   uint64_t local_transpose_write_bytes;
   int local_transpose_write_bytes_known;
@@ -951,6 +1124,15 @@ void __ncnn_profile_flush(void) {
   local_copy_events = copy_events;
   local_copy_bytes = copy_bytes;
   local_copy_bytes_known = copy_bytes_known;
+  local_materialized_write_events = materialized_write_events;
+  local_materialized_write_bytes = materialized_write_bytes;
+  local_materialized_write_bytes_known = materialized_write_bytes_known;
+  local_materialized_read_events = materialized_read_events;
+  local_materialized_read_bytes = materialized_read_bytes;
+  local_materialized_read_bytes_known = materialized_read_bytes_known;
+  local_materialized_expected_read_bytes = materialized_expected_read_bytes;
+  local_materialized_expected_read_bytes_known =
+    materialized_expected_read_bytes_known;
   local_transpose_events = transpose_events;
   local_transpose_write_bytes = transpose_write_bytes;
   local_transpose_write_bytes_known = transpose_write_bytes_known;
@@ -1098,6 +1280,66 @@ void __ncnn_profile_flush(void) {
   fprintf(file,
           "    \"copy_bytes_known\": %s,\n",
           local_copy_bytes_known ? "true" : "false");
+  fprintf(file,
+          "    \"materialized_write_count\": %llu,\n",
+          (unsigned long long)local_materialized_write_events);
+  if (local_materialized_write_events != 0 &&
+      local_materialized_write_bytes_known) {
+    fprintf(file,
+            "    \"runtime_materialized_write_bytes\": %llu,\n",
+            (unsigned long long)local_materialized_write_bytes);
+  } else {
+    fputs("    \"runtime_materialized_write_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"materialized_write_bytes_known\": %s,\n",
+          (local_materialized_write_events != 0 &&
+           local_materialized_write_bytes_known)
+            ? "true"
+            : "false");
+  fprintf(file,
+          "    \"materialized_read_count\": %llu,\n",
+          (unsigned long long)local_materialized_read_events);
+  if (local_materialized_read_events != 0 &&
+      local_materialized_read_bytes_known) {
+    fprintf(file,
+            "    \"runtime_materialized_read_bytes\": %llu,\n",
+            (unsigned long long)local_materialized_read_bytes);
+  } else {
+    fputs("    \"runtime_materialized_read_bytes\": null,\n", file);
+  }
+  fprintf(
+    file,
+    "    \"materialized_read_bytes_known\": %s,\n",
+    (local_materialized_read_events != 0 && local_materialized_read_bytes_known)
+      ? "true"
+      : "false");
+  if (local_materialized_write_events != 0 &&
+      local_materialized_expected_read_bytes_known) {
+    fprintf(file,
+            "    \"expected_materialized_read_bytes\": %llu,\n",
+            (unsigned long long)local_materialized_expected_read_bytes);
+  } else {
+    fputs("    \"expected_materialized_read_bytes\": null,\n", file);
+  }
+  fprintf(file,
+          "    \"expected_materialized_read_bytes_known\": %s,\n",
+          (local_materialized_write_events != 0 &&
+           local_materialized_expected_read_bytes_known)
+            ? "true"
+            : "false");
+  if (local_materialized_write_events == 0 ||
+      !local_materialized_expected_read_bytes_known ||
+      !local_materialized_read_bytes_known) {
+    fputs("    \"materialized_read_complete\": null,\n", file);
+  } else {
+    fprintf(
+      file,
+      "    \"materialized_read_complete\": %s,\n",
+      local_materialized_expected_read_bytes == local_materialized_read_bytes
+        ? "true"
+        : "false");
+  }
   fprintf(file,
           "    \"transpose_count\": %llu,\n",
           (unsigned long long)local_transpose_events);

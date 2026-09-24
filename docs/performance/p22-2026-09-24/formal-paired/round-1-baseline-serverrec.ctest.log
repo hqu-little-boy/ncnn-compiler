@@ -1,0 +1,11 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-p22-baseline-build-20260924-c
+Test project /tmp/ncnn-compiler-p22-baseline-build-20260924-c
+    Start 434: PerformanceModel.PPOcrv5ServerRec
+1/1 Test #434: PerformanceModel.PPOcrv5ServerRec ...   Passed  262.09 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+performance    = 262.09 sec*proc (1 test)
+
+Total Test time (real) = 262.10 sec

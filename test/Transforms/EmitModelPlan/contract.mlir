@@ -7,7 +7,8 @@ module attributes {
   ncnn.fusion_selected_count = 1 : i64,
   ncnn.fusion_residual_count = 1 : i64,
   ncnn.fusion_rejected_count = 2 : i64,
-  ncnn.fusion_rejection_reasons = "multi_consumer=1,non_identity_map=1"
+  ncnn.fusion_rejection_reasons = "multi_consumer=1,non_identity_map=1",
+  ncnn.fusion_revision = "fusion-v2"
 } {
   func.func @model(%input: memref<4x8xf32>) {
     %output = memref.alloc() : memref<4x8xf32>
@@ -53,7 +54,12 @@ module attributes {
       ncnn.fusion_residual_inputs = 1 : i64,
       ncnn.fusion_tile_width = 16 : i64,
       ncnn.fusion_intermediate_bytes = 1024 : i64,
-      ncnn.fusion_saved_bytes = 1024 : i64
+      ncnn.fusion_saved_bytes = 1024 : i64,
+      ncnn.fusion_revision = "fusion-v2",
+      ncnn.fusion_chain = "ordered_elementwise",
+      ncnn.fusion_broadcast_inputs = "projected_broadcast",
+      ncnn.fusion_layout = "identity_contiguous",
+      ncnn.fusion_copy_kind = "none"
     } : () -> ()
     memref.dealloc %output : memref<4x8xf32>
     return
@@ -77,9 +83,9 @@ module attributes {
 // CHECK-DAG: "matmul_i8_rows": 2
 // CHECK-DAG: "matmul_i8_acc_columns": 4
 // CHECK-DAG: "operations": [
-// CHECK-DAG: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v1"
-// CHECK-DAG: "plan_revision": "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v1"
-// CHECK-DAG: "attribution_revision": "attribution-v1"
+// CHECK-DAG: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v2"
+// CHECK-DAG: "plan_revision": "static-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v2"
+// CHECK-DAG: "attribution_revision": "attribution-v2"
 // CHECK-DAG: "static_pack_count": 1
 // CHECK-DAG: "static_pack_bytes": 64
 // CHECK-DAG: "static_pack_bytes_known": true
@@ -88,17 +94,26 @@ module attributes {
 // CHECK-DAG: "static_unpack_bytes": 32
 // CHECK-DAG: "static_unpack_bytes_known": true
 // CHECK-DAG: "static_unpack_status": "known"
+// CHECK-DAG: "copy": {
+// CHECK-DAG: "revision": "copy-v1"
+// CHECK-DAG: "runtime_status": "not_collected"
 // CHECK-DAG: "fusion": {
 // CHECK-DAG: "enabled": true
 // CHECK-DAG: "selected_count": 1
 // CHECK-DAG: "residual_count": 1
 // CHECK-DAG: "rejected_count": 2
 // CHECK-DAG: "rejection_reasons": "multi_consumer=1,non_identity_map=1"
+// CHECK-DAG: "revision": "fusion-v2"
 // CHECK-DAG: "fusions": [
 // CHECK-DAG: "fusion_kind": "matmul_epilogue"
 // CHECK-DAG: "fusion_residual_inputs": 1
 // CHECK-DAG: "fusion_intermediate_bytes": 1024
 // CHECK-DAG: "fusion_saved_bytes": 1024
+// CHECK-DAG: "fusion_chain": "ordered_elementwise"
+// CHECK-DAG: "fusion_broadcast_inputs": "projected_broadcast"
+// CHECK-DAG: "fusion_layout": "identity_contiguous"
+// CHECK-DAG: "fusion_copy_kind": "none"
+// CHECK-DAG: "fusion_revision": "fusion-v2"
 // CHECK-DAG: "kernel_contract": {
 // CHECK-DAG: "kernel": "f32_mxn_fma"
 // CHECK-DAG: "parallel": "outer_tile+inner_simd"

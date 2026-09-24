@@ -29,6 +29,7 @@
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/Transforms/Passes.h"
+#include "mlir/Dialect/SCF/Transforms/Transforms.h"
 #include "mlir/Dialect/Vector/Transforms/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -98,7 +99,8 @@ class ConvertNestedLinalgToLoopsPass final
     IRRewriter rewriter(&getContext());
     for (linalg::LinalgOp op : nestedOps) {
       if (!llvm::all_of(op->getOperands(), [](Value value) {
-            return isa<MemRefType>(value.getType());
+            Type type = value.getType();
+            return isa<MemRefType>(type) || !isa<ShapedType>(type);
           })) {
         op.emitError()
           << "nested Linalg operation must be bufferized before OpenMP "
@@ -113,6 +115,48 @@ class ConvertNestedLinalgToLoopsPass final
         return;
       }
       rewriter.eraseOp(op);
+    }
+  }
+};
+
+// An inner forall would become a second OpenMP team when the outer forall is
+// lowered by SCFToOpenMP. Sequentialize only forall operations that have a
+// forall ancestor, retaining the outer tile's parallelism.
+class ConvertNestedForallToForPass final
+  : public PassWrapper<ConvertNestedForallToForPass, OperationPass<ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertNestedForallToForPass)
+
+  StringRef getArgument() const final { return "convert-nested-forall-to-for"; }
+  StringRef getDescription() const final {
+    return "Lower nested scf.forall operations to serial loops";
+  }
+
+  void runOnOperation() final {
+    SmallVector<scf::ForallOp> nestedForalls;
+    getOperation().walk([&](scf::ForallOp op) {
+      if (op->getParentOfType<scf::ForallOp>()) {
+        nestedForalls.push_back(op);
+      }
+    });
+
+    for (scf::ForallOp op : nestedForalls) {
+      if (!op.getOutputs().empty() || op.getNumResults() != 0) {
+        op.emitError()
+          << "cannot serialize nested scf.forall with shared outputs";
+        signalPassFailure();
+        return;
+      }
+    }
+
+    IRRewriter rewriter(&getContext());
+    for (scf::ForallOp op : llvm::reverse(nestedForalls)) {
+      rewriter.setInsertionPoint(op);
+      if (failed(scf::forallToForLoop(rewriter, op))) {
+        op.emitError() << "failed to lower nested scf.forall to serial loops";
+        signalPassFailure();
+        return;
+      }
     }
   }
 };
@@ -201,9 +245,28 @@ void buildNCNNTosaToLinalgPipeline(
   passManager.addPass(std::make_unique<SetLowPrecisionOptionsPass>(
     false, options.int8CastChain, "portable", "portable"));
   passManager.addPass(createFuseQuantChainNCNNPass());
-  // 算子形态策略层（A1）：在 epilogue 融合与向量化之前把可改写卷积变为
-  // matmul 形态，使计算大头进入投影映射的收缩主干；权重 collapse 由紧随
-  // 其后的 canonicalizer 折叠为 .rodata 常量。
+  passManager.addPass(createLinalgInlineScalarOperandsPass());
+  passManager.addPass(createLinalgFoldIntoElementwisePass());
+  passManager.addPass(createCanonicalizerPass());
+  // Fuse only epilogues proven safe on the original producer-consumer edge.
+  // Run before Strategy rewrites Conv into GEMM plus views, so a rejected
+  // candidate still follows the established GEMM fallback instead of relying
+  // on a later fusion pass to recover from a direct-convolution deferral.
+  FuseLinalgEpiloguePassOptions epilogueOptions;
+  epilogueOptions.tileWidth = options.epilogueTileWidth;
+  epilogueOptions.enable = options.selectiveFusion;
+  epilogueOptions.allowResidual = options.selectiveFusionResidual;
+  epilogueOptions.allowBroadcast = options.selectiveFusionBroadcast;
+  epilogueOptions.allowCastChain = options.selectiveFusionCastChain;
+  epilogueOptions.layoutAwareFusion = options.layoutAwareFusion;
+  epilogueOptions.maxChainLength = options.selectiveFusionMaxChain;
+  passManager.addPass(createFuseLinalgEpiloguePass(epilogueOptions));
+  if (options.profileMaterializedSites) {
+    passManager.addPass(createInstrumentNCNNFusionSitesPass());
+  }
+  // Fuse has consumed all eligible original Conv/Matmul edges. Strategy now
+  // rewrites the remaining convolutions; its unsupported epilogues retain the
+  // independent generic and use the normal GEMM implementation.
   StrategyNCNNPassOptions strategyOptions;
   strategyOptions.strategy = options.convStrategy.getValue();
   strategyOptions.gemmL2Bytes = options.convGemmL2Bytes.getValue();
@@ -211,11 +274,9 @@ void buildNCNNTosaToLinalgPipeline(
   passManager.addPass(createLinalgInlineScalarOperandsPass());
   passManager.addPass(createLinalgFoldIntoElementwisePass());
   passManager.addPass(createCanonicalizerPass());
-  FuseLinalgEpiloguePassOptions epilogueOptions;
-  epilogueOptions.tileWidth = options.epilogueTileWidth;
-  epilogueOptions.enable = options.selectiveFusion;
-  epilogueOptions.allowResidual = options.selectiveFusionResidual;
-  passManager.addPass(createFuseLinalgEpiloguePass(epilogueOptions));
+  if (options.profileMaterializedSites) {
+    passManager.addPass(createInstrumentNCNNMaterializedSitesPass());
+  }
   passManager.addPass(createVerifyNoTosaOpsPass());
 }
 
@@ -266,10 +327,6 @@ void buildNCNNLinalgToMemRefPipeline(
   }
 
   passManager.addPass(createBufferizeNCNNPass());
-  // bufferize 的拷贝以恒等 linalg.generic 形式存在（memCpyFn 产物）；
-  // 改写为 memref.copy，避免多线程路径把它们当作可并行 linalg op 在
-  // forall 区域内再并行化（嵌套 omp），并让尾段走更廉价的整块复制。
-  passManager.addPass(createRewriteLinalgCopiesPass());
   if (options.vectorTail) {
     // A1b SIMD matmul 内核与 forall 路径标量热点清理。发射 vector/
     // ub.poison op，必须确保下游有向量下降尾（串行遗留路径没有），
@@ -292,6 +349,12 @@ void buildNCNNLinalgToMemRefPipeline(
   outParamOptions.hoistStaticAllocs = true;
   passManager.addPass(
     bufferization::createBufferResultsToOutParamsPass(outParamOptions));
+  // Lower bufferization copies after result-to-out-param conversion as well,
+  // which may introduce memref.copy operations for dynamic results.
+  RewriteLinalgCopiesPassOptions copyOptions;
+  copyOptions.vectorize = options.vectorTail;
+  copyOptions.vectorLanes = options.vectorLanes;
+  passManager.addPass(createRewriteLinalgCopiesPass(copyOptions));
 
   bufferization::BufferDeallocationPipelineOptions deallocationOptions;
   deallocationOptions.privateFunctionDynamicOwnership = false;
@@ -338,6 +401,7 @@ void buildNCNNMemRefToLLVMPipeline(
     // loops 已产出分块 forall；残余顶层 linalg 仍可用上游全域并行化，
     // 而 tile 区域与 reduction 先改成串行 scf.for，保证整个算子只
     // 进入一个 OpenMP team。
+    passManager.addPass(std::make_unique<ConvertNestedForallToForPass>());
     passManager.addPass(std::make_unique<ConvertNestedLinalgToLoopsPass>());
     passManager.addPass(createConvertLinalgToParallelLoopsPass());
     passManager.addPass(createForallToParallelLoopPass());

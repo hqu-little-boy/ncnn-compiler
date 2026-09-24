@@ -60,6 +60,7 @@ inline constexpr llvm::StringLiteral kInputChannels = "ncnn.input_channels";
 inline constexpr llvm::StringLiteral kOutputChannels = "ncnn.output_channels";
 inline constexpr llvm::StringLiteral kMultiplier = "ncnn.multiplier";
 inline constexpr llvm::StringLiteral kFusion = "ncnn.fusion";
+inline constexpr llvm::StringLiteral kFusionSiteId = "ncnn.fusion_site_id";
 inline constexpr llvm::StringLiteral kFusionKind = "ncnn.fusion_kind";
 inline constexpr llvm::StringLiteral kFusionProducer = "ncnn.fusion_producer";
 inline constexpr llvm::StringLiteral kFusionResidualInputs =
@@ -80,6 +81,34 @@ inline constexpr llvm::StringLiteral kFusionRejectedCount =
 inline constexpr llvm::StringLiteral kFusionRejectionReasons =
   "ncnn.fusion_rejection_reasons";
 inline constexpr llvm::StringLiteral kFusionRecords = "ncnn.fusion_records";
+inline constexpr llvm::StringLiteral kFusionRevision = "ncnn.fusion_revision";
+inline constexpr llvm::StringLiteral kFusionChain = "ncnn.fusion_chain";
+inline constexpr llvm::StringLiteral kFusionBroadcastInputs =
+  "ncnn.fusion_broadcast_inputs";
+inline constexpr llvm::StringLiteral kFusionLayout = "ncnn.fusion_layout";
+inline constexpr llvm::StringLiteral kFusionCopyKind = "ncnn.fusion_copy_kind";
+inline constexpr llvm::StringLiteral kFusionFallbackCount =
+  "ncnn.fusion_fallback_count";
+inline constexpr llvm::StringLiteral kFusionAllowBroadcast =
+  "ncnn.fusion_allow_broadcast";
+inline constexpr llvm::StringLiteral kFusionAllowCastChain =
+  "ncnn.fusion_allow_cast_chain";
+inline constexpr llvm::StringLiteral kFusionLayoutAware =
+  "ncnn.fusion_layout_aware";
+inline constexpr llvm::StringLiteral kFusionMaxChain = "ncnn.fusion_max_chain";
+inline constexpr llvm::StringLiteral kCopyContract = "ncnn.copy_contract";
+inline constexpr llvm::StringLiteral kCopyKind = "ncnn.copy_kind";
+inline constexpr llvm::StringLiteral kCopyBytes = "ncnn.copy_bytes";
+inline constexpr llvm::StringLiteral kCopyVectorLanes =
+  "ncnn.copy_vector_lanes";
+inline constexpr llvm::StringLiteral kCopyEliminatedCount =
+  "ncnn.copy_eliminated_count";
+inline constexpr llvm::StringLiteral kCopyVectorizedCount =
+  "ncnn.copy_vectorized_count";
+inline constexpr llvm::StringLiteral kCopyFusedCount = "ncnn.copy_fused_count";
+inline constexpr llvm::StringLiteral kCopyFallbackCount =
+  "ncnn.copy_fallback_count";
+inline constexpr llvm::StringLiteral kCopyRecords = "ncnn.copy_records";
 inline constexpr llvm::StringLiteral kAttentionSegments =
   "ncnn.attention_segments";
 inline constexpr llvm::StringLiteral kAttentionOrdinal =
@@ -224,6 +253,7 @@ inline void annotateFusion(Operation* operation,
                            int64_t savedBytes) {
   setString(operation, kContract, "selected");
   setString(operation, kFusion, "selected");
+  setString(operation, kFusionRevision, "fusion-v2");
   setString(operation, kFusionKind, kind);
   setString(operation, kFusionProducer, producer);
   setInteger(operation, kFusionResidualInputs, residualInputs);
@@ -232,15 +262,43 @@ inline void annotateFusion(Operation* operation,
   setInteger(operation, kFusionSavedBytes, savedBytes);
 }
 
-inline void appendFusionRecord(Operation* operation,
-                               StringRef function,
-                               StringRef operationKind,
-                               StringRef kind,
-                               StringRef producer,
-                               int64_t residualInputs,
-                               int64_t tileWidth,
-                               int64_t intermediateBytes,
-                               int64_t savedBytes) {
+inline void annotateFusionPlan(Operation* operation,
+                               StringRef chain,
+                               StringRef broadcastInputs,
+                               StringRef layout,
+                               StringRef copyKind = "none") {
+  setString(operation, kFusionRevision, "fusion-v2");
+  setString(operation, kFusionChain, chain);
+  setString(operation, kFusionBroadcastInputs, broadcastInputs);
+  setString(operation, kFusionLayout, layout);
+  setString(operation, kFusionCopyKind, copyKind);
+}
+
+inline void annotateCopy(Operation* operation,
+                         StringRef contract,
+                         StringRef kind,
+                         std::optional<int64_t> bytes,
+                         int64_t vectorLanes = 0) {
+  setString(operation, kCopyContract, contract);
+  setString(operation, kCopyKind, kind);
+  if (bytes) {
+    setInteger(operation, kCopyBytes, *bytes);
+  }
+  setInteger(operation, kCopyVectorLanes, vectorLanes);
+}
+
+inline void appendFusionRecord(
+  Operation* operation,
+  StringRef function,
+  StringRef operationKind,
+  StringRef kind,
+  StringRef producer,
+  int64_t residualInputs,
+  int64_t tileWidth,
+  int64_t intermediateBytes,
+  int64_t savedBytes,
+  int64_t profileId,
+  std::optional<int64_t> tailProfileId = std::nullopt) {
   MLIRContext* context = operation->getContext();
   SmallVector<Attribute> records;
   if (auto existing = operation->getAttrOfType<ArrayAttr>(kFusionRecords)) {
@@ -263,6 +321,12 @@ inline void appendFusionRecord(Operation* operation,
     IntegerAttr::get(IntegerType::get(context, 64), intermediateBytes));
   record.set("fusion_saved_bytes",
              IntegerAttr::get(IntegerType::get(context, 64), savedBytes));
+  record.set("profile_id",
+             IntegerAttr::get(IntegerType::get(context, 64), profileId));
+  if (tailProfileId) {
+    record.set("tail_profile_id",
+               IntegerAttr::get(IntegerType::get(context, 64), *tailProfileId));
+  }
   records.push_back(DictionaryAttr::get(context, record));
   operation->setAttr(kFusionRecords, ArrayAttr::get(context, records));
 }

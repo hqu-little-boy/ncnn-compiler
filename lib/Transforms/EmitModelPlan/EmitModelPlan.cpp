@@ -300,6 +300,7 @@ class EmitModelPlanPass final
     std::int64_t parallel_region_count = 0;
     std::int64_t kernel_contract_count = 0;
     std::int64_t kernel_contract_fallback_count = 0;
+    std::int64_t copy_contract_count = 0;
     std::int64_t conv_operation_count = 0;
     std::int64_t depthwise_operation_count = 0;
     std::int64_t conv_fallback_count = 0;
@@ -340,7 +341,30 @@ class EmitModelPlanPass final
     bool peak_workspace_unknown = false;
     std::int64_t dynamic_buffer_count = 0;
     std::int64_t static_copy_bytes = 0;
+    std::int64_t static_copy_event_count = 0;
     bool has_unknown_copy_bytes = false;
+    const auto module_copy_eliminated =
+      module->getAttrOfType<IntegerAttr>(contract::kCopyEliminatedCount);
+    const auto module_copy_vectorized =
+      module->getAttrOfType<IntegerAttr>(contract::kCopyVectorizedCount);
+    const auto module_copy_fallback =
+      module->getAttrOfType<IntegerAttr>(contract::kCopyFallbackCount);
+    const auto module_copy_records =
+      module->getAttrOfType<ArrayAttr>(contract::kCopyRecords);
+    const bool copy_ledger_collected = module_copy_records != nullptr;
+    const auto module_fusion_revision =
+      module->getAttrOfType<StringAttr>(contract::kFusionRevision);
+    const std::string fusion_revision =
+      module_fusion_revision ? module_fusion_revision.getValue().str()
+                             : "unknown";
+    const auto fusion_allow_broadcast =
+      module->getAttrOfType<BoolAttr>(contract::kFusionAllowBroadcast);
+    const auto fusion_allow_cast_chain =
+      module->getAttrOfType<BoolAttr>(contract::kFusionAllowCastChain);
+    const auto fusion_layout_aware =
+      module->getAttrOfType<BoolAttr>(contract::kFusionLayoutAware);
+    const auto fusion_max_chain =
+      module->getAttrOfType<IntegerAttr>(contract::kFusionMaxChain);
     std::int64_t static_transpose_bytes = 0;
     bool has_unknown_transpose_bytes = false;
     const bool fusion_enabled =
@@ -524,10 +548,10 @@ class EmitModelPlanPass final
       "|matmul-i8-rows=" + std::to_string(matmulI8Rows.getValue()) +
       "|matmul-i8-acc-columns=" + std::to_string(matmulI8AccColumns.getValue());
 
-    constexpr StringLiteral attribution_revision = "attribution-v1";
+    constexpr StringLiteral attribution_revision = "attribution-v2";
     std::string plan_hash_input =
-      "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v1|conv-depthwise-"
-      "v1|packed-gemm-v1|" +
+      "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v2|copy-v1|"
+      "conv-depthwise-v1|packed-gemm-v1|" +
       attribution_revision.str() + "|" + model + "|" + targetTriple + "|" +
       std::to_string(threads) + "|" + std::to_string(vectorLanes) + "|" +
       std::to_string(vectorScalable.getValue()) + "|" +
@@ -536,6 +560,32 @@ class EmitModelPlanPass final
       "|fusion-selected=" + std::to_string(fusion_selected_count) +
       "|fusion-residual=" + std::to_string(fusion_residual_count) +
       "|fusion-rejected=" + std::to_string(fusion_rejected_count) +
+      "|fusion-revision=" + fusion_revision + "|fusion-allow-broadcast=" +
+      (fusion_allow_broadcast
+         ? std::to_string(fusion_allow_broadcast.getValue())
+         : "unknown") +
+      "|fusion-allow-cast-chain=" +
+      (fusion_allow_cast_chain
+         ? std::to_string(fusion_allow_cast_chain.getValue())
+         : "unknown") +
+      "|fusion-layout-aware=" +
+      (fusion_layout_aware ? std::to_string(fusion_layout_aware.getValue())
+                           : "unknown") +
+      "|fusion-max-chain=" +
+      (fusion_max_chain ? std::to_string(fusion_max_chain.getInt())
+                        : "unknown") +
+      "|copy-eliminated=" +
+      (module_copy_eliminated ? std::to_string(module_copy_eliminated.getInt())
+                              : "unknown") +
+      "|copy-vectorized=" +
+      (module_copy_vectorized ? std::to_string(module_copy_vectorized.getInt())
+                              : "unknown") +
+      "|copy-fused=unsupported|copy-fallback=" +
+      (module_copy_fallback ? std::to_string(module_copy_fallback.getInt())
+                            : "unknown") +
+      "|copy-records=" +
+      (module_copy_records ? std::to_string(module_copy_records.size())
+                           : "unknown") +
       "|fusion-reasons=" + fusion_rejection_reasons + "|" +
       low_precision_hash_input + "|" + layout_island_hash_input + "|" +
       tuning_hash_input + "|" + attention_hash_input;
@@ -583,6 +633,18 @@ class EmitModelPlanPass final
         copyInteger("fusion_tile_width", "fusion_tile_width");
         copyInteger("fusion_intermediate_bytes", "fusion_intermediate_bytes");
         copyInteger("fusion_saved_bytes", "fusion_saved_bytes");
+        copyInteger("profile_id", "profile_id");
+        copyInteger("tail_profile_id", "tail_profile_id");
+        if (auto profileId = record.getAs<IntegerAttr>("profile_id")) {
+          plan_hash_input +=
+            "|fusion-profile-id=" + std::to_string(profileId.getInt());
+        } else {
+          add_unknown("fusion_profile_id_missing");
+        }
+        if (auto tailProfileId = record.getAs<IntegerAttr>("tail_profile_id")) {
+          plan_hash_input +=
+            "|fusion-tail-profile-id=" + std::to_string(tailProfileId.getInt());
+        }
         fusions.push_back(std::move(entry));
         plan_hash_input += "|fusion-record=" + functionName + "|" + kind;
       }
@@ -612,6 +674,7 @@ class EmitModelPlanPass final
       const std::string function_name = function.getName().str();
       std::map<std::string, unsigned> operation_ordinals;
       std::map<Operation*, std::string> operation_ids;
+      std::map<Operation*, std::uint64_t> operation_profile_ids;
       std::map<Operation*, std::int64_t> operation_positions;
       std::int64_t operation_position = 0;
       const bool straight_line =
@@ -626,6 +689,12 @@ class EmitModelPlanPass final
         const std::string operation_id =
           function_name + "/" + kind + "#" + std::to_string(ordinal);
         operation_ids.emplace(operation, operation_id);
+        const auto fusionProfileId =
+          operation->getAttrOfType<IntegerAttr>(contract::kFusionSiteId);
+        operation_profile_ids.emplace(
+          operation,
+          fusionProfileId ? static_cast<std::uint64_t>(fusionProfileId.getInt())
+                          : profileId(operation_id));
         operation_positions.emplace(operation, operation_position++);
       });
 
@@ -889,6 +958,10 @@ class EmitModelPlanPass final
           plan_hash_input += "|source-name=" + name.getValue().str();
         }
 
+        // Copy events are serialized from the module-level ledger below.  The
+        // loop/transfer operation carrying the temporary annotation may be
+        // cloned or erased by later lowering passes, so counting it here would
+        // make kernel_contract_count depend on IR implementation details.
         const bool has_contract =
           operation->hasAttr(contract::kContract) ||
           operation->hasAttr(contract::kKernel) ||
@@ -896,7 +969,9 @@ class EmitModelPlanPass final
           operation->hasAttr(contract::kFallback) ||
           operation->hasAttr(contract::kOperationFamily) ||
           operation->hasAttr(contract::kImplementation) ||
+          operation->hasAttr(contract::kFusionSiteId) ||
           operation->hasAttr(contract::kFusion) ||
+          operation->hasAttr(contract::kFusionRevision) ||
           operation->hasAttr(contract::kLayoutIslandId);
         auto make_contract = [&]() {
           JsonObject result;
@@ -962,6 +1037,7 @@ class EmitModelPlanPass final
           copy_integer(contract::kLayoutPackFactor, "layout_pack_factor");
           copy_integer(contract::kLayoutChannelBlocks, "layout_channel_blocks");
           copy_string(contract::kFusion, "fusion_status");
+          copy_integer(contract::kFusionSiteId, "fusion_site_id");
           copy_string(contract::kFusionKind, "fusion_kind");
           copy_string(contract::kFusionProducer, "fusion_producer");
           copy_integer(contract::kFusionResidualInputs,
@@ -970,6 +1046,16 @@ class EmitModelPlanPass final
           copy_integer(contract::kFusionIntermediateBytes,
                        "fusion_intermediate_bytes");
           copy_integer(contract::kFusionSavedBytes, "fusion_saved_bytes");
+          copy_string(contract::kFusionRevision, "fusion_revision");
+          copy_string(contract::kFusionChain, "fusion_chain");
+          copy_string(contract::kFusionBroadcastInputs,
+                      "fusion_broadcast_inputs");
+          copy_string(contract::kFusionLayout, "fusion_layout");
+          copy_string(contract::kFusionCopyKind, "fusion_copy_kind");
+          copy_string(contract::kCopyContract, "copy_contract");
+          copy_string(contract::kCopyKind, "copy_kind");
+          copy_integer(contract::kCopyBytes, "copy_bytes");
+          copy_integer(contract::kCopyVectorLanes, "copy_vector_lanes");
           return result;
         };
         auto family =
@@ -1139,7 +1225,7 @@ class EmitModelPlanPass final
         }
         JsonObject operation_object;
         operation_object["id"] = operation_id;
-        operation_object["profile_id"] = profileId(operation_id);
+        operation_object["profile_id"] = operation_profile_ids.at(operation);
         if (auto source =
               operation->getAttrOfType<IntegerAttr>("ncnn.source_layer")) {
           operation_object["source_layer"] = source.getInt();
@@ -1290,10 +1376,19 @@ class EmitModelPlanPass final
           buffers.push_back(std::move(buffer));
         } else if (isa<memref::DeallocOp>(*operation)) {
           ++deallocation_count;
-        } else if (isa<memref::CopyOp>(*operation)) {
+        } else if (isa<memref::CopyOp, linalg::CopyOp>(*operation)) {
           ++copy_count;
-          auto copy = cast<memref::CopyOp>(*operation);
-          const ByteSize size = checkedByteSize(copy.getSource().getType());
+          ++static_copy_event_count;
+          Value source;
+          if (auto copy = dyn_cast<memref::CopyOp>(*operation)) {
+            source = copy.getSource();
+          } else if (auto copy = dyn_cast<linalg::CopyOp>(*operation)) {
+            if (copy.getInputs().size() == 1) {
+              source = copy.getInputs().front();
+            }
+          }
+          const ByteSize size =
+            source ? checkedByteSize(source.getType()) : ByteSize{};
           if (size.bytes &&
               static_copy_bytes <=
                 std::numeric_limits<std::int64_t>::max() - *size.bytes) {
@@ -1357,6 +1452,76 @@ class EmitModelPlanPass final
       });
     });
 
+    if (module_copy_records) {
+      std::int64_t recordOrdinal = 0;
+      for (Attribute attribute : module_copy_records) {
+        const std::int64_t ordinal = recordOrdinal++;
+        auto record = dyn_cast<DictionaryAttr>(attribute);
+        if (!record) {
+          add_unknown("copy_record_malformed");
+          plan_hash_input +=
+            "|copy-record-malformed#" + std::to_string(ordinal);
+          continue;
+        }
+        const auto function = record.getAs<StringAttr>("function");
+        const auto contract = record.getAs<StringAttr>("copy_contract");
+        const auto kind = record.getAs<StringAttr>("copy_kind");
+        const auto lanes = record.getAs<IntegerAttr>("copy_vector_lanes");
+        const Attribute bytesAttribute = record.get("copy_bytes");
+        const auto bytes = bytesAttribute
+                             ? dyn_cast<IntegerAttr>(bytesAttribute)
+                             : IntegerAttr();
+        if (!function || !contract || contract.getValue().empty() || !kind ||
+            kind.getValue().empty() || !lanes || lanes.getInt() < 0 ||
+            (bytesAttribute && !bytes)) {
+          add_unknown("copy_record_malformed");
+          plan_hash_input +=
+            "|copy-record-malformed#" + std::to_string(ordinal);
+          continue;
+        }
+        const std::string functionName = function.getValue().str();
+        const std::string copyContract = contract.getValue().str();
+        const std::string copyKind = kind.getValue().str();
+        JsonObject entry;
+        entry["id"] = "copy/" + functionName + "/" + copyKind + "#" +
+                      std::to_string(ordinal);
+        entry["operation"] = "copy";
+        entry["function"] = functionName;
+        entry["copy_contract"] = copyContract;
+        entry["copy_kind"] = copyKind;
+        if (bytes) {
+          entry["copy_bytes"] = bytes.getInt();
+        } else {
+          entry["copy_bytes"] = nullptr;
+        }
+        entry["copy_vector_lanes"] = lanes.getInt();
+        if (copyKind != "eliminated") {
+          ++static_copy_event_count;
+          if (bytes && !has_unknown_copy_bytes &&
+              static_copy_bytes <=
+                std::numeric_limits<std::int64_t>::max() - bytes.getInt()) {
+            static_copy_bytes += bytes.getInt();
+          } else if (!bytes) {
+            has_unknown_copy_bytes = true;
+          } else {
+            has_unknown_copy_bytes = true;
+          }
+        }
+        contracts.push_back(std::move(entry));
+        ++copy_contract_count;
+        ++kernel_contract_count;
+        if (copyKind == "fallback") {
+          ++kernel_contract_fallback_count;
+        }
+        plan_hash_input +=
+          "|copy-record#" + std::to_string(ordinal) +
+          "|function=" + functionName + "|contract=" + copyContract +
+          "|kind=" + copyKind +
+          "|bytes=" + (bytes ? std::to_string(bytes.getInt()) : "unknown") +
+          "|lanes=" + std::to_string(lanes.getInt());
+      }
+    }
+
     if (packed_constant_count != 0) {
       if (packed_constant_bytes_unknown) {
         packed_buffer_bytes_unknown = true;
@@ -1389,6 +1554,7 @@ class EmitModelPlanPass final
     summary["parallel_region_count"] = parallel_region_count;
     summary["kernel_contract_count"] = kernel_contract_count;
     summary["kernel_contract_fallback_count"] = kernel_contract_fallback_count;
+    summary["copy_contract_count"] = copy_contract_count;
     summary["layout_island_count"] = layout_island_count;
     summary["layout_island_selected_count"] = layout_island_selected_count;
     summary["layout_island_rejected_count"] = layout_island_rejected_count;
@@ -1472,18 +1638,37 @@ class EmitModelPlanPass final
       summary["static_buffer_bytes"] = nullptr;
     }
     summary["dynamic_buffer_count"] = dynamic_buffer_count;
-    if (copy_count == 0 || has_unknown_copy_bytes) {
+    if (static_copy_event_count == 0 || has_unknown_copy_bytes) {
       summary["static_copy_bytes"] = nullptr;
     } else {
       summary["static_copy_bytes"] = static_copy_bytes;
     }
     summary["static_copy_bytes_known"] =
-      copy_count != 0 && !has_unknown_copy_bytes;
+      static_copy_event_count != 0 && !has_unknown_copy_bytes;
     summary["attribution_revision"] = attribution_revision.str();
-    summary["static_copy_count"] = copy_count;
-    summary["static_copy_status"] = copy_count == 0          ? "not_applicable"
+    summary["static_copy_count"] = static_copy_event_count;
+    summary["static_copy_status"] = static_copy_event_count == 0
+                                      ? "not_applicable"
                                     : has_unknown_copy_bytes ? "unknown"
                                                              : "known";
+    if (copy_ledger_collected) {
+      summary["copy_eliminated_count"] =
+        module_copy_eliminated ? module_copy_eliminated.getInt() : 0;
+      summary["copy_vectorized_count"] =
+        module_copy_vectorized ? module_copy_vectorized.getInt() : 0;
+      summary["copy_fused_count"] = nullptr;
+      summary["copy_fallback_count"] =
+        module_copy_fallback ? module_copy_fallback.getInt() : 0;
+    } else {
+      summary["copy_eliminated_count"] = nullptr;
+      summary["copy_vectorized_count"] = nullptr;
+      summary["copy_fused_count"] = nullptr;
+      summary["copy_fallback_count"] = nullptr;
+    }
+    summary["copy_contract_status"] = !copy_ledger_collected ? "unknown"
+                                      : copy_contract_count == 0
+                                        ? "not_applicable"
+                                        : "collected";
     summary["static_transpose_count"] = transpose_count;
     if (transpose_count == 0 || has_unknown_transpose_bytes) {
       summary["static_transpose_bytes"] = nullptr;
@@ -1531,11 +1716,51 @@ class EmitModelPlanPass final
 
     JsonObject fusion;
     fusion["enabled"] = fusion_enabled;
+    fusion["revision"] = fusion_revision;
+    if (fusion_allow_broadcast) {
+      fusion["allow_broadcast"] = fusion_allow_broadcast.getValue();
+    } else {
+      fusion["allow_broadcast"] = nullptr;
+    }
+    if (fusion_allow_cast_chain) {
+      fusion["allow_cast_chain"] = fusion_allow_cast_chain.getValue();
+    } else {
+      fusion["allow_cast_chain"] = nullptr;
+    }
+    if (fusion_layout_aware) {
+      fusion["layout_aware"] = fusion_layout_aware.getValue();
+    } else {
+      fusion["layout_aware"] = nullptr;
+    }
+    if (fusion_max_chain) {
+      fusion["max_chain_length"] = fusion_max_chain.getInt();
+    } else {
+      fusion["max_chain_length"] = nullptr;
+    }
     fusion["selected_count"] = fusion_selected_count;
     fusion["residual_count"] = fusion_residual_count;
     fusion["rejected_count"] = fusion_rejected_count;
     fusion["rejection_reasons"] = fusion_rejection_reasons;
     fusion["contract_count"] = static_cast<std::int64_t>(fusions.size());
+
+    JsonObject copy;
+    copy["revision"] = "copy-v1";
+    if (copy_ledger_collected) {
+      copy["eliminated_count"] =
+        module_copy_eliminated ? module_copy_eliminated.getInt() : 0;
+      copy["vectorized_count"] =
+        module_copy_vectorized ? module_copy_vectorized.getInt() : 0;
+      copy["fused_count"] = nullptr;
+      copy["fallback_count"] =
+        module_copy_fallback ? module_copy_fallback.getInt() : 0;
+    } else {
+      copy["eliminated_count"] = nullptr;
+      copy["vectorized_count"] = nullptr;
+      copy["fused_count"] = nullptr;
+      copy["fallback_count"] = nullptr;
+    }
+    copy["runtime_bytes"] = nullptr;
+    copy["runtime_status"] = "not_collected";
 
     JsonObject low_precision;
     low_precision["revision"] = low_precision_revision;
@@ -1600,13 +1825,13 @@ class EmitModelPlanPass final
     JsonObject root;
     root["schema_version"] = 1;
     root["plan_revision"] =
-      "static-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|"
-      "attribution-v1";
+      "static-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|"
+      "conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|"
+      "tuning-v1|attribution-v2";
     root["contract_revision"] =
-      "layout-kernel-v1|workspace-slot-v1|fusion-v1|attention-segment-v1|conv-"
-      "depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|"
-      "attribution-v1";
+      "layout-kernel-v1|workspace-slot-v1|fusion-v2|copy-v1|"
+      "attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|"
+      "layout-island-v1|int8-target-v1|tuning-v1|attribution-v2";
     root["attribution_revision"] = attribution_revision.str();
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen
@@ -1619,6 +1844,7 @@ class EmitModelPlanPass final
     root["model"] = model;
     root["target"] = std::move(target);
     root["fusion"] = std::move(fusion);
+    root["copy"] = std::move(copy);
     root["low_precision"] = std::move(low_precision);
     root["tuning"] = std::move(tuning);
     root["attention_revision"] = attention_revision;
