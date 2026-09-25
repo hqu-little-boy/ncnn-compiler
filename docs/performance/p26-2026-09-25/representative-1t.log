@@ -1,0 +1,17 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-stage-p26-20260925-01
+Test project /tmp/ncnn-compiler-stage-p26-20260925-01
+    Start 401: PerformanceModel.ResNet18
+1/4 Test #401: PerformanceModel.ResNet18 ...................   Passed    0.88 sec
+    Start 411: PerformanceModel.Yolov5nDet
+2/4 Test #411: PerformanceModel.Yolov5nDet .................   Passed    2.25 sec
+    Start 431: PerformanceModel.PPOcrv6TinyRecInt8
+3/4 Test #431: PerformanceModel.PPOcrv6TinyRecInt8 .........   Passed    0.29 sec
+    Start 446: PerformanceModel.PPFormulaNetPlusSEncoder
+4/4 Test #446: PerformanceModel.PPFormulaNetPlusSEncoder ...   Passed    3.99 sec
+
+100% tests passed, 0 tests failed out of 4
+
+Label Time Summary:
+performance    =   7.40 sec*proc (4 tests)
+
+Total Test time (real) =   7.41 sec

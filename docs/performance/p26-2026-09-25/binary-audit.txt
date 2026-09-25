@@ -1,0 +1,78 @@
+
+== resnet18 ==
+library=/tmp/ncnn-compiler-stage-p26-20260925-01/test/Numerical/generated/resnet18/libresnet18.so
+bytes=46959536
+-- dynamic dependencies / RPATH --
+ 0x0000000000000001 (NEEDED)             Shared library: [libomp.so.5]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
+-- loaded OpenMP/math runtimes --
+	libomp.so.5 => /lib/x86_64-linux-gnu/libomp.so.5 (0x00007fce5c4fc000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fce5c308000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fce5c218000)
+-- undefined symbol count and sample --
+9
+                 U __kmpc_barrier@VERSION
+                 U __kmpc_for_static_fini@VERSION
+                 U __kmpc_for_static_init_8u@VERSION
+                 U __kmpc_fork_call@VERSION
+                 U __kmpc_global_thread_num@VERSION
+                 U free@GLIBC_2.2.5
+                 U malloc@GLIBC_2.2.5
+                 U memcpy@GLIBC_2.14
+                 U memset@GLIBC_2.2.5
+-- FMA instruction count --
+964
+
+== pp_ocrv6_tiny_rec_int8 ==
+library=/tmp/ncnn-compiler-stage-p26-20260925-01/test/Numerical/generated/pp_ocrv6_tiny_rec_int8/libpp_ocrv6_tiny_rec_int8.so
+bytes=1516776
+-- dynamic dependencies / RPATH --
+ 0x0000000000000001 (NEEDED)             Shared library: [libomp.so.5]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
+-- loaded OpenMP/math runtimes --
+	libomp.so.5 => /lib/x86_64-linux-gnu/libomp.so.5 (0x00007f2e640d8000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f2e63ee4000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f2e63df4000)
+-- undefined symbol count and sample --
+11
+                 U __kmpc_barrier@VERSION
+                 U __kmpc_for_static_fini@VERSION
+                 U __kmpc_for_static_init_8u@VERSION
+                 U __kmpc_fork_call@VERSION
+                 U __kmpc_global_thread_num@VERSION
+                 U erfcf@GLIBC_2.2.5
+                 U expf@GLIBC_2.27
+                 U free@GLIBC_2.2.5
+                 U malloc@GLIBC_2.2.5
+                 U memset@GLIBC_2.2.5
+                 U powf@GLIBC_2.27
+-- FMA instruction count --
+0
+
+== pp_ocrv5_server_det_static ==
+library=/tmp/ncnn-compiler-stage-p26-20260925-01/test/Numerical/generated/pp_ocrv5_server_det_static/libpp_ocrv5_server_det_static.so
+bytes=88647040
+-- dynamic dependencies / RPATH --
+ 0x0000000000000001 (NEEDED)             Shared library: [libomp.so.5]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
+-- loaded OpenMP/math runtimes --
+	libomp.so.5 => /lib/x86_64-linux-gnu/libomp.so.5 (0x00007f9d717ad000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f9d715b9000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f9d714c9000)
+-- undefined symbol count and sample --
+10
+                 U __kmpc_barrier@VERSION
+                 U __kmpc_for_static_fini@VERSION
+                 U __kmpc_for_static_init_8u@VERSION
+                 U __kmpc_fork_call@VERSION
+                 U __kmpc_global_thread_num@VERSION
+                 U expf@GLIBC_2.27
+                 U free@GLIBC_2.2.5
+                 U malloc@GLIBC_2.2.5
+                 U memcpy@GLIBC_2.14
+                 U memset@GLIBC_2.2.5
+-- FMA instruction count --
+5794

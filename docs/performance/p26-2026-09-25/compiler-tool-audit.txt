@@ -1,0 +1,28 @@
+
+== ncnn-compile ==
+ 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]
+
+== ncnn-mlir-driver ==
+ 0x0000000000000001 (NEEDED)             Shared library: [libLLVM.so.21.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]
+ 0x000000000000001d (RUNPATH)            Library runpath: [/usr/lib/llvm-21/lib:]
+	libLLVM.so.21.1 => /usr/lib/llvm-21/lib/libLLVM.so.21.1 (0x00007fc36dc96000)
+
+== ncnn-mlir-opt ==
+ 0x0000000000000001 (NEEDED)             Shared library: [libMLIR.so.21.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libLLVM.so.21.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x000000000000001d (RUNPATH)            Library runpath: [/usr/lib/llvm-21/lib:]
+	libMLIR.so.21.1 => /usr/lib/llvm-21/lib/libMLIR.so.21.1 (0x00007fc8e1aa7000)
+	libLLVM.so.21.1 => /usr/lib/llvm-21/lib/libLLVM.so.21.1 (0x00007fc8d94e5000)

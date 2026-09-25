@@ -1,0 +1,38 @@
+{
+  "status": "blocked_by_preexisting_llvm_mlir_asan_issue",
+  "sanitizers": ["address", "undefined"],
+  "configuration": {
+    "build_type": "Debug",
+    "directory": "/tmp/ncnn-compiler-stage-p26-sanitizer-20260925-02",
+    "compiler_revision": "05be0ae01c85828bcc350121071730b886ee9cf7",
+    "llvm_mlir_version": "21.1.8"
+  },
+  "stage_gates": {
+    "format_check": "passed",
+    "tidy": "passed; 90 first-party translation units"
+  },
+  "failure": {
+    "phase": "full build, while generating convolution_int8_term1",
+    "test_fixture": "convolution_int8_term1",
+    "sanitizer": "AddressSanitizer",
+    "report": "use-after-poison",
+    "top_frame": "llvm::SmallVectorTemplateCommon<std::pair<mlir::TypeID, void*>, void>::begin()",
+    "header": "/usr/include/llvm-21/llvm/ADT/SmallVector.h:268",
+    "call_chain": [
+      "mlir::Dialect::addType",
+      "mlir::BuiltinDialect::initialize",
+      "mlir::MLIRContext::MLIRContext",
+      "ncnn-mlir-driver main at tools/ncnn-mlir-driver.cpp:301"
+    ],
+    "full_build_log": "sanitizer-full-build.log.gz"
+  },
+  "reproduction": {
+    "executable": "/tmp/ncnn-compiler-stage-p26-sanitizer-20260925-02/test/Unit/unit_tests",
+    "gtest_case": "NcnnImporterTest.ImportsDynamicInputShapeOverride",
+    "result": "same AddressSanitizer use-after-poison in BuiltinDialect initialization",
+    "log": "sanitizer-unit-tests.log.gz"
+  },
+  "full_sanitizer_ctest": "not run because the known blocker prevents fixture build",
+  "prior_project_record": "/mnt/ncnn-compiler/docs/ncnn-mlir-performance-optimization-plan.md:1410",
+  "note": "The first sanitizer build attempt was stopped after an accidental concurrent invocation against the same build directory; its compressed log is retained separately as sanitizer-build-concurrent-attempt.log.gz. Final sanitizer findings above come from the clean, single-invocation stage-02 retry."
+}

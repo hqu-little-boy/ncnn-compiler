@@ -1,0 +1,12 @@
+Note: Google Test filter = PerformanceModel.ResNet18
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from PerformanceModel
+[ RUN      ] PerformanceModel.ResNet18
+PERF model=resnet18 mode=end_to_end status=measured threads=6 warmup=2 iters=5 ncnn_ms=11.853 compiled_ms=28.806 ratio=2.430 ncnn_min_ms=10.588 compiled_min_ms=27.298 cv=0.0568 setup=ncnn_extractor_and_io_per_iteration
+[       OK ] PerformanceModel.ResNet18 (408 ms)
+[----------] 1 test from PerformanceModel (408 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (408 ms total)
+[  PASSED  ] 1 test.

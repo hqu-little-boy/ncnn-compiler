@@ -1,0 +1,7 @@
+model                                  mode              T   ncnn(ms)   cmpd(ms)   ratio
+pp_ocrv6_tiny_rec_int8                 end_to_end        1        4.0       30.0    7.55
+resnet18                               end_to_end        1       23.0       70.8    3.08
+yolov5n                                end_to_end        1       69.2      197.4    2.85
+pp_formulanet_plus_s_encoder           end_to_end        1      132.8      356.3    2.68
+mode=end_to_end n=4 p50=2.96 p90=6.21 max=7.55 records=4
+  heavy(ncnn>=100ms) n=1 p50=2.68 p90=2.68 max=2.68

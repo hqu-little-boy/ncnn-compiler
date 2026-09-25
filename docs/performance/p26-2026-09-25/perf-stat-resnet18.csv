@@ -1,0 +1,12 @@
+# started on Fri Sep 25 10:08:53 2026
+
+17630229,,cpu_atom/cycles:u/,615696,0.00,,
+5407266257,,cpu_core/cycles:u/,1539525882,99.00,,
+3293448,,cpu_atom/instructions:u/,615696,0.00,0.19,insn per cycle
+8003417540,,cpu_core/instructions:u/,1539525882,99.00,1.48,insn per cycle
+585674,,cpu_atom/branches:u/,615696,0.00,,
+436420230,,cpu_core/branches:u/,1539525882,99.00,,
+64306,,cpu_atom/branch-misses:u/,615696,0.00,10.98,of all branches
+1982852,,cpu_core/branch-misses:u/,1539525882,99.00,0.45,of all branches
+40948,,cpu_atom/cache-misses:u/,615696,0.00,,
+42116670,,cpu_core/cache-misses:u/,1539525882,99.00,,

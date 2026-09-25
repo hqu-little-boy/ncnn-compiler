@@ -1,0 +1,188 @@
+{
+  "scope": "44 official models plus resnet18_winograd diagnostic",
+  "model_count": 45,
+  "missing": [],
+  "total_shared_library_bytes": 3059869096,
+  "models": [
+    {
+      "model": "chineseocr_lite_anglenet",
+      "shared_library_bytes": 1105824
+    },
+    {
+      "model": "efficientnet_b0",
+      "shared_library_bytes": 21553688
+    },
+    {
+      "model": "efficientnet_b1",
+      "shared_library_bytes": 31757056
+    },
+    {
+      "model": "efficientnet_b2",
+      "shared_library_bytes": 37173344
+    },
+    {
+      "model": "efficientnet_b3",
+      "shared_library_bytes": 49790464
+    },
+    {
+      "model": "pp_formulanet_plus_s_encoder",
+      "shared_library_bytes": 54669208
+    },
+    {
+      "model": "pp_lcnet_x1_0_doc_ori",
+      "shared_library_bytes": 6840616
+    },
+    {
+      "model": "pp_lcnet_x1_0_textline_ori",
+      "shared_library_bytes": 6837232
+    },
+    {
+      "model": "pp_ocrv5_mobile_det_static",
+      "shared_library_bytes": 4949904
+    },
+    {
+      "model": "pp_ocrv5_mobile_rec",
+      "shared_library_bytes": 16877960
+    },
+    {
+      "model": "pp_ocrv5_mobile_rec_int8",
+      "shared_library_bytes": 5035816
+    },
+    {
+      "model": "pp_ocrv5_server_det_static",
+      "shared_library_bytes": 88647040
+    },
+    {
+      "model": "pp_ocrv5_server_rec",
+      "shared_library_bytes": 84858008
+    },
+    {
+      "model": "pp_ocrv6_medium_det",
+      "shared_library_bytes": 62239096
+    },
+    {
+      "model": "pp_ocrv6_medium_det_int8",
+      "shared_library_bytes": 16293320
+    },
+    {
+      "model": "pp_ocrv6_medium_rec",
+      "shared_library_bytes": 77031272
+    },
+    {
+      "model": "pp_ocrv6_medium_rec_int8",
+      "shared_library_bytes": 20935360
+    },
+    {
+      "model": "pp_ocrv6_small_det",
+      "shared_library_bytes": 10231032
+    },
+    {
+      "model": "pp_ocrv6_small_rec",
+      "shared_library_bytes": 21569728
+    },
+    {
+      "model": "pp_ocrv6_small_rec_int8",
+      "shared_library_bytes": 6384272
+    },
+    {
+      "model": "pp_ocrv6_tiny_det",
+      "shared_library_bytes": 2050944
+    },
+    {
+      "model": "pp_ocrv6_tiny_rec",
+      "shared_library_bytes": 4609672
+    },
+    {
+      "model": "pp_ocrv6_tiny_rec_int8",
+      "shared_library_bytes": 1516776
+    },
+    {
+      "model": "pp_structrurev2_slanet_plus_cnn",
+      "shared_library_bytes": 5747440
+    },
+    {
+      "model": "resnet101",
+      "shared_library_bytes": 178833744
+    },
+    {
+      "model": "resnet18",
+      "shared_library_bytes": 46959536
+    },
+    {
+      "model": "resnet18_winograd",
+      "shared_library_bytes": 279400624
+    },
+    {
+      "model": "resnet34",
+      "shared_library_bytes": 87554864
+    },
+    {
+      "model": "resnet50",
+      "shared_library_bytes": 102704600
+    },
+    {
+      "model": "squeezenet_v1_1",
+      "shared_library_bytes": 5192528
+    },
+    {
+      "model": "yolov5l",
+      "shared_library_bytes": 187277168
+    },
+    {
+      "model": "yolov5l_cls",
+      "shared_library_bytes": 106556584
+    },
+    {
+      "model": "yolov5l_seg",
+      "shared_library_bytes": 192748640
+    },
+    {
+      "model": "yolov5m",
+      "shared_library_bytes": 85632984
+    },
+    {
+      "model": "yolov5m_cls",
+      "shared_library_bytes": 52079784
+    },
+    {
+      "model": "yolov5m_seg",
+      "shared_library_bytes": 88859456
+    },
+    {
+      "model": "yolov5n",
+      "shared_library_bytes": 8220616
+    },
+    {
+      "model": "yolov5n_cls",
+      "shared_library_bytes": 10124328
+    },
+    {
+      "model": "yolov5n_seg",
+      "shared_library_bytes": 8718744
+    },
+    {
+      "model": "yolov5s",
+      "shared_library_bytes": 29720640
+    },
+    {
+      "model": "yolov5s_cls",
+      "shared_library_bytes": 21986472
+    },
+    {
+      "model": "yolov5s_seg",
+      "shared_library_bytes": 31287832
+    },
+    {
+      "model": "yolov5x",
+      "shared_library_bytes": 348104456
+    },
+    {
+      "model": "yolov5x_cls",
+      "shared_library_bytes": 192785576
+    },
+    {
+      "model": "yolov5x_seg",
+      "shared_library_bytes": 356414848
+    }
+  ]
+}

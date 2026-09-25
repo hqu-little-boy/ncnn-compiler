@@ -1,0 +1,86 @@
+# P26 fresh full validation and final performance comparison
+# Source: /mnt/ncnn-compiler/compiler at 05be0ae01c85828bcc350121071730b886ee9cf7
+# Vendored ncnn: a4d2ea1d4422c9e849f166fd7a4aefb52f942f6a
+# Fresh build directory (do not reuse model fixtures across runs):
+# /tmp/ncnn-compiler-stage-p26-20260925-01
+
+# The pre-existing cmake-build-debug is a moved build tree (its cache points at
+# /home/zeng/debian/ncnn-compiler/compiler/cmake-build-debug and its Ninja binary
+# is absent). Attempts there are retained in format-check-existing-build.log and
+# tidy-existing-build.log; the gates were rerun successfully in the fresh build.
+
+cmake -S /mnt/ncnn-compiler/compiler \
+  -B /tmp/ncnn-compiler-stage-p26-20260925-01 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+  -DBUILD_TESTING=ON \
+  -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+  -DCOMPILER_INSTALL_RPATH=ON
+
+cmake --build /tmp/ncnn-compiler-stage-p26-20260925-01 --target format_check --parallel 8
+cmake --build /tmp/ncnn-compiler-stage-p26-20260925-01 --target tidy --parallel 8
+cmake --build /tmp/ncnn-compiler-stage-p26-20260925-01 --parallel 8
+cmake --build /tmp/ncnn-compiler-stage-p26-20260925-01 \
+  --target numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests \
+  --parallel 8
+ctest --test-dir /tmp/ncnn-compiler-stage-p26-20260925-01 --output-on-failure
+
+# Full official + diagnostic profile-off end-to-end comparison versus the
+# vendored ncnn revision above. Two known upstream crashes remain CTest skips;
+# never invent result rows for them.
+NCNN_PERF_THREADS=6 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 \
+NCNN_PERF_MODE=end_to_end NCNN_PERF_MAX_RATIO=0 \
+NCNN_PERF_JSON=/mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/raw-all-model-ncnn-comparison.ndjson \
+ctest --test-dir /tmp/ncnn-compiler-stage-p26-20260925-01 \
+  -R '^PerformanceModel\.' --output-on-failure
+
+python3 /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/finalize-end-to-end.py \
+  /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/raw-all-model-ncnn-comparison.ndjson \
+  /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/final-all-model-ncnn-comparison.json
+cp /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/raw-all-model-ncnn-comparison.ndjson \
+  /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/final-all-model-ncnn-comparison.ndjson
+python3 /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/summarize-end-to-end.py \
+  /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/final-all-model-ncnn-comparison.json
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py \
+  /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/final-all-model-ncnn-comparison.ndjson \
+  --official-only > /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/official-summary.txt
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py \
+  /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/final-all-model-ncnn-comparison.ndjson \
+  > /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/all-measured-summary.txt
+python3 /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/audit-generated-artifacts.py \
+  /tmp/ncnn-compiler-stage-p26-20260925-01
+python3 /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/summarize-model-families.py
+
+# Representative one-thread diagnostic timing, separate from the 6T gate table.
+NCNN_PERF_THREADS=1 NCNN_PERF_WARMUP=2 NCNN_PERF_ITERS=5 \
+NCNN_PERF_MODE=end_to_end NCNN_PERF_MAX_RATIO=0 \
+NCNN_PERF_JSON=/mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/representative-1t.ndjson \
+ctest --test-dir /tmp/ncnn-compiler-stage-p26-20260925-01 \
+  -R '^PerformanceModel\.(ResNet18|Yolov5nDet|PPOcrv6TinyRecInt8|PPFormulaNetPlusSEncoder)$' \
+  --output-on-failure
+
+# Representative perf stat; this diagnostic result is not part of the E2E table.
+/usr/bin/perf stat -x, \
+  -o /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/perf-stat-resnet18-retry.csv \
+  -e cycles,instructions,branches,branch-misses,cache-misses -- \
+  env NCNN_PERF_THREADS=6 NCNN_PERF_WARMUP=2 NCNN_PERF_ITERS=5 \
+      NCNN_PERF_MODE=end_to_end NCNN_PERF_MAX_RATIO=0 \
+      NCNN_PERF_JSON=/mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/perf-stat-resnet18-retry.ndjson \
+  /tmp/ncnn-compiler-stage-p26-20260925-01/test/Numerical/performance_tests \
+  --gtest_filter=PerformanceModel.ResNet18 \
+  > /mnt/ncnn-compiler/compiler/docs/performance/p26-2026-09-25/perf-stat-resnet18-retry.log 2>&1
+
+# ASan+UBSan extra audit. Build is blocked by the already-documented MLIR 21
+# BuiltinDialect use-after-poison; no sanitizer full CTest was run.
+mkdir /tmp/ncnn-compiler-stage-p26-sanitizer-20260925-02
+cmake -S /mnt/ncnn-compiler/compiler \
+  -B /tmp/ncnn-compiler-stage-p26-sanitizer-20260925-02 \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DBUILD_TESTING=ON \
+  -DCOMPILER_ENABLE_FORMAT_TARGETS=ON -DCOMPILER_INSTALL_RPATH=ON \
+  -DCOMPILER_TIDY_JOBS=8 '-DCOMPILER_SANITIZERS=address;undefined'
+cmake --build /tmp/ncnn-compiler-stage-p26-sanitizer-20260925-02 --target format_check --parallel 8
+cmake --build /tmp/ncnn-compiler-stage-p26-sanitizer-20260925-02 --target tidy --parallel 8
+cmake --build /tmp/ncnn-compiler-stage-p26-sanitizer-20260925-02 --parallel 8

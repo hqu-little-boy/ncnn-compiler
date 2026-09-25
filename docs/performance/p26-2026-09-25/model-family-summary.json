@@ -1,0 +1,86 @@
+{
+  "measurement": "profile-off end_to_end, 6 threads, 10 warmup, 20 iterations",
+  "official_models": 44,
+  "families": {
+    "CNN classification": {
+      "models": 16,
+      "ratio_p50": 2.0564999999999998,
+      "ratio_p90": 2.3185000000000002,
+      "ratio_max": 2.535,
+      "ratio_geometric_mean": 2.014986707119136,
+      "ncnn_total_ms": 301.438,
+      "compiled_total_ms": 579.158,
+      "total_excess_ms": 277.72
+    },
+    "Formula/Doc": {
+      "models": 3,
+      "ratio_p50": 2.221,
+      "ratio_p90": 4.497,
+      "ratio_max": 5.066,
+      "ratio_geometric_mean": 2.597728340646956,
+      "ncnn_total_ms": 94.033,
+      "compiled_total_ms": 184.794,
+      "total_excess_ms": 90.761
+    },
+    "OCR detection": {
+      "models": 6,
+      "ratio_p50": 1.5230000000000001,
+      "ratio_p90": 2.255,
+      "ratio_max": 2.549,
+      "ratio_geometric_mean": 1.4884469280039692,
+      "ncnn_total_ms": 5213.552,
+      "compiled_total_ms": 4992.873,
+      "total_excess_ms": -220.67900000000006
+    },
+    "OCR recognition": {
+      "models": 9,
+      "ratio_p50": 2.292,
+      "ratio_p90": 4.2708,
+      "ratio_max": 4.918,
+      "ratio_geometric_mean": 2.3519598565440947,
+      "ncnn_total_ms": 574.61,
+      "compiled_total_ms": 753.606,
+      "total_excess_ms": 178.996
+    },
+    "YOLO detection": {
+      "models": 5,
+      "ratio_p50": 1.236,
+      "ratio_p90": 1.6044,
+      "ratio_max": 1.708,
+      "ratio_geometric_mean": 1.3247780240385723,
+      "ncnn_total_ms": 1073.443,
+      "compiled_total_ms": 1600.218,
+      "total_excess_ms": 526.7750000000001
+    },
+    "YOLO segmentation": {
+      "models": 5,
+      "ratio_p50": 1.352,
+      "ratio_p90": 1.6623999999999999,
+      "ratio_max": 1.674,
+      "ratio_geometric_mean": 1.4172221951288266,
+      "ncnn_total_ms": 1381.154,
+      "compiled_total_ms": 2144.918,
+      "total_excess_ms": 763.7639999999999
+    }
+  },
+  "orthogonal_int8_subset": {
+    "models": 5,
+    "ratio_p50": 4.071,
+    "ratio_p90": 4.5944,
+    "ratio_max": 4.918,
+    "ratio_geometric_mean": 3.366812774284803,
+    "ncnn_total_ms": 54.89,
+    "compiled_total_ms": 196.567,
+    "total_excess_ms": 141.677
+  },
+  "orthogonal_fp32_subset": {
+    "models": 39,
+    "ratio_p50": 1.773,
+    "ratio_p90": 2.3248,
+    "ratio_max": 5.066,
+    "ratio_geometric_mean": 1.7238231767002532,
+    "ncnn_total_ms": 8583.34,
+    "compiled_total_ms": 10059.0,
+    "total_excess_ms": 1475.6599999999999
+  }
+}

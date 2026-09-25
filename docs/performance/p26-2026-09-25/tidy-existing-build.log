@@ -1,0 +1,5 @@
+CMake Error: The current CMakeCache.txt directory /mnt/ncnn-compiler/compiler/cmake-build-debug/CMakeCache.txt is different than the directory /home/zeng/debian/ncnn-compiler/compiler/cmake-build-debug where CMakeCache.txt was created. This may result in binaries being created in the wrong place. If you are not sure, reedit the CMakeCache.txt
+no such file or directory
+CMake Error: Generator: execution of make failed. Make command was: /opt/clion/bin/ninja/linux/x64/ninja -j 8 tidy
+
+tidy_exit=1

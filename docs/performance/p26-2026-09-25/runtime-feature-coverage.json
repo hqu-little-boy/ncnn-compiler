@@ -1,0 +1,36 @@
+{
+  "formal_e2e": {
+    "profile_instrumentation": "off",
+    "runtime_counters": "not_collected",
+    "packing_runtime_hit_count": null,
+    "workspace_runtime_hit_count": null,
+    "fusion_runtime_hit_count": null,
+    "copy_bytes": null,
+    "transpose_bytes": null,
+    "allocation_bytes": null,
+    "meaning": "null means not collected; static plan fields and selected counts are not runtime-hit evidence"
+  },
+  "generated_sidecars": {
+    "execution_plans_valid": 230,
+    "model_manifests_valid": 230,
+    "these_are_static_artifacts_not_runtime_consumption": true
+  },
+  "p25_profile_qualification_reused_as_diagnostic_only": {
+    "profiles": 7,
+    "schema2_event_streams_complete": 7,
+    "event_mismatches": 0,
+    "attribution_reports_complete": 0,
+    "incomplete_reason": "runtime_exclusive_time_unknown",
+    "unknown_exclusive_time_percent": {
+      "yolov5x_seg": 95.1,
+      "yolov5x": 95.4,
+      "yolov5l_seg": 94.6,
+      "yolov5l": 95.3,
+      "yolov5m_seg": 94.1,
+      "pp_ocrv6_medium_det": 80.1,
+      "efficientnet_b3": 91.8
+    },
+    "one_thread_yolov5x_seg_profile": "compile failed with remaining scf.parallel; not a valid profile"
+  },
+  "decision": "No runtime feature hit-rate or copy/allocation-byte claims are made for P26; attribution remains insufficient to admit a new production optimization."
+}

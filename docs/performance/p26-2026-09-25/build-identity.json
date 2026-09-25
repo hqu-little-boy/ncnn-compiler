@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-25",
+  "compiler_repository": {
+    "path": "/mnt/ncnn-compiler/compiler",
+    "branch": "p8-implementation",
+    "revision": "05be0ae01c85828bcc350121071730b886ee9cf7",
+    "tracked_worktree_clean_before_p26": true,
+    "preexisting_untracked_evidence": [
+      "docs/performance/p22-2026-09-22/",
+      "docs/performance/p22-2026-09-23/",
+      "docs/performance/p24-2026-09-25/",
+      "docs/performance/p25-2026-09-25/"
+    ],
+    "production_source_changed": false
+  },
+  "ncnn_reference": {
+    "repository": "compiler/test/third_party/ncnn",
+    "revision": "a4d2ea1d4422c9e849f166fd7a4aefb52f942f6a"
+  },
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i5-12600KF",
+    "online_logical_cpus": 16,
+    "kernel": "Linux 7.2.6-zen2-1-zen"
+  },
+  "toolchain": {
+    "cmake": "3.31.6",
+    "c_compiler": "GNU 14.2.0",
+    "cxx_compiler": "GNU 14.2.0",
+    "clang": "21.1.8",
+    "clang_format": "21.1.8",
+    "clang_tidy": "21.1.8",
+    "llvm_mlir": "21.1.8",
+    "gtest": "1.15.0"
+  },
+  "cmake_configuration": {
+    "build_directory": "/tmp/ncnn-compiler-stage-p26-20260925-01",
+    "build_type": "Release",
+    "llvm_dir": "/usr/lib/llvm-21/lib/cmake/llvm",
+    "mlir_dir": "/usr/lib/llvm-21/lib/cmake/mlir",
+    "export_compile_commands": true,
+    "build_testing": true,
+    "format_targets": true,
+    "install_rpath": true,
+    "build_parallelism": 8
+  },
+  "completed_gate_results": {
+    "format_check": "passed; fresh-build-directory gate, old moved Debug cache was unusable",
+    "tidy": "passed; 90 first-party translation units checked",
+    "full_build": "passed",
+    "numerical_targets": [
+      "numerical_tests",
+      "numerical_dynamic_operator_tests",
+      "numerical_dynamic_tests"
+    ],
+    "generated_shared_libraries": 230,
+    "valid_execution_plan_sidecars": 230,
+    "valid_model_manifest_sidecars": 230,
+    "full_ctest": "449 registered; 447 passed, 0 failed, 2 known upstream INT8 reference skips; 768.04 seconds"
+  },
+  "formal_end_to_end_measurement": {
+    "mode": "end_to_end",
+    "instrumentation": "off",
+    "threads": 6,
+    "warmup_iterations": 10,
+    "timed_iterations": 20,
+    "metrics_json": "final-all-model-ncnn-comparison.json",
+    "metrics_ndjson": "final-all-model-ncnn-comparison.ndjson",
+    "measured_rows": 45,
+    "official_rows": 44,
+    "diagnostic_model": "resnet18_winograd",
+    "official_ratio": {
+      "p50": 1.901,
+      "p90": 2.6015,
+      "max": 5.066,
+      "geometric_mean": 1.8600721462345235,
+      "total_excess_ms": 1617.337
+    },
+    "heavy_official_ratio_ncnn_ge_100ms": {
+      "models": 11,
+      "p50": 1.352,
+      "p90": 1.674,
+      "max": 1.708
+    },
+    "full_performance_ctest": "47 cases; 45 measured passed, 0 failed, 2 known upstream skips; 594.48 seconds"
+  }
+}

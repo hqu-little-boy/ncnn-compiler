@@ -1,0 +1,12 @@
+{
+  "rows": 45,
+  "expected_rows": 45,
+  "missing_models": [],
+  "unexpected_models": [],
+  "missing_identity_rows": [],
+  "distinct_targets": [
+    "x86_64-pc-linux-gnu"
+  ],
+  "distinct_plan_hashes": 45,
+  "distinct_build_identities": 45
+}
