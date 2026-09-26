@@ -17,7 +17,7 @@ target_link_libraries(ncnn-mlir-driver PRIVATE
     ${NCNN_DRIVER_LLVM_LIBS})
 install(TARGETS ncnn-mlir-driver RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-add_executable(ncnn-compile ncnn-compile.cpp)
+add_executable(ncnn-compile ncnn-compile.cpp CompileSession.cpp)
 target_include_directories(ncnn-compile PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_include_directories(ncnn-compile SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(ncnn-compile PRIVATE

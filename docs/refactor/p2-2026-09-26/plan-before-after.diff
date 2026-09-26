@@ -1,0 +1,13 @@
+# 逐字节对照：重构前 vs 重构后（9 个模型的 .plan.json / .h / manifest）
+#
+# 命令：
+#   STAGE=/tmp/ncnn-compiler-stage-p2-baseline /tmp/p2-emit-plans.sh /tmp/p2-before
+#   STAGE=/tmp/ncnn-compiler-stage-refactor-p2  /tmp/p2-emit-plans.sh /tmp/p2-after
+#   diff -ru /tmp/p2-before /tmp/p2-after --exclude='*.compile.log'
+#
+# 结果：exit 0，输出为空 —— 下面除本注释外无内容，即全部逐字节一致。
+#
+# 覆盖模型：squeezenet_v1_1 / resnet18 / chineseocr_lite_anglenet /
+#   yolov5n / yolov5x_seg / pp_ocrv6_tiny_rec / pp_ocrv6_tiny_det /
+#   pp_ocrv6_tiny_rec_dynamic / pp_ocrv6_tiny_det_dynamic
+# 后两者为动态维 + dim 约束用例，覆盖 finalizeDynamicRankABI。

@@ -1,0 +1,138 @@
+# P2 巨型函数拆分 · 验证记录
+
+日期：2026-09-26
+阶段：/tmp/ncnn-compiler-stage-refactor-p2
+配置：-DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+      -DCOMPILER_ENABLE_FORMAT_TARGETS=ON -DCOMPILER_INSTALL_RPATH=ON -DBUILD_TESTING=ON
+
+## 1. clang-format（全局，含非本次产生的文件）
+
+```
+Checking code style with clang-format (Google)
+Built target format_check
+exit=0
+```
+
+## 2. clang-tidy（全局，90 个 first-party TU）
+
+```
+target: tidy
+exit=0
+user-code diagnostics: 0
+```
+
+首轮 tidy 报出 2 类本次产生的问题，已按结果修复（这正是全局检测的目的）：
+
+| 诊断 | 位置 | 修复 |
+|---|---|---|
+| `google-build-using-namespace` | `tools/ncnn-compile.cpp:42` | `using namespace ncnn_compile;` → 7 条 using-declaration |
+| `modernize-concat-nested-namespaces` | `GenerateCAPIInternal.hpp:28` 等 3 文件 | `namespace mlir::ncnn { namespace capi_detail {` → `namespace mlir::ncnn::capi_detail {` |
+
+## 3. 构建（全新 /tmp stage）
+
+```
+cmake -S compiler -B /tmp/ncnn-compiler-stage-refactor-p2 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+  -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+  -DCOMPILER_INSTALL_RPATH=ON \
+  -DBUILD_TESTING=ON
+cmake --build /tmp/ncnn-compiler-stage-refactor-p2 --parallel
+exit=0, error: 0
+```
+
+## 4. 三个 numerical target
+
+```
+cmake --build /tmp/ncnn-compiler-stage-refactor-p2 \
+  --target numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests \
+  --parallel
+[100%] Built target numerical_dynamic_operator_tests
+[ 87%] Built target numerical_test_support
+[100%] Built target numerical_dynamic_tests
+exit=0
+```
+
+## 5. 全量 CTest
+
+```
+100% tests passed, 0 tests failed out of 456
+Total Test time (real) = 897.59 sec
+
+The following tests did not run:
+	435 - PerformanceModel.PPLCNetDocOriInt8 (Skipped)
+	436 - PerformanceModel.PPLCNetTextlineOriInt8 (Skipped)
+```
+
+**456 registered / 456 passed / 0 failed**，2 个既有 upstream INT8 reference skip
+（`PerformanceModel.PPLCNetDocOriInt8`、`PerformanceModel.PPLCNetTextlineOriInt8`）
+原样披露，未新增 skip。见 `docs/ncnn-suspected-issues.md`。
+
+计数核对：P27 基线 451 registered + 本阶段新增 5 项
+（`plan-hash-whitelist`、`attr-partition`、`attr-report` +
+`plan-hash-whitelist.mlir`、GenerateCAPI 侧无新增 lit）= 456。
+
+## 6. 逐字节对照（不动语义的直接证据）
+
+9 个模型（含 2 个动态形状用例，覆盖 `finalizeDynamicRankABI`）经重构前后
+的 `ncnn-compile` 产出 `.plan.json` / `.h` / manifest `.json`：
+
+```
+STAGE=/tmp/ncnn-compiler-stage-p2-baseline /tmp/p2-emit-plans.sh /tmp/p2-before
+STAGE=/tmp/ncnn-compiler-stage-refactor-p2  /tmp/p2-emit-plans.sh /tmp/p2-after
+diff -ru /tmp/p2-before /tmp/p2-after --exclude='*.compile.log'
+-> empty (exit 0, 0 lines)
+```
+
+| 模型 | 覆盖点 | .plan.json | .h | manifest |
+|---|---|---|---|---|
+| `squeezenet_v1_1` | 静态 | 一致 | 一致 | 一致 |
+| `resnet18` | 静态 | 一致 | 一致 | 一致 |
+| `chineseocr_lite_anglenet` | 静态 | 一致 | 一致 | 一致 |
+| `yolov5n` | 静态 | 一致 | 一致 | 一致 |
+| `yolov5x_seg` | 静态 | 一致 | 一致 | 一致 |
+| `pp_ocrv6_tiny_rec` | 静态 | 一致 | 一致 | 一致 |
+| `pp_ocrv6_tiny_det` | 静态 | 一致 | 一致 | 一致 |
+| `pp_ocrv6_tiny_rec_dynamic` | 动态维+约束 | 一致 | 一致 | 一致 |
+| `pp_ocrv6_tiny_det_dynamic` | 动态维+约束 | 一致 | 一致 | 一致 |
+
+对照文件已归档到 `plan-before-after.diff`（内容为空即全部一致）。
+
+## 7. T-C2 CLI 逐字节对照
+
+11 组输入（正常 / worker 归因 / 多次调用聚合 / 4 类错误路径）重构前后
+stdout、stderr、退出码：**34 项 IDENTICAL，0 项 DIFF**。
+证据目录 `/tmp/p2-t2-evidence/`（`diff-summary.txt`、`out/`）。
+
+## 8. T-C4 返回码契约对照
+
+| 场景 | 重构前 | 重构后 |
+|---|---:|---:|
+| 缺输入文件 | 1 | 1 |
+| 非法 `--emit` 阶段 | 1 | 1 |
+| 非法 `--vector-width` | 1 | 1 |
+| 非法 `--tuning-profile` | 1 | 1 |
+| 找不到工具 | 1 | 1 |
+| driver 退出 42 | 42 | 42 |
+| 成功 | 0 | 0 |
+
+stdout/stderr 在归一化随机 staging 后缀后逐字节一致；成功产物 md5 一致。
+证据目录 `/tmp/p2-t4-evidence/`。
+
+## 9. 新增守卫单测
+
+```
+plan-hash whitelist check passed (14 mutation sites, 12 whitelisted fragments, 4 folded fragments)
+
+OK
+
+OK
+check_perf_attribution exit=0
+attribute whitelist ok: 164 keys defined in KernelContract.hpp, 0 bare literals outside it, 4 recorded literals in 3 allow-listed files
+check_attribute_whitelist exit=0
+```
+
+## 10. 披露的偏差
+
+1. **T-C3 未拆 `prepareABI`** —— 与同任务验收「每 TU ≤ 700 行」冲突。
+2. **pytest 不可用**（本机无 pytest / pip），T-C2 新增单测以 `unittest` + ctest 执行。

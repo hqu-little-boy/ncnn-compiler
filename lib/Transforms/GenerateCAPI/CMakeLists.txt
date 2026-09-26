@@ -1,5 +1,8 @@
 add_library(GenerateCAPI
-    GenerateCAPI.cpp
+    GenerateCAPIEmitInfer.cpp
+    GenerateCAPIEmitWrapper.cpp
+    GenerateCAPIFinalize.cpp
+    GenerateCAPIPrepare.cpp
 )
 add_dependencies(GenerateCAPI NCNNPassesIncGen)
 target_compile_options(GenerateCAPI PRIVATE -fno-rtti)

@@ -1,3 +1,5 @@
+#include "CompileSession.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -36,6 +38,14 @@
 namespace {
 
 namespace fs = std::filesystem;
+
+using ncnn_compile::Argument;
+using ncnn_compile::ClangTargetArguments;
+using ncnn_compile::Manifest;
+using ncnn_compile::OutputDirectoryState;
+using ncnn_compile::ScopedDirectory;
+using ncnn_compile::ToolResult;
+using ncnn_compile::TuningSettings;
 
 int g_executable_anchor;
 
@@ -326,90 +336,6 @@ llvm::cl::opt<std::string> g_expected_undefined("expected-undefined",
                                                 llvm::cl::Hidden,
                                                 llvm::cl::cat(g_category));
 
-struct Argument {
-  struct DimensionConstraint {
-    std::uint32_t dimension;
-    std::int64_t minimum;
-    std::int64_t multiple_of;
-  };
-
-  std::string name;
-  std::vector<std::int64_t> shape;
-  std::vector<std::int64_t> maximum_shape;
-  std::string element_type;
-  std::uint32_t dynamic_dim_mask;
-  bool shape_depends_on_data;
-  std::int32_t shape_source_input;
-  std::int32_t shape_program_version;
-  bool dynamic_rank;
-  std::uint32_t rank_min;
-  std::uint32_t rank_max;
-  std::vector<DimensionConstraint> dimension_constraints;
-  std::vector<std::vector<std::int64_t>> shape_program;
-};
-
-struct Manifest {
-  struct InputDimensionRelation {
-    std::uint32_t lhs_input;
-    std::uint32_t lhs_dimension;
-    std::uint32_t rhs_input;
-    std::uint32_t rhs_dimension;
-    std::int64_t offset;
-  };
-
-  struct PrecisionPolicy {
-    std::string storage;
-    std::string complex_math;
-    std::string complex_accumulator;
-    std::optional<std::string> fp16_accumulator;
-    bool fallback;
-  };
-
-  struct Target {
-    std::string triple;
-    std::string cpu;
-    std::string march;
-    std::string tune;
-    std::vector<std::string> features;
-    std::string execution_profile;
-  };
-
-  std::string function;
-  std::vector<Argument> inputs;
-  std::vector<Argument> outputs;
-  std::vector<InputDimensionRelation> input_dimension_relations;
-  std::optional<PrecisionPolicy> precision_policy;
-  std::optional<Target> target;
-  // 多线程产物是否依赖 OpenMP 运行时（libomp 探测失败回退 threads=1 时
-  // 为 false；探测成功为 true）。旧 manifest 无此字段。
-  std::optional<bool> openmp;
-  // 实际生效的向量数学后端（none/libmvec/sleef）。旧 manifest 无此字段。
-  std::optional<std::string> vector_math;
-};
-
-class ScopedDirectory {
- public:
-  explicit ScopedDirectory(fs::path path)
-    : path_(std::move(path)), remove_(true) {}
-  ~ScopedDirectory() {
-    if (!remove_) {
-      return;
-    }
-    std::error_code error;
-    fs::remove_all(path_, error);
-    if (error) {
-      llvm::errs() << "ncnn-compile: warning: cannot clean up '"
-                   << path_.string() << "': " << error.message() << '\n';
-    }
-  }
-  const fs::path& path() const { return path_; }
-  void release() { remove_ = false; }
-
- private:
-  fs::path path_;
-  bool remove_;
-};
-
 // 定位 vendored SLEEF 静态档案（单档案，dispatcher 内置运行时 ISA 自分
 // 发）。顺序：--sleef-path > 可执行文件相对 ../lib > 构建期注入的构建树
 // 路径。
@@ -532,8 +458,6 @@ std::string c_identifier(std::string_view name) {
   }
   return result;
 }
-
-using ToolResult = std::expected<std::optional<std::string>, std::string>;
 
 [[nodiscard]] ToolResult find_tool(
   const fs::path& executable_dir,
@@ -1464,11 +1388,6 @@ bool is_generated_output(const fs::path& path, std::string_view model_name) {
          name == std::string(model_name) + ".plan.json";
 }
 
-struct OutputDirectoryState {
-  bool exists;
-  std::optional<llvm::sys::fs::UniqueID> identity;
-};
-
 [[nodiscard]] std::expected<OutputDirectoryState, std::string>
 validate_output_directory(const fs::path& output_dir,
                           std::string_view model_name) {
@@ -1839,11 +1758,6 @@ validate_output_directory(const fs::path& output_dir,
   return write_file(path, code);
 }
 
-struct ClangTargetArguments {
-  std::vector<std::string> target;
-  std::vector<std::string> isa;
-};
-
 ClangTargetArguments build_clang_target_arguments(
   const std::string& effective_target_triple) {
   ClangTargetArguments result;
@@ -1998,18 +1912,6 @@ bool hasImplementedVnniBackend(std::string_view capability) {
   return capability == "avx-vnni" || capability == "avx512-vnni";
 }
 
-struct TuningSettings {
-  std::string profile;
-  std::string status = "stable";
-  std::string fallbackReason;
-  int64_t matmulMRows = 4;
-  int64_t matmulAccColumns = 16;
-  std::string matmulPacking = "auto";
-  unsigned rowChunkLanes = 8;
-  int64_t matmulI8Rows = 2;
-  int64_t matmulI8AccColumns = 4;
-};
-
 std::string build_codegen_identity(std::string_view target_triple,
                                    std::string_view resolved_int8_target,
                                    unsigned effective_threads,
@@ -2079,10 +1981,9 @@ std::vector<std::string> normalize_arguments(int argc, char** argv) {
 
 }  // namespace
 
-// The CLI orchestration keeps validation, target resolution, and pipeline
-// construction in one transaction so the emitted identity cannot drift.
-// NOLINTNEXTLINE(google-readability-function-size)
-int main(int argc, char** argv) {
+namespace ncnn_compile {
+
+int CompileSession::parseArguments(int argc, char** argv) {
   std::vector<std::string> normalized = normalize_arguments(argc, argv);
   std::vector<const char*> normalized_argv;
   normalized_argv.reserve(normalized.size());
@@ -2098,13 +1999,12 @@ int main(int argc, char** argv) {
   if (!g_input.empty() && !g_param.empty()) {
     return fail("use either positional input or --param, not both");
   }
-  const std::string param_path = g_param.empty() ? g_input : g_param;
+  param_path = g_param.empty() ? g_input : g_param;
   if (param_path.empty()) {
     return fail("an input .param file is required");
   }
-  const std::string bin_path =
-    g_bin.empty() ? derive_bin_path(param_path) : g_bin;
-  std::error_code error;
+  bin_path = g_bin.empty() ? derive_bin_path(param_path) : g_bin;
+  error.clear();
   if (!fs::is_regular_file(param_path, error)) {
     return fail(llvm::Twine("cannot use input file '") + param_path +
                 "': " + (error ? error.message() : "not a regular file"));
@@ -2153,12 +2053,11 @@ int main(int argc, char** argv) {
     }
   }
 
-  const std::string model_name = c_identifier(
+  model_name = c_identifier(
     g_model_name.empty() ? fs::path(param_path).stem().string() : g_model_name);
-  fs::path output_dir =
-    (g_output_dir.empty() ? fs::path(model_name)
-                          : fs::path(g_output_dir.getValue()))
-      .lexically_normal();
+  output_dir = (g_output_dir.empty() ? fs::path(model_name)
+                                     : fs::path(g_output_dir.getValue()))
+                 .lexically_normal();
   while (output_dir.filename().empty() &&
          output_dir != output_dir.root_path()) {
     output_dir = output_dir.parent_path();
@@ -2167,7 +2066,7 @@ int main(int argc, char** argv) {
       output_dir.filename() == "..") {
     return fail("output directory must name a non-root directory");
   }
-  auto output_exists = validate_output_directory(output_dir, model_name);
+  output_exists = validate_output_directory(output_dir, model_name);
   if (!output_exists) {
     return fail(output_exists.error());
   }
@@ -2182,7 +2081,7 @@ int main(int argc, char** argv) {
                                               "object",
                                               "assembly",
                                               "all"};
-  std::set<std::string> emitted;
+  emitted.clear();
   for (const std::string& stage : g_emit) {
     if (!valid_stages.contains(stage)) {
       return fail(llvm::Twine("invalid --emit stage: ") + stage);
@@ -2200,20 +2099,21 @@ int main(int argc, char** argv) {
                "object",
                "assembly"};
   }
+  return 0;
+}
 
+int CompileSession::resolveTools(char** argv) {
   const fs::path executable =
     llvm::sys::fs::getMainExecutable(argv[0], &g_executable_anchor);
   const fs::path executable_dir = executable.parent_path();
-  auto driver = find_tool(
+  driver = find_tool(
     executable_dir, g_driver, {"ncnn-mlir-driver"}, {"ncnn-mlir-driver"});
-  auto opt =
-    find_tool(executable_dir, g_opt, {"ncnn-mlir-opt"}, {"ncnn-mlir-opt"});
-  auto translate =
-    find_tool(executable_dir, g_translate, {}, {"mlir-translate-21"});
-  auto clang = find_tool(executable_dir, g_clang, {}, {"clang-21"});
-  auto nm = find_tool(executable_dir, g_nm, {}, {"llvm-nm-21"});
-  auto readelf = find_tool(executable_dir, g_readelf, {}, {"llvm-readelf-21"});
-  auto llvm_as = find_tool(executable_dir, g_llvm_as, {}, {"llvm-as-21"});
+  opt = find_tool(executable_dir, g_opt, {"ncnn-mlir-opt"}, {"ncnn-mlir-opt"});
+  translate = find_tool(executable_dir, g_translate, {}, {"mlir-translate-21"});
+  clang = find_tool(executable_dir, g_clang, {}, {"clang-21"});
+  nm = find_tool(executable_dir, g_nm, {}, {"llvm-nm-21"});
+  readelf = find_tool(executable_dir, g_readelf, {}, {"llvm-readelf-21"});
+  llvm_as = find_tool(executable_dir, g_llvm_as, {}, {"llvm-as-21"});
   for (const ToolResult* tool :
        {&driver, &opt, &translate, &clang, &nm, &readelf, &llvm_as}) {
     if (!*tool) {
@@ -2226,22 +2126,26 @@ int main(int argc, char** argv) {
       "required compiler tool not found; use -v and verify PATH or "
       "the installed toolchain");
   }
-  const std::string& driver_path = **driver;
-  const std::string& opt_path = **opt;
-  const std::string& translate_path = **translate;
-  const std::string& clang_path = **clang;
-  const std::string& nm_path = **nm;
-  const std::string& readelf_path = **readelf;
+  driver_path = **driver;
+  opt_path = **opt;
+  translate_path = **translate;
+  clang_path = **clang;
+  nm_path = **nm;
+  readelf_path = **readelf;
 
-  llvm::SmallString<256> staging_storage;
+  staging_storage.clear();
   if (llvm::sys::fs::createUniqueDirectory("ncnn-compile", staging_storage)) {
     return fail("cannot create staging directory");
   }
-  ScopedDirectory staging(fs::path(staging_storage.str().str()));
-  std::string effective_target_triple = g_target_triple;
+  staging = ScopedDirectory(fs::path(staging_storage.str().str()));
+  return 0;
+}
+
+int CompileSession::resolveTarget() {
+  effective_target_triple = g_target_triple;
   if (effective_target_triple.empty()) {
     const fs::path target_capture = staging.path() / "target-triple.txt";
-    if (int status = run({clang_path, "-dumpmachine"}, target_capture)) {
+    if (int status = ::run({clang_path, "-dumpmachine"}, target_capture)) {
       return status;
     }
     auto target_text = read_text(target_capture);
@@ -2255,16 +2159,15 @@ int main(int argc, char** argv) {
   }
 
   // The probe and final backend share one ordered target/ISA argument list.
-  const auto clang_target =
-    build_clang_target_arguments(effective_target_triple);
-  const auto& target_args = clang_target.target;
-  const auto& isa_args = clang_target.isa;
-  std::vector<std::string> codegen_args;
+  clang_target = build_clang_target_arguments(effective_target_triple);
+  target_args = clang_target.target;
+  isa_args = clang_target.isa;
+  codegen_args.clear();
 
   // libomp 探测：多线程产物链接 -lomp；sysroot 缺少 OpenMP 运行时（部分
   // RISC-V 裸环境）要到链接阶段才失败。先行以最小探针验证 -lomp 可解析，
   // 失败则等价回退 --threads=1 并在 manifest 标注 openmp=false。
-  unsigned effective_threads = g_threads;
+  effective_threads = g_threads;
   if (g_threads != 1) {
     const fs::path probe_source = staging.path() / "omp_probe.c";
     const fs::path probe_library = staging.path() / "libomp_probe.so";
@@ -2286,7 +2189,7 @@ int main(int argc, char** argv) {
       probe_command.insert(
         probe_command.end(), target_args.begin(), target_args.end());
       omp_available =
-        run(probe_command) == 0 && fs::is_regular_file(probe_library);
+        ::run(probe_command) == 0 && fs::is_regular_file(probe_library);
     }
     if (!omp_available) {
       llvm::errs() << "ncnn-compile: warning: OpenMP runtime (-lomp) not "
@@ -2302,9 +2205,9 @@ int main(int argc, char** argv) {
   const ncnn_mlir::TargetVectorInfo vector_info =
     ncnn_mlir::TargetVectorInfo::resolve(
       effective_target_triple, g_march, target_feature_refs);
-  unsigned vector_lanes = 0;
-  bool vector_scalable = false;
-  bool vector_active = false;
+  vector_lanes = 0;
+  vector_scalable = false;
+  vector_active = false;
   if (g_conv_strategy != "auto" && g_conv_strategy != "gemm" &&
       g_conv_strategy != "conv" && g_conv_strategy != "winograd") {
     return fail("--conv-strategy must be one of auto, gemm, conv, winograd");
@@ -2347,7 +2250,7 @@ int main(int argc, char** argv) {
   }
   vector_active = vector_lanes != 0;
 
-  TuningSettings tuning;
+  tuning = TuningSettings{};
   tuning.profile = g_tuning_profile.getValue();
   tuning.matmulPacking = g_matmul_packing.getValue();
   if (tuning.matmulPacking != "auto" && tuning.matmulPacking != "off") {
@@ -2397,7 +2300,7 @@ int main(int argc, char** argv) {
   if (!int8_target) {
     return fail(int8_target.error());
   }
-  const std::string& resolved_int8_target = *int8_target;
+  resolved_int8_target = *int8_target;
   if (probeNativeProfileWithPortableOverride) {
     g_int8_kernel = requestedInt8Kernel;
   }
@@ -2474,11 +2377,11 @@ int main(int argc, char** argv) {
   // 解析向量数学后端：auto 按目标探测 libmvec，缺失时静默降级 vendored
   // SLEEF 静态档案，再退回 none；显式指定而不可用时报错退出。部署环境
   // 由 --sysroot 声明并据此重编，编译器不补偿构建机与部署机的 libc 差异。
-  std::string resolved_vector_math;
-  std::string vector_math_abi;
-  unsigned vector_math_lanes = 0;
-  bool uses_libmvec = false;
-  fs::path sleef_archive;
+  resolved_vector_math.clear();
+  vector_math_abi.clear();
+  vector_math_lanes = 0;
+  uses_libmvec = false;
+  sleef_archive.clear();
   {
     if (g_vector_math != "auto" && g_vector_math != "libmvec" &&
         g_vector_math != "sleef" && g_vector_math != "none") {
@@ -2580,7 +2483,7 @@ int main(int argc, char** argv) {
                                          "-Wl,-z,defs",
                                          "-lm"};
         command.insert(command.end(), target_args.begin(), target_args.end());
-        available = run(command) == 0 && fs::is_regular_file(probe_library);
+        available = ::run(command) == 0 && fs::is_regular_file(probe_library);
       }
       return available;
     };
@@ -2644,20 +2547,24 @@ int main(int argc, char** argv) {
       }
     }
   }
-  const fs::path ncnn_ir = staging.path() / "model.ncnn.mlir";
-  const fs::path tosa_ir = staging.path() / "model.tosa.mlir";
-  const fs::path linalg_ir = staging.path() / "model.linalg.mlir";
-  const fs::path memref_ir = staging.path() / "model.memref.mlir";
-  const fs::path capi_ir = staging.path() / "model.capi.mlir";
-  const fs::path llvm_dialect_ir = staging.path() / "model.llvm.mlir";
-  const fs::path llvm_ir = staging.path() / "model.ll";
-  const fs::path object = staging.path() / "model.o";
-  const fs::path assembly = staging.path() / "model.s";
-  const fs::path profile_object = staging.path() / "profile_runtime.o";
+  return 0;
+}
+
+int CompileSession::declareArtifacts() {
+  ncnn_ir = staging.path() / "model.ncnn.mlir";
+  tosa_ir = staging.path() / "model.tosa.mlir";
+  linalg_ir = staging.path() / "model.linalg.mlir";
+  memref_ir = staging.path() / "model.memref.mlir";
+  capi_ir = staging.path() / "model.capi.mlir";
+  llvm_dialect_ir = staging.path() / "model.llvm.mlir";
+  llvm_ir = staging.path() / "model.ll";
+  object = staging.path() / "model.o";
+  assembly = staging.path() / "model.s";
+  profile_object = staging.path() / "profile_runtime.o";
 #ifdef NCNN_PROFILE_RUNTIME_SOURCE
-  fs::path profile_runtime_source = NCNN_PROFILE_RUNTIME_SOURCE;
+  profile_runtime_source = NCNN_PROFILE_RUNTIME_SOURCE;
 #else
-  fs::path profile_runtime_source;
+  profile_runtime_source.clear();
 #endif
 #ifdef NCNN_PROFILE_RUNTIME_RELATIVE_PATH
   if (g_profile && !fs::is_regular_file(profile_runtime_source)) {
@@ -2673,25 +2580,26 @@ int main(int argc, char** argv) {
     }
   }
 #endif
-  const fs::path manifest_path = staging.path() / (model_name + ".json");
-  const fs::path execution_plan_path =
-    staging.path() / (model_name + ".plan.json");
-  const fs::path header = staging.path() / (model_name + ".h");
-  const fs::path exports = staging.path() / "exports.map";
-  const fs::path library = staging.path() / ("lib" + model_name + ".so");
+  manifest_path = staging.path() / (model_name + ".json");
+  execution_plan_path = staging.path() / (model_name + ".plan.json");
+  header = staging.path() / (model_name + ".h");
+  exports = staging.path() / "exports.map";
+  library = staging.path() / ("lib" + model_name + ".so");
   // A diagnostic profile is only joinable when its matching static plan is
   // published alongside the library, so profiling implicitly emits the plan.
-  const bool emit_execution_plan = g_emit_execution_plan || g_profile;
-  const std::string codegen_identity =
-    build_codegen_identity(effective_target_triple,
-                           resolved_int8_target,
-                           effective_threads,
-                           resolved_vector_math,
-                           vector_math_abi,
-                           vector_math_lanes,
-                           tuning);
-  const std::string codegen_identity_transport = hex_encode(codegen_identity);
+  emit_execution_plan = g_emit_execution_plan || g_profile;
+  codegen_identity = build_codegen_identity(effective_target_triple,
+                                            resolved_int8_target,
+                                            effective_threads,
+                                            resolved_vector_math,
+                                            vector_math_abi,
+                                            vector_math_lanes,
+                                            tuning);
+  codegen_identity_transport = hex_encode(codegen_identity);
+  return 0;
+}
 
+int CompileSession::runPipeline() {
   std::vector<std::string> driver_command{
     driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()};
   driver_command.push_back("--precision=" + g_precision);
@@ -2715,15 +2623,15 @@ int main(int argc, char** argv) {
   for (const std::string& constraint : g_input_dim_constraints) {
     driver_command.push_back("--input-dim-constraint=" + constraint);
   }
-  if (int status = run(driver_command)) {
+  if (int status = ::run(driver_command)) {
     return status;
   }
-  if (int status = run({opt_path,
-                        "--ncnn-to-tosa-pipeline",
-                        "--mlir-print-debuginfo",
-                        ncnn_ir.string(),
-                        "-o",
-                        tosa_ir.string()})) {
+  if (int status = ::run({opt_path,
+                          "--ncnn-to-tosa-pipeline",
+                          "--mlir-print-debuginfo",
+                          ncnn_ir.string(),
+                          "-o",
+                          tosa_ir.string()})) {
     return status;
   }
   std::string tosa_linalg_pipeline_option = "--ncnn-tosa-to-linalg-pipeline";
@@ -2747,12 +2655,12 @@ int main(int argc, char** argv) {
       tosa_linalg_pipeline_option += " profile-materialized-sites=true";
     }
   }
-  if (int status = run({opt_path,
-                        tosa_linalg_pipeline_option,
-                        "--mlir-print-debuginfo",
-                        tosa_ir.string(),
-                        "-o",
-                        linalg_ir.string()})) {
+  if (int status = ::run({opt_path,
+                          tosa_linalg_pipeline_option,
+                          "--mlir-print-debuginfo",
+                          tosa_ir.string(),
+                          "-o",
+                          linalg_ir.string()})) {
     return status;
   }
   std::string linalg_pipeline_option = "--ncnn-linalg-to-memref-pipeline";
@@ -2816,23 +2724,23 @@ int main(int argc, char** argv) {
       linalg_pipeline_option += "=" + joined;
     }
   }
-  if (int status = run({opt_path,
-                        linalg_pipeline_option,
-                        linalg_ir.string(),
-                        "-o",
-                        memref_ir.string()})) {
+  if (int status = ::run({opt_path,
+                          linalg_pipeline_option,
+                          linalg_ir.string(),
+                          "-o",
+                          memref_ir.string()})) {
     return status;
   }
   const std::string capi_option =
     "--generate-ncnn-c-api=export-name=" + model_name +
     " manifest-path=" + manifest_path.string();
-  if (int status = run(
+  if (int status = ::run(
         {opt_path, capi_option, memref_ir.string(), "-o", capi_ir.string()})) {
     return status;
   }
-  std::string execution_plan_hash;
-  std::string execution_plan_revision;
-  std::string execution_attribution_revision = "attribution-v4";
+  execution_plan_hash.clear();
+  execution_plan_revision.clear();
+  execution_attribution_revision = "attribution-v4";
   if (g_profile) {
     auto hash = read_execution_plan_field(execution_plan_path, "plan_hash");
     if (!hash) {
@@ -2853,8 +2761,8 @@ int main(int argc, char** argv) {
     execution_attribution_revision = *attribution;
   }
   std::string llvm_pipeline = "--ncnn-memref-to-llvm-pipeline=";
-  const bool uses_openmp = effective_threads != 1;
-  const bool uses_sleef = resolved_vector_math == "sleef";
+  uses_openmp = effective_threads != 1;
+  uses_sleef = resolved_vector_math == "sleef";
   llvm_pipeline += "threads=" + std::to_string(effective_threads);
   if (!vector_active) {
     llvm_pipeline += " vector-size=" + std::to_string(g_vector_width / 32);
@@ -2868,23 +2776,23 @@ int main(int argc, char** argv) {
     }
     llvm_pipeline += " vector-math-lanes=" + std::to_string(vector_math_lanes);
   }
-  if (int status = run({opt_path,
-                        llvm_pipeline,
-                        capi_ir.string(),
-                        "-o",
-                        llvm_dialect_ir.string()})) {
+  if (int status = ::run({opt_path,
+                          llvm_pipeline,
+                          capi_ir.string(),
+                          "-o",
+                          llvm_dialect_ir.string()})) {
     return status;
   }
-  if (int status = run({translate_path,
-                        "--mlir-to-llvmir",
-                        llvm_dialect_ir.string(),
-                        "-o",
-                        llvm_ir.string()})) {
+  if (int status = ::run({translate_path,
+                          "--mlir-to-llvmir",
+                          llvm_dialect_ir.string(),
+                          "-o",
+                          llvm_ir.string()})) {
     return status;
   }
-  const fs::path llvm_bitcode = staging.path() / "model.bc";
+  llvm_bitcode = staging.path() / "model.bc";
   if (int status =
-        run({**llvm_as, llvm_ir.string(), "-o", llvm_bitcode.string()})) {
+        ::run({**llvm_as, llvm_ir.string(), "-o", llvm_bitcode.string()})) {
     return status;
   }
 
@@ -2904,7 +2812,7 @@ int main(int argc, char** argv) {
   if (g_debug) {
     codegen_args.emplace_back("-g");
   }
-  const std::string optimization = "-O" + g_optimization;
+  optimization = "-O" + g_optimization;
   std::vector<std::string> compile = {
     clang_path, "-x", "ir", "-fPIC", optimization};
   compile.insert(compile.end(), target_args.begin(), target_args.end());
@@ -2912,7 +2820,7 @@ int main(int argc, char** argv) {
   compile.insert(compile.end(), g_clang_args.begin(), g_clang_args.end());
   compile.insert(compile.end(),
                  {"-c", llvm_bitcode.string(), "-o", object.string()});
-  if (int status = run(compile)) {
+  if (int status = ::run(compile)) {
     return status;
   }
   if (g_profile) {
@@ -2942,7 +2850,7 @@ int main(int argc, char** argv) {
     profile_compile.insert(
       profile_compile.end(),
       {"-c", profile_runtime_source.string(), "-o", profile_object.string()});
-    if (int status = run(profile_compile)) {
+    if (int status = ::run(profile_compile)) {
       return status;
     }
   }
@@ -2952,11 +2860,14 @@ int main(int argc, char** argv) {
   assemble.insert(assemble.end(), g_clang_args.begin(), g_clang_args.end());
   assemble.insert(assemble.end(),
                   {"-S", llvm_bitcode.string(), "-o", assembly.string()});
-  if (int status = run(assemble)) {
+  if (int status = ::run(assemble)) {
     return status;
   }
+  return 0;
+}
 
-  auto manifest = read_manifest(manifest_path);
+int CompileSession::emitABI() {
+  manifest = read_manifest(manifest_path);
   if (!manifest) {
     return fail(manifest.error());
   }
@@ -2997,7 +2908,7 @@ int main(int argc, char** argv) {
   if (!header_result) {
     return fail(header_result.error());
   }
-  const bool has_dynamic_output =
+  has_dynamic_output =
     std::ranges::any_of(manifest->outputs, [](const Argument& output) {
       return (output.dynamic_rank || output.dynamic_dim_mask != 0) &&
              !output.shape_depends_on_data;
@@ -3011,8 +2922,12 @@ int main(int argc, char** argv) {
   if (!exports_result) {
     return fail(exports_result.error());
   }
-  bool uses_address_sanitizer = false;
-  bool uses_undefined_sanitizer = false;
+  return 0;
+}
+
+int CompileSession::linkAndAudit() {
+  uses_address_sanitizer = false;
+  uses_undefined_sanitizer = false;
   for (const std::string& argument : g_linker_args) {
     constexpr std::string_view prefix = "-fsanitize=";
     if (!argument.starts_with(prefix)) {
@@ -3031,14 +2946,13 @@ int main(int argc, char** argv) {
       values.remove_prefix(separator + 1);
     }
   }
-  const bool uses_sanitizer =
-    uses_address_sanitizer || uses_undefined_sanitizer;
+  uses_sanitizer = uses_address_sanitizer || uses_undefined_sanitizer;
   const fs::path builtins_capture = staging.path() / "compiler-rt.txt";
   std::vector<std::string> builtins_command{
     clang_path, "--rtlib=compiler-rt", "--print-libgcc-file-name"};
   builtins_command.insert(
     builtins_command.end(), target_args.begin(), target_args.end());
-  if (int status = run(builtins_command, builtins_capture)) {
+  if (int status = ::run(builtins_command, builtins_capture)) {
     return status;
   }
   auto builtins_text = read_text(builtins_capture);
@@ -3081,20 +2995,20 @@ int main(int argc, char** argv) {
                "-lm",
                "-o",
                library.string()});
-  if (int status = run(link)) {
+  if (int status = ::run(link)) {
     return status;
   }
 
-  fs::path capture_path = staging.path() / "undefined.txt";
-  if (int status = run({nm_path, "-D", "--undefined-only", library.string()},
-                       capture_path)) {
+  capture_path = staging.path() / "undefined.txt";
+  if (int status = ::run({nm_path, "-D", "--undefined-only", library.string()},
+                         capture_path)) {
     return status;
   }
-  auto text = read_text(capture_path);
+  text = read_text(capture_path);
   if (!text) {
     return fail(text.error());
   }
-  const std::set<std::string> undefined = symbols(*text);
+  undefined = symbols(*text);
   const std::set<std::string> common_allowed = {"ceilf",
                                                 "erfcf",
                                                 "erff",
@@ -3158,8 +3072,8 @@ int main(int argc, char** argv) {
     }
   }
   capture_path = staging.path() / "defined.txt";
-  if (int status = run({nm_path, "-D", "--defined-only", library.string()},
-                       capture_path)) {
+  if (int status = ::run({nm_path, "-D", "--defined-only", library.string()},
+                         capture_path)) {
     return status;
   }
   text = read_text(capture_path);
@@ -3175,8 +3089,8 @@ int main(int argc, char** argv) {
       "shared library exports symbols outside the model ABI entry points");
   }
   capture_path = staging.path() / "needed.txt";
-  if (int status =
-        run({readelf_path, "--needed-libs", library.string()}, capture_path)) {
+  if (int status = ::run({readelf_path, "--needed-libs", library.string()},
+                         capture_path)) {
     return status;
   }
   text = read_text(capture_path);
@@ -3222,7 +3136,7 @@ int main(int argc, char** argv) {
     return fail("shared library lacks a required sanitizer runtime dependency");
   }
   capture_path = staging.path() / "symbols.txt";
-  if (int status = run({nm_path, "-D", library.string()}, capture_path)) {
+  if (int status = ::run({nm_path, "-D", library.string()}, capture_path)) {
     return status;
   }
   text = read_text(capture_path);
@@ -3235,7 +3149,10 @@ int main(int argc, char** argv) {
       return fail("forbidden runtime symbol found in shared library");
     }
   }
+  return 0;
+}
 
+int CompileSession::verifyExecution() {
   if (g_verify_execution) {
     const fs::path harness_source = staging.path() / "harness.c";
     const fs::path harness = staging.path() / "harness";
@@ -3250,23 +3167,23 @@ int main(int argc, char** argv) {
       return fail(llvm::Twine("cannot make staging path absolute: ") +
                   error.message());
     }
-    if (int status = run({clang_path,
-                          "-std=c23",
-                          harness_source.string(),
-                          "-I",
-                          staging.path().string(),
-                          "-L",
-                          staging.path().string(),
-                          "-l" + model_name,
-                          "-Wl,-rpath," + absolute_staging.string(),
-                          "-lm",
-                          "-o",
-                          harness.string()})) {
+    if (int status = ::run({clang_path,
+                            "-std=c23",
+                            harness_source.string(),
+                            "-I",
+                            staging.path().string(),
+                            "-L",
+                            staging.path().string(),
+                            "-l" + model_name,
+                            "-Wl,-rpath," + absolute_staging.string(),
+                            "-lm",
+                            "-o",
+                            harness.string()})) {
       llvm::errs()
         << "ncnn-compile: error: ABI verification harness compilation failed\n";
       return status;
     }
-    if (int status = run({harness.string()})) {
+    if (int status = ::run({harness.string()})) {
       llvm::errs() << "ncnn-compile: error: ABI execution verification failed "
                       "with harness exit code "
                    << status << '\n';
@@ -3274,7 +3191,10 @@ int main(int argc, char** argv) {
     }
     llvm::errs() << "ncnn-compile: ABI execution verification passed\n";
   }
+  return 0;
+}
 
+int CompileSession::publishOutputs() {
   fs::path output_parent = output_dir.parent_path();
   if (output_parent.empty()) {
     output_parent = ".";
@@ -3394,4 +3314,12 @@ int main(int argc, char** argv) {
   replacement.release();
   llvm::outs() << output_dir.string() << '\n';
   return 0;
+}
+}  // namespace ncnn_compile
+
+// The CLI orchestration keeps validation, target resolution, and pipeline
+// construction in one transaction so the emitted identity cannot drift.
+int main(int argc, char** argv) {
+  ncnn_compile::CompileSession session;
+  return session.run(argc, argv);
 }

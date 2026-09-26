@@ -38,9 +38,29 @@ set_tests_properties(perf-json-summary PROPERTIES
     LABELS "performance;tooling"
     RUN_SERIAL TRUE
     TIMEOUT 30)
+# T-C1：plan-hash 字段白名单守卫（源码级）+ 行为级用例见
+# test/Transforms/EmitModelPlan/plan-hash-whitelist.mlir。
+add_test(NAME plan-hash-whitelist
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_plan_hash_whitelist.py)
+set_tests_properties(plan-hash-whitelist PROPERTIES
+    LABELS "tooling"
+    TIMEOUT 30)
 add_test(NAME perf-attribution
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_perf_attribution.py)
 set_tests_properties(perf-attribution PROPERTIES
+    LABELS "performance;tooling"
+    RUN_SERIAL TRUE
+    TIMEOUT 30)
+# T-C2：tools/attr/ 拆分后的纯 Python 单元测试（无编译产物依赖）。
+add_test(NAME attr-partition
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/test_attr_partition.py)
+set_tests_properties(attr-partition PROPERTIES
+    LABELS "performance;tooling"
+    RUN_SERIAL TRUE
+    TIMEOUT 30)
+add_test(NAME attr-report
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/test_attr_report.py)
+set_tests_properties(attr-report PROPERTIES
     LABELS "performance;tooling"
     RUN_SERIAL TRUE
     TIMEOUT 30)

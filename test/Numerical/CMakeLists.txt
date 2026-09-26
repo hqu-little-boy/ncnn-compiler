@@ -183,6 +183,7 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
             ncnn-mlir-opt
             ${CMAKE_CURRENT_SOURCE_DIR}/support/timed_compile.cmake
             ${CMAKE_SOURCE_DIR}/tools/ncnn-compile.cpp
+            ${CMAKE_SOURCE_DIR}/tools/CompileSession.cpp
             ${param_file}
             ${bin_file}
         VERBATIM)

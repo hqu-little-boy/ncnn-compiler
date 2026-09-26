@@ -34,7 +34,7 @@ ALLOWED_SITES: dict[str, dict[str, str]] = {
             "and its symbol set is frozen by the profile_allowed allow-list"
         ),
     },
-    "tools/perf_attribution_report.py": {
+    "tools/attr/attr_schema.py": {
         "ncnn.model_execution_plan": (
             "JSON document-kind discriminator read from the plan; Python cannot "
             "link the C++ contract constant"
@@ -42,6 +42,8 @@ ALLOWED_SITES: dict[str, dict[str, str]] = {
         "ncnn.model_execution_profile": (
             "JSON document-kind discriminator read from the profile"
         ),
+    },
+    "tools/attr/attr_report.py": {
         "ncnn.model_performance_attribution": (
             "JSON document-kind value written into the attribution report"
         ),
