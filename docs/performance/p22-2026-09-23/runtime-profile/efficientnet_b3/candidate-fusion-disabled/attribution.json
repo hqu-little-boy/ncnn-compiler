@@ -1,0 +1,1203 @@
+{
+  "aggregation": "per-invocation-median",
+  "attribution_revision": "attribution-v2",
+  "identity": {
+    "build_identity": "14216094576556433077",
+    "codegen_identity": "7461726765743d7838365f36342d70632d6c696e75782d676e757c6d617263683d7c6d6370753d7c6d74756e653d7c707265636973696f6e3d6175746f7c667031362d616363756d756c61746f723d6631367c616c6c6f772d66616c6c6261636b3d307c6f7074696d697a6174696f6e3d337c766563746f722d77696474683d3235367c766563746f722d6d6f64653d66697865642d77696474687c766563746f722d6d6174683d6c69626d7665637c766563746f722d6d6174682d6162693d5f5a4756644e387c766563746f722d6d6174682d6c616e65733d387c737973726f6f743d7c636f6e762d73747261746567793d6175746f7c636f6e762d67656d6d2d6c322d62797465733d3532343238387c74756e696e672d70726f66696c653d737461626c657c74756e696e672d7374617475733d737461626c657c74756e696e672d66616c6c6261636b2d726561736f6e3d7c6d61746d756c2d6d2d726f77733d347c6d61746d756c2d6163632d636f6c756d6e733d31367c6d61746d756c2d7061636b696e673d6175746f7c726f772d6368756e6b2d6c616e65733d387c6d61746d756c2d69382d726f77733d327c6d61746d756c2d69382d6163632d636f6c756d6e733d347c696e74382d6b65726e656c3d706f727461626c657c696e74382d7461726765743d706f727461626c657c696e74382d6465707468776973653d307c7061636b65642d636f6e762d6465707468776973653d307c696e74382d636173742d636861696e3d307c746872656164733d307c7461726765742d666561747572653d2b617678327c7461726765742d666561747572653d2b666d617c636c616e672d6172673d2d6d617263683d7838362d36342d7633",
+    "plan_hash": "14216094576556433077",
+    "target": "x86_64-pc-linux-gnu",
+    "threads": 0
+  },
+  "invocation_id": null,
+  "invocation_ids": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "kind": "ncnn.model_performance_attribution",
+  "mode": "end_to_end",
+  "model": "efficientnet_b3",
+  "performance": {
+    "compiled_mean_ms": 247.991,
+    "gate_eligible": true,
+    "ncnn_mean_ms": 35.821,
+    "ratio": 6.923,
+    "status": "measured"
+  },
+  "plan_revision": "static-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v2",
+  "runtime": {
+    "allocation_coverage": {
+      "all_invocations_observed_count": 329,
+      "complete": true,
+      "missing_profile_ids": [],
+      "observed_count": 329,
+      "static_count": 329
+    },
+    "category_time_ns": {
+      "allocation": 1080474,
+      "copy": 0,
+      "deallocation": 0,
+      "kernel": 24774782,
+      "parallel": 217686328
+    },
+    "complete": false,
+    "complete_all": false,
+    "copy_layout": {
+      "copy": {
+        "bytes": 4000,
+        "bytes_known": true,
+        "count": 1,
+        "status": "known"
+      },
+      "pack": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      },
+      "transpose": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      },
+      "unpack": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      }
+    },
+    "coverage": "explicit-callbacks",
+    "incomplete_reasons": [
+      "runtime_exclusive_time_unknown"
+    ],
+    "invocation_count": 31,
+    "packed_kernel_summary": {
+      "call_count": 17,
+      "consumed_count": 17,
+      "joined_count": 17,
+      "packed_buffer_bytes": null,
+      "runtime_consumed": true,
+      "selected_count": 17
+    },
+    "packed_kernels": [
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#15",
+        "inclusive_ns": 106277,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13682870413959061570,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#175",
+        "inclusive_ns": 268877,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7250259658049249259,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#176",
+        "inclusive_ns": 398602,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7250260757560877470,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#182",
+        "inclusive_ns": 472631,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7256996365793973481,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#184",
+        "inclusive_ns": 274380,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7256998564817229903,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#21",
+        "inclusive_ns": 190617,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13683719236935851237,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#28",
+        "inclusive_ns": 126058,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13683726933517248714,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#55",
+        "inclusive_ns": 72869,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13686687918331453262,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#56",
+        "inclusive_ns": 122009,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13686686818819825051,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#61",
+        "inclusive_ns": 124658,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687651090517576873,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#63",
+        "inclusive_ns": 125122,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687648891494320451,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#68",
+        "inclusive_ns": 127395,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687658787098974350,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#70",
+        "inclusive_ns": 136003,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688501013005994751,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#75",
+        "inclusive_ns": 129195,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688495515447853696,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#77",
+        "inclusive_ns": 122865,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688497714471110118,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#82",
+        "inclusive_ns": 126877,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689494971517708270,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#84",
+        "inclusive_ns": 129412,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689497170540964692,
+        "runtime_consumed": true
+      }
+    ],
+    "peak_live_proven": true,
+    "per_invocation": {
+      "category_time_ns": {
+        "allocation": {
+          "known_count": 31,
+          "median": 1080474,
+          "worst": 1343582
+        },
+        "copy": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "deallocation": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "kernel": {
+          "known_count": 31,
+          "median": 24774782,
+          "worst": 30951021
+        },
+        "parallel": {
+          "known_count": 31,
+          "median": 217686328,
+          "worst": 234145869
+        }
+      },
+      "copy_layout": {
+        "copy": {
+          "bytes": {
+            "known_count": 31,
+            "median": 4000,
+            "worst": 4000
+          },
+          "bytes_known_count": 31,
+          "count": {
+            "known_count": 31,
+            "median": 1,
+            "worst": 1
+          }
+        },
+        "pack": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 31,
+            "median": 0,
+            "worst": 0
+          }
+        },
+        "transpose": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 31,
+            "median": 0,
+            "worst": 0
+          }
+        },
+        "unpack": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 31,
+            "median": 0,
+            "worst": 0
+          }
+        }
+      },
+      "expected_materialized_read_bytes": {
+        "known_count": 31,
+        "median": 0,
+        "worst": 0
+      },
+      "peak_live_bytes": {
+        "known_count": 31,
+        "median": 216653096,
+        "worst": 216653096
+      },
+      "runtime_materialized_read_bytes": {
+        "known_count": 31,
+        "median": 0,
+        "worst": 0
+      },
+      "runtime_materialized_write_bytes": {
+        "known_count": 31,
+        "median": 0,
+        "worst": 0
+      },
+      "runtime_transpose_write_bytes": {
+        "known_count": 31,
+        "median": 0,
+        "worst": 0
+      },
+      "summary": {
+        "allocation_bytes": {
+          "known_count": 31,
+          "median": 344300168,
+          "worst": 344300168
+        },
+        "allocation_count": {
+          "known_count": 31,
+          "median": 253047,
+          "worst": 253047
+        },
+        "copy_bytes": {
+          "known_count": 31,
+          "median": 4000,
+          "worst": 4000
+        },
+        "copy_count": {
+          "known_count": 31,
+          "median": 1,
+          "worst": 1
+        },
+        "deallocation_bytes": {
+          "known_count": 31,
+          "median": 344300168,
+          "worst": 344300168
+        },
+        "deallocation_count": {
+          "known_count": 31,
+          "median": 253047,
+          "worst": 253047
+        },
+        "event_mismatch_count": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "expected_materialized_read_bytes": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "materialized_read_complete": {
+          "complete_count": 0,
+          "incomplete_count": 0,
+          "unknown_count": 31
+        },
+        "materialized_read_count": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "materialized_write_count": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "pack_bytes": {
+          "known_count": 0,
+          "median": null,
+          "worst": null
+        },
+        "pack_count": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "parallel_region_count": {
+          "known_count": 31,
+          "median": 290,
+          "worst": 290
+        },
+        "peak_live_bytes": {
+          "known_count": 31,
+          "median": 216653096,
+          "worst": 216653096
+        },
+        "runtime_materialized_read_bytes": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "runtime_materialized_write_bytes": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "runtime_transpose_write_bytes": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "top_level_time_ns": {
+          "known_count": 31,
+          "median": 243170632,
+          "worst": 263888403
+        },
+        "transpose_count": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        },
+        "unpack_bytes": {
+          "known_count": 0,
+          "median": null,
+          "worst": null
+        },
+        "unpack_count": {
+          "known_count": 31,
+          "median": 0,
+          "worst": 0
+        }
+      },
+      "top_level_time_ns": {
+        "known_count": 31,
+        "median": 243170632,
+        "worst": 263888403
+      },
+      "unattributed_event_count": {
+        "known_count": 31,
+        "median": 0,
+        "worst": 0
+      },
+      "unattributed_time_ns": {
+        "known_count": 31,
+        "median": 0,
+        "worst": 0
+      },
+      "unknown_time_ns": {
+        "known_count": 31,
+        "median": 217686328,
+        "worst": 234145869
+      }
+    },
+    "summary": {
+      "allocation_bytes": 344300168,
+      "allocation_bytes_known": true,
+      "allocation_count": null,
+      "copy_bytes": 4000,
+      "copy_bytes_known": true,
+      "copy_count": null,
+      "deallocation_bytes": 344300168,
+      "deallocation_bytes_known": true,
+      "deallocation_count": null,
+      "event_mismatch_count": null,
+      "expected_materialized_read_bytes": 0,
+      "expected_materialized_read_bytes_known": true,
+      "materialized_read_bytes_known": true,
+      "materialized_read_complete": null,
+      "materialized_read_count": null,
+      "materialized_write_bytes_known": true,
+      "materialized_write_count": null,
+      "pack_bytes": null,
+      "pack_bytes_known": false,
+      "pack_count": null,
+      "parallel_region_count": null,
+      "peak_live_bytes": 216653096,
+      "peak_live_proven": true,
+      "runtime_materialized_read_bytes": 0,
+      "runtime_materialized_write_bytes": 0,
+      "runtime_transpose_write_bytes": 0,
+      "runtime_transpose_write_bytes_known": true,
+      "top_level_time_known": true,
+      "top_level_time_ns": 243170632,
+      "transpose_count": null,
+      "unpack_bytes": null,
+      "unpack_bytes_known": false,
+      "unpack_count": null
+    },
+    "unattributed_event_count": 0,
+    "unattributed_time_ns": 0,
+    "unknown_time_ns": 217686328,
+    "workspace_coverage": {
+      "all_invocations_joined_count": 0,
+      "complete": true,
+      "joined_count": 0,
+      "static_count": 0
+    }
+  },
+  "schema_version": 1,
+  "static": {
+    "conv_depthwise": {
+      "conv": {
+        "fallback_reasons": {},
+        "implementations": {
+          "gemm": 104
+        },
+        "operation_count": 104,
+        "runtime_time_ns": null,
+        "source_layers": []
+      },
+      "depthwise": {
+        "fallback_reasons": {},
+        "implementations": {
+          "depthwise_simd": 26
+        },
+        "operation_count": 26,
+        "runtime_time_ns": null,
+        "source_layers": []
+      }
+    },
+    "low_precision": {
+      "capability": "portable",
+      "cast_chain_enabled": false,
+      "depthwise_enabled": false,
+      "operations": [],
+      "requested_policy": "portable",
+      "requested_policy_fallback_reason": null,
+      "requested_policy_status": "selected",
+      "revision": "int8-target-v1"
+    },
+    "summary": {
+      "allocation_count": 329,
+      "attention_fallback_count": 0,
+      "attention_revision": "attention-segment-v1",
+      "attention_segment_count": 0,
+      "attention_selected_count": 0,
+      "attention_unknown_count": 0,
+      "attribution_revision": "attribution-v2",
+      "batch_matmul_count": 0,
+      "conv_depthwise": {
+        "conv_fallback_count": 0,
+        "conv_fallback_reasons": {},
+        "conv_implementations": {
+          "gemm": 104
+        },
+        "conv_operation_count": 104,
+        "conv_unknown_count": 0,
+        "depthwise_fallback_count": 0,
+        "depthwise_fallback_reasons": {},
+        "depthwise_implementations": {
+          "depthwise_simd": 26
+        },
+        "depthwise_operation_count": 26,
+        "depthwise_unknown_count": 0
+      },
+      "copy_contract_count": 35,
+      "copy_contract_status": "collected",
+      "copy_count": 0,
+      "copy_eliminated_count": 0,
+      "copy_fallback_count": 30,
+      "copy_fused_count": null,
+      "copy_vectorized_count": 5,
+      "deallocation_count": 329,
+      "dynamic_buffer_count": 0,
+      "fusion_contract_count": 0,
+      "fusion_enabled": false,
+      "fusion_rejected_count": 59,
+      "fusion_rejection_reasons": "multi_consumer=58,unsupported_consumer=1",
+      "fusion_residual_count": 0,
+      "fusion_selected_count": 0,
+      "kernel_contract_count": 237,
+      "kernel_contract_fallback_count": 45,
+      "layout_island_count": 0,
+      "layout_island_rejected_count": 0,
+      "layout_island_selected_count": 0,
+      "layout_pack4_count": 0,
+      "layout_pack8_count": 0,
+      "matmul_count": 15,
+      "nested_openmp_count": 0,
+      "packed_buffer_bytes": null,
+      "packed_constant_bytes": 13744128,
+      "packed_constant_bytes_known": true,
+      "packed_constant_count": 17,
+      "packed_constant_status": "known",
+      "packed_conv_depthwise": false,
+      "parallel_region_count": 290,
+      "peak_workspace_bytes": null,
+      "peak_workspace_proven": false,
+      "static_buffer_bytes": 216887248,
+      "static_copy_bytes": 4428256,
+      "static_copy_bytes_known": true,
+      "static_copy_count": 35,
+      "static_copy_status": "known",
+      "static_pack_bytes": 13744128,
+      "static_pack_bytes_known": true,
+      "static_pack_count": 32,
+      "static_pack_status": "known",
+      "static_transpose_bytes": null,
+      "static_transpose_bytes_known": false,
+      "static_transpose_count": 0,
+      "static_transpose_status": "not_applicable",
+      "static_unpack_bytes": null,
+      "static_unpack_bytes_known": false,
+      "static_unpack_count": 0,
+      "static_unpack_status": "not_applicable",
+      "transpose_count": 0,
+      "vector_fma_count": 494,
+      "workspace_fallback_count": 329,
+      "workspace_reused_allocation_count": 0,
+      "workspace_slot_bytes": 0,
+      "workspace_slot_bytes_known": true,
+      "workspace_slot_count": 0
+    },
+    "unknown_fields": [
+      "runtime_counters_not_collected",
+      "buffer_liveness_unknown",
+      "peak_workspace_control_flow_unknown",
+      "peak_workspace_liveness_unknown",
+      "packed_buffer_bytes_unknown",
+      "peak_workspace_not_proven",
+      "runtime_exclusive_time_unknown"
+    ]
+  },
+  "top_allocations": [
+    {
+      "function": "model",
+      "id": 9644042916169760762,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#32",
+      "runtime_bytes": 13483584,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 13483584,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9645022581030307538,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#29",
+      "runtime_bytes": 12960000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 12960000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9644040717146504340,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#30",
+      "runtime_bytes": 12960000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 12960000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9640217715215971593,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#73",
+      "runtime_bytes": 4793088,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4793088,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9643040161565021555,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#48",
+      "runtime_bytes": 4553472,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4553472,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9641202877634659424,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#63",
+      "runtime_bytes": 4553472,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4553472,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9643055554727816509,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#46",
+      "runtime_bytes": 4320000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4320000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9643052256192931876,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#45",
+      "runtime_bytes": 4320000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4320000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9643039062053393344,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#49",
+      "runtime_bytes": 4320000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4320000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9642199035169629365,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#51",
+      "runtime_bytes": 4320000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4320000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    }
+  ],
+  "top_costs": [
+    {
+      "attributed_ns": 17994064,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682866015912548726,
+      "inclusive_ns": 17994064,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#11",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.07399768570737604
+    },
+    {
+      "attributed_ns": 13080035,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694734178080894185,
+      "inclusive_ns": 13080035,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#3",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.053789534091435845
+    },
+    {
+      "attributed_ns": 12714368,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694733078569265974,
+      "inclusive_ns": 12714368,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#2",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.05228578753704107
+    },
+    {
+      "attributed_ns": 12053195,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694731979057637763,
+      "inclusive_ns": 12053195,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#1",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.04956682022358687
+    },
+    {
+      "attributed_ns": 7677336,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694737476615778818,
+      "inclusive_ns": 7677336,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#6",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.03157180592432724
+    },
+    {
+      "attributed_ns": 7429854,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13683711540354453760,
+      "inclusive_ns": 7429854,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#26",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.030554076118862905
+    },
+    {
+      "attributed_ns": 7332893,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13684708797401051912,
+      "inclusive_ns": 7332893,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#31",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.030155339646442174
+    },
+    {
+      "attributed_ns": 7331798,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13683714838889338393,
+      "inclusive_ns": 7331798,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#25",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.030150836635568723
+    },
+    {
+      "attributed_ns": 7318303,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13683713739377710182,
+      "inclusive_ns": 7318303,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#24",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.030095340624849795
+    },
+    {
+      "attributed_ns": 7269220,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694740775150663451,
+      "inclusive_ns": 7269220,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#9",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.029893494704574357
+    },
+    {
+      "attributed_ns": 6756479,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694738576127407029,
+      "inclusive_ns": 6756479,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#7",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.02778493004862528
+    },
+    {
+      "attributed_ns": 5096865,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13683728033028876925,
+      "inclusive_ns": 5096865,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#29",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.020960035173984332
+    },
+    {
+      "attributed_ns": 4791277,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682874812005574414,
+      "inclusive_ns": 4791277,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#19",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.01970335381617958
+    },
+    {
+      "attributed_ns": 4742218,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682875911517202625,
+      "inclusive_ns": 4742218,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#18",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.019501606592032872
+    },
+    {
+      "attributed_ns": 4609864,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "kernel",
+      "exclusive_ns": 4609864,
+      "id": 13136411074785292016,
+      "inclusive_ns": 243170632,
+      "kind": "func.func",
+      "operation": "model/func.func#0",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "exclusive",
+      "time_fraction": 0.018957322116101585
+    },
+    {
+      "attributed_ns": 4564662,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682863816889292304,
+      "inclusive_ns": 4564662,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#13",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.01877143618231004
+    },
+    {
+      "attributed_ns": 4456156,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682864916400920515,
+      "inclusive_ns": 4456156,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#12",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.018325222759629955
+    },
+    {
+      "attributed_ns": 4322441,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682868214935805148,
+      "inclusive_ns": 4322441,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#17",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.017775341390731756
+    },
+    {
+      "attributed_ns": 4293501,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13683715938400966604,
+      "inclusive_ns": 4293501,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#22",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.017656330308834334
+    },
+    {
+      "attributed_ns": 2737049,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "kernel",
+      "exclusive_ns": 2737049,
+      "id": 15521646095518164034,
+      "inclusive_ns": 2737049,
+      "kind": "linalg.map",
+      "operation": "model/linalg.map#3",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "exclusive",
+      "time_fraction": 0.011255672518875553
+    }
+  ]
+}

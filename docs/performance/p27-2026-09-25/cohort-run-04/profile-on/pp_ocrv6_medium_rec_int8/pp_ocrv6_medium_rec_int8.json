@@ -1,0 +1,39 @@
+{
+  "function": "pp_ocrv6_medium_rec_int8",
+  "inputs": [
+    {
+      "dynamic_dim_mask": 0,
+      "element_type": "f32",
+      "name": "input1",
+      "shape": [
+        3,
+        48,
+        320
+      ]
+    }
+  ],
+  "openmp": true,
+  "outputs": [
+    {
+      "dynamic_dim_mask": 0,
+      "element_type": "f32",
+      "name": "output1",
+      "shape": [
+        40,
+        18710
+      ]
+    }
+  ],
+  "target": {
+    "cpu": "",
+    "execution_profile": "x86-64-auto",
+    "features": [
+      "+avx2",
+      "+fma"
+    ],
+    "march": "x86-64-v3",
+    "triple": "x86_64-pc-linux-gnu",
+    "tune": ""
+  },
+  "vector_math": "libmvec"
+}

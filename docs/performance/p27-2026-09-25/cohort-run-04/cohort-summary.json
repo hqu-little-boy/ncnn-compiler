@@ -1,0 +1,3397 @@
+{
+  "cpu_placement_verified_all": true,
+  "models": {
+    "chineseocr_lite_anglenet": {
+      "cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "end_to_end_compiled_mean_ms": 4.687,
+      "end_to_end_ncnn_mean_ms": 1.0,
+      "end_to_end_ratio": 4.688,
+      "group": "small_fixed_overhead",
+      "input_hash": "1a590809922d09d2",
+      "prepared_compiled_mean_ms": 4.085,
+      "prepared_cpu_placement_verified": true,
+      "prepared_ncnn_mean_ms": 0.82,
+      "prepared_ncnn_to_end_to_end_ncnn_ratio": 0.82,
+      "prepared_ratio": 4.983,
+      "profile_binary_growth_percent": 4.049830714471736,
+      "profile_binary_size_bytes": 1150608,
+      "profile_compile_budget_seconds": 300,
+      "profile_compile_wall_seconds": 7.026577868993627,
+      "profile_off_binary_size_bytes": 1105824,
+      "profile_off_compiled_mean_ms": 4.687,
+      "profile_off_cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "profile_off_cv": 0.2014,
+      "profile_on_compiled_mean_ms": 13.78,
+      "profile_on_cv": 0.097,
+      "profile_on_process_tree_peak_rss_kb": 37520,
+      "profile_perturbation_percent": 194.00469383400895,
+      "profile_rows": 7,
+      "runtime_complete": false,
+      "runtime_unknown_wall_ns": 9351523,
+      "top_worker_operations": [
+        {
+          "calls": 192,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 141825,
+          "id": 5861858344701579687,
+          "inclusive_cpu_ns": 141825,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#60",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 141825,
+              "worst": 233379
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 141825,
+              "worst": 233379
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 124357,
+              "worst": 148750
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.011627632994026903,
+              "worst": 0.014187077681472782
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 124357,
+          "wall_union_share_of_top_level": 0.011627632994026903
+        },
+        {
+          "calls": 192,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 137510,
+          "id": 5847475633095789971,
+          "inclusive_cpu_ns": 137510,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#91",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 137510,
+              "worst": 422317
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 137510,
+              "worst": 422317
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 106863,
+              "worst": 156316
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.008835451491203445,
+              "worst": 0.014601301503200981
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 106863,
+          "wall_union_share_of_top_level": 0.008835451491203445
+        },
+        {
+          "calls": 192,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 126545,
+          "id": 5859869328166524438,
+          "inclusive_cpu_ns": 126545,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#45",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 126545,
+              "worst": 209501
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 126545,
+              "worst": 209501
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 102571,
+              "worst": 149799
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.009581041585537168,
+              "worst": 0.013440091558319036
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 102571,
+          "wall_union_share_of_top_level": 0.009581041585537168
+        },
+        {
+          "calls": 225,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 338258,
+          "id": 3069873171016242755,
+          "inclusive_cpu_ns": 338258,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#8",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 338258,
+              "worst": 439165
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 338258,
+              "worst": 439165
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 100963,
+              "worst": 128757
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.009430840116607902,
+              "worst": 0.012337243475941239
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 100963,
+          "wall_union_share_of_top_level": 0.009430840116607902
+        },
+        {
+          "calls": 225,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 98027,
+          "id": 5855084253561496291,
+          "inclusive_cpu_ns": 98027,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#19",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 98027,
+              "worst": 160168
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 98027,
+              "worst": 160168
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 99094,
+              "worst": 156766
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.009488949396706628,
+              "worst": 0.014065176624886964
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 99094,
+          "wall_union_share_of_top_level": 0.009488949396706628
+        },
+        {
+          "calls": 97,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 58754,
+          "id": 3069884166132524865,
+          "inclusive_cpu_ns": 58754,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#2",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 58754,
+              "worst": 92233
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 58754,
+              "worst": 92233
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 97506,
+              "worst": 156049
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.009342833883712159,
+              "worst": 0.014590899596202097
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 97506,
+          "wall_union_share_of_top_level": 0.009342833883712159
+        },
+        {
+          "calls": 192,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 58817,
+          "id": 5857075469119807962,
+          "inclusive_cpu_ns": 58817,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#30",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 58817,
+              "worst": 83390
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 58817,
+              "worst": 83390
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 87214,
+              "worst": 142767
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.008146561511938448,
+              "worst": 0.01150145984684055
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 87214,
+          "wall_union_share_of_top_level": 0.008146561511938448
+        },
+        {
+          "calls": 65,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 35005,
+          "id": 5847478931630674604,
+          "inclusive_cpu_ns": 35005,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#94",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 35005,
+              "worst": 54107
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 35005,
+              "worst": 54107
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 69408,
+              "worst": 79944
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.005591581563313012,
+              "worst": 0.0075384084570034714
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 69408,
+          "wall_union_share_of_top_level": 0.005591581563313012
+        },
+        {
+          "calls": 48,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 21662,
+          "id": 12779489032298064621,
+          "inclusive_cpu_ns": 21662,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#297",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 21662,
+              "worst": 35194
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 21662,
+              "worst": 35194
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 62408,
+              "worst": 92986
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.005884831819582116,
+              "worst": 0.008685717531005442
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 62408,
+          "wall_union_share_of_top_level": 0.005884831819582116
+        },
+        {
+          "calls": 48,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 84041,
+          "id": 12779472539623641456,
+          "inclusive_cpu_ns": 84041,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#298",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 84041,
+              "worst": 159943
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 84041,
+              "worst": 159943
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 52824,
+              "worst": 92500
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.0049391516784457416,
+              "worst": 0.008640320818381297
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 52824,
+          "wall_union_share_of_top_level": 0.0049391516784457416
+        }
+      ],
+      "worker_attribution_complete_for_observed_events": true
+    },
+    "pp_ocrv5_mobile_rec_int8": {
+      "cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "end_to_end_compiled_mean_ms": 34.768,
+      "end_to_end_ncnn_mean_ms": 19.341,
+      "end_to_end_ratio": 1.798,
+      "group": "int8_rec_reference",
+      "input_hash": "9f758a4bb6c28099",
+      "prepared_compiled_mean_ms": 37.754,
+      "prepared_cpu_placement_verified": true,
+      "prepared_ncnn_mean_ms": 24.505,
+      "prepared_ncnn_to_end_to_end_ncnn_ratio": 1.2669975699291658,
+      "prepared_ratio": 1.541,
+      "profile_binary_growth_percent": 1.2157711878273636,
+      "profile_binary_size_bytes": 5097040,
+      "profile_compile_budget_seconds": 300,
+      "profile_compile_wall_seconds": 8.731744354008697,
+      "profile_off_binary_size_bytes": 5035816,
+      "profile_off_compiled_mean_ms": 34.768,
+      "profile_off_cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "profile_off_cv": 0.1119,
+      "profile_on_compiled_mean_ms": 63.187,
+      "profile_on_cv": 0.0649,
+      "profile_on_process_tree_peak_rss_kb": 264040,
+      "profile_perturbation_percent": 81.73895536125171,
+      "profile_rows": 7,
+      "runtime_complete": false,
+      "runtime_unknown_wall_ns": 38442740,
+      "top_worker_operations": [
+        {
+          "calls": 7354,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 24878714,
+          "id": 16011659880305797221,
+          "inclusive_cpu_ns": 24878714,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "linalg.matmul",
+          "operation": "model/linalg.matmul#8",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 24878714,
+              "worst": 36373661
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 24878714,
+              "worst": 36373661
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 9235802,
+              "worst": 9821711
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.15726202378963122,
+              "worst": 0.17121136982721435
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 9235802,
+          "wall_union_share_of_top_level": 0.15726202378963122
+        },
+        {
+          "calls": 7354,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 4331036,
+          "id": 12141887736823921676,
+          "inclusive_cpu_ns": 4331036,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#391",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4331036,
+              "worst": 5028750
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4331036,
+              "worst": 5028750
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 1449846,
+              "worst": 2190711
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.02543778471961908,
+              "worst": 0.03507694793689275
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 1449846,
+          "wall_union_share_of_top_level": 0.02543778471961908
+        },
+        {
+          "calls": 15,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 4372896,
+          "id": 10844764182548345254,
+          "inclusive_cpu_ns": 4372896,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#168",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4372896,
+              "worst": 6300093
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4372896,
+              "worst": 6300093
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 932938,
+              "worst": 1369548
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.015933838644429574,
+              "worst": 0.021509084132421332
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 932938,
+          "wall_union_share_of_top_level": 0.015933838644429574
+        },
+        {
+          "calls": 3840,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 4162971,
+          "id": 5855093049654521979,
+          "inclusive_cpu_ns": 4162971,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#11",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4162971,
+              "worst": 5640915
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4162971,
+              "worst": 5640915
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 858487,
+              "worst": 1047971
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01374581302759663,
+              "worst": 0.016307447081142172
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 858487,
+          "wall_union_share_of_top_level": 0.01374581302759663
+        },
+        {
+          "calls": 3840,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 3901322,
+          "id": 5855091950142893768,
+          "inclusive_cpu_ns": 3901322,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#10",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3901322,
+              "worst": 4512418
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3901322,
+              "worst": 4512418
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 765157,
+              "worst": 1091750
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.012719160573317803,
+              "worst": 0.016988690861519037
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 765157,
+          "wall_union_share_of_top_level": 0.012719160573317803
+        },
+        {
+          "calls": 30,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 3004577,
+          "id": 5848475089165644545,
+          "inclusive_cpu_ns": 3004577,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#88",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3004577,
+              "worst": 3140808
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3004577,
+              "worst": 3140808
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 703218,
+              "worst": 770280
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.010942755402111926,
+              "worst": 0.012097434573685263
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 703218,
+          "wall_union_share_of_top_level": 0.010942755402111926
+        },
+        {
+          "calls": 30,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 2986025,
+          "id": 5860867684724750801,
+          "inclusive_cpu_ns": 2986025,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#71",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 2986025,
+              "worst": 3668532
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 2986025,
+              "worst": 3668532
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 701998,
+              "worst": 753565
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.010985081245155967,
+              "worst": 0.011834921437034759
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 701998,
+          "wall_union_share_of_top_level": 0.010985081245155967
+        },
+        {
+          "calls": 3840,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 4064285,
+          "id": 5855083154049868080,
+          "inclusive_cpu_ns": 4064285,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#18",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4064285,
+              "worst": 4522861
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4064285,
+              "worst": 4522861
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 699237,
+              "worst": 1082986
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.012219900053390322,
+              "worst": 0.016852314505475665
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 699237,
+          "wall_union_share_of_top_level": 0.012219900053390322
+        },
+        {
+          "calls": 3840,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 4197365,
+          "id": 5858038641305931573,
+          "inclusive_cpu_ns": 4197365,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#26",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4197365,
+              "worst": 4558711
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4197365,
+              "worst": 4558711
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 697710,
+              "worst": 1053855
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.011878814913045179,
+              "worst": 0.016399007838668326
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 697710,
+          "wall_union_share_of_top_level": 0.011878814913045179
+        },
+        {
+          "calls": 960,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 1169450,
+          "id": 10839140180571181339,
+          "inclusive_cpu_ns": 1169450,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#101",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1169450,
+              "worst": 1356148
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1169450,
+              "worst": 1356148
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 635397,
+              "worst": 827720
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.010621597184263523,
+              "worst": 0.014923966508738243
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 635397,
+          "wall_union_share_of_top_level": 0.010621597184263523
+        }
+      ],
+      "worker_attribution_complete_for_observed_events": true
+    },
+    "pp_ocrv6_medium_rec_int8": {
+      "cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "end_to_end_compiled_mean_ms": 101.218,
+      "end_to_end_ncnn_mean_ms": 23.282,
+      "end_to_end_ratio": 4.347,
+      "group": "int8_rec_high_ratio",
+      "input_hash": "ba693b720b90afc6",
+      "prepared_compiled_mean_ms": 131.491,
+      "prepared_cpu_placement_verified": true,
+      "prepared_ncnn_mean_ms": 26.258,
+      "prepared_ncnn_to_end_to_end_ncnn_ratio": 1.1278240700970708,
+      "prepared_ratio": 5.008,
+      "profile_binary_growth_percent": 0.3511379789982172,
+      "profile_binary_size_bytes": 21008872,
+      "profile_compile_budget_seconds": 300,
+      "profile_compile_wall_seconds": 13.340600474999519,
+      "profile_off_binary_size_bytes": 20935360,
+      "profile_off_compiled_mean_ms": 101.218,
+      "profile_off_cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "profile_off_cv": 0.0659,
+      "profile_on_compiled_mean_ms": 164.577,
+      "profile_on_cv": 0.0939,
+      "profile_on_process_tree_peak_rss_kb": 358220,
+      "profile_perturbation_percent": 62.59657373194489,
+      "profile_rows": 7,
+      "runtime_complete": false,
+      "runtime_unknown_wall_ns": 131105535,
+      "top_worker_operations": [
+        {
+          "calls": 3742,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 41301523,
+          "id": 10667653195659554484,
+          "inclusive_cpu_ns": 41301523,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "linalg.matmul",
+          "operation": "model/linalg.matmul#16",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 41301523,
+              "worst": 47720341
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 41301523,
+              "worst": 47720341
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 10014946,
+              "worst": 11985479
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.06208292350936947,
+              "worst": 0.0722510425831585
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 10014946,
+          "wall_union_share_of_top_level": 0.06208292350936947
+        },
+        {
+          "calls": 8,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 13311897,
+          "id": 12142887192893776250,
+          "inclusive_cpu_ns": 13311897,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#366",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13311897,
+              "worst": 16617688
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13311897,
+              "worst": 16617688
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 3907795,
+              "worst": 4060138
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.022580528297662557,
+              "worst": 0.02562858102022449
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 3907795,
+          "wall_union_share_of_top_level": 0.022580528297662557
+        },
+        {
+          "calls": 8,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 13152793,
+          "id": 12143869056777579448,
+          "inclusive_cpu_ns": 13152793,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#373",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13152793,
+              "worst": 16274844
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13152793,
+              "worst": 16274844
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 3654394,
+              "worst": 3940273
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.02191389700966217,
+              "worst": 0.024056529226380692
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 3654394,
+          "wall_union_share_of_top_level": 0.02191389700966217
+        },
+        {
+          "calls": 15,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 11995685,
+          "id": 12771866118181191558,
+          "inclusive_cpu_ns": 11995685,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#212",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 11995685,
+              "worst": 14944822
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 11995685,
+              "worst": 14944822
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2970087,
+              "worst": 4049739
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.017945411909788992,
+              "worst": 0.022522694077799246
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2970087,
+          "wall_union_share_of_top_level": 0.017945411909788992
+        },
+        {
+          "calls": 8,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 13467197,
+          "id": 12141042212382016642,
+          "inclusive_cpu_ns": 13467197,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#384",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13467197,
+              "worst": 15739073
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13467197,
+              "worst": 15739073
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2809072,
+              "worst": 3927483
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.019084376617832924,
+              "worst": 0.02424797639496974
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2809072,
+          "wall_union_share_of_top_level": 0.019084376617832924
+        },
+        {
+          "calls": 8,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 13229882,
+          "id": 12141888836335549887,
+          "inclusive_cpu_ns": 13229882,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#390",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13229882,
+              "worst": 15778837
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13229882,
+              "worst": 15778837
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2762955,
+              "worst": 3887578
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01908913619613824,
+              "worst": 0.023928833983453565
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2762955,
+          "wall_union_share_of_top_level": 0.01908913619613824
+        },
+        {
+          "calls": 15360,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 16954422,
+          "id": 5855096348189406612,
+          "inclusive_cpu_ns": 16954422,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#14",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 16954422,
+              "worst": 24511641
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 16954422,
+              "worst": 24511641
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2581691,
+              "worst": 4531846
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.016669196554968405,
+              "worst": 0.027381636693379553
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2581691,
+          "wall_union_share_of_top_level": 0.016669196554968405
+        },
+        {
+          "calls": 3840,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 3756643,
+          "id": 5855093049654521979,
+          "inclusive_cpu_ns": 3756643,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#11",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3756643,
+              "worst": 6513195
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3756643,
+              "worst": 6513195
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2495913,
+              "worst": 3638923
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01572638583178137,
+              "worst": 0.023685267515005982
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2495913,
+          "wall_union_share_of_top_level": 0.01572638583178137
+        },
+        {
+          "calls": 15,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 11966876,
+          "id": 12776676481553668558,
+          "inclusive_cpu_ns": 11966876,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#245",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 11966876,
+              "worst": 12970435
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 11966876,
+              "worst": 12970435
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2469640,
+              "worst": 3566979
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.015247366423756148,
+              "worst": 0.02016807080403304
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2469640,
+          "wall_union_share_of_top_level": 0.015247366423756148
+        },
+        {
+          "calls": 9477,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 11739878,
+          "id": 5857074369608179751,
+          "inclusive_cpu_ns": 11739878,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#33",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 11739878,
+              "worst": 16989339
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 11739878,
+              "worst": 16989339
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2168106,
+              "worst": 2507754
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.013099803215894002,
+              "worst": 0.015215559237294462
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2168106,
+          "wall_union_share_of_top_level": 0.013099803215894002
+        }
+      ],
+      "worker_attribution_complete_for_observed_events": true
+    },
+    "pp_ocrv6_small_rec_int8": {
+      "cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "end_to_end_compiled_mean_ms": 42.713,
+      "end_to_end_ncnn_mean_ms": 11.257,
+      "end_to_end_ratio": 3.794,
+      "group": "int8_rec_high_ratio",
+      "input_hash": "5c792262033ae4a2",
+      "prepared_compiled_mean_ms": 46.266,
+      "prepared_cpu_placement_verified": true,
+      "prepared_ncnn_mean_ms": 9.347,
+      "prepared_ncnn_to_end_to_end_ncnn_ratio": 0.8303277960380208,
+      "prepared_ratio": 4.95,
+      "profile_binary_growth_percent": 1.1514546999250586,
+      "profile_binary_size_bytes": 6457784,
+      "profile_compile_budget_seconds": 300,
+      "profile_compile_wall_seconds": 11.186131611990277,
+      "profile_off_binary_size_bytes": 6384272,
+      "profile_off_compiled_mean_ms": 42.713,
+      "profile_off_cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "profile_off_cv": 0.055,
+      "profile_on_compiled_mean_ms": 93.408,
+      "profile_on_cv": 0.1473,
+      "profile_on_process_tree_peak_rss_kb": 169932,
+      "profile_perturbation_percent": 118.68751902231169,
+      "profile_rows": 7,
+      "runtime_complete": false,
+      "runtime_unknown_wall_ns": 70431030,
+      "top_worker_operations": [
+        {
+          "calls": 3742,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 25725438,
+          "id": 10667655394682810906,
+          "inclusive_cpu_ns": 25725438,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "linalg.matmul",
+          "operation": "model/linalg.matmul#14",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 25725438,
+              "worst": 26655586
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 25725438,
+              "worst": 26655586
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 6315318,
+              "worst": 6702010
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.07042812618158321,
+              "worst": 0.07581864344550399
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 6315318,
+          "wall_union_share_of_top_level": 0.07042812618158321
+        },
+        {
+          "calls": 15360,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 22672348,
+          "id": 5855096348189406612,
+          "inclusive_cpu_ns": 22672348,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#14",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 22672348,
+              "worst": 24483393
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 22672348,
+              "worst": 24483393
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2989279,
+              "worst": 3285137
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.03336346342566726,
+              "worst": 0.03588783314793217
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2989279,
+          "wall_union_share_of_top_level": 0.03336346342566726
+        },
+        {
+          "calls": 9477,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 13110804,
+          "id": 5857074369608179751,
+          "inclusive_cpu_ns": 13110804,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#33",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13110804,
+              "worst": 17258227
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 13110804,
+              "worst": 17258227
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 1758516,
+              "worst": 2722009
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.020111704408462976,
+              "worst": 0.028604253547727495
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 1758516,
+          "wall_union_share_of_top_level": 0.020111704408462976
+        },
+        {
+          "calls": 3840,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 3058476,
+          "id": 5855093049654521979,
+          "inclusive_cpu_ns": 3058476,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#11",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3058476,
+              "worst": 3659135
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3058476,
+              "worst": 3659135
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 1552060,
+              "worst": 2662862
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.018633279234082735,
+              "worst": 0.028552422251199066
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 1552060,
+          "wall_union_share_of_top_level": 0.018633279234082735
+        },
+        {
+          "calls": 3840,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 6122406,
+          "id": 5855091950142893768,
+          "inclusive_cpu_ns": 6122406,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#10",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 6122406,
+              "worst": 9240570
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 6122406,
+              "worst": 9240570
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 1519792,
+              "worst": 2352546
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01715247102186884,
+              "worst": 0.025225072406068867
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 1519792,
+          "wall_union_share_of_top_level": 0.01715247102186884
+        },
+        {
+          "calls": 8,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 3426075,
+          "id": 12142880595824006984,
+          "inclusive_cpu_ns": 3426075,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#360",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3426075,
+              "worst": 3633702
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3426075,
+              "worst": 3633702
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 999881,
+              "worst": 1107337
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.010545855309382195,
+              "worst": 0.011887017188451856
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 999881,
+          "wall_union_share_of_top_level": 0.010545855309382195
+        },
+        {
+          "calls": 8,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 3328287,
+          "id": 12144856418219523701,
+          "inclusive_cpu_ns": 3328287,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#349",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3328287,
+              "worst": 4202115
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3328287,
+              "worst": 4202115
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 976967,
+              "worst": 988841
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01039124363012334,
+              "worst": 0.011343393417033453
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 976967,
+          "wall_union_share_of_top_level": 0.01039124363012334
+        },
+        {
+          "calls": 8,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 3353915,
+          "id": 12142888292405404461,
+          "inclusive_cpu_ns": 3353915,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#367",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3353915,
+              "worst": 3403980
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3353915,
+              "worst": 3403980
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 976070,
+              "worst": 991684
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.010257039473539719,
+              "worst": 0.011420234212764264
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 976070,
+          "wall_union_share_of_top_level": 0.010257039473539719
+        },
+        {
+          "calls": 8,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 3382795,
+          "id": 12144865214312549389,
+          "inclusive_cpu_ns": 3382795,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#341",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3382795,
+              "worst": 4029470
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 3382795,
+              "worst": 4029470
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 925915,
+              "worst": 1016585
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.00993949224133701,
+              "worst": 0.011592283073784938
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 925915,
+          "wall_union_share_of_top_level": 0.00993949224133701
+        },
+        {
+          "calls": 3840,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 4118672,
+          "id": 5857075469119807962,
+          "inclusive_cpu_ns": 4118672,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#30",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4118672,
+              "worst": 5602102
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 4118672,
+              "worst": 5602102
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 858858,
+              "worst": 1072960
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.009833779405399036,
+              "worst": 0.011275208820606284
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 858858,
+          "wall_union_share_of_top_level": 0.009833779405399036
+        }
+      ],
+      "worker_attribution_complete_for_observed_events": true
+    },
+    "pp_ocrv6_tiny_rec": {
+      "cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "end_to_end_compiled_mean_ms": 7.678,
+      "end_to_end_ncnn_mean_ms": 3.365,
+      "end_to_end_ratio": 2.282,
+      "group": "small_fixed_overhead_control",
+      "input_hash": "a3dc06afc9b0647d",
+      "prepared_compiled_mean_ms": 10.928,
+      "prepared_cpu_placement_verified": true,
+      "prepared_ncnn_mean_ms": 4.026,
+      "prepared_ncnn_to_end_to_end_ncnn_ratio": 1.1964338781575037,
+      "prepared_ratio": 2.715,
+      "profile_binary_growth_percent": 0.7939827389020326,
+      "profile_binary_size_bytes": 4646272,
+      "profile_compile_budget_seconds": 300,
+      "profile_compile_wall_seconds": 8.481319776998134,
+      "profile_off_binary_size_bytes": 4609672,
+      "profile_off_compiled_mean_ms": 7.678,
+      "profile_off_cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "profile_off_cv": 0.1099,
+      "profile_on_compiled_mean_ms": 32.965,
+      "profile_on_cv": 0.0904,
+      "profile_on_process_tree_peak_rss_kb": 83140,
+      "profile_perturbation_percent": 329.3435790570461,
+      "profile_rows": 7,
+      "runtime_complete": false,
+      "runtime_unknown_wall_ns": 26187458,
+      "top_worker_operations": [
+        {
+          "calls": 2302,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 2572546,
+          "id": 12776680879600181402,
+          "inclusive_cpu_ns": 2572546,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#241",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 2572546,
+              "worst": 2768107
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 2572546,
+              "worst": 2768107
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2770490,
+              "worst": 2836183
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.08712425413116376,
+              "worst": 0.0944915040927407
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2770490,
+          "wall_union_share_of_top_level": 0.08712425413116376
+        },
+        {
+          "calls": 480,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 708749,
+          "id": 10839993401594483850,
+          "inclusive_cpu_ns": 708749,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#115",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 708749,
+              "worst": 1532280
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 708749,
+              "worst": 1532280
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 544149,
+              "worst": 778773
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.017330523712095123,
+              "worst": 0.02580987503771837
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 544149,
+          "wall_union_share_of_top_level": 0.017330523712095123
+        },
+        {
+          "calls": 2302,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 838186,
+          "id": 12776679780088553191,
+          "inclusive_cpu_ns": 838186,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#242",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 838186,
+              "worst": 1104897
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 838186,
+              "worst": 1104897
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 543766,
+              "worst": 645102
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.017762934567196485,
+              "worst": 0.020570708970108695
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 543766,
+          "wall_union_share_of_top_level": 0.017762934567196485
+        },
+        {
+          "calls": 960,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 1030425,
+          "id": 5859874825724665493,
+          "inclusive_cpu_ns": 1030425,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#40",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1030425,
+              "worst": 1237786
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1030425,
+              "worst": 1237786
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 539249,
+              "worst": 697952
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.017195318323958292,
+              "worst": 0.0223302673388774
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 539249,
+          "wall_union_share_of_top_level": 0.017195318323958292
+        },
+        {
+          "calls": 240,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 100565,
+          "id": 10832373786012495420,
+          "inclusive_cpu_ns": 100565,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#197",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 100565,
+              "worst": 229822
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 100565,
+              "worst": 229822
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 516451,
+              "worst": 542137
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.016036317113593334,
+              "worst": 0.017279535243739867
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 516451,
+          "wall_union_share_of_top_level": 0.016036317113593334
+        },
+        {
+          "calls": 560,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 1829774,
+          "id": 5861853946655066843,
+          "inclusive_cpu_ns": 1829774,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#64",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1829774,
+              "worst": 2030144
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1829774,
+              "worst": 2030144
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 511958,
+              "worst": 668846
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.016826894633699727,
+              "worst": 0.021399050348073784
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 511958,
+          "wall_union_share_of_top_level": 0.016826894633699727
+        },
+        {
+          "calls": 240,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 412959,
+          "id": 10832369387965982576,
+          "inclusive_cpu_ns": 412959,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#193",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 412959,
+              "worst": 827341
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 412959,
+              "worst": 827341
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 505452,
+              "worst": 539471
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01611761549392093,
+              "worst": 0.017973250035140508
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 505452,
+          "wall_union_share_of_top_level": 0.01611761549392093
+        },
+        {
+          "calls": 240,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 103148,
+          "id": 10845765837641456250,
+          "inclusive_cpu_ns": 103148,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#173",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 103148,
+              "worst": 126437
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 103148,
+              "worst": 126437
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 498631,
+              "worst": 595961
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.016529843445987732,
+              "worst": 0.019564476110621766
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 498631,
+          "wall_union_share_of_top_level": 0.016529843445987732
+        },
+        {
+          "calls": 240,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 311193,
+          "id": 10844765282059973465,
+          "inclusive_cpu_ns": 311193,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#169",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 311193,
+              "worst": 480536
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 311193,
+              "worst": 480536
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 481614,
+              "worst": 559943
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01561508221737667,
+              "worst": 0.017304228078850663
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 481614,
+          "wall_union_share_of_top_level": 0.01561508221737667
+        },
+        {
+          "calls": 480,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 871085,
+          "id": 5847482230165559237,
+          "inclusive_cpu_ns": 871085,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#97",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 871085,
+              "worst": 1738849
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 871085,
+              "worst": 1738849
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 474407,
+              "worst": 629371
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01466086178450897,
+              "worst": 0.020069086245626706
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 474407,
+          "wall_union_share_of_top_level": 0.01466086178450897
+        }
+      ],
+      "worker_attribution_complete_for_observed_events": true
+    },
+    "pp_ocrv6_tiny_rec_int8": {
+      "cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "end_to_end_compiled_mean_ms": 10.964,
+      "end_to_end_ncnn_mean_ms": 2.991,
+      "end_to_end_ratio": 3.665,
+      "group": "int8_rec_high_ratio",
+      "input_hash": "84a35c3843392944",
+      "prepared_compiled_mean_ms": 12.943,
+      "prepared_cpu_placement_verified": true,
+      "prepared_ncnn_mean_ms": 2.66,
+      "prepared_ncnn_to_end_to_end_ncnn_ratio": 0.8893346706787028,
+      "prepared_ratio": 4.866,
+      "profile_binary_growth_percent": 2.956270405122452,
+      "profile_binary_size_bytes": 1561616,
+      "profile_compile_budget_seconds": 300,
+      "profile_compile_wall_seconds": 5.8756925979978405,
+      "profile_off_binary_size_bytes": 1516776,
+      "profile_off_compiled_mean_ms": 10.964,
+      "profile_off_cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "profile_off_cv": 0.1084,
+      "profile_on_compiled_mean_ms": 26.658,
+      "profile_on_cv": 0.078,
+      "profile_on_process_tree_peak_rss_kb": 77924,
+      "profile_perturbation_percent": 143.14118934695367,
+      "profile_rows": 7,
+      "runtime_complete": false,
+      "runtime_unknown_wall_ns": 18965315,
+      "top_worker_operations": [
+        {
+          "calls": 2302,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 5221817,
+          "id": 16011660979817425432,
+          "inclusive_cpu_ns": 5221817,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "linalg.matmul",
+          "operation": "model/linalg.matmul#7",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 5221817,
+              "worst": 8447034
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 5221817,
+              "worst": 8447034
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 2198463,
+              "worst": 2662831
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.0895494829606482,
+              "worst": 0.0942161182898605
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 2198463,
+          "wall_union_share_of_top_level": 0.0895494829606482
+        },
+        {
+          "calls": 2302,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 886862,
+          "id": 12776680879600181402,
+          "inclusive_cpu_ns": 886862,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#241",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 886862,
+              "worst": 1165473
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 886862,
+              "worst": 1165473
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 418414,
+              "worst": 643021
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01730047092588576,
+              "worst": 0.018281835397663277
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 418414,
+          "wall_union_share_of_top_level": 0.01730047092588576
+        },
+        {
+          "calls": 960,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 436584,
+          "id": 5858879767701323763,
+          "inclusive_cpu_ns": 436584,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#55",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 436584,
+              "worst": 591425
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 436584,
+              "worst": 591425
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 344353,
+              "worst": 445766
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.013598663430661859,
+              "worst": 0.018521627111501283
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 344353,
+          "wall_union_share_of_top_level": 0.013598663430661859
+        },
+        {
+          "calls": 960,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 375901,
+          "id": 5858040840329187995,
+          "inclusive_cpu_ns": 375901,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#28",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 375901,
+              "worst": 1024813
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 375901,
+              "worst": 1024813
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 340875,
+              "worst": 448052
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.013838461396569022,
+              "worst": 0.01852593507694524
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 340875,
+          "wall_union_share_of_top_level": 0.013838461396569022
+        },
+        {
+          "calls": 960,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 419247,
+          "id": 5857072170584923329,
+          "inclusive_cpu_ns": 419247,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#35",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 419247,
+              "worst": 879435
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 419247,
+              "worst": 879435
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 331259,
+              "worst": 403529
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.013357944614759462,
+              "worst": 0.016876341263354033
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 331259,
+          "wall_union_share_of_top_level": 0.013357944614759462
+        },
+        {
+          "calls": 960,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 1027691,
+          "id": 5858035342771046940,
+          "inclusive_cpu_ns": 1027691,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#25",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1027691,
+              "worst": 1885133
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1027691,
+              "worst": 1885133
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 301843,
+              "worst": 392468
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.012010861397095528,
+              "worst": 0.013295818809597074
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 301843,
+          "wall_union_share_of_top_level": 0.012010861397095528
+        },
+        {
+          "calls": 480,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 172448,
+          "id": 10840982962059684525,
+          "inclusive_cpu_ns": 172448,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#121",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 172448,
+              "worst": 219150
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 172448,
+              "worst": 219150
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 257596,
+              "worst": 282789
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.009346447510529878,
+              "worst": 0.011031220271454102
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 257596,
+          "wall_union_share_of_top_level": 0.009346447510529878
+        },
+        {
+          "calls": 1053,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 1047012,
+          "id": 5855097447701034823,
+          "inclusive_cpu_ns": 1047012,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#15",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1047012,
+              "worst": 4419107
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1047012,
+              "worst": 4419107
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 256105,
+              "worst": 962322
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.010411710521221399,
+              "worst": 0.0273599344400107
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 256105,
+          "wall_union_share_of_top_level": 0.010411710521221399
+        },
+        {
+          "calls": 1053,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 1114409,
+          "id": 3069888564179037709,
+          "inclusive_cpu_ns": 1114409,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#6",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1114409,
+              "worst": 1352305
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1114409,
+              "worst": 1352305
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 248907,
+              "worst": 456944
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.010138671042126277,
+              "worst": 0.012991449725514172
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 248907,
+          "wall_union_share_of_top_level": 0.010138671042126277
+        },
+        {
+          "calls": 960,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 1105497,
+          "id": 5859870427678152649,
+          "inclusive_cpu_ns": 1105497,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#44",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1105497,
+              "worst": 1316393
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 1105497,
+              "worst": 1316393
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 238235,
+              "worst": 255558
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.009502751070772817,
+              "worst": 0.010243395733182038
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 238235,
+          "wall_union_share_of_top_level": 0.009502751070772817
+        }
+      ],
+      "worker_attribution_complete_for_observed_events": true
+    },
+    "yolov5x": {
+      "cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "end_to_end_compiled_mean_ms": 990.903,
+      "end_to_end_ncnn_mean_ms": 522.345,
+      "end_to_end_ratio": 1.897,
+      "group": "yolo_absolute_excess",
+      "input_hash": "587bed750d7adb9a",
+      "prepared_compiled_mean_ms": 766.046,
+      "prepared_cpu_placement_verified": true,
+      "prepared_ncnn_mean_ms": 490.885,
+      "prepared_ncnn_to_end_to_end_ncnn_ratio": 0.9397716068881677,
+      "prepared_ratio": 1.561,
+      "profile_binary_growth_percent": 0.02229445750041581,
+      "profile_binary_size_bytes": 348182064,
+      "profile_compile_budget_seconds": 900,
+      "profile_compile_wall_seconds": 219.64356731099542,
+      "profile_off_binary_size_bytes": 348104456,
+      "profile_off_compiled_mean_ms": 990.903,
+      "profile_off_cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "profile_off_cv": 0.1877,
+      "profile_on_compiled_mean_ms": 4860.815,
+      "profile_on_cv": 0.0503,
+      "profile_on_process_tree_peak_rss_kb": 4060720,
+      "profile_perturbation_percent": 390.5439785730793,
+      "profile_rows": 7,
+      "runtime_complete": false,
+      "runtime_unknown_wall_ns": 4749714365,
+      "top_worker_operations": [
+        {
+          "calls": 102400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 192698063,
+          "id": 3069888564179037709,
+          "inclusive_cpu_ns": 192698063,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#6",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 192698063,
+              "worst": 210337158
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 192698063,
+              "worst": 210337158
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 145036950,
+              "worst": 152045594
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.030045307484640234,
+              "worst": 0.03164512837643872
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 145036950,
+          "wall_union_share_of_top_level": 0.030045307484640234
+        },
+        {
+          "calls": 233289,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 114466278,
+          "id": 5855095248677778401,
+          "inclusive_cpu_ns": 114466278,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#13",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 114466278,
+              "worst": 155215954
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 114466278,
+              "worst": 155215954
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 123351858,
+              "worst": 136349118
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.02579135516237044,
+              "worst": 0.026467176578235774
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 123351858,
+          "wall_union_share_of_top_level": 0.02579135516237044
+        },
+        {
+          "calls": 233289,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 105143367,
+          "id": 5855096348189406612,
+          "inclusive_cpu_ns": 105143367,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#14",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 105143367,
+              "worst": 149411611
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 105143367,
+              "worst": 149411611
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 122328227,
+              "worst": 135786061
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.025337988441440005,
+              "worst": 0.02635787972863964
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 122328227,
+          "wall_union_share_of_top_level": 0.025337988441440005
+        },
+        {
+          "calls": 102400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 50453833,
+          "id": 3069887464667409498,
+          "inclusive_cpu_ns": 50453833,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#7",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 50453833,
+              "worst": 52692860
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 50453833,
+              "worst": 52692860
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 95985892,
+              "worst": 114195002
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.02012392308585309,
+              "worst": 0.023653344053995145
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 95985892,
+          "wall_union_share_of_top_level": 0.02012392308585309
+        },
+        {
+          "calls": 19200,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 33741775,
+          "id": 4416796715551475342,
+          "inclusive_cpu_ns": 33741775,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#1121",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 33741775,
+              "worst": 41036286
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 33741775,
+              "worst": 41036286
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 88562940,
+              "worst": 93094224
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.018747810437570674,
+              "worst": 0.018977497376448434
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 88562940,
+          "wall_union_share_of_top_level": 0.018747810437570674
+        },
+        {
+          "calls": 102400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 35640251,
+          "id": 3069872071504614544,
+          "inclusive_cpu_ns": 35640251,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#9",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 35640251,
+              "worst": 42330138
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 35640251,
+              "worst": 42330138
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 84713581,
+              "worst": 93327281
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.0175468229112075,
+              "worst": 0.019666881788470647
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 84713581,
+          "wall_union_share_of_top_level": 0.0175468229112075
+        },
+        {
+          "calls": 102400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 36214951,
+          "id": 3069873171016242755,
+          "inclusive_cpu_ns": 36214951,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#8",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 36214951,
+              "worst": 39793933
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 36214951,
+              "worst": 39793933
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 81132904,
+              "worst": 86796513
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01680515310478964,
+              "worst": 0.018290651377944417
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 81132904,
+          "wall_union_share_of_top_level": 0.01680515310478964
+        },
+        {
+          "calls": 230400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 337110616,
+          "id": 5859883621817691181,
+          "inclusive_cpu_ns": 337110616,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#48",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 337110616,
+              "worst": 355840709
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 337110616,
+              "worst": 355840709
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 79553565,
+              "worst": 86664229
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.016764343093917156,
+              "worst": 0.017035096834723065
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 79553565,
+          "wall_union_share_of_top_level": 0.016764343093917156
+        },
+        {
+          "calls": 230400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 349185248,
+          "id": 5847481130653931026,
+          "inclusive_cpu_ns": 349185248,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#96",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 349185248,
+              "worst": 389601474
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 349185248,
+              "worst": 389601474
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 74801647,
+              "worst": 86509692
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01458462949368878,
+              "worst": 0.018339044276063685
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 74801647,
+          "wall_union_share_of_top_level": 0.01458462949368878
+        },
+        {
+          "calls": 230400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 332666630,
+          "id": 5860864386189866168,
+          "inclusive_cpu_ns": 332666630,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#72",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 332666630,
+              "worst": 363165432
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 332666630,
+              "worst": 363165432
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 74418343,
+              "worst": 75491866
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.014825112877729951,
+              "worst": 0.01599829396816665
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 74418343,
+          "wall_union_share_of_top_level": 0.014825112877729951
+        }
+      ],
+      "worker_attribution_complete_for_observed_events": true
+    },
+    "yolov5x_seg": {
+      "cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "end_to_end_compiled_mean_ms": 983.771,
+      "end_to_end_ncnn_mean_ms": 583.437,
+      "end_to_end_ratio": 1.686,
+      "group": "yolo_regression_control",
+      "input_hash": "cabb876cc8f1770d",
+      "prepared_compiled_mean_ms": 1060.396,
+      "prepared_cpu_placement_verified": true,
+      "prepared_ncnn_mean_ms": 603.708,
+      "prepared_ncnn_to_end_to_end_ncnn_ratio": 1.034744111189383,
+      "prepared_ratio": 1.756,
+      "profile_binary_growth_percent": 0.02292609313514493,
+      "profile_binary_size_bytes": 356496560,
+      "profile_compile_budget_seconds": 900,
+      "profile_compile_wall_seconds": 222.59285099600675,
+      "profile_off_binary_size_bytes": 356414848,
+      "profile_off_compiled_mean_ms": 983.771,
+      "profile_off_cpu_placement": {
+        "cpu_list": "0-11",
+        "observed_tasks": 11,
+        "status": "all_observed_process_tasks_match_common_mask",
+        "tasks_matching_mask": 11,
+        "verified": true
+      },
+      "profile_off_cv": 0.0511,
+      "profile_on_compiled_mean_ms": 5489.768,
+      "profile_on_cv": 0.0181,
+      "profile_on_process_tree_peak_rss_kb": 4870612,
+      "profile_perturbation_percent": 458.0331194963056,
+      "profile_rows": 7,
+      "runtime_complete": false,
+      "runtime_unknown_wall_ns": 5372602499,
+      "top_worker_operations": [
+        {
+          "calls": 230400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 238694278,
+          "id": 4416801113597988186,
+          "inclusive_cpu_ns": 238694278,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#1125",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 238694278,
+              "worst": 258624827
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 238694278,
+              "worst": 258624827
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 223667902,
+              "worst": 224938026
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.040859394009531126,
+              "worst": 0.041247036935090076
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 223667902,
+          "wall_union_share_of_top_level": 0.040859394009531126
+        },
+        {
+          "calls": 102400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 206825222,
+          "id": 3069888564179037709,
+          "inclusive_cpu_ns": 206825222,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#6",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 206825222,
+              "worst": 210146872
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 206825222,
+              "worst": 210146872
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 132798102,
+              "worst": 133393441
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.024207015980589375,
+              "worst": 0.024477497905778276
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 132798102,
+          "wall_union_share_of_top_level": 0.024207015980589375
+        },
+        {
+          "calls": 233289,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 95400012,
+          "id": 5855095248677778401,
+          "inclusive_cpu_ns": 95400012,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#13",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 95400012,
+              "worst": 102700801
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 95400012,
+              "worst": 102700801
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 125126864,
+              "worst": 128327194
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.022573517110183686,
+              "worst": 0.023505079527156924
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 125126864,
+          "wall_union_share_of_top_level": 0.022573517110183686
+        },
+        {
+          "calls": 233289,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 91591361,
+          "id": 5855096348189406612,
+          "inclusive_cpu_ns": 91591361,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#14",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 91591361,
+              "worst": 95041746
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 91591361,
+              "worst": 95041746
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 123641516,
+              "worst": 126655191
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.022305552842394022,
+              "worst": 0.023025859438462068
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 123641516,
+          "wall_union_share_of_top_level": 0.022305552842394022
+        },
+        {
+          "calls": 102400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 50976313,
+          "id": 3069887464667409498,
+          "inclusive_cpu_ns": 50976313,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#7",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 50976313,
+              "worst": 52004871
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 50976313,
+              "worst": 52004871
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 101012479,
+              "worst": 102538089
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.018485909506382143,
+              "worst": 0.018705789579904906
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 101012479,
+          "wall_union_share_of_top_level": 0.018485909506382143
+        },
+        {
+          "calls": 102400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 38704023,
+          "id": 3069872071504614544,
+          "inclusive_cpu_ns": 38704023,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#9",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 38704023,
+              "worst": 39778234
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 38704023,
+              "worst": 39778234
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 94263738,
+              "worst": 95059536
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01707147562129538,
+              "worst": 0.01744328338725631
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 94263738,
+          "wall_union_share_of_top_level": 0.01707147562129538
+        },
+        {
+          "calls": 102400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 35832482,
+          "id": 3069873171016242755,
+          "inclusive_cpu_ns": 35832482,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#8",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 35832482,
+              "worst": 36291545
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 35832482,
+              "worst": 36291545
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 84351833,
+              "worst": 86566756
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.015313649257197156,
+              "worst": 0.015884870896313553
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 84351833,
+          "wall_union_share_of_top_level": 0.015313649257197156
+        },
+        {
+          "calls": 8000,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 451368646,
+          "id": 4416789018970077865,
+          "inclusive_cpu_ns": 451368646,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#1128",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 451368646,
+              "worst": 457425103
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 451368646,
+              "worst": 457425103
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 79206632,
+              "worst": 80748055
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.014385492096794185,
+              "worst": 0.014817147922274298
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 79206632,
+          "wall_union_share_of_top_level": 0.014385492096794185
+        },
+        {
+          "calls": 230400,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 338623440,
+          "id": 5859883621817691181,
+          "inclusive_cpu_ns": 338623440,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#48",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 338623440,
+              "worst": 359923149
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 338623440,
+              "worst": 359923149
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 77253077,
+              "worst": 84716849
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.01396962651432294,
+              "worst": 0.0154014868379411
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 77253077,
+          "wall_union_share_of_top_level": 0.01396962651432294
+        },
+        {
+          "calls": 25600,
+          "event_join_status": "joined",
+          "exclusive_cpu_ns": 26876028,
+          "id": 4415807155086274667,
+          "inclusive_cpu_ns": 26876028,
+          "invocation_count": 7,
+          "joined_invocation_count": 7,
+          "kind": "scf.for",
+          "operation": "model/scf.for#1131",
+          "per_invocation": {
+            "exclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 26876028,
+              "worst": 29391169
+            },
+            "inclusive_cpu_ns": {
+              "known_count": 7,
+              "median": 26876028,
+              "worst": 29391169
+            },
+            "wall_union_ns": {
+              "known_count": 7,
+              "median": 76955552,
+              "worst": 78719679
+            },
+            "wall_union_share_of_top_level": {
+              "known_count": 7,
+              "median": 0.014081622505365671,
+              "worst": 0.014418707816889262
+            }
+          },
+          "source_layer": null,
+          "source_name": null,
+          "wall_union_known": true,
+          "wall_union_ns": 76955552,
+          "wall_union_share_of_top_level": 0.014081622505365671
+        }
+      ],
+      "worker_attribution_complete_for_observed_events": true
+    }
+  },
+  "profile_off_end_to_end_batch_process_tree_peak_rss_kb": 4876304,
+  "profile_off_end_to_end_rows": 8,
+  "profile_off_prepared_batch_process_tree_peak_rss_kb": 4474312,
+  "profile_off_prepared_rows": 8,
+  "same_input_hash_across_boundaries": true,
+  "schema_version": 1,
+  "study": "P27 diagnostic cohorts; profile-on is not formal timing",
+  "worker_attribution_complete_all": true
+}

@@ -1,0 +1,9 @@
+{
+  "model": "pp_ocrv6_medium_det",
+  "profile_rows": 7,
+  "timing_median_ms": 939.826575,
+  "plan_hash": "3340282180025924365",
+  "build_identity": "3340282180025924365",
+  "profile": "/mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/profile-on/pp_ocrv6_medium_det/profile.ndjson",
+  "diagnostic_perf": "/mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/profile-on/pp_ocrv6_medium_det/diagnostic-perf.ndjson"
+}

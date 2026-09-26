@@ -1,0 +1,11 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-p22-validation-baseline-20260923-a
+Test project /tmp/ncnn-compiler-p22-validation-baseline-20260923-a
+    Start 419: PerformanceModel.EfficientNetB3
+1/1 Test #419: PerformanceModel.EfficientNetB3 ...   Passed    8.13 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+performance    =   8.13 sec*proc (1 test)
+
+Total Test time (real) =   8.14 sec

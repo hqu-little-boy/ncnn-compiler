@@ -1,0 +1,1 @@
+ncnn-compile: error: cannot use input file '/mnt/ncnn-compiler/ncnn_modelzoo/liteocr/PP-OCRv6_medium_rec_int8.ncnn.param': No such file or directory

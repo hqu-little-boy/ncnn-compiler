@@ -1,0 +1,7 @@
+profiled pp_ocrv5_server_rec
+profiled pp_ocrv5_server_det_static
+profiled pp_formulanet_plus_s_encoder
+profiled chineseocr_lite_anglenet
+profiled pp_ocrv6_tiny_rec
+profiled squeezenet_v1_1
+/mnt/ncnn-compiler/compiler/docs/performance/p24-2026-09-25/allocation-qualification.json

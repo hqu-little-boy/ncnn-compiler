@@ -1,0 +1,39 @@
+{
+  "function": "pp_formulanet_plus_s_encoder",
+  "inputs": [
+    {
+      "dynamic_dim_mask": 0,
+      "element_type": "f32",
+      "name": "input1",
+      "shape": [
+        1,
+        384,
+        384
+      ]
+    }
+  ],
+  "openmp": true,
+  "outputs": [
+    {
+      "dynamic_dim_mask": 0,
+      "element_type": "f32",
+      "name": "output1",
+      "shape": [
+        144,
+        2048
+      ]
+    }
+  ],
+  "target": {
+    "cpu": "",
+    "execution_profile": "x86-64-auto",
+    "features": [
+      "+avx2",
+      "+fma"
+    ],
+    "march": "x86-64-v3",
+    "triple": "x86_64-pc-linux-gnu",
+    "tune": ""
+  },
+  "vector_math": "libmvec"
+}

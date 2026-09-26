@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-25",
+  "compiler_repository": "/mnt/ncnn-compiler/compiler",
+  "branch": "p8-implementation",
+  "head": "05be0ae01c85828bcc350121071730b886ee9cf7",
+  "head_subject": "perf(ncnn): 完善 native INT8 后端并归档验收结果",
+  "initial_worktree_status": [
+    "?? docs/performance/p22-2026-09-22/",
+    "?? docs/performance/p22-2026-09-23/"
+  ],
+  "vendored_ncnn": "a4d2ea1d4422c9e849f166fd7a4aefb52f942f6a",
+  "build": {
+    "fresh_stage": "/tmp/ncnn-compiler-stage-p24-qualification-20260925-01",
+    "build_type": "Release",
+    "llvm_dir": "/usr/lib/llvm-21/lib/cmake/llvm",
+    "llvm_mlir_version": "21.1.8",
+    "cmake_version": "3.31.6",
+    "clang_version": "Debian clang 21.1.8",
+    "compiler_enable_format_targets": true,
+    "compiler_install_rpath": true,
+    "build_testing": true,
+    "build_parallelism": 8
+  },
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "12th Gen Intel Core i5-12600KF",
+    "online_logical_cpus": 16,
+    "performance_target": "x86-64-v3/AVX2/FMA"
+  },
+  "formal_performance_measurement": {
+    "mode": "end_to_end",
+    "threads": 6,
+    "warmup": 10,
+    "iterations": 20,
+    "measured_rows": 45,
+    "official_rows": 44,
+    "diagnostic_model": "resnet18_winograd",
+    "profile_instrumentation": false
+  },
+  "qualification_profile": {
+    "threads": 6,
+    "warmup_invocations": 2,
+    "timed_invocations": 5,
+    "input": "all-zero diagnostic input",
+    "profile_instrumentation": true,
+    "profile_build_identity_is_separate_from_formal_artifact": true
+  }
+}

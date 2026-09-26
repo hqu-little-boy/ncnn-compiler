@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-22",
+  "llvm_version": "21.1.8",
+  "compiler_head": "a5c3c576e025b725931b76a5c467bff263c4fd2f",
+  "compiler_branch": "p8-implementation",
+  "candidate_source_dirty": true,
+  "candidate_diff_sha256": "1d4ce146a339f756bd80dcecb1dd134ea869c113b89f861c2d680915ae4cde87",
+  "baseline_source_commit": "a5c3c57",
+  "baseline_source_path": "/tmp/ncnn-compiler-p22-baseline-src",
+  "candidate_source_path": "/mnt/ncnn-compiler/compiler",
+  "baseline_stage": "/tmp/ncnn-compiler-stage-p22-baseline-20260922-a",
+  "candidate_stage": "/tmp/ncnn-compiler-stage-p22-gate-20260922-a",
+  "cmake_options": {
+    "CMAKE_BUILD_TYPE": "Release",
+    "COMPILER_ENABLE_FORMAT_TARGETS": "ON",
+    "COMPILER_INSTALL_RPATH": "ON",
+    "BUILD_TESTING": "ON",
+    "NCNN_PACKED_CONV_DEPTHWISE": "OFF",
+    "LLVM_DIR": "/usr/lib/llvm-21/lib/cmake/llvm"
+  },
+  "benchmark": {
+    "threads": 6,
+    "warmup": 10,
+    "iterations": 20,
+    "mode": "end_to_end",
+    "max_ratio": 0
+  }
+}

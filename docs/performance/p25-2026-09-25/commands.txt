@@ -1,0 +1,59 @@
+# P25 fresh baseline and no-go qualification commands (2026-09-25)
+
+# Fresh Release build and global gates
+cmake -S /mnt/ncnn-compiler/compiler \
+  -B /tmp/ncnn-compiler-stage-p25-baseline-20260925-01 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+  -DBUILD_TESTING=ON \
+  -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+  -DCOMPILER_INSTALL_RPATH=ON
+cmake --build /tmp/ncnn-compiler-stage-p25-baseline-20260925-01 --parallel 8
+cmake --build /tmp/ncnn-compiler-stage-p25-baseline-20260925-01 --target format_check --parallel 8
+cmake --build /tmp/ncnn-compiler-stage-p25-baseline-20260925-01 --target tidy --parallel 8
+cmake --build /tmp/ncnn-compiler-stage-p25-baseline-20260925-01 \
+  --target numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests \
+  --parallel 8
+ctest --test-dir /tmp/ncnn-compiler-stage-p25-baseline-20260925-01 --output-on-failure
+
+# Formal profile-off current-vs-ncnn comparison (fresh NDJSON path)
+NCNN_PERF_THREADS=6 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 \
+NCNN_PERF_MODE=end_to_end NCNN_PERF_MAX_RATIO=0 \
+NCNN_PERF_JSON=/mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/baseline-all-model-ncnn-comparison.ndjson \
+ctest --test-dir /tmp/ncnn-compiler-stage-p25-baseline-20260925-01 \
+  -R '^PerformanceModel\.' --output-on-failure
+python3 /mnt/ncnn-compiler/compiler/docs/performance/p24-2026-09-25/finalize-end-to-end.py \
+  /mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/baseline-all-model-ncnn-comparison.ndjson \
+  /mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/baseline-all-model-ncnn-comparison.json
+python3 /mnt/ncnn-compiler/compiler/docs/performance/p24-2026-09-25/summarize-end-to-end.py \
+  /mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/baseline-all-model-ncnn-comparison.json
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py \
+  /mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/baseline-all-model-ncnn-comparison.ndjson \
+  --official-only
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py \
+  /mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/baseline-all-model-ncnn-comparison.ndjson
+
+# Seven-model profile collection (profile-on diagnostic only, not gate timing)
+python3 /mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/collect-profile-evidence.py \
+  --stage /tmp/ncnn-compiler-stage-p25-baseline-20260925-01 \
+  --compiler-root /mnt/ncnn-compiler/compiler \
+  --yolo-root /mnt/ncnn-compiler/yolov5_v7.0_models \
+  --ocr-root /mnt/ncnn-compiler/ncnn_modelzoo/liteocr \
+  --evidence /mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25
+
+# One-thread follow-up diagnostic attempt; compilation stops at remaining scf.parallel
+/tmp/ncnn-compiler-stage-p25-baseline-20260925-01/tools/ncnn-compile \
+  --driver=/tmp/ncnn-compiler-stage-p25-baseline-20260925-01/tools/ncnn-mlir-driver \
+  --opt=/tmp/ncnn-compiler-stage-p25-baseline-20260925-01/bin/ncnn-mlir-opt \
+  --translate=/usr/bin/mlir-translate-21 --clang=/usr/bin/clang-21 \
+  --nm=/usr/bin/llvm-nm-21 --readelf=/usr/bin/llvm-readelf-21 \
+  --llvm-as=/usr/bin/llvm-as-21 \
+  --param=/mnt/ncnn-compiler/yolov5_v7.0_models/yolov5x_seg.ncnn.param \
+  --bin=/mnt/ncnn-compiler/yolov5_v7.0_models/yolov5x_seg.ncnn.bin \
+  --model-name=yolov5x_seg --input-shape=3x640x640 \
+  --matmul-packing=auto --march=x86-64-v3 \
+  --target-feature=+avx2 --target-feature=+fma \
+  --vector-mode=fixed-width --threads=1 --profile \
+  --emit-manifest --emit-execution-plan \
+  --output-dir=/mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/profile-1t/yolov5x_seg

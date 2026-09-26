@@ -1,0 +1,9 @@
+{
+  "model": "efficientnet_b3",
+  "profile_rows": 7,
+  "timing_median_ms": 236.392324,
+  "plan_hash": "2318370704922650889",
+  "build_identity": "2318370704922650889",
+  "profile": "/mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/profile-on/efficientnet_b3/profile.ndjson",
+  "diagnostic_perf": "/mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/profile-on/efficientnet_b3/diagnostic-perf.ndjson"
+}

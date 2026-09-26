@@ -1,0 +1,11 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-p22-validation-candidate-20260923-b
+Test project /tmp/ncnn-compiler-p22-validation-candidate-20260923-b
+    Start 444: PerformanceModel.PPOcrv5ServerDetStatic
+1/1 Test #444: PerformanceModel.PPOcrv5ServerDetStatic ...   Passed  127.02 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+performance    = 127.02 sec*proc (1 test)
+
+Total Test time (real) = 127.03 sec

@@ -1,0 +1,11 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-stage-p27-20260925-01
+Test project /tmp/ncnn-compiler-stage-p27-20260925-01
+    Start 430: PerformanceModel.Yolov5xSeg
+1/1 Test #430: PerformanceModel.Yolov5xSeg ......   Passed   14.18 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+performance    =  14.18 sec*proc (1 test)
+
+Total Test time (real) =  14.19 sec

@@ -1,0 +1,2879 @@
+{
+  "aggregation": "per-invocation-median",
+  "attribution_revision": "attribution-v2",
+  "identity": {
+    "build_identity": "2318370704922650889",
+    "codegen_identity": "7461726765743d7838365f36342d70632d6c696e75782d676e757c6d617263683d7838362d36342d76337c6d6370753d7c6d74756e653d7c707265636973696f6e3d6175746f7c667031362d616363756d756c61746f723d6631367c616c6c6f772d66616c6c6261636b3d307c6f7074696d697a6174696f6e3d337c766563746f722d77696474683d3235367c766563746f722d6d6f64653d66697865642d77696474687c766563746f722d6d6174683d6c69626d7665637c766563746f722d6d6174682d6162693d5f5a4756644e387c766563746f722d6d6174682d6c616e65733d387c737973726f6f743d7c636f6e762d73747261746567793d6175746f7c636f6e762d67656d6d2d6c322d62797465733d3532343238387c74756e696e672d70726f66696c653d737461626c657c74756e696e672d70726f66696c652d7265766973696f6e3d6e6f6e657c74756e696e672d7374617475733d737461626c657c74756e696e672d66616c6c6261636b2d726561736f6e3d7c6d61746d756c2d6d2d726f77733d347c6d61746d756c2d6163632d636f6c756d6e733d31367c6d61746d756c2d7061636b696e673d6175746f7c726f772d6368756e6b2d6c616e65733d387c6d61746d756c2d69382d726f77733d327c6d61746d756c2d69382d6163632d636f6c756d6e733d347c696e74382d6b65726e656c3d706f727461626c657c696e74382d7461726765743d706f727461626c657c696e74382d6465707468776973653d307c7061636b65642d636f6e762d6465707468776973653d307c696e74382d636173742d636861696e3d307c746872656164733d367c7461726765742d666561747572653d2b617678327c7461726765742d666561747572653d2b666d61",
+    "plan_hash": "2318370704922650889",
+    "target": "x86_64-pc-linux-gnu",
+    "threads": 6
+  },
+  "invocation_id": null,
+  "invocation_ids": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "kind": "ncnn.model_performance_attribution",
+  "mode": "end_to_end",
+  "model": "efficientnet_b3",
+  "performance": {
+    "compiled_mean_ms": 238.1547036,
+    "gate_eligible": false,
+    "ncnn_mean_ms": null,
+    "ratio": null,
+    "status": "diagnostic"
+  },
+  "plan_revision": "static-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v2",
+  "runtime": {
+    "allocation_coverage": {
+      "all_invocations_observed_count": 369,
+      "complete": true,
+      "missing_profile_ids": [],
+      "observed_count": 369,
+      "static_count": 369
+    },
+    "category_time_ns": {
+      "allocation": 446840,
+      "copy": 0,
+      "deallocation": 0,
+      "kernel": 21254696,
+      "materialized_read": 0,
+      "materialized_write": 0,
+      "parallel": 212832818
+    },
+    "complete": false,
+    "complete_all": false,
+    "copy_layout": {
+      "copy": {
+        "bytes": 4000,
+        "bytes_known": true,
+        "count": 1,
+        "status": "known"
+      },
+      "pack": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      },
+      "transpose": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      },
+      "unpack": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      }
+    },
+    "coverage": "explicit-callbacks",
+    "fusion_site_summary": {
+      "complete": true,
+      "invocation_count": 7,
+      "joined_count": 45,
+      "missing_count": 0,
+      "partial_count": 0,
+      "selected_count": 45
+    },
+    "fusion_sites": [
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 1425,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#30",
+        "inclusive_ns": 1288632,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1425,
+            "worst": 1639
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1288632,
+            "worst": 1523169
+          }
+        },
+        "profile_ids": [
+          8853660963019075901,
+          6039089094353712952
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 530,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#5",
+        "inclusive_ns": 1184613,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 530,
+            "worst": 599
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1184613,
+            "worst": 1318423
+          }
+        },
+        "profile_ids": [
+          8851822579577085559,
+          5429227088655306938
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 1273,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#24",
+        "inclusive_ns": 1182145,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1273,
+            "worst": 2566
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1182145,
+            "worst": 1559458
+          }
+        },
+        "profile_ids": [
+          8855618093716913031,
+          2005149867569928394
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 1106,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#26",
+        "inclusive_ns": 1180618,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1106,
+            "worst": 1442
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1180618,
+            "worst": 1436898
+          }
+        },
+        "profile_ids": [
+          8852812140042286234,
+          7282589044465803397
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 479,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#7",
+        "inclusive_ns": 1122622,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 479,
+            "worst": 1001
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1122622,
+            "worst": 1315409
+          }
+        },
+        "profile_ids": [
+          8851809385437547027,
+          3872690272365115910
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 1422,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#28",
+        "inclusive_ns": 1111933,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1422,
+            "worst": 2640
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1111933,
+            "worst": 1726778
+          }
+        },
+        "profile_ids": [
+          8852807741995773390,
+          4284608871750745097
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 302,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#2",
+        "inclusive_ns": 972239,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 302,
+            "worst": 375
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 972239,
+            "worst": 1088177
+          }
+        },
+        "profile_ids": [
+          2092022655575500748,
+          7824625920918560999
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 1020,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#19",
+        "inclusive_ns": 875204,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1020,
+            "worst": 1997
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 875204,
+            "worst": 938580
+          }
+        },
+        "profile_ids": [
+          8854619737158686668,
+          3518077222123991271
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 883,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#17",
+        "inclusive_ns": 830903,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 883,
+            "worst": 3114
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 830903,
+            "worst": 885417
+          }
+        },
+        "profile_ids": [
+          8854615339112173824,
+          1972411096135312347
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 1014,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#21",
+        "inclusive_ns": 785220,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1014,
+            "worst": 1467
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 785220,
+            "worst": 937413
+          }
+        },
+        "profile_ids": [
+          8855609297623887343,
+          7692972184185420626
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 860,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#15",
+        "inclusive_ns": 635414,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 860,
+            "worst": 971
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 635414,
+            "worst": 763659
+          }
+        },
+        "profile_ids": [
+          8849843458646684209,
+          194702560189490508
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 623,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#10",
+        "inclusive_ns": 559933,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 623,
+            "worst": 1120
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 559933,
+            "worst": 818602
+          }
+        },
+        "profile_ids": [
+          8848990237623381698,
+          4186577775506893485
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 571,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#12",
+        "inclusive_ns": 522547,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 571,
+            "worst": 689
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 522547,
+            "worst": 732211
+          }
+        },
+        "profile_ids": [
+          8849834662553658521,
+          8793667992574033876
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 1903,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#44",
+        "inclusive_ns": 248722,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1903,
+            "worst": 2543
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 248722,
+            "worst": 275232
+          }
+        },
+        "profile_ids": [
+          3915022987344992507
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 1049,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#33",
+        "inclusive_ns": 227182,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1049,
+            "worst": 2413
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 227182,
+            "worst": 233160
+          }
+        },
+        "profile_ids": [
+          8853652166926050213
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 1303,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#41",
+        "inclusive_ns": 216590,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1303,
+            "worst": 2808
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 216590,
+            "worst": 264152
+          }
+        },
+        "profile_ids": [
+          8859404811763714815
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 1112,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#37",
+        "inclusive_ns": 216333,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1112,
+            "worst": 5237
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 216333,
+            "worst": 236726
+          }
+        },
+        "profile_ids": [
+          8858437241531078360
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 1411,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#39",
+        "inclusive_ns": 211096,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1411,
+            "worst": 3548
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 211096,
+            "worst": 263854
+          }
+        },
+        "profile_ids": [
+          8859400413717201971
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 1139,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#35",
+        "inclusive_ns": 206728,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1139,
+            "worst": 4907
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 206728,
+            "worst": 229062
+          }
+        },
+        "profile_ids": [
+          8858441639577591204
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 825,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#43",
+        "inclusive_ns": 5124,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 825,
+            "worst": 2408
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 5124,
+            "worst": 11645
+          }
+        },
+        "profile_ids": [
+          3915024086856620718
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 723,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#32",
+        "inclusive_ns": 5018,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 723,
+            "worst": 734
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 5018,
+            "worst": 5594
+          }
+        },
+        "profile_ids": [
+          8853653266437678424
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 542,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#23",
+        "inclusive_ns": 2618,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 542,
+            "worst": 824
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 2618,
+            "worst": 5131
+          }
+        },
+        "profile_ids": [
+          8855605999089002710
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 803,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#42",
+        "inclusive_ns": 2183,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 803,
+            "worst": 2340
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 2183,
+            "worst": 6659
+          }
+        },
+        "profile_ids": [
+          8859405911275343026
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 788,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#40",
+        "inclusive_ns": 2156,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 788,
+            "worst": 2279
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 2156,
+            "worst": 6153
+          }
+        },
+        "profile_ids": [
+          8859401513228830182
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 757,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#38",
+        "inclusive_ns": 2081,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 757,
+            "worst": 774
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 2081,
+            "worst": 2223
+          }
+        },
+        "profile_ids": [
+          8858436142019450149
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 738,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#36",
+        "inclusive_ns": 2055,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 738,
+            "worst": 754
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 2055,
+            "worst": 2149
+          }
+        },
+        "profile_ids": [
+          8858440540065962993
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 716,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#34",
+        "inclusive_ns": 1995,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 716,
+            "worst": 725
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1995,
+            "worst": 2109
+          }
+        },
+        "profile_ids": [
+          8858444938112475837
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 667,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#31",
+        "inclusive_ns": 1695,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 667,
+            "worst": 672
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1695,
+            "worst": 1827
+          }
+        },
+        "profile_ids": [
+          8853657664484191268
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 639,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#29",
+        "inclusive_ns": 1681,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 639,
+            "worst": 653
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1681,
+            "worst": 1699
+          }
+        },
+        "profile_ids": [
+          8852802244437632335
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 602,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#27",
+        "inclusive_ns": 1578,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 602,
+            "worst": 608
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1578,
+            "worst": 1642
+          }
+        },
+        "profile_ids": [
+          8852806642484145179
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 548,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#25",
+        "inclusive_ns": 1474,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 548,
+            "worst": 571
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1474,
+            "worst": 1511
+          }
+        },
+        "profile_ids": [
+          8852811040530658023
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 368,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#14",
+        "inclusive_ns": 1322,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 368,
+            "worst": 376
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1322,
+            "worst": 2183
+          }
+        },
+        "profile_ids": [
+          8849835762065286732
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 294,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#9",
+        "inclusive_ns": 1027,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 294,
+            "worst": 300
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1027,
+            "worst": 1397
+          }
+        },
+        "profile_ids": [
+          8848989138111753487
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 225,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#3",
+        "inclusive_ns": 1007,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 225,
+            "worst": 288
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1007,
+            "worst": 1388
+          }
+        },
+        "profile_ids": [
+          2092030352156898225
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 472,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#22",
+        "inclusive_ns": 975,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 472,
+            "worst": 500
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 975,
+            "worst": 981
+          }
+        },
+        "profile_ids": [
+          8855610397135515554
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 430,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#20",
+        "inclusive_ns": 914,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 430,
+            "worst": 455
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 914,
+            "worst": 964
+          }
+        },
+        "profile_ids": [
+          8854627433740084145
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 421,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#18",
+        "inclusive_ns": 896,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 421,
+            "worst": 1245
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 896,
+            "worst": 2539
+          }
+        },
+        "profile_ids": [
+          8854623035693571301
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 426,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#0",
+        "inclusive_ns": 852,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 426,
+            "worst": 777
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 852,
+            "worst": 1714
+          }
+        },
+        "profile_ids": [
+          2092018257528987904
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 382,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#16",
+        "inclusive_ns": 838,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 382,
+            "worst": 392
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 838,
+            "worst": 877
+          }
+        },
+        "profile_ids": [
+          8854618637647058457
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 226,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#4",
+        "inclusive_ns": 812,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 226,
+            "worst": 244
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 812,
+            "worst": 1286
+          }
+        },
+        "profile_ids": [
+          8851819281042200926
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 352,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#13",
+        "inclusive_ns": 691,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 352,
+            "worst": 390
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 691,
+            "worst": 758
+          }
+        },
+        "profile_ids": [
+          8849831364018773888
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 237,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#1",
+        "inclusive_ns": 688,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 237,
+            "worst": 349
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 688,
+            "worst": 1356
+          }
+        },
+        "profile_ids": [
+          2092025954110385381
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 301,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#11",
+        "inclusive_ns": 634,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 301,
+            "worst": 319
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 634,
+            "worst": 735
+          }
+        },
+        "profile_ids": [
+          8848993536158266331
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 251,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#8",
+        "inclusive_ns": 620,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 251,
+            "worst": 266
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 620,
+            "worst": 691
+          }
+        },
+        "profile_ids": [
+          8848984740065240643
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": 225,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#6",
+        "inclusive_ns": 590,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 225,
+            "worst": 228
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 590,
+            "worst": 638
+          }
+        },
+        "profile_ids": [
+          8851823679088713770
+        ],
+        "runtime_consumed": true
+      }
+    ],
+    "incomplete_reasons": [
+      "runtime_exclusive_time_unknown"
+    ],
+    "invocation_count": 7,
+    "packed_kernel_summary": {
+      "call_count": 21,
+      "consumed_count": 21,
+      "joined_count": 21,
+      "packed_buffer_bytes": null,
+      "runtime_consumed": true,
+      "selected_count": 21
+    },
+    "packed_kernels": [
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#16",
+        "inclusive_ns": 206630,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13682869314447433359,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#196",
+        "inclusive_ns": 270987,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7256030994584593448,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#197",
+        "inclusive_ns": 426238,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7256032094096221659,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#203",
+        "inclusive_ns": 464286,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7781568965421982387,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#205",
+        "inclusive_ns": 269649,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7781575562491751653,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#23",
+        "inclusive_ns": 39476,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13683717037912594815,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#31",
+        "inclusive_ns": 31924,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13684708797401051912,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#60",
+        "inclusive_ns": 73461,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687649991005948662,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#61",
+        "inclusive_ns": 122348,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687651090517576873,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#66",
+        "inclusive_ns": 118669,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687652190029205084,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#68",
+        "inclusive_ns": 27311,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687658787098974350,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#70",
+        "inclusive_ns": 83697,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688501013005994751,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#75",
+        "inclusive_ns": 160602,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688495515447853696,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#77",
+        "inclusive_ns": 47621,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688497714471110118,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#79",
+        "inclusive_ns": 181009,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688508709587392228,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#84",
+        "inclusive_ns": 155173,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689497170540964692,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#86",
+        "inclusive_ns": 34599,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689499369564221114,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#88",
+        "inclusive_ns": 122627,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689483976401426160,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#93",
+        "inclusive_ns": 111876,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13690481233448024312,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#95",
+        "inclusive_ns": 49278,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13690487830517793578,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#97",
+        "inclusive_ns": 183329,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13690485631494537156,
+        "runtime_consumed": true
+      }
+    ],
+    "peak_live_proven": true,
+    "per_invocation": {
+      "category_time_ns": {
+        "allocation": {
+          "known_count": 7,
+          "median": 446840,
+          "worst": 1525653
+        },
+        "copy": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "deallocation": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "kernel": {
+          "known_count": 7,
+          "median": 21254696,
+          "worst": 25639769
+        },
+        "materialized_read": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "materialized_write": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "parallel": {
+          "known_count": 7,
+          "median": 212832818,
+          "worst": 223136415
+        }
+      },
+      "copy_layout": {
+        "copy": {
+          "bytes": {
+            "known_count": 7,
+            "median": 4000,
+            "worst": 4000
+          },
+          "bytes_known_count": 7,
+          "count": {
+            "known_count": 7,
+            "median": 1,
+            "worst": 1
+          }
+        },
+        "pack": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 7,
+            "median": 0,
+            "worst": 0
+          }
+        },
+        "transpose": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 7,
+            "median": 0,
+            "worst": 0
+          }
+        },
+        "unpack": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 7,
+            "median": 0,
+            "worst": 0
+          }
+        }
+      },
+      "expected_materialized_read_bytes": {
+        "known_count": 7,
+        "median": 163520,
+        "worst": 163520
+      },
+      "fusion_site_summary": {
+        "complete": true,
+        "invocation_count": 7,
+        "joined_count": 45,
+        "missing_count": 0,
+        "partial_count": 0,
+        "selected_count": 45
+      },
+      "peak_live_bytes": {
+        "known_count": 7,
+        "median": 208918416,
+        "worst": 208918416
+      },
+      "runtime_materialized_read_bytes": {
+        "known_count": 7,
+        "median": 163520,
+        "worst": 163520
+      },
+      "runtime_materialized_write_bytes": {
+        "known_count": 7,
+        "median": 163520,
+        "worst": 163520
+      },
+      "runtime_transpose_write_bytes": {
+        "known_count": 7,
+        "median": 0,
+        "worst": 0
+      },
+      "summary": {
+        "allocation_bytes": {
+          "known_count": 7,
+          "median": 356275280,
+          "worst": 356275280
+        },
+        "allocation_count": {
+          "known_count": 7,
+          "median": 218863,
+          "worst": 218863
+        },
+        "copy_bytes": {
+          "known_count": 7,
+          "median": 4000,
+          "worst": 4000
+        },
+        "copy_count": {
+          "known_count": 7,
+          "median": 1,
+          "worst": 1
+        },
+        "deallocation_bytes": {
+          "known_count": 7,
+          "median": 356275280,
+          "worst": 356275280
+        },
+        "deallocation_count": {
+          "known_count": 7,
+          "median": 218863,
+          "worst": 218863
+        },
+        "event_mismatch_count": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "expected_materialized_read_bytes": {
+          "known_count": 7,
+          "median": 163520,
+          "worst": 163520
+        },
+        "materialized_read_complete": {
+          "complete_count": 7,
+          "incomplete_count": 0,
+          "unknown_count": 0
+        },
+        "materialized_read_count": {
+          "known_count": 7,
+          "median": 79,
+          "worst": 79
+        },
+        "materialized_write_count": {
+          "known_count": 7,
+          "median": 79,
+          "worst": 79
+        },
+        "pack_bytes": {
+          "known_count": 0,
+          "median": null,
+          "worst": null
+        },
+        "pack_count": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "parallel_region_count": {
+          "known_count": 7,
+          "median": 374,
+          "worst": 374
+        },
+        "peak_live_bytes": {
+          "known_count": 7,
+          "median": 208918416,
+          "worst": 208918416
+        },
+        "runtime_materialized_read_bytes": {
+          "known_count": 7,
+          "median": 163520,
+          "worst": 163520
+        },
+        "runtime_materialized_write_bytes": {
+          "known_count": 7,
+          "median": 163520,
+          "worst": 163520
+        },
+        "runtime_transpose_write_bytes": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "top_level_time_ns": {
+          "known_count": 7,
+          "median": 231758876,
+          "worst": 250301837
+        },
+        "transpose_count": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "unpack_bytes": {
+          "known_count": 0,
+          "median": null,
+          "worst": null
+        },
+        "unpack_count": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        }
+      },
+      "top_level_time_ns": {
+        "known_count": 7,
+        "median": 231758876,
+        "worst": 250301837
+      },
+      "unattributed_event_count": {
+        "known_count": 7,
+        "median": 0,
+        "worst": 0
+      },
+      "unattributed_time_ns": {
+        "known_count": 7,
+        "median": 0,
+        "worst": 0
+      },
+      "unknown_time_ns": {
+        "known_count": 7,
+        "median": 212832818,
+        "worst": 223136415
+      }
+    },
+    "summary": {
+      "allocation_bytes": 356275280,
+      "allocation_bytes_known": true,
+      "allocation_count": null,
+      "copy_bytes": 4000,
+      "copy_bytes_known": true,
+      "copy_count": null,
+      "deallocation_bytes": 356275280,
+      "deallocation_bytes_known": true,
+      "deallocation_count": null,
+      "event_mismatch_count": null,
+      "expected_materialized_read_bytes": 163520,
+      "expected_materialized_read_bytes_known": true,
+      "materialized_read_bytes_known": true,
+      "materialized_read_complete": true,
+      "materialized_read_count": null,
+      "materialized_write_bytes_known": true,
+      "materialized_write_count": null,
+      "pack_bytes": null,
+      "pack_bytes_known": false,
+      "pack_count": null,
+      "parallel_region_count": null,
+      "peak_live_bytes": 208918416,
+      "peak_live_proven": true,
+      "runtime_materialized_read_bytes": 163520,
+      "runtime_materialized_write_bytes": 163520,
+      "runtime_transpose_write_bytes": 0,
+      "runtime_transpose_write_bytes_known": true,
+      "top_level_time_known": true,
+      "top_level_time_ns": 231758876,
+      "transpose_count": null,
+      "unpack_bytes": null,
+      "unpack_bytes_known": false,
+      "unpack_count": null
+    },
+    "top_fusion_sites": [
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 1425,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#30",
+        "inclusive_ns": 1288632,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1425,
+            "worst": 1639
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1288632,
+            "worst": 1523169
+          }
+        },
+        "profile_ids": [
+          8853660963019075901,
+          6039089094353712952
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 530,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#5",
+        "inclusive_ns": 1184613,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 530,
+            "worst": 599
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1184613,
+            "worst": 1318423
+          }
+        },
+        "profile_ids": [
+          8851822579577085559,
+          5429227088655306938
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 1273,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#24",
+        "inclusive_ns": 1182145,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1273,
+            "worst": 2566
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1182145,
+            "worst": 1559458
+          }
+        },
+        "profile_ids": [
+          8855618093716913031,
+          2005149867569928394
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 1106,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#26",
+        "inclusive_ns": 1180618,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 1106,
+            "worst": 1442
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1180618,
+            "worst": 1436898
+          }
+        },
+        "profile_ids": [
+          8852812140042286234,
+          7282589044465803397
+        ],
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 2,
+        "event_join_status": "joined",
+        "exclusive_ns": 479,
+        "function": "model",
+        "fusion_kind": "conv2d_epilogue",
+        "id": "fusion/model/conv2d_epilogue#7",
+        "inclusive_ns": 1122622,
+        "invocation_count": 7,
+        "joined_invocation_count": 7,
+        "per_invocation": {
+          "call_count": {
+            "known_count": 7,
+            "median": 2,
+            "worst": 2
+          },
+          "exclusive_ns": {
+            "known_count": 7,
+            "median": 479,
+            "worst": 1001
+          },
+          "inclusive_ns": {
+            "known_count": 7,
+            "median": 1122622,
+            "worst": 1315409
+          }
+        },
+        "profile_ids": [
+          8851809385437547027,
+          3872690272365115910
+        ],
+        "runtime_consumed": true
+      }
+    ],
+    "unattributed_event_count": 0,
+    "unattributed_time_ns": 0,
+    "unknown_time_ns": 212832818,
+    "workspace_coverage": {
+      "all_invocations_joined_count": 0,
+      "complete": true,
+      "joined_count": 0,
+      "static_count": 0
+    }
+  },
+  "schema_version": 1,
+  "static": {
+    "conv_depthwise": {
+      "conv": {
+        "fallback_reasons": {},
+        "implementations": {
+          "gemm": 117
+        },
+        "operation_count": 117,
+        "runtime_time_ns": null,
+        "source_layers": []
+      },
+      "depthwise": {
+        "fallback_reasons": {},
+        "implementations": {
+          "depthwise_simd": 26
+        },
+        "operation_count": 26,
+        "runtime_time_ns": null,
+        "source_layers": []
+      }
+    },
+    "low_precision": {
+      "capability": "portable",
+      "cast_chain_enabled": false,
+      "depthwise_enabled": false,
+      "operations": [],
+      "requested_policy": "portable",
+      "requested_policy_fallback_reason": null,
+      "requested_policy_status": "selected",
+      "revision": "int8-target-v1",
+      "tuning_profile": "stable",
+      "tuning_profile_revision": "none"
+    },
+    "summary": {
+      "allocation_count": 369,
+      "attention_fallback_count": 0,
+      "attention_revision": "attention-segment-v1",
+      "attention_segment_count": 0,
+      "attention_selected_count": 0,
+      "attention_unknown_count": 0,
+      "attribution_revision": "attribution-v2",
+      "batch_matmul_count": 0,
+      "conv_depthwise": {
+        "conv_fallback_count": 0,
+        "conv_fallback_reasons": {},
+        "conv_implementations": {
+          "gemm": 117
+        },
+        "conv_operation_count": 117,
+        "conv_unknown_count": 0,
+        "depthwise_fallback_count": 0,
+        "depthwise_fallback_reasons": {},
+        "depthwise_implementations": {
+          "depthwise_simd": 26
+        },
+        "depthwise_operation_count": 26,
+        "depthwise_unknown_count": 0
+      },
+      "copy_contract_count": 35,
+      "copy_contract_status": "collected",
+      "copy_count": 0,
+      "copy_eliminated_count": 0,
+      "copy_fallback_count": 30,
+      "copy_fused_count": null,
+      "copy_vectorized_count": 5,
+      "deallocation_count": 369,
+      "dynamic_buffer_count": 7,
+      "fusion_contract_count": 45,
+      "fusion_enabled": true,
+      "fusion_rejected_count": 59,
+      "fusion_rejection_reasons": "multi_consumer=7,repeated_producer_input=51,unsupported_consumer=1",
+      "fusion_residual_count": 19,
+      "fusion_selected_count": 45,
+      "kernel_contract_count": 258,
+      "kernel_contract_fallback_count": 45,
+      "layout_island_count": 0,
+      "layout_island_rejected_count": 0,
+      "layout_island_selected_count": 0,
+      "layout_pack4_count": 0,
+      "layout_pack8_count": 0,
+      "matmul_count": 15,
+      "nested_openmp_count": 0,
+      "packed_buffer_bytes": null,
+      "packed_constant_bytes": 13744128,
+      "packed_constant_bytes_known": true,
+      "packed_constant_count": 17,
+      "packed_constant_status": "known",
+      "packed_conv_depthwise": false,
+      "parallel_region_count": 374,
+      "peak_workspace_bytes": null,
+      "peak_workspace_proven": false,
+      "static_buffer_bytes": 214941040,
+      "static_copy_bytes": 4428256,
+      "static_copy_bytes_known": true,
+      "static_copy_count": 35,
+      "static_copy_status": "known",
+      "static_pack_bytes": 13744128,
+      "static_pack_bytes_known": true,
+      "static_pack_count": 36,
+      "static_pack_status": "known",
+      "static_transpose_bytes": null,
+      "static_transpose_bytes_known": false,
+      "static_transpose_count": 0,
+      "static_transpose_status": "not_applicable",
+      "static_unpack_bytes": null,
+      "static_unpack_bytes_known": false,
+      "static_unpack_count": 0,
+      "static_unpack_status": "not_applicable",
+      "transpose_count": 0,
+      "vector_fma_count": 578,
+      "workspace_fallback_count": 369,
+      "workspace_reused_allocation_count": 0,
+      "workspace_slot_bytes": 0,
+      "workspace_slot_bytes_known": true,
+      "workspace_slot_count": 0
+    },
+    "unknown_fields": [
+      "runtime_counters_not_collected",
+      "buffer_liveness_unknown",
+      "peak_workspace_control_flow_unknown",
+      "peak_workspace_liveness_unknown",
+      "packed_buffer_bytes_unknown",
+      "peak_workspace_not_proven",
+      "runtime_exclusive_time_unknown"
+    ]
+  },
+  "top_allocations": [
+    {
+      "function": "model",
+      "id": 9643047858146419032,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#41",
+      "runtime_bytes": 13483584,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 13483584,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9644033020565106863,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#39",
+      "runtime_bytes": 12960000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 12960000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9644031921053478652,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#38",
+      "runtime_bytes": 12960000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 12960000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9653604269286791368,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#92",
+      "runtime_bytes": 4793088,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4793088,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9642191338588231888,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#56",
+      "runtime_bytes": 4553472,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4553472,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9640223212774112648,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#78",
+      "runtime_bytes": 4553472,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4553472,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9654598227798504887,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#80",
+      "runtime_bytes": 4320000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4320000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9642207831262655053,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#59",
+      "runtime_bytes": 4320000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4320000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9642196836146372943,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#53",
+      "runtime_bytes": 4320000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4320000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9642193537611488310,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#54",
+      "runtime_bytes": 4320000,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 4320000,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    }
+  ],
+  "top_costs": [
+    {
+      "attributed_ns": 18682756,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682864916400920515,
+      "inclusive_ns": 18682756,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#12",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.08061290390448735
+    },
+    {
+      "attributed_ns": 13671671,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694734178080894185,
+      "inclusive_ns": 13671671,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#3",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.058990927277365636
+    },
+    {
+      "attributed_ns": 12737056,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694733078569265974,
+      "inclusive_ns": 12737056,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#2",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.05495822304557604
+    },
+    {
+      "attributed_ns": 12334783,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694731979057637763,
+      "inclusive_ns": 12334783,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#1",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.053222483698963055
+    },
+    {
+      "attributed_ns": 9145244,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694737476615778818,
+      "inclusive_ns": 9145244,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#6",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.039460167212754346
+    },
+    {
+      "attributed_ns": 7426524,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13684714294959192967,
+      "inclusive_ns": 7426524,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#34",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.03204418371445675
+    },
+    {
+      "attributed_ns": 7323538,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694738576127407029,
+      "inclusive_ns": 7323538,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#7",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.031599816699145536
+    },
+    {
+      "attributed_ns": 7291461,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13683712639866081971,
+      "inclusive_ns": 7291461,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#27",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.031461409918125426
+    },
+    {
+      "attributed_ns": 7119405,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13683726933517248714,
+      "inclusive_ns": 7119405,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#28",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.030719017639695492
+    },
+    {
+      "attributed_ns": 7032055,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13683711540354453760,
+      "inclusive_ns": 7032055,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#26",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.030342117296081467
+    },
+    {
+      "attributed_ns": 5887361,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13683718137424223026,
+      "inclusive_ns": 5887361,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#20",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.02540295802953411
+    },
+    {
+      "attributed_ns": 5351146,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682874812005574414,
+      "inclusive_ns": 5351146,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#19",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.02308928181028976
+    },
+    {
+      "attributed_ns": 5023806,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682875911517202625,
+      "inclusive_ns": 5023806,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#18",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.02167686557126727
+    },
+    {
+      "attributed_ns": 4912978,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682863816889292304,
+      "inclusive_ns": 4912978,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#13",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.0211986616642031
+    },
+    {
+      "attributed_ns": 4751976,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682871513470689781,
+      "inclusive_ns": 4751976,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#14",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.02050396550939434
+    },
+    {
+      "attributed_ns": 2611610.0,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13686686818819825051,
+      "inclusive_ns": 2611610.0,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#56",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.011268651475510262
+    },
+    {
+      "attributed_ns": 2540666.5,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13686693415889594317,
+      "inclusive_ns": 2540666.5,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#50",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.010962542379606638
+    },
+    {
+      "attributed_ns": 2538521,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "kernel",
+      "exclusive_ns": 2538521,
+      "id": 13136411074785292016,
+      "inclusive_ns": 231758876,
+      "kind": "func.func",
+      "operation": "model/func.func#0",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "exclusive",
+      "time_fraction": 0.01095328491323888
+    },
+    {
+      "attributed_ns": 2478122.0,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13685692860308111532,
+      "inclusive_ns": 2478122.0,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#48",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.010692673535403235
+    },
+    {
+      "attributed_ns": 2415754,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "kernel",
+      "exclusive_ns": 2415754,
+      "id": 15521646095518164034,
+      "inclusive_ns": 2415754,
+      "kind": "linalg.map",
+      "operation": "model/linalg.map#3",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "exclusive",
+      "time_fraction": 0.010423566258579887
+    }
+  ]
+}

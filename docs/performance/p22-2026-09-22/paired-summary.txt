@@ -1,0 +1,52 @@
+P22 paired 6-thread summary
+runs=10 rounds=5 rows_per_run=45 warmup=10 iterations=20
+official_44: models=44 baseline_ratio_p50=1.882 candidate_ratio_p50=2.010 compiled_delta_median_percent=+1.34% candidate_faster_models=11
+all_45: models=45 baseline_ratio_p50=1.886 candidate_ratio_p50=2.032 compiled_delta_median_percent=+1.28% candidate_faster_models=12
+heavy_models_ncnn_baseline_ge_100ms: models=11 baseline_ratio_p50=1.765 candidate_ratio_p50=1.781 compiled_delta_median_percent=+0.37% candidate_faster_models=2
+
+model                                     base_ms    cand_ms    delta%   base_r   cand_r faster
+yolov5n_cls                                  7.90       6.74    -14.61    2.363    2.192  4/5
+pp_lcnet_x1_0_doc_ori                        6.84       5.90    -13.67    2.224    2.390  2/5
+resnet18                                    26.08      24.25     -7.03    2.446    2.330  3/5
+pp_ocrv6_tiny_rec                            7.39       6.89     -6.82    2.619    2.824  4/5
+yolov5m                                    218.67     209.11     -4.37    1.456    1.409  5/5
+pp_ocrv6_small_rec_int8                     34.35      33.38     -2.83    4.149    4.087  2/5
+resnet34                                    39.21      38.84     -0.96    2.058    2.135  3/5
+pp_ocrv6_medium_det                        534.48     532.12     -0.44    1.502    1.499  3/5
+resnet50                                    45.87      45.70     -0.38    1.778    1.752  3/5
+pp_ocrv6_tiny_det                           92.54      92.28     -0.28    2.036    2.032  2/5
+resnet18_winograd                           50.31      50.26     -0.10    4.906    4.852  4/5
+efficientnet_b2                             43.05      43.02     -0.06    2.390    2.442  2/5
+pp_ocrv5_server_det_static                9322.90    9329.01      0.07    2.102    2.100  3/5
+pp_ocrv5_server_rec                       7971.69    7989.64      0.23   18.042   18.080  1/5
+pp_ocrv6_small_det                         151.90     152.35      0.30    1.878    1.867  2/5
+yolov5s_seg                                147.75     148.28      0.35    1.320    1.307  1/5
+pp_ocrv5_mobile_det_static                 109.03     109.43      0.37    1.079    1.081  3/5
+yolov5s                                     93.78      94.24      0.49    1.182    1.180  2/5
+efficientnet_b3                             67.34      67.73      0.59    2.274    2.125  2/5
+pp_ocrv6_medium_rec_int8                    88.57      89.11      0.62    4.379    4.933  1/5
+yolov5x                                    780.72     786.99      0.80    1.780    1.804  0/5
+yolov5n_seg                                 76.28      77.24      1.26    1.323    1.364  1/5
+squeezenet_v1_1                             11.45      11.60      1.28    2.560    2.418  2/5
+yolov5l_seg                                652.93     662.08      1.40    1.886    1.908  1/5
+yolov5x_seg                                956.64     971.24      1.53    1.765    1.781  0/5
+yolov5x_cls                                 79.01      80.29      1.62    1.856    1.876  2/5
+yolov5l_cls                                 52.11      53.15      1.99    2.133    1.987  2/5
+yolov5n                                     50.87      52.08      2.37    1.227    1.223  2/5
+resnet101                                   67.49      69.12      2.41    1.532    1.612  1/5
+yolov5l                                    480.38     492.96      2.62    1.769    1.816  0/5
+efficientnet_b1                             31.18      32.02      2.71    2.073    2.123  2/5
+yolov5s_cls                                 11.84      12.19      3.02    1.809    2.033  2/5
+yolov5m_seg                                298.35     307.46      3.05    1.470    1.528  0/5
+pp_ocrv6_small_rec                          28.05      29.11      3.78    2.442    2.688  2/5
+pp_ocrv6_medium_det_int8                     6.34       6.60      4.23    2.005    1.860  3/5
+chineseocr_lite_anglenet                     2.22       2.33      4.68    2.957    2.980  1/5
+pp_ocrv5_mobile_rec                         25.57      26.79      4.77    1.239    1.295  2/5
+pp_ocrv6_medium_rec                         74.24      78.19      5.32    2.157    2.248  1/5
+pp_structrurev2_slanet_plus_cnn             59.77      63.08      5.54    1.665    1.717  1/5
+yolov5m_cls                                 24.39      25.75      5.61    1.788    2.084  2/5
+pp_ocrv5_mobile_rec_int8                    30.96      32.98      6.53    1.610    1.666  1/5
+pp_lcnet_x1_0_textline_ori                   5.95       6.43      8.00    1.756    1.774  1/5
+pp_ocrv6_tiny_rec_int8                       9.24      10.02      8.50    3.940    3.448  2/5
+pp_formulanet_plus_s_encoder               324.01     384.92     18.80    6.772    8.195  1/5
+efficientnet_b0                             16.18      22.04     36.24    1.810    2.662  0/5

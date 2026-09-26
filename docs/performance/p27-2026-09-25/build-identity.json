@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-25",
+  "compiler_repository": {
+    "path": "/mnt/ncnn-compiler/compiler",
+    "head": "233a2ca",
+    "branch": "p8-implementation",
+    "tracked_source_changes": true,
+    "preexisting_untracked_evidence_preserved": [
+      "docs/performance/p22-2026-09-22/",
+      "docs/performance/p22-2026-09-23/",
+      "docs/performance/p24-2026-09-25/",
+      "docs/performance/p25-2026-09-25/"
+    ]
+  },
+  "ncnn_reference": {
+    "repository": "compiler/test/third_party/ncnn",
+    "revision": "a4d2ea1d4422c9e849f166fd7a4aefb52f942f6a"
+  },
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i5-12600KF",
+    "online_logical_cpus": 16,
+    "kernel": "Linux 7.2.6-zen2-1-zen",
+    "common_effective_cpu_list": "0-11",
+    "process_task_affinity_verification": "all observed tasks matched the common mask"
+  },
+  "toolchain": {
+    "cmake": "3.31.6",
+    "c_compiler": "GNU 14.2.0",
+    "cxx_compiler": "GNU 14.2.0",
+    "clang": "21.1.8",
+    "clang_format": "21.1.8",
+    "clang_tidy": "21.1.8",
+    "llvm_mlir": "21.1.8",
+    "gtest": "1.15.0"
+  },
+  "cmake_configuration": {
+    "build_directory": "/tmp/ncnn-compiler-stage-p27-20260925-01",
+    "build_type": "Release",
+    "llvm_dir": "/usr/lib/llvm-21/lib/cmake/llvm",
+    "export_compile_commands": true,
+    "build_testing": true,
+    "format_targets": true,
+    "install_rpath": true,
+    "build_parallelism": 8
+  },
+  "benchmark_runtimes": {
+    "ncnn_test_runtime": "libgomp.so.1",
+    "compiled_model_runtime": "libomp.so.5",
+    "thread_count": 6,
+    "placement_policy": "process restricted to ncnn big-core mask; OMP_PROC_BIND=FALSE; observed process task masks verified"
+  },
+  "official_profile_off_measurement": {
+    "mode": "end_to_end",
+    "warmup": 10,
+    "iterations": 20,
+    "profile_instrumentation": false,
+    "backend_order": "counterbalanced within each warmup/timed pair; actual order recorded per row",
+    "boundary": "ncnn creates extractor/input Mats and binds/extracts/flattens each call; compiled DSO and buffers are prepared before timing and call the exported function directly",
+    "measured_rows": 45,
+    "official_rows": 44,
+    "diagnostic_model": "resnet18_winograd",
+    "known_upstream_skips": [
+      "PerformanceModel.PPLCNetDocOriInt8",
+      "PerformanceModel.PPLCNetTextlineOriInt8"
+    ]
+  },
+  "engineering_gates": {
+    "format_check": "passed",
+    "tidy": "passed",
+    "full_release_build": "passed",
+    "numerical_targets": [
+      "numerical_tests",
+      "numerical_dynamic_operator_tests",
+      "numerical_dynamic_tests"
+    ],
+    "full_ctest": "451 registered; 449 passed, 0 failed, 2 known upstream INT8 reference skips"
+  },
+  "evidence": {
+    "full_raw_ndjson": "raw-all-model-ncnn-comparison.ndjson",
+    "full_final_json": "final-all-model-ncnn-comparison.json",
+    "official_summary": "official-summary.txt",
+    "cohort_run": "cohort-run-04/cohort-summary.json",
+    "attribution_revision": "attribution-v3",
+    "profile_schema": 3
+  }
+}

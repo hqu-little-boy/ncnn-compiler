@@ -1,0 +1,25 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-stage-p27-20260925-01
+Test project /tmp/ncnn-compiler-stage-p27-20260925-01
+    Start 417: PerformanceModel.Yolov5xDet
+1/8 Test #417: PerformanceModel.Yolov5xDet ...............   Passed   12.49 sec
+    Start 424: PerformanceModel.ChineseOCRLiteAngleNet
+2/8 Test #424: PerformanceModel.ChineseOCRLiteAngleNet ...   Passed    0.06 sec
+    Start 429: PerformanceModel.Yolov5xSeg
+3/8 Test #429: PerformanceModel.Yolov5xSeg ...............   Passed   13.25 sec
+    Start 432: PerformanceModel.PPOcrv6TinyRec
+4/8 Test #432: PerformanceModel.PPOcrv6TinyRec ...........   Passed    0.11 sec
+    Start 433: PerformanceModel.PPOcrv6TinyRecInt8
+5/8 Test #433: PerformanceModel.PPOcrv6TinyRecInt8 .......   Passed    0.12 sec
+    Start 435: PerformanceModel.PPOcrv5MobileRecInt8
+6/8 Test #435: PerformanceModel.PPOcrv5MobileRecInt8 .....   Passed    0.47 sec
+    Start 438: PerformanceModel.PPOcrv6MediumRecInt8
+7/8 Test #438: PerformanceModel.PPOcrv6MediumRecInt8 .....   Passed    1.06 sec
+    Start 440: PerformanceModel.PPOcrv6SmallRecInt8
+8/8 Test #440: PerformanceModel.PPOcrv6SmallRecInt8 ......   Passed    0.44 sec
+
+100% tests passed, 0 tests failed out of 8
+
+Label Time Summary:
+performance    =  28.00 sec*proc (8 tests)
+
+Total Test time (real) =  28.01 sec

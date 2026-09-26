@@ -1,0 +1,17 @@
+# P22 formal benchmark configuration.
+# Baseline is the clean pre-P22 a5c3c57 source; candidate is the working P22 source.
+# Both stages are Release, LLVM 21, INSTALL_RPATH=ON, and NCNN_PACKED_CONV_DEPTHWISE=OFF.
+# Each stage must build performance_tests and compile_resnet18_winograd first.
+BASELINE_STAGE=/tmp/ncnn-compiler-stage-p22-baseline-20260922-a
+CANDIDATE_STAGE=/tmp/ncnn-compiler-stage-p22-gate-20260922-a
+EVIDENCE=/mnt/ncnn-compiler/compiler/docs/performance/p22-2026-09-22
+
+# Run paired rounds in this order: B,C / C,B / B,C / C,B / B,C.
+# Use unique empty NDJSON paths and retain each CTest log.
+NCNN_PERF_THREADS=6 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 NCNN_PERF_MAX_RATIO=0 NCNN_PERF_MODE=end_to_end NCNN_PERF_JSON=${EVIDENCE}/round-N-baseline.ndjson ctest --test-dir ${BASELINE_STAGE} -R '^PerformanceModel\\.' --output-on-failure 2>&1 | tee ${EVIDENCE}/round-N-baseline.ctest.log
+NCNN_PERF_THREADS=6 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 NCNN_PERF_MAX_RATIO=0 NCNN_PERF_MODE=end_to_end NCNN_PERF_JSON=${EVIDENCE}/round-N-candidate.ndjson ctest --test-dir ${CANDIDATE_STAGE} -R '^PerformanceModel\\.' --output-on-failure 2>&1 | tee ${EVIDENCE}/round-N-candidate.ctest.log
+
+# Validate official (44-row) and all-measured (45-row) final candidate views.
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py ${EVIDENCE}/round-5-candidate.ndjson --official-only
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py ${EVIDENCE}/round-5-candidate.ndjson
+python3 /tmp/p22-aggregate.py ${EVIDENCE}

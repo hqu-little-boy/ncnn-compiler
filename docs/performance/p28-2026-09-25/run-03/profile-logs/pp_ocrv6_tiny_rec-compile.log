@@ -1,0 +1,21 @@
+/tmp/ncnn-compile-04b766/libmvec_probe.c:8:11: warning: AVX vector argument of type 'vsf' (vector of 8 'float' values) without 'avx' enabled changes the ABI [-Wpsabi]
+    8 |   vsf r = _ZGVdN8v_expf(x);
+      |           ^
+/tmp/ncnn-compile-04b766/libmvec_probe.c:9:8: warning: AVX vector argument of type 'vsf' (vector of 8 'float' values) without 'avx' enabled changes the ABI [-Wpsabi]
+    9 |   r += _ZGVdN8v_tanhf(x);
+      |        ^
+/tmp/ncnn-compile-04b766/libmvec_probe.c:10:8: warning: AVX vector argument of type 'vsf' (vector of 8 'float' values) without 'avx' enabled changes the ABI [-Wpsabi]
+   10 |   r += _ZGVdN8v_erff(x);
+      |        ^
+/tmp/ncnn-compile-04b766/libmvec_probe.c:11:8: warning: AVX vector argument of type 'vsf' (vector of 8 'float' values) without 'avx' enabled changes the ABI [-Wpsabi]
+   11 |   r += _ZGVdN8v_logf(x);
+      |        ^
+/tmp/ncnn-compile-04b766/libmvec_probe.c:12:8: warning: AVX vector argument of type 'vsf' (vector of 8 'float' values) without 'avx' enabled changes the ABI [-Wpsabi]
+   12 |   r += _ZGVdN8vv_powf(x, x);
+      |        ^
+5 warnings generated.
+warning: overriding the module target triple with x86_64-pc-linux-gnu [-Woverride-module]
+1 warning generated.
+warning: overriding the module target triple with x86_64-pc-linux-gnu [-Woverride-module]
+1 warning generated.
+/mnt/ncnn-compiler/compiler/docs/performance/p28-2026-09-25/run-03/profile-on/pp_ocrv6_tiny_rec

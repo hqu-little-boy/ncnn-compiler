@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "stage": "P25 profile-driven qualification",
+  "decision": "no-go; no production specialization selected or implemented",
+  "decision_reason": "All seven current target profiles report runtime_exclusive_time_unknown. Their OpenMP scf.forall/scf.parallel kernel events have inclusive durations but no exclusive duration, so the P18 \u00a712.2 percentage thresholds cannot be established. Inclusive nested timings are not substituted for exclusive time.",
+  "profile_collection": {
+    "mode": "end_to_end diagnostic",
+    "threads": 6,
+    "warmups": 2,
+    "timed_invocations": 5,
+    "input": "all-zero diagnostic input",
+    "profile_instrumentation": true,
+    "profile_timing_is_formal": false,
+    "models": [
+      {
+        "model": "efficientnet_b3",
+        "threads": 6,
+        "profile_invocations": 7,
+        "schema2_profiles_complete": true,
+        "attribution_complete": false,
+        "incomplete_reasons": [
+          "runtime_exclusive_time_unknown"
+        ],
+        "top_level_time_ms": 231.758876,
+        "unknown_exclusive_time_ms": 212.832818,
+        "unknown_exclusive_time_percent": 91.83372894853011,
+        "top_profile_sites": [
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 18.682756,
+            "time_fraction": 0.08061290390448735
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 13.671671,
+            "time_fraction": 0.058990927277365636
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 12.737056,
+            "time_fraction": 0.05495822304557604
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 12.334783,
+            "time_fraction": 0.053222483698963055
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 9.145244,
+            "time_fraction": 0.039460167212754346
+          }
+        ]
+      },
+      {
+        "model": "pp_ocrv6_medium_det",
+        "threads": 6,
+        "profile_invocations": 7,
+        "schema2_profiles_complete": true,
+        "attribution_complete": false,
+        "incomplete_reasons": [
+          "runtime_exclusive_time_unknown"
+        ],
+        "top_level_time_ms": 935.981556,
+        "unknown_exclusive_time_ms": 749.551239,
+        "unknown_exclusive_time_percent": 80.08183859981959,
+        "top_profile_sites": [
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 38.519315,
+            "time_fraction": 0.0411539252596127
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 37.168412,
+            "time_fraction": 0.03971062438328646
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 36.134292,
+            "time_fraction": 0.038605773552230126
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 35.575591,
+            "time_fraction": 0.03800885901217481
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 34.368262,
+            "time_fraction": 0.03671895218413898
+          }
+        ]
+      },
+      {
+        "model": "yolov5l",
+        "threads": 6,
+        "profile_invocations": 7,
+        "schema2_profiles_complete": true,
+        "attribution_complete": false,
+        "incomplete_reasons": [
+          "runtime_exclusive_time_unknown"
+        ],
+        "top_level_time_ms": 1061.36244,
+        "unknown_exclusive_time_ms": 1011.80781,
+        "unknown_exclusive_time_percent": 95.33103602196437,
+        "top_profile_sites": [
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 44.178756,
+            "time_fraction": 0.04162457077339198
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 30.999278,
+            "time_fraction": 0.0292070614445335
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 27.681007,
+            "time_fraction": 0.02608063556498193
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 20.969891,
+            "time_fraction": 0.019757521285565748
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 20.525567,
+            "time_fraction": 0.019338885781562044
+          }
+        ]
+      },
+      {
+        "model": "yolov5l_seg",
+        "threads": 6,
+        "profile_invocations": 7,
+        "schema2_profiles_complete": true,
+        "attribution_complete": false,
+        "incomplete_reasons": [
+          "runtime_exclusive_time_unknown"
+        ],
+        "top_level_time_ms": 1361.716584,
+        "unknown_exclusive_time_ms": 1287.743163,
+        "unknown_exclusive_time_percent": 94.56763456734107,
+        "top_profile_sites": [
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 84.222084,
+            "time_fraction": 0.061849936315382346
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 59.858536,
+            "time_fraction": 0.043958145698840954
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 46.490097,
+            "time_fraction": 0.03414080253281251
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 31.565368,
+            "time_fraction": 0.023180571031365216
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 30.73222,
+            "time_fraction": 0.02256873446435165
+          }
+        ]
+      },
+      {
+        "model": "yolov5m_seg",
+        "threads": 6,
+        "profile_invocations": 7,
+        "schema2_profiles_complete": true,
+        "attribution_complete": false,
+        "incomplete_reasons": [
+          "runtime_exclusive_time_unknown"
+        ],
+        "top_level_time_ms": 821.348401,
+        "unknown_exclusive_time_ms": 772.928323,
+        "unknown_exclusive_time_percent": 94.10480644498143,
+        "top_profile_sites": [
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 45.892769,
+            "time_fraction": 0.055874911236358515
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 35.956818,
+            "time_fraction": 0.043777790224248575
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 30.589232,
+            "time_fraction": 0.03724269988564816
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 26.523811,
+            "time_fraction": 0.032293008627894075
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 22.666552,
+            "time_fraction": 0.027596756714207082
+          }
+        ]
+      },
+      {
+        "model": "yolov5x",
+        "threads": 6,
+        "profile_invocations": 7,
+        "schema2_profiles_complete": true,
+        "attribution_complete": false,
+        "incomplete_reasons": [
+          "runtime_exclusive_time_unknown"
+        ],
+        "top_level_time_ms": 1543.011314,
+        "unknown_exclusive_time_ms": 1472.77972,
+        "unknown_exclusive_time_percent": 95.44840706203662,
+        "top_profile_sites": [
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 51.133929,
+            "time_fraction": 0.03313904994477571
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 40.207934,
+            "time_fraction": 0.026058094088608867
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 31.777685,
+            "time_fraction": 0.02059458975554861
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 25.162176,
+            "time_fraction": 0.016307188269910507
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 22.399838,
+            "time_fraction": 0.014516962900247406
+          }
+        ]
+      },
+      {
+        "model": "yolov5x_seg",
+        "threads": 6,
+        "profile_invocations": 7,
+        "schema2_profiles_complete": true,
+        "attribution_complete": false,
+        "incomplete_reasons": [
+          "runtime_exclusive_time_unknown"
+        ],
+        "top_level_time_ms": 1848.792191,
+        "unknown_exclusive_time_ms": 1758.276631,
+        "unknown_exclusive_time_percent": 95.10407062293785,
+        "top_profile_sites": [
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 78.040966,
+            "time_fraction": 0.04221186479470585
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 48.63617,
+            "time_fraction": 0.02630699666342327
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 43.2913,
+            "time_fraction": 0.023415990293957273
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 39.29055,
+            "time_fraction": 0.02125200992911377
+          },
+          {
+            "kind": "scf.forall",
+            "time_basis": "inclusive_unknown_exclusive",
+            "attributed_ms": 31.330846,
+            "time_fraction": 0.016946656391410516
+          }
+        ]
+      }
+    ]
+  },
+  "single_thread_followup": {
+    "attempted_model": "yolov5x_seg",
+    "threads": 1,
+    "status": "compile_failed_before_runtime_profile",
+    "reason": "'scf.parallel' op remains after parallel lowering",
+    "log": "profile-logs/yolov5x-seg-1t-compile.log"
+  },
+  "official_baseline_vs_ncnn": {
+    "models": 44,
+    "ratio_p50": 1.803,
+    "ratio_p90": 2.862000000000001,
+    "ratio_max": 5.015,
+    "ratio_geometric_mean": 1.8522531866906844,
+    "ratio_le_1_0_count": 2,
+    "ratio_le_1_5_count": 12,
+    "ncnn_total_ms": 8616.392,
+    "compiled_total_ms": 10242.904,
+    "total_excess_ms": 1626.5120000000006
+  },
+  "implementation": "none; profile attribution entry gate not demonstrated",
+  "paired_ab": "not run because no candidate specialization passed entry criteria"
+}

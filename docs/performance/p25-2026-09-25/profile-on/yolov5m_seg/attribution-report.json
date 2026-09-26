@@ -1,0 +1,1824 @@
+{
+  "aggregation": "per-invocation-median",
+  "attribution_revision": "attribution-v2",
+  "identity": {
+    "build_identity": "13075548933912453627",
+    "codegen_identity": "7461726765743d7838365f36342d70632d6c696e75782d676e757c6d617263683d7838362d36342d76337c6d6370753d7c6d74756e653d7c707265636973696f6e3d6175746f7c667031362d616363756d756c61746f723d6631367c616c6c6f772d66616c6c6261636b3d307c6f7074696d697a6174696f6e3d337c766563746f722d77696474683d3235367c766563746f722d6d6f64653d66697865642d77696474687c766563746f722d6d6174683d6c69626d7665637c766563746f722d6d6174682d6162693d5f5a4756644e387c766563746f722d6d6174682d6c616e65733d387c737973726f6f743d7c636f6e762d73747261746567793d6175746f7c636f6e762d67656d6d2d6c322d62797465733d3532343238387c74756e696e672d70726f66696c653d737461626c657c74756e696e672d70726f66696c652d7265766973696f6e3d6e6f6e657c74756e696e672d7374617475733d737461626c657c74756e696e672d66616c6c6261636b2d726561736f6e3d7c6d61746d756c2d6d2d726f77733d347c6d61746d756c2d6163632d636f6c756d6e733d31367c6d61746d756c2d7061636b696e673d6175746f7c726f772d6368756e6b2d6c616e65733d387c6d61746d756c2d69382d726f77733d327c6d61746d756c2d69382d6163632d636f6c756d6e733d347c696e74382d6b65726e656c3d706f727461626c657c696e74382d7461726765743d706f727461626c657c696e74382d6465707468776973653d307c7061636b65642d636f6e762d6465707468776973653d307c696e74382d636173742d636861696e3d307c746872656164733d367c7461726765742d666561747572653d2b617678327c7461726765742d666561747572653d2b666d61",
+    "plan_hash": "13075548933912453627",
+    "target": "x86_64-pc-linux-gnu",
+    "threads": 6
+  },
+  "invocation_id": null,
+  "invocation_ids": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "kind": "ncnn.model_performance_attribution",
+  "mode": "end_to_end",
+  "model": "yolov5m_seg",
+  "performance": {
+    "compiled_mean_ms": 820.8370654,
+    "gate_eligible": false,
+    "ncnn_mean_ms": null,
+    "ratio": null,
+    "status": "diagnostic"
+  },
+  "plan_revision": "static-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v2",
+  "runtime": {
+    "allocation_coverage": {
+      "all_invocations_observed_count": 229,
+      "complete": true,
+      "missing_profile_ids": [],
+      "observed_count": 229,
+      "static_count": 229
+    },
+    "category_time_ns": {
+      "allocation": 1533658,
+      "deallocation": 0,
+      "kernel": 50071671,
+      "materialized_read": 0,
+      "materialized_write": 0,
+      "parallel": 772928323
+    },
+    "complete": false,
+    "complete_all": false,
+    "copy_layout": {
+      "copy": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      },
+      "pack": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      },
+      "transpose": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      },
+      "unpack": {
+        "bytes": null,
+        "bytes_known": null,
+        "count": 0,
+        "status": "not_observed"
+      }
+    },
+    "coverage": "explicit-callbacks",
+    "fusion_site_summary": {
+      "complete": true,
+      "invocation_count": 7,
+      "joined_count": 0,
+      "missing_count": 0,
+      "partial_count": 0,
+      "selected_count": 0
+    },
+    "fusion_sites": [],
+    "incomplete_reasons": [
+      "runtime_exclusive_time_unknown"
+    ],
+    "invocation_count": 7,
+    "packed_kernel_summary": {
+      "call_count": 69,
+      "consumed_count": 69,
+      "joined_count": 69,
+      "packed_buffer_bytes": 64942080,
+      "runtime_consumed": true,
+      "selected_count": 69
+    },
+    "packed_kernels": [
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#100",
+        "inclusive_ns": 1716398,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7249271197095676795,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#102",
+        "inclusive_ns": 199231,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7249273396118933217,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#104",
+        "inclusive_ns": 1671809,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7249275595142189639,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#106",
+        "inclusive_ns": 745021,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7249277794165446061,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#108",
+        "inclusive_ns": 752992,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7249262401002651107,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#110",
+        "inclusive_ns": 376945,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7248279437607219698,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#112",
+        "inclusive_ns": 736490,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7248277238583963276,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#114",
+        "inclusive_ns": 189906,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7248275039560706854,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#116",
+        "inclusive_ns": 1677676,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7248272840537450432,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#118",
+        "inclusive_ns": 179750,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7248288233700245386,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#120",
+        "inclusive_ns": 1646593,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7247428415607173609,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#122",
+        "inclusive_ns": 788020,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7247426216583917187,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#124",
+        "inclusive_ns": 715777,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7247432813653686453,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#128",
+        "inclusive_ns": 377600,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7247437211700199297,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#130",
+        "inclusive_ns": 183193,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7246436656118716512,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#132",
+        "inclusive_ns": 1761535,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7246438855141972934,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#134",
+        "inclusive_ns": 210159,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7246441054165229356,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#136",
+        "inclusive_ns": 1631016,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7246443253188485778,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#138",
+        "inclusive_ns": 833630,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7246445452211742200,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#140",
+        "inclusive_ns": 1562706,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7253062313188991423,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#144",
+        "inclusive_ns": 641887,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7253057915142478579,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#146",
+        "inclusive_ns": 308223,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7253060114165735001,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#148",
+        "inclusive_ns": 2826485,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7253071109282017111,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#150",
+        "inclusive_ns": 232881,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7252211291188945334,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#152",
+        "inclusive_ns": 1944883,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7252209092165688912,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#154",
+        "inclusive_ns": 455893,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7252215689235458178,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#156",
+        "inclusive_ns": 1260968,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7252213490212201756,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#158",
+        "inclusive_ns": 7778594,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7252220087281971022,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#16",
+        "inclusive_ns": 1074631,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13682869314447433359,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#160",
+        "inclusive_ns": 38511024,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7251254716072590989,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#162",
+        "inclusive_ns": 1210138,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 7251252517049334567,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#20",
+        "inclusive_ns": 593998,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13683718137424223026,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#22",
+        "inclusive_ns": 377341,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13683715938400966604,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#24",
+        "inclusive_ns": 1934912,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13683713739377710182,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#26",
+        "inclusive_ns": 424838,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13683711540354453760,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#28",
+        "inclusive_ns": 3646250,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13683726933517248714,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#30",
+        "inclusive_ns": 423586,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13684709896912680123,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#32",
+        "inclusive_ns": 2747471,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13684712095935936545,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#34",
+        "inclusive_ns": 243993,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13684714294959192967,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#36",
+        "inclusive_ns": 1672965,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13684716493982449389,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#38",
+        "inclusive_ns": 381639,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13684701100819654435,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#40",
+        "inclusive_ns": 750590,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13685701656401137220,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#44",
+        "inclusive_ns": 439763,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13685697258354624376,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#46",
+        "inclusive_ns": 188926,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13685699457377880798,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#48",
+        "inclusive_ns": 1647646,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13685692860308111532,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#50",
+        "inclusive_ns": 195699,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13686693415889594317,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#52",
+        "inclusive_ns": 1742346,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13686691216866337895,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#54",
+        "inclusive_ns": 196856,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13686689017843081473,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#56",
+        "inclusive_ns": 1828550,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13686686818819825051,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#58",
+        "inclusive_ns": 396750,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13686684619796568629,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#60",
+        "inclusive_ns": 3466534,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687649991005948662,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#62",
+        "inclusive_ns": 396142,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687647791982692240,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#64",
+        "inclusive_ns": 2301875,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687654389052461506,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#66",
+        "inclusive_ns": 400861,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687652190029205084,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#68",
+        "inclusive_ns": 3188767,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13687658787098974350,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#70",
+        "inclusive_ns": 387943,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688501013005994751,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#72",
+        "inclusive_ns": 736706,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688503212029251173,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#76",
+        "inclusive_ns": 445488,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688498813982738329,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#78",
+        "inclusive_ns": 216027,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13688509809099020439,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#80",
+        "inclusive_ns": 2036955,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689492772494451848,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#82",
+        "inclusive_ns": 241038,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689494971517708270,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#84",
+        "inclusive_ns": 2116509,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689497170540964692,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#86",
+        "inclusive_ns": 440291,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689499369564221114,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#88",
+        "inclusive_ns": 867967,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13689483976401426160,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#90",
+        "inclusive_ns": 433575,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13690484531982908945,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#92",
+        "inclusive_ns": 1828708,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13690482332959652523,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#94",
+        "inclusive_ns": 430297,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13690488930029421789,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#96",
+        "inclusive_ns": 736940,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13690486731006165367,
+        "runtime_consumed": true
+      },
+      {
+        "call_count": 1,
+        "event_join_status": "joined",
+        "exclusive_ns": null,
+        "id": "model/scf.forall#98",
+        "inclusive_ns": 314213,
+        "kernel": "f32_packed_mxn_fma",
+        "pack_runtime": "compile_time_B",
+        "packing": "prepacked_B",
+        "profile_id": 13690475735889883257,
+        "runtime_consumed": true
+      }
+    ],
+    "peak_live_proven": true,
+    "per_invocation": {
+      "category_time_ns": {
+        "allocation": {
+          "known_count": 7,
+          "median": 1533658,
+          "worst": 1739222
+        },
+        "deallocation": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "kernel": {
+          "known_count": 7,
+          "median": 50071671,
+          "worst": 54040788
+        },
+        "materialized_read": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "materialized_write": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "parallel": {
+          "known_count": 7,
+          "median": 772928323,
+          "worst": 804280639
+        }
+      },
+      "copy_layout": {
+        "copy": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 7,
+            "median": 0,
+            "worst": 0
+          }
+        },
+        "pack": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 7,
+            "median": 0,
+            "worst": 0
+          }
+        },
+        "transpose": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 7,
+            "median": 0,
+            "worst": 0
+          }
+        },
+        "unpack": {
+          "bytes": {
+            "known_count": 0,
+            "median": null,
+            "worst": null
+          },
+          "bytes_known_count": 0,
+          "count": {
+            "known_count": 7,
+            "median": 0,
+            "worst": 0
+          }
+        }
+      },
+      "expected_materialized_read_bytes": {
+        "known_count": 7,
+        "median": 36864000,
+        "worst": 36864000
+      },
+      "fusion_site_summary": {
+        "complete": true,
+        "invocation_count": 7,
+        "joined_count": 0,
+        "missing_count": 0,
+        "partial_count": 0,
+        "selected_count": 0
+      },
+      "peak_live_bytes": {
+        "known_count": 7,
+        "median": 873181436,
+        "worst": 873181436
+      },
+      "runtime_materialized_read_bytes": {
+        "known_count": 7,
+        "median": 36864000,
+        "worst": 36864000
+      },
+      "runtime_materialized_write_bytes": {
+        "known_count": 7,
+        "median": 36864000,
+        "worst": 36864000
+      },
+      "runtime_transpose_write_bytes": {
+        "known_count": 7,
+        "median": 0,
+        "worst": 0
+      },
+      "summary": {
+        "allocation_bytes": {
+          "known_count": 7,
+          "median": 1091049892,
+          "worst": 1091049892
+        },
+        "allocation_count": {
+          "known_count": 7,
+          "median": 646135,
+          "worst": 646135
+        },
+        "copy_bytes": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "copy_count": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "deallocation_bytes": {
+          "known_count": 7,
+          "median": 1091049892,
+          "worst": 1091049892
+        },
+        "deallocation_count": {
+          "known_count": 7,
+          "median": 646135,
+          "worst": 646135
+        },
+        "event_mismatch_count": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "expected_materialized_read_bytes": {
+          "known_count": 7,
+          "median": 36864000,
+          "worst": 36864000
+        },
+        "materialized_read_complete": {
+          "complete_count": 7,
+          "incomplete_count": 0,
+          "unknown_count": 0
+        },
+        "materialized_read_count": {
+          "known_count": 7,
+          "median": 13,
+          "worst": 13
+        },
+        "materialized_write_count": {
+          "known_count": 7,
+          "median": 13,
+          "worst": 13
+        },
+        "pack_bytes": {
+          "known_count": 0,
+          "median": null,
+          "worst": null
+        },
+        "pack_count": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "parallel_region_count": {
+          "known_count": 7,
+          "median": 374,
+          "worst": 374
+        },
+        "peak_live_bytes": {
+          "known_count": 7,
+          "median": 873181436,
+          "worst": 873181436
+        },
+        "runtime_materialized_read_bytes": {
+          "known_count": 7,
+          "median": 36864000,
+          "worst": 36864000
+        },
+        "runtime_materialized_write_bytes": {
+          "known_count": 7,
+          "median": 36864000,
+          "worst": 36864000
+        },
+        "runtime_transpose_write_bytes": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "top_level_time_ns": {
+          "known_count": 7,
+          "median": 821348401,
+          "worst": 860060649
+        },
+        "transpose_count": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        },
+        "unpack_bytes": {
+          "known_count": 0,
+          "median": null,
+          "worst": null
+        },
+        "unpack_count": {
+          "known_count": 7,
+          "median": 0,
+          "worst": 0
+        }
+      },
+      "top_level_time_ns": {
+        "known_count": 7,
+        "median": 821348401,
+        "worst": 860060649
+      },
+      "unattributed_event_count": {
+        "known_count": 7,
+        "median": 0,
+        "worst": 0
+      },
+      "unattributed_time_ns": {
+        "known_count": 7,
+        "median": 0,
+        "worst": 0
+      },
+      "unknown_time_ns": {
+        "known_count": 7,
+        "median": 772928323,
+        "worst": 804280639
+      }
+    },
+    "summary": {
+      "allocation_bytes": 1091049892,
+      "allocation_bytes_known": true,
+      "allocation_count": null,
+      "copy_bytes": 0,
+      "copy_bytes_known": true,
+      "copy_count": null,
+      "deallocation_bytes": 1091049892,
+      "deallocation_bytes_known": true,
+      "deallocation_count": null,
+      "event_mismatch_count": null,
+      "expected_materialized_read_bytes": 36864000,
+      "expected_materialized_read_bytes_known": true,
+      "materialized_read_bytes_known": true,
+      "materialized_read_complete": true,
+      "materialized_read_count": null,
+      "materialized_write_bytes_known": true,
+      "materialized_write_count": null,
+      "pack_bytes": null,
+      "pack_bytes_known": false,
+      "pack_count": null,
+      "parallel_region_count": null,
+      "peak_live_bytes": 873181436,
+      "peak_live_proven": true,
+      "runtime_materialized_read_bytes": 36864000,
+      "runtime_materialized_write_bytes": 36864000,
+      "runtime_transpose_write_bytes": 0,
+      "runtime_transpose_write_bytes_known": true,
+      "top_level_time_known": true,
+      "top_level_time_ns": 821348401,
+      "transpose_count": null,
+      "unpack_bytes": null,
+      "unpack_bytes_known": false,
+      "unpack_count": null
+    },
+    "top_fusion_sites": [],
+    "unattributed_event_count": 0,
+    "unattributed_time_ns": 0,
+    "unknown_time_ns": 772928323,
+    "workspace_coverage": {
+      "all_invocations_joined_count": 0,
+      "complete": true,
+      "joined_count": 0,
+      "static_count": 0
+    }
+  },
+  "schema_version": 1,
+  "static": {
+    "conv_depthwise": {
+      "conv": {
+        "fallback_reasons": {},
+        "implementations": {
+          "gemm": 85
+        },
+        "operation_count": 85,
+        "runtime_time_ns": null,
+        "source_layers": []
+      },
+      "depthwise": {
+        "fallback_reasons": {},
+        "implementations": {},
+        "operation_count": 0,
+        "runtime_time_ns": null,
+        "source_layers": []
+      }
+    },
+    "low_precision": {
+      "capability": "portable",
+      "cast_chain_enabled": false,
+      "depthwise_enabled": false,
+      "operations": [],
+      "requested_policy": "portable",
+      "requested_policy_fallback_reason": null,
+      "requested_policy_status": "selected",
+      "revision": "int8-target-v1",
+      "tuning_profile": "stable",
+      "tuning_profile_revision": "none"
+    },
+    "summary": {
+      "allocation_count": 229,
+      "attention_fallback_count": 0,
+      "attention_revision": "attention-segment-v1",
+      "attention_segment_count": 0,
+      "attention_selected_count": 0,
+      "attention_unknown_count": 0,
+      "attribution_revision": "attribution-v2",
+      "batch_matmul_count": 0,
+      "conv_depthwise": {
+        "conv_fallback_count": 0,
+        "conv_fallback_reasons": {},
+        "conv_implementations": {
+          "gemm": 85
+        },
+        "conv_operation_count": 85,
+        "conv_unknown_count": 0,
+        "depthwise_fallback_count": 0,
+        "depthwise_fallback_reasons": {},
+        "depthwise_implementations": {},
+        "depthwise_operation_count": 0,
+        "depthwise_unknown_count": 0
+      },
+      "copy_contract_count": 0,
+      "copy_contract_status": "not_applicable",
+      "copy_count": 0,
+      "copy_eliminated_count": 0,
+      "copy_fallback_count": 0,
+      "copy_fused_count": null,
+      "copy_vectorized_count": 0,
+      "deallocation_count": 229,
+      "dynamic_buffer_count": 7,
+      "fusion_contract_count": 0,
+      "fusion_enabled": true,
+      "fusion_rejected_count": 85,
+      "fusion_rejection_reasons": "producer_not_flowing_input=14,repeated_producer_input=62,unsupported_consumer=9",
+      "fusion_residual_count": 0,
+      "fusion_selected_count": 0,
+      "kernel_contract_count": 179,
+      "kernel_contract_fallback_count": 0,
+      "layout_island_count": 0,
+      "layout_island_rejected_count": 0,
+      "layout_island_selected_count": 0,
+      "layout_pack4_count": 0,
+      "layout_pack8_count": 0,
+      "matmul_count": 0,
+      "nested_openmp_count": 0,
+      "packed_buffer_bytes": 64942080,
+      "packed_constant_bytes": 64942080,
+      "packed_constant_bytes_known": true,
+      "packed_constant_count": 69,
+      "packed_constant_status": "known",
+      "packed_conv_depthwise": false,
+      "parallel_region_count": 374,
+      "peak_workspace_bytes": null,
+      "peak_workspace_proven": false,
+      "static_buffer_bytes": 873255736,
+      "static_copy_bytes": null,
+      "static_copy_bytes_known": false,
+      "static_copy_count": 0,
+      "static_copy_status": "not_applicable",
+      "static_pack_bytes": 64942080,
+      "static_pack_bytes_known": true,
+      "static_pack_count": 69,
+      "static_pack_status": "known",
+      "static_transpose_bytes": null,
+      "static_transpose_bytes_known": false,
+      "static_transpose_count": 0,
+      "static_transpose_status": "not_applicable",
+      "static_unpack_bytes": null,
+      "static_unpack_bytes_known": false,
+      "static_unpack_count": 0,
+      "static_unpack_status": "not_applicable",
+      "transpose_count": 0,
+      "vector_fma_count": 405,
+      "workspace_fallback_count": 229,
+      "workspace_reused_allocation_count": 0,
+      "workspace_slot_bytes": 0,
+      "workspace_slot_bytes_known": true,
+      "workspace_slot_count": 0
+    },
+    "unknown_fields": [
+      "runtime_counters_not_collected",
+      "buffer_liveness_unknown",
+      "peak_workspace_control_flow_unknown",
+      "peak_workspace_liveness_unknown",
+      "peak_workspace_not_proven",
+      "runtime_exclusive_time_unknown"
+    ]
+  },
+  "top_allocations": [
+    {
+      "function": "model",
+      "id": 7573283401249390059,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#187",
+      "runtime_bytes": 176947200,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 176947200,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 17610571923509334493,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#8",
+      "runtime_bytes": 44791488,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 44791488,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 17610559828881424172,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#3",
+      "runtime_bytes": 44236800,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 44236800,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9645992350286200415,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#17",
+      "runtime_bytes": 44236800,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 44236800,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 7573287799295902903,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#183",
+      "runtime_bytes": 44236800,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 44236800,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9644040717146504340,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#30",
+      "runtime_bytes": 22674816,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 22674816,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 9644033020565106863,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#39",
+      "runtime_bytes": 22118400,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 22118400,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 7573282301737761848,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#186",
+      "runtime_bytes": 20155392,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 20155392,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 17610556530346539539,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#6",
+      "runtime_bytes": 20031168,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 20031168,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    },
+    {
+      "function": "model",
+      "id": 17610560928393052383,
+      "liveness_status": "unknown",
+      "missing_runtime_event": false,
+      "operation": "model/memref.alloc#2",
+      "runtime_bytes": 19660800,
+      "runtime_bytes_known": true,
+      "runtime_calls": 1,
+      "static_bytes": 19660800,
+      "static_bytes_known": true,
+      "workspace_join_status": "fallback",
+      "workspace_slot": null,
+      "workspace_slot_owner": null
+    }
+  ],
+  "top_costs": [
+    {
+      "attributed_ns": 45892769,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694731979057637763,
+      "inclusive_ns": 45892769,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#1",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.055874911236358515
+    },
+    {
+      "attributed_ns": 35956818,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 7251253616560962778,
+      "inclusive_ns": 35956818,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#161",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.043777790224248575
+    },
+    {
+      "attributed_ns": 30589232,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 7251254716072590989,
+      "inclusive_ns": 30589232,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#160",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.03724269988564816
+    },
+    {
+      "attributed_ns": 26523811,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 7251245919979565301,
+      "inclusive_ns": 26523811,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#168",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.032293008627894075
+    },
+    {
+      "attributed_ns": 22666552,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 7251251417537706356,
+      "inclusive_ns": 22666552,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#163",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.027596756714207082
+    },
+    {
+      "attributed_ns": 19448931,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 7251248119002821723,
+      "inclusive_ns": 19448931,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#166",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.023679270546239244
+    },
+    {
+      "attributed_ns": 18624566,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 7251249218514449934,
+      "inclusive_ns": 18624566,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#165",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.022675597806393003
+    },
+    {
+      "attributed_ns": 18351016,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 7251247019491193512,
+      "inclusive_ns": 18351016,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#167",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.022342547909824203
+    },
+    {
+      "attributed_ns": 16530828,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 3601187290287367442,
+      "inclusive_ns": 16530828,
+      "kind": "scf.parallel",
+      "operation": "model/scf.parallel#175",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.020126450577944207
+    },
+    {
+      "attributed_ns": 16267418,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682866015912548726,
+      "inclusive_ns": 16267418,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#11",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.01980574623411241
+    },
+    {
+      "attributed_ns": 15811731,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694738576127407029,
+      "inclusive_ns": 15811731,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#7",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.019250942694658026
+    },
+    {
+      "attributed_ns": 15555249,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682863816889292304,
+      "inclusive_ns": 15555249,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#13",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.018938673261019716
+    },
+    {
+      "attributed_ns": 15490774,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694740775150663451,
+      "inclusive_ns": 15490774,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#9",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.018860174295268397
+    },
+    {
+      "attributed_ns": 14924782,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682870413959061570,
+      "inclusive_ns": 14924782,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#15",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.0181710733007198
+    },
+    {
+      "attributed_ns": 13172140,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13682868214935805148,
+      "inclusive_ns": 13172140,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#17",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.01603721390820605
+    },
+    {
+      "attributed_ns": 12711627,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 13688496614959481907,
+      "inclusive_ns": 12711627,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#74",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.015476534664855334
+    },
+    {
+      "attributed_ns": 12347074.5,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 7252220087281971022,
+      "inclusive_ns": 12347074.5,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#158",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.015032688302512445
+    },
+    {
+      "attributed_ns": 12255867,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694736377104150607,
+      "inclusive_ns": 12255867,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#5",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.014921642247161323
+    },
+    {
+      "attributed_ns": 12043253.0,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 7252221186793599233,
+      "inclusive_ns": 12043253.0,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#159",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.014662782547987209
+    },
+    {
+      "attributed_ns": 11879246,
+      "bytes": null,
+      "bytes_known": false,
+      "calls": 1,
+      "category": "parallel",
+      "exclusive_ns": null,
+      "id": 17694734178080894185,
+      "inclusive_ns": 11879246,
+      "kind": "scf.forall",
+      "operation": "model/scf.forall#3",
+      "source_layer": null,
+      "source_name": null,
+      "time_basis": "inclusive_unknown_exclusive",
+      "time_fraction": 0.014463102363792146
+    }
+  ]
+}

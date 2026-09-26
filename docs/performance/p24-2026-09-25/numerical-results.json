@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "fresh_stage": "/tmp/ncnn-compiler-stage-p24-qualification-20260925-01",
+  "configuration": {
+    "build_type": "Release",
+    "llvm_version": "21.1.8",
+    "compiler_enable_format_targets": true,
+    "compiler_install_rpath": true,
+    "build_testing": true
+  },
+  "checks": {
+    "format_check": "passed",
+    "tidy": "passed; 90 first-party translation units",
+    "full_build": "passed",
+    "numerical_tests": "passed",
+    "numerical_dynamic_operator_tests": "passed",
+    "numerical_dynamic_tests": "passed",
+    "ctest": {
+      "registered": 449,
+      "passed": 447,
+      "failed": 0,
+      "skipped": 2,
+      "total_test_time_seconds": 773.19,
+      "expected_skips": [
+        "PerformanceModel.PPLCNetDocOriInt8",
+        "PerformanceModel.PPLCNetTextlineOriInt8"
+      ]
+    }
+  },
+  "evidence": {
+    "full_build_log": "full-build.log.gz",
+    "numerical_build_log": "numerical-build.log.gz",
+    "full_ctest_log": "full-ctest.log.gz",
+    "format_check_log": "format-check.log.gz",
+    "tidy_log": "tidy.log.gz"
+  }
+}

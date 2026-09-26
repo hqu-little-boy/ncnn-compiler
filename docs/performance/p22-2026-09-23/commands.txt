@@ -1,0 +1,55 @@
+# P22 formal five-round paired benchmark: 44 official + resnet18_winograd.
+# Baseline is clean pre-P22 a5c3c57; candidate is the P22 working tree.
+# Both fresh stages: Release, LLVM/MLIR 21, BUILD_TESTING=ON,
+# COMPILER_INSTALL_RPATH=ON, NCNN_PACKED_CONV_DEPTHWISE=OFF.
+BASELINE_STAGE=/tmp/ncnn-compiler-p22-validation-baseline-20260923-a
+CANDIDATE_STAGE=/tmp/ncnn-compiler-p22-validation-candidate-20260923-b
+EVIDENCE=/mnt/ncnn-compiler/compiler/docs/performance/p22-2026-09-23
+
+# Order: B,C / C,B / B,C / C,B / B,C. Each run measured 45 rows;
+# PPLCNetDocOriInt8 and PPLCNetTextlineOriInt8 are the two known skips.
+# Reproduce for N=1..5, choosing stages per round order above:
+NCNN_PERF_THREADS=6 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 NCNN_PERF_MAX_RATIO=0 NCNN_PERF_MODE=end_to_end NCNN_PERF_JSON=${EVIDENCE}/round-N-baseline.ndjson ctest --test-dir ${BASELINE_STAGE} -R '^PerformanceModel\.' --output-on-failure 2>&1 | tee ${EVIDENCE}/round-N-baseline.ctest.log
+NCNN_PERF_THREADS=6 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 NCNN_PERF_MAX_RATIO=0 NCNN_PERF_MODE=end_to_end NCNN_PERF_JSON=${EVIDENCE}/round-N-candidate.ndjson ctest --test-dir ${CANDIDATE_STAGE} -R '^PerformanceModel\.' --output-on-failure 2>&1 | tee ${EVIDENCE}/round-N-candidate.ctest.log
+
+# Validate the authoritative final candidate-vs-ncnn views and paired data.
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py ${EVIDENCE}/round-5-candidate.ndjson --official-only
+python3 /mnt/ncnn-compiler/compiler/tools/perf_json_summary.py ${EVIDENCE}/round-5-candidate.ndjson
+python3 /tmp/p22-aggregate.py ${EVIDENCE}
+
+# Runtime profile follow-up: one diagnostic server-det invocation using the
+# post-fix compiler. This does NOT replace the paired benchmark or performance
+# gates. The archived candidate/ directory contains earlier profile artifacts;
+# this new directory preserves the instrumented fusion-ID join separately.
+PROFILE_EVIDENCE=${EVIDENCE}/runtime-profile/pp_ocrv5_server_det_static/candidate-fusion-site-join
+PROFILE_BUILD=/tmp/ncnn-compiler-p22-validation-candidate-20260923-b
+PROFILE_OUT=/tmp/p22-profile-serverdet-earlyfusion-repro
+# PROFILE_OUT must be a new/empty path. ncnn-compile --profile also emits plan.
+LD_LIBRARY_PATH=${PROFILE_BUILD}/lib ${PROFILE_BUILD}/tools/ncnn-compile \
+  --driver ${PROFILE_BUILD}/tools/ncnn-mlir-driver \
+  --opt ${PROFILE_BUILD}/bin/ncnn-mlir-opt \
+  --translate /usr/lib/llvm-21/bin/mlir-translate \
+  --clang /usr/lib/llvm-21/bin/clang \
+  --nm /usr/lib/llvm-21/bin/llvm-nm \
+  --readelf /usr/bin/llvm-readelf-21 \
+  --llvm-as /usr/lib/llvm-21/bin/llvm-as \
+  --param /mnt/ncnn-compiler/ncnn_modelzoo/liteocr/PP-OCRv5_server_det.param \
+  --bin /mnt/ncnn-compiler/ncnn_modelzoo/liteocr/PP-OCRv5_server_det.bin \
+  --model-name pp_ocrv5_server_det_static \
+  --input-shape 3x640x640 --threads 6 --matmul-packing auto \
+  --vector-mode fixed-width --target-feature +avx2 --target-feature +fma \
+  --clang-arg=-march=x86-64-v3 --profile --emit-manifest \
+  --emit-execution-plan --output-dir ${PROFILE_OUT}
+python3 ${PROFILE_EVIDENCE}/run_profile_once.py \
+  --library=${PROFILE_OUT}/libpp_ocrv5_server_det_static.so \
+  --plan=${PROFILE_OUT}/pp_ocrv5_server_det_static.plan.json \
+  --profile=/tmp/p22-serverdet-profile.ndjson \
+  --perf=/tmp/p22-serverdet-diagnostic-perf.ndjson
+python3 /mnt/ncnn-compiler/compiler/tools/perf_attribution_report.py \
+  --perf=/tmp/p22-serverdet-diagnostic-perf.ndjson \
+  --plan=${PROFILE_OUT}/pp_ocrv5_server_det_static.plan.json \
+  --profile=/tmp/p22-serverdet-profile.ndjson --mode=end_to_end \
+  --output=/tmp/p22-serverdet-attribution.json
+# Acceptance for this diagnostic only: all selected fusion records joined,
+# materialized reads equal expected bytes; overall report may remain incomplete
+# for independent reasons such as unknown OpenMP exclusive time.

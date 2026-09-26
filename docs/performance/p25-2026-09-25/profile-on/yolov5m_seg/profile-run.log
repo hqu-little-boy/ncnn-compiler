@@ -1,0 +1,9 @@
+{
+  "model": "yolov5m_seg",
+  "profile_rows": 7,
+  "timing_median_ms": 823.78197,
+  "plan_hash": "13075548933912453627",
+  "build_identity": "13075548933912453627",
+  "profile": "/mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/profile-on/yolov5m_seg/profile.ndjson",
+  "diagnostic_perf": "/mnt/ncnn-compiler/compiler/docs/performance/p25-2026-09-25/profile-on/yolov5m_seg/diagnostic-perf.ndjson"
+}

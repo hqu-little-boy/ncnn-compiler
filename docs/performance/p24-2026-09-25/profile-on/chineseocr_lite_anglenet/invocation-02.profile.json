@@ -1,0 +1,6467 @@
+{
+  "schema_version": 2,
+  "kind": "ncnn.model_execution_profile",
+  "plan_revision": "static-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v2",
+  "attribution_revision": "attribution-v2",
+  "model": "chineseocr_lite_anglenet",
+  "plan_hash": "5783085584978412216",
+  "build_identity": "5783085584978412216",
+  "target": "x86_64-pc-linux-gnu",
+  "mode": "end_to_end",
+  "threads": 6,
+  "invocation_id": 4,
+  "complete": true,
+  "instrumentation": {
+    "enabled": true,
+    "coverage": "explicit-callbacks",
+    "aggregation": "per-invocation",
+    "invocation_count": 1,
+    "record_overflow": false,
+    "allocation_table_overflow": false
+  },
+  "summary": {
+    "allocation_count": 6626,
+    "allocation_bytes": 3363756,
+    "allocation_bytes_known": true,
+    "deallocation_count": 6626,
+    "deallocation_bytes": 3363756,
+    "deallocation_bytes_known": true,
+    "copy_count": 0,
+    "copy_bytes": 0,
+    "copy_bytes_known": true,
+    "materialized_write_count": 40,
+    "runtime_materialized_write_bytes": 474112,
+    "materialized_write_bytes_known": true,
+    "materialized_read_count": 40,
+    "runtime_materialized_read_bytes": 474112,
+    "materialized_read_bytes_known": true,
+    "expected_materialized_read_bytes": 474112,
+    "expected_materialized_read_bytes_known": true,
+    "materialized_read_complete": true,
+    "transpose_count": 0,
+    "runtime_transpose_write_bytes": 0,
+    "runtime_transpose_write_bytes_known": true,
+    "pack_count": 0,
+    "pack_bytes": null,
+    "pack_bytes_known": false,
+    "unpack_count": 0,
+    "unpack_bytes": null,
+    "unpack_bytes_known": false,
+    "parallel_region_count": 234,
+    "peak_live_bytes": 2525292,
+    "peak_live_proven": true,
+    "top_level_time_ns": 9143720,
+    "top_level_time_known": true,
+    "event_mismatch_count": 0
+  },
+  "events": [
+    {
+      "id": 2092023755087128959,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 126413,
+      "exclusive_ns": 690,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 2092025954110385381,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 138812,
+      "exclusive_ns": 580,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 2092030352156898225,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 138111,
+      "exclusive_ns": 532,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321627696939680224,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19332,
+      "exclusive_ns": 19332,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321628796451308435,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19523,
+      "exclusive_ns": 19523,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321629895962936646,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 23807,
+      "exclusive_ns": 23807,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321630995474564857,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19045,
+      "exclusive_ns": 19045,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321632094986193068,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 21959,
+      "exclusive_ns": 21959,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321633194497821279,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 64234,
+      "exclusive_ns": 64234,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321634294009449490,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 43187,
+      "exclusive_ns": 43187,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321635393521077701,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 27477,
+      "exclusive_ns": 27477,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321643090102475178,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19794,
+      "exclusive_ns": 19794,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3321644189614103389,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19970,
+      "exclusive_ns": 19970,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604009736636417404,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16355,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604010836148045615,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17570,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604014134682930248,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15989,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604015234194558459,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 14848,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604016333706186670,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16417,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604017433217814881,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15771,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604018532729443092,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15999,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604019632241071303,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15834,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604020731752699514,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15506,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3604021831264327725,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15612,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605005894171387345,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15870,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605006993683015556,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15802,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605008093194643767,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16150,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605009192706271978,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15947,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605010292217900189,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16321,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605964668310998112,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16251,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605965767822626323,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16421,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605966867334254534,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16252,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605967966845882745,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17101,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605969066357510956,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 14655,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605970165869139167,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 18750,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605971265380767378,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16281,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605972364892395589,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 20193,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605975663427280222,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15499,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3605976762938908433,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16888,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606953129264570576,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15537,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606954228776198787,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16223,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606955328287826998,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15728,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606956427799455209,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15357,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606957527311083420,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 14990,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606958626822711631,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16610,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606959726334339842,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15658,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606960825845968053,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 14878,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606966323404109108,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15660,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 3606967422915737319,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15356,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 4825193431451085408,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 49770,
+      "exclusive_ns": 256,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 5631038507537006797,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 170,
+      "exclusive_ns": 170,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 6800981949455991664,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 15689,
+      "exclusive_ns": 15689,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 6800983048967619875,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 15367,
+      "exclusive_ns": 15367,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 6800984148479248086,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 15445,
+      "exclusive_ns": 15445,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 6800985247990876297,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 15746,
+      "exclusive_ns": 15746,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 7239189209214784226,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 39614,
+      "exclusive_ns": 353,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 7563687963271884912,
+      "category": "allocation",
+      "calls": 21,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 8064,
+      "bytes_known": true
+    },
+    {
+      "id": 7563687963271884912,
+      "category": "deallocation",
+      "calls": 21,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 8064,
+      "bytes_known": true
+    },
+    {
+      "id": 7563689062783513123,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 500,
+      "exclusive_ns": 500,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563689062783513123,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563690162295141334,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 545,
+      "exclusive_ns": 545,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563690162295141334,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563691261806769545,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 502,
+      "exclusive_ns": 502,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563691261806769545,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563692361318397756,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 446,
+      "exclusive_ns": 446,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563692361318397756,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563693460830025967,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563693460830025967,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7563694560341654178,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 555,
+      "exclusive_ns": 555,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 7563694560341654178,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 7563695659853282389,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 7563695659853282389,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 7563696759364910600,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 523,
+      "exclusive_ns": 523,
+      "bytes": 40320,
+      "bytes_known": true
+    },
+    {
+      "id": 7563696759364910600,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 40320,
+      "bytes_known": true
+    },
+    {
+      "id": 7563697858876538811,
+      "category": "allocation",
+      "calls": 21,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 8064,
+      "bytes_known": true
+    },
+    {
+      "id": 7563697858876538811,
+      "category": "deallocation",
+      "calls": 21,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 8064,
+      "bytes_known": true
+    },
+    {
+      "id": 7564676424225457376,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 577,
+      "exclusive_ns": 577,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7564676424225457376,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7564677523737085587,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 476,
+      "exclusive_ns": 476,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7564677523737085587,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7564678623248713798,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564678623248713798,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564679722760342009,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 523,
+      "exclusive_ns": 523,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564679722760342009,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564680822271970220,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564680822271970220,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564681921783598431,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 607,
+      "exclusive_ns": 607,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564681921783598431,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564683021295226642,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 490,
+      "exclusive_ns": 490,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7564683021295226642,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7564684120806854853,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564684120806854853,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564687419341739486,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564687419341739486,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564688518853367697,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 695,
+      "exclusive_ns": 695,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7564688518853367697,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7565664885179029840,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565664885179029840,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565665984690658051,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565665984690658051,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565667084202286262,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565667084202286262,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565668183713914473,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 537,
+      "exclusive_ns": 537,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565668183713914473,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565669283225542684,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565669283225542684,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565670382737170895,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 452,
+      "exclusive_ns": 452,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 7565670382737170895,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 7565671482248799106,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 458,
+      "exclusive_ns": 458,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565671482248799106,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565672581760427317,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565672581760427317,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565680278341824794,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 462,
+      "exclusive_ns": 462,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 7565680278341824794,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 7565681377853453005,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7565681377853453005,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566512608644191296,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 541,
+      "exclusive_ns": 541,
+      "bytes": 8064,
+      "bytes_known": true
+    },
+    {
+      "id": 7566512608644191296,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 8064,
+      "bytes_known": true
+    },
+    {
+      "id": 7566513708155819507,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 682,
+      "exclusive_ns": 682,
+      "bytes": 8064,
+      "bytes_known": true
+    },
+    {
+      "id": 7566513708155819507,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 8064,
+      "bytes_known": true
+    },
+    {
+      "id": 7566521404737216984,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566521404737216984,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566522504248845195,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 503,
+      "exclusive_ns": 503,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566522504248845195,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566523603760473406,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 465,
+      "exclusive_ns": 465,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 7566523603760473406,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 7566524703272101617,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566524703272101617,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566525802783729828,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 521,
+      "exclusive_ns": 521,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566525802783729828,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566526902295358039,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566526902295358039,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566528001806986250,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 812,
+      "exclusive_ns": 812,
+      "bytes": 40320,
+      "bytes_known": true
+    },
+    {
+      "id": 7566528001806986250,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 40320,
+      "bytes_known": true
+    },
+    {
+      "id": 7566529101318614461,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7566529101318614461,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 7569460399318857312,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569460399318857312,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569461498830485523,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 560,
+      "exclusive_ns": 560,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569461498830485523,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569462598342113734,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569462598342113734,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569463697853741945,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 636,
+      "exclusive_ns": 636,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7569463697853741945,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7569464797365370156,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 573,
+      "exclusive_ns": 573,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7569464797365370156,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7569465896876998367,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569465896876998367,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569466996388626578,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569466996388626578,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569468095900254789,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569468095900254789,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569471394435139422,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 542,
+      "exclusive_ns": 542,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569471394435139422,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569472493946767633,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7569472493946767633,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 7570448860272429776,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 697,
+      "exclusive_ns": 697,
+      "bytes": 1024,
+      "bytes_known": true
+    },
+    {
+      "id": 7570448860272429776,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 1024,
+      "bytes_known": true
+    },
+    {
+      "id": 7570448860272429776,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 1024,
+      "bytes_known": true
+    },
+    {
+      "id": 7570448860272429776,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 1024,
+      "bytes_known": true
+    },
+    {
+      "id": 7570449959784057987,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 574,
+      "exclusive_ns": 574,
+      "bytes": 1024,
+      "bytes_known": true
+    },
+    {
+      "id": 7570449959784057987,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 1024,
+      "bytes_known": true
+    },
+    {
+      "id": 7570451059295686198,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 567,
+      "exclusive_ns": 567,
+      "bytes": 4,
+      "bytes_known": true
+    },
+    {
+      "id": 7570451059295686198,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4,
+      "bytes_known": true
+    },
+    {
+      "id": 7570452158807314409,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 628,
+      "exclusive_ns": 628,
+      "bytes": 8,
+      "bytes_known": true
+    },
+    {
+      "id": 7570452158807314409,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 8,
+      "bytes_known": true
+    },
+    {
+      "id": 7570453258318942620,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 524,
+      "exclusive_ns": 524,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7570453258318942620,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7570454357830570831,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 654,
+      "exclusive_ns": 654,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7570454357830570831,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7570455457342199042,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 610,
+      "exclusive_ns": 610,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 7570455457342199042,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 7570456556853827253,
+      "category": "allocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7570456556853827253,
+      "category": "deallocation",
+      "calls": 12,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 7570463153923596519,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 587,
+      "exclusive_ns": 587,
+      "bytes": 4,
+      "bytes_known": true
+    },
+    {
+      "id": 7570463153923596519,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4,
+      "bytes_known": true
+    },
+    {
+      "id": 8124382180562776416,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124382180562776416,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124383280074404627,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124383280074404627,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124384379586032838,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124384379586032838,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124385479097661049,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124385479097661049,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124386578609289260,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 8124386578609289260,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 8124387678120917471,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 8124387678120917471,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 8124388777632545682,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124388777632545682,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124389877144173893,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 8124389877144173893,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 8124395374702314948,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124395374702314948,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124396474213943159,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8124396474213943159,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8126220564004766758,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 8126220564004766758,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 8126227161074536024,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126227161074536024,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126228260586164235,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126228260586164235,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126229360097792446,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 8126229360097792446,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 8126230459609420657,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126230459609420657,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126231559121048868,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126231559121048868,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126232658632677079,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126232658632677079,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126233758144305290,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126233758144305290,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126234857655933501,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8126234857655933501,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8127211223981595644,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8127211223981595644,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 4608,
+      "bytes_known": true
+    },
+    {
+      "id": 8127212323493223855,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127212323493223855,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127215622028108488,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127215622028108488,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127216721539736699,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127216721539736699,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127217821051364910,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127217821051364910,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127218920562993121,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127218920562993121,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127220020074621332,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127220020074621332,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127221119586249543,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127221119586249543,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127222219097877754,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127222219097877754,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127223318609505965,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8127223318609505965,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 8412859051926332720,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 23105,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8412860151437960931,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 99429,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8412861250949589142,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 43556,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8412862350461217353,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 21630,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8412863449972845564,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 21467,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8412864549484473775,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 22084,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8412865648996101986,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 22182,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8412866748507730197,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 21445,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8412870047042614830,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 27991,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8412871146554243041,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 23397,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8478719069898095052,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 52460,
+      "exclusive_ns": 203,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8848983640553612432,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 51945,
+      "exclusive_ns": 320,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8848985839576868854,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 58503,
+      "exclusive_ns": 288,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8848988038600125276,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 52537,
+      "exclusive_ns": 279,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8848990237623381698,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 58690,
+      "exclusive_ns": 300,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8849831364018773888,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 32216,
+      "exclusive_ns": 364,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8849833563042030310,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 27298,
+      "exclusive_ns": 347,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8849837961088543154,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 30851,
+      "exclusive_ns": 369,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8851809385437547027,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 49978,
+      "exclusive_ns": 260,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8851822579577085559,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 48697,
+      "exclusive_ns": 271,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 8851824778600341981,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 56685,
+      "exclusive_ns": 320,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 9546060402141720272,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 17988,
+      "exclusive_ns": 17988,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 9546061501653348483,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 20245,
+      "exclusive_ns": 20245,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 9546063700676604905,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 17801,
+      "exclusive_ns": 17801,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 9546064800188233116,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19342,
+      "exclusive_ns": 19342,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 9546065899699861327,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 17186,
+      "exclusive_ns": 17186,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 9546066999211489538,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 17120,
+      "exclusive_ns": 17120,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 9546068098723117749,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19539,
+      "exclusive_ns": 19539,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 9640214416681086960,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 431,
+      "exclusive_ns": 431,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640214416681086960,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640215516192715171,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 233,
+      "exclusive_ns": 233,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640215516192715171,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640216615704343382,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640216615704343382,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640217715215971593,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 366,
+      "exclusive_ns": 366,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 9640217715215971593,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 9640218814727599804,
+      "category": "allocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 9640218814727599804,
+      "category": "deallocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 9640219914239228015,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 382,
+      "exclusive_ns": 382,
+      "bytes": 57024,
+      "bytes_known": true
+    },
+    {
+      "id": 9640219914239228015,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 57024,
+      "bytes_known": true
+    },
+    {
+      "id": 9640221013750856226,
+      "category": "allocation",
+      "calls": 65,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12480,
+      "bytes_known": true
+    },
+    {
+      "id": 9640221013750856226,
+      "category": "deallocation",
+      "calls": 65,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12480,
+      "bytes_known": true
+    },
+    {
+      "id": 9640222113262484437,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 429,
+      "exclusive_ns": 429,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640222113262484437,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640223212774112648,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640223212774112648,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9640224312285740859,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 383,
+      "exclusive_ns": 383,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9640224312285740859,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9641202877634659424,
+      "category": "allocation",
+      "calls": 64,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9641202877634659424,
+      "category": "deallocation",
+      "calls": 64,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9641203977146287635,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 388,
+      "exclusive_ns": 388,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9641203977146287635,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9641205076657915846,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 455,
+      "exclusive_ns": 455,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9641205076657915846,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9641206176169544057,
+      "category": "allocation",
+      "calls": 128,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9641206176169544057,
+      "category": "deallocation",
+      "calls": 128,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9641207275681172268,
+      "category": "allocation",
+      "calls": 65,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12480,
+      "bytes_known": true
+    },
+    {
+      "id": 9641207275681172268,
+      "category": "deallocation",
+      "calls": 65,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12480,
+      "bytes_known": true
+    },
+    {
+      "id": 9641208375192800479,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 336,
+      "exclusive_ns": 336,
+      "bytes": 12480,
+      "bytes_known": true
+    },
+    {
+      "id": 9641208375192800479,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12480,
+      "bytes_known": true
+    },
+    {
+      "id": 9641209474704428690,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 550,
+      "exclusive_ns": 550,
+      "bytes": 12480,
+      "bytes_known": true
+    },
+    {
+      "id": 9641209474704428690,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12480,
+      "bytes_known": true
+    },
+    {
+      "id": 9641210574216056901,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 434,
+      "exclusive_ns": 434,
+      "bytes": 57024,
+      "bytes_known": true
+    },
+    {
+      "id": 9641210574216056901,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 57024,
+      "bytes_known": true
+    },
+    {
+      "id": 9641213872750941534,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 341,
+      "exclusive_ns": 341,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9641213872750941534,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9641214972262569745,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 438,
+      "exclusive_ns": 438,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9641214972262569745,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9642191338588231888,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 369,
+      "exclusive_ns": 369,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9642191338588231888,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9642192438099860099,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 361,
+      "exclusive_ns": 361,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9642192438099860099,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9642193537611488310,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 482,
+      "exclusive_ns": 482,
+      "bytes": 24960,
+      "bytes_known": true
+    },
+    {
+      "id": 9642193537611488310,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 24960,
+      "bytes_known": true
+    },
+    {
+      "id": 9642194637123116521,
+      "category": "allocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9642194637123116521,
+      "category": "deallocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9642195736634744732,
+      "category": "allocation",
+      "calls": 64,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9642195736634744732,
+      "category": "deallocation",
+      "calls": 64,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9642196836146372943,
+      "category": "allocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9642196836146372943,
+      "category": "deallocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9642197935658001154,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 382,
+      "exclusive_ns": 382,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9642197935658001154,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9642199035169629365,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 339,
+      "exclusive_ns": 339,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9642199035169629365,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9642206731751026842,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 343,
+      "exclusive_ns": 343,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9642206731751026842,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9642207831262655053,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 343,
+      "exclusive_ns": 343,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9642207831262655053,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9643039062053393344,
+      "category": "allocation",
+      "calls": 128,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9643039062053393344,
+      "category": "deallocation",
+      "calls": 128,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9643040161565021555,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 308,
+      "exclusive_ns": 308,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9643040161565021555,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9643047858146419032,
+      "category": "allocation",
+      "calls": 64,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9643047858146419032,
+      "category": "deallocation",
+      "calls": 64,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9643048957658047243,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 328,
+      "exclusive_ns": 328,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9643048957658047243,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9643050057169675454,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 817,
+      "exclusive_ns": 817,
+      "bytes": 24960,
+      "bytes_known": true
+    },
+    {
+      "id": 9643050057169675454,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 24960,
+      "bytes_known": true
+    },
+    {
+      "id": 9643051156681303665,
+      "category": "allocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9643051156681303665,
+      "category": "deallocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9643052256192931876,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 359,
+      "exclusive_ns": 359,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9643052256192931876,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9643053355704560087,
+      "category": "allocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9643053355704560087,
+      "category": "deallocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9643054455216188298,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 309,
+      "exclusive_ns": 309,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9643054455216188298,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9643055554727816509,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 282,
+      "exclusive_ns": 282,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9643055554727816509,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9644031921053478652,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 354,
+      "exclusive_ns": 354,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9644031921053478652,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9644033020565106863,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 317,
+      "exclusive_ns": 317,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9644033020565106863,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 9644036319099991496,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 240,
+      "exclusive_ns": 240,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9644036319099991496,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9644037418611619707,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 748,
+      "exclusive_ns": 748,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9644037418611619707,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9644038518123247918,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 259,
+      "exclusive_ns": 259,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9644038518123247918,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9644039617634876129,
+      "category": "allocation",
+      "calls": 128,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9644039617634876129,
+      "category": "deallocation",
+      "calls": 128,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 9644040717146504340,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 342,
+      "exclusive_ns": 342,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9644040717146504340,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9644041816658132551,
+      "category": "allocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9644041816658132551,
+      "category": "deallocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9644042916169760762,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 431,
+      "exclusive_ns": 431,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9644042916169760762,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9644044015681388973,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 353,
+      "exclusive_ns": 353,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9644044015681388973,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645022581030307538,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 875,
+      "exclusive_ns": 875,
+      "bytes": 24960,
+      "bytes_known": true
+    },
+    {
+      "id": 9645022581030307538,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 24960,
+      "bytes_known": true
+    },
+    {
+      "id": 9645023680541935749,
+      "category": "allocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645023680541935749,
+      "category": "deallocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645024780053563960,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 225,
+      "exclusive_ns": 225,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 9645024780053563960,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 9645025879565192171,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 269,
+      "exclusive_ns": 269,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 9645025879565192171,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 36864,
+      "bytes_known": true
+    },
+    {
+      "id": 9645026979076820382,
+      "category": "allocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645026979076820382,
+      "category": "deallocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645028078588448593,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 306,
+      "exclusive_ns": 306,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645028078588448593,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645029178100076804,
+      "category": "allocation",
+      "calls": 225,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 21600,
+      "bytes_known": true
+    },
+    {
+      "id": 9645029178100076804,
+      "category": "deallocation",
+      "calls": 225,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 21600,
+      "bytes_known": true
+    },
+    {
+      "id": 9645030277611705015,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 292,
+      "exclusive_ns": 292,
+      "bytes": 93024,
+      "bytes_known": true
+    },
+    {
+      "id": 9645030277611705015,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 93024,
+      "bytes_known": true
+    },
+    {
+      "id": 9645031377123333226,
+      "category": "allocation",
+      "calls": 768,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 9645031377123333226,
+      "category": "deallocation",
+      "calls": 768,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 9645032476634961437,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 349,
+      "exclusive_ns": 349,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 9645032476634961437,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 9645986852728059360,
+      "category": "allocation",
+      "calls": 225,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 21600,
+      "bytes_known": true
+    },
+    {
+      "id": 9645986852728059360,
+      "category": "deallocation",
+      "calls": 225,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 21600,
+      "bytes_known": true
+    },
+    {
+      "id": 9645987952239687571,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 230,
+      "exclusive_ns": 230,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645987952239687571,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645989051751315782,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 362,
+      "exclusive_ns": 362,
+      "bytes": 21600,
+      "bytes_known": true
+    },
+    {
+      "id": 9645989051751315782,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 21600,
+      "bytes_known": true
+    },
+    {
+      "id": 9645990151262943993,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 324,
+      "exclusive_ns": 324,
+      "bytes": 21600,
+      "bytes_known": true
+    },
+    {
+      "id": 9645990151262943993,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 21600,
+      "bytes_known": true
+    },
+    {
+      "id": 9645991250774572204,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 247,
+      "exclusive_ns": 247,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645991250774572204,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645992350286200415,
+      "category": "allocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645992350286200415,
+      "category": "deallocation",
+      "calls": 192,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645993449797828626,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 191,
+      "exclusive_ns": 191,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645993449797828626,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645994549309456837,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 203,
+      "exclusive_ns": 203,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645994549309456837,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9645997847844341470,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 212,
+      "exclusive_ns": 212,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 9645997847844341470,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 9645998947355969681,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 273,
+      "exclusive_ns": 273,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 9645998947355969681,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 9653597672217022102,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 451,
+      "exclusive_ns": 451,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 9653597672217022102,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 9653598771728650313,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653598771728650313,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653604269286791368,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653604269286791368,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653605368798419579,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 432,
+      "exclusive_ns": 432,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 9653605368798419579,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 9653606468310047790,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 505,
+      "exclusive_ns": 505,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653606468310047790,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653607567821676001,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653607567821676001,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653608667333304212,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653608667333304212,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653609766844932423,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653609766844932423,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653610866356560634,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653610866356560634,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653611965868188845,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 459,
+      "exclusive_ns": 459,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9653611965868188845,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654588332193850988,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654588332193850988,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654589431705479199,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 432,
+      "exclusive_ns": 432,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 9654589431705479199,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 9654592730240363832,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 383,
+      "exclusive_ns": 383,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654592730240363832,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654593829751992043,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654593829751992043,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654594929263620254,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654594929263620254,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654596028775248465,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654596028775248465,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654597128286876676,
+      "category": "allocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654597128286876676,
+      "category": "deallocation",
+      "calls": 48,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654598227798504887,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 511,
+      "exclusive_ns": 511,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9654598227798504887,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 9654599327310133098,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 387,
+      "exclusive_ns": 387,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654599327310133098,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 9216,
+      "bytes_known": true
+    },
+    {
+      "id": 9654600426821761309,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 412,
+      "exclusive_ns": 412,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 9654600426821761309,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 16128,
+      "bytes_known": true
+    },
+    {
+      "id": 12002408322048504771,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 70370,
+      "exclusive_ns": 70370,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 12175644926830759234,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 191,
+      "exclusive_ns": 191,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 12175646026342387445,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 163,
+      "exclusive_ns": 163,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 12818344137367929400,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 487,
+      "exclusive_ns": 487,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 12818345236879557611,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 1098,
+      "exclusive_ns": 1098,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 12818346336391185822,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 193,
+      "exclusive_ns": 193,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 12818347435902814033,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 175,
+      "exclusive_ns": 175,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116172834679595884,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 17533,
+      "exclusive_ns": 17533,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116173934191224095,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 17712,
+      "exclusive_ns": 17712,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116177232726108728,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19158,
+      "exclusive_ns": 19158,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116178332237736939,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19522,
+      "exclusive_ns": 19522,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116179431749365150,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 24937,
+      "exclusive_ns": 24937,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116180531260993361,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 23763,
+      "exclusive_ns": 23763,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116181630772621572,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 18838,
+      "exclusive_ns": 18838,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116182730284249783,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19571,
+      "exclusive_ns": 19571,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116183829795877994,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19459,
+      "exclusive_ns": 19459,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13116184929307506205,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19023,
+      "exclusive_ns": 19023,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13118980987377479103,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19838,
+      "exclusive_ns": 19838,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13136411074785292016,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 9143720,
+      "exclusive_ns": 49330,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682863816889292304,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16319,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682864916400920515,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 96865,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682866015912548726,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 98445,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682867115424176937,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 21829,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682868214935805148,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16614,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682869314447433359,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 49186,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682870413959061570,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15545,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682871513470689781,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 69261,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682874812005574414,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 108026,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13682875911517202625,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 75954,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683711540354453760,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 107829,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683712639866081971,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17625,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683713739377710182,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 18550,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683714838889338393,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 86156,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683715938400966604,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15847,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683717037912594815,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 39261,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683718137424223026,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16464,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683719236935851237,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 59570,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683726933517248714,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 65875,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13683728033028876925,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15988,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684700001308026224,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17434,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684701100819654435,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 57358,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684708797401051912,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 74722,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684709896912680123,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 52257,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684710996424308334,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 50774,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684712095935936545,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17024,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684713195447564756,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 130363,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684714294959192967,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 21756,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684715394470821178,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 18209,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13684716493982449389,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 81763,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685692860308111532,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 56365,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685693959819739743,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15846,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685697258354624376,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15174,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685698357866252587,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 50736,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685699457377880798,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 58994,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685700556889509009,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16049,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685701656401137220,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 53627,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685702755912765431,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 56689,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685703855424393642,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15730,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13685704954936021853,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 48426,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686683520284940418,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15608,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686684619796568629,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 51625,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686685719308196840,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15733,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686686818819825051,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 59706,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686687918331453262,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 50241,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686689017843081473,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15921,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686690117354709684,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 49718,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686691216866337895,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15738,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686692316377966106,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 67044,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13686693415889594317,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 47286,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687647791982692240,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16498,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687648891494320451,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 58215,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687649991005948662,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 52609,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687651090517576873,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 71546,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687652190029205084,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 64930,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687653289540833295,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 13338,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687654389052461506,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15292,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687655488564089717,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 57931,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687658787098974350,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 52258,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13687659886610602561,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15402,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688495515447853696,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16997,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688496614959481907,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 42956,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688497714471110118,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 19634,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688498813982738329,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 27560,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688499913494366540,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 63260,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688501013005994751,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 58352,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688502112517622962,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 58390,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688503212029251173,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16083,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688508709587392228,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 37752,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13688509809099020439,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 63269,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689483976401426160,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 34473,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689485075913054371,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 30107,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689492772494451848,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16728,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689493872006080059,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 27291,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689494971517708270,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15875,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689496071029336481,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 26207,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689497170540964692,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 27007,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689498270052592903,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16477,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689499369564221114,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 26951,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13689500469075849325,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16175,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13690475735889883257,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 31059,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13690481233448024312,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 31121,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13690482332959652523,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16812,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13690483432471280734,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 31852,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13690484531982908945,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16544,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13690485631494537156,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 22330,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13690486731006165367,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 30482,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13690487830517793578,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16256,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 13690488930029421789,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 28588,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521639498448394768,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 20053,
+      "exclusive_ns": 20053,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521640597960022979,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 24144,
+      "exclusive_ns": 24144,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521641697471651190,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 23304,
+      "exclusive_ns": 23304,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521642796983279401,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 20002,
+      "exclusive_ns": 20002,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521643896494907612,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 54801,
+      "exclusive_ns": 54801,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521644996006535823,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 32998,
+      "exclusive_ns": 32998,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521646095518164034,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 40167,
+      "exclusive_ns": 40167,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521647195029792245,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 38179,
+      "exclusive_ns": 38179,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521652692587933300,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 19872,
+      "exclusive_ns": 19872,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 15521653792099561511,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 26721,
+      "exclusive_ns": 26721,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16011668676398822909,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 15618,
+      "exclusive_ns": 15618,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336118807437598464,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15966,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336119906949226675,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15438,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336121006460854886,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15763,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336122105972483097,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16449,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336123205484111308,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16860,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336124304995739519,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15578,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336125404507367730,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16412,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336126504018995941,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16433,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336127603530624152,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16632,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16336128703042252363,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16401,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337107268391170928,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16321,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337108367902799139,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17260,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337109467414427350,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17855,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337110566926055561,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16290,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337111666437683772,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15609,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337112765949311983,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16125,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337113865460940194,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16093,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337114964972568405,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15079,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337118263507453038,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15674,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16337119363019081249,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15658,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338095729344743392,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 20951,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338096828856371603,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 19998,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338097928367999814,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 22354,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338099027879628025,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 21435,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338100127391256236,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 20226,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338101226902884447,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 19935,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338102326414512658,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 19899,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338103425926140869,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 20306,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338111122507538346,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17070,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16338112222019166557,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15929,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339936311809990156,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15629,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339937411321618367,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15525,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339940709856503000,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16547,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339941809368131211,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15180,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339942908879759422,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16125,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339944008391387633,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16323,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339945107903015844,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15914,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339946207414644055,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16773,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339947306926272266,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15257,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16339948406437900477,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 19833,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340926971786819042,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15552,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340928071298447253,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15960,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340929170810075464,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15935,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340930270321703675,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15934,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340931369833331886,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15841,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340932469344960097,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16834,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340933568856588308,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16512,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340934668368216519,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16950,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340935767879844730,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16607,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16340936867391472941,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 18833,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341891243484570864,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 14799,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341892342996199075,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16459,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341893442507827286,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17034,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341894542019455497,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17716,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341895641531083708,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17581,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341896741042711919,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16940,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341897840554340130,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16214,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341898940065968341,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16436,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341902238600852974,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 29210,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16341903338112481185,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 24196,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342879704438143328,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 18160,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342880803949771539,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 18109,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342881903461399750,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16535,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342883002973027961,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17124,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342884102484656172,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 38976,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342885201996284383,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16694,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342886301507912594,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 49619,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342887401019540805,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16973,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342892898577681860,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16494,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16342893998089310071,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 17498,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345710946880218978,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16268,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345712046391847189,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15529,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345713145903475400,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 14851,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345714245415103611,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16807,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345715344926731822,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16282,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345716444438360033,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16362,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345717543949988244,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15469,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345718643461616455,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15303,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345719742973244666,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 14971,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16345720842484872877,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16767,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346675218577970800,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15691,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346676318089599011,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15688,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346677417601227222,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16649,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346678517112855433,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16285,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346679616624483644,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16134,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346680716136111855,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15231,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346681815647740066,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 15240,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346682915159368277,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16131,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346684014670996488,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16259,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16346685114182624699,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 16183,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16488111960133041804,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 236,
+      "exclusive_ns": 236,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 16488113059644670015,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 177,
+      "exclusive_ns": 177,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17456340969661893500,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17456340969661893500,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17456342069173521711,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 17456342069173521711,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 17456345367708406344,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 17456345367708406344,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 6144,
+      "bytes_known": true
+    },
+    {
+      "id": 17456346467220034555,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 17456346467220034555,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 17456347566731662766,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 17456347566731662766,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 12288,
+      "bytes_known": true
+    },
+    {
+      "id": 17456348666243290977,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17456348666243290977,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17456349765754919188,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 17456349765754919188,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 17456350865266547399,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17456350865266547399,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17456351964778175610,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17456351964778175610,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17456353064289803821,
+      "category": "materialized_write",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17456353064289803821,
+      "category": "materialized_read",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 18432,
+      "bytes_known": true
+    },
+    {
+      "id": 17610555430834911328,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 307,
+      "exclusive_ns": 307,
+      "bytes": 75264,
+      "bytes_known": true
+    },
+    {
+      "id": 17610555430834911328,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 75264,
+      "bytes_known": true
+    },
+    {
+      "id": 17610556530346539539,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 490,
+      "exclusive_ns": 490,
+      "bytes": 171072,
+      "bytes_known": true
+    },
+    {
+      "id": 17610556530346539539,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 171072,
+      "bytes_known": true
+    },
+    {
+      "id": 17610557629858167750,
+      "category": "allocation",
+      "calls": 1536,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 147456,
+      "bytes_known": true
+    },
+    {
+      "id": 17610557629858167750,
+      "category": "deallocation",
+      "calls": 1536,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 147456,
+      "bytes_known": true
+    },
+    {
+      "id": 17610558729369795961,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 205,
+      "exclusive_ns": 205,
+      "bytes": 147456,
+      "bytes_known": true
+    },
+    {
+      "id": 17610558729369795961,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 147456,
+      "bytes_known": true
+    },
+    {
+      "id": 17610559828881424172,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 217,
+      "exclusive_ns": 217,
+      "bytes": 178092,
+      "bytes_known": true
+    },
+    {
+      "id": 17610559828881424172,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 178092,
+      "bytes_known": true
+    },
+    {
+      "id": 17610560928393052383,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 165,
+      "exclusive_ns": 165,
+      "bytes": 158304,
+      "bytes_known": true
+    },
+    {
+      "id": 17610560928393052383,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 158304,
+      "bytes_known": true
+    },
+    {
+      "id": 17610562027904680594,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 471,
+      "exclusive_ns": 471,
+      "bytes": 81900,
+      "bytes_known": true
+    },
+    {
+      "id": 17610562027904680594,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 81900,
+      "bytes_known": true
+    },
+    {
+      "id": 17610563127416308805,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 217,
+      "exclusive_ns": 217,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 17610563127416308805,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 73728,
+      "bytes_known": true
+    },
+    {
+      "id": 17610570823997706282,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 327,
+      "exclusive_ns": 327,
+      "bytes": 93024,
+      "bytes_known": true
+    },
+    {
+      "id": 17610570823997706282,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 93024,
+      "bytes_known": true
+    },
+    {
+      "id": 17610571923509334493,
+      "category": "allocation",
+      "calls": 1,
+      "inclusive_ns": 104,
+      "exclusive_ns": 104,
+      "bytes": 36,
+      "bytes_known": true
+    },
+    {
+      "id": 17610571923509334493,
+      "category": "deallocation",
+      "calls": 1,
+      "inclusive_ns": 0,
+      "exclusive_ns": 0,
+      "bytes": 36,
+      "bytes_known": true
+    },
+    {
+      "id": 17694730879546009552,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 31287,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17694731979057637763,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 837086,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17694733078569265974,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 134014,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17694734178080894185,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 22165,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17694735277592522396,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 94212,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17694736377104150607,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 23480,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17694737476615778818,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 309957,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17694738576127407029,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 133180,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17694739675639035240,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 20742,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 17694740775150663451,
+      "category": "parallel",
+      "calls": 1,
+      "inclusive_ns": 97899,
+      "exclusive_ns": null,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088092266682775868,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 15806,
+      "exclusive_ns": 15806,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088093366194404079,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 15719,
+      "exclusive_ns": 15719,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088096664729288712,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 17229,
+      "exclusive_ns": 17229,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088097764240916923,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 17415,
+      "exclusive_ns": 17415,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088098863752545134,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 16102,
+      "exclusive_ns": 16102,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088099963264173345,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 17185,
+      "exclusive_ns": 17185,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088101062775801556,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 31221,
+      "exclusive_ns": 31221,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088102162287429767,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 22788,
+      "exclusive_ns": 22788,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088103261799057978,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 26023,
+      "exclusive_ns": 26023,
+      "bytes": null,
+      "bytes_known": false
+    },
+    {
+      "id": 18088104361310686189,
+      "category": "operation",
+      "calls": 1,
+      "inclusive_ns": 18563,
+      "exclusive_ns": 18563,
+      "bytes": null,
+      "bytes_known": false
+    }
+  ]
+}

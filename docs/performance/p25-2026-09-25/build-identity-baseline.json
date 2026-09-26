@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-25",
+  "compiler_repository": "/mnt/ncnn-compiler/compiler",
+  "branch": "p8-implementation",
+  "head": "05be0ae01c85828bcc350121071730b886ee9cf7",
+  "head_subject": "perf(ncnn): 完善 native INT8 后端并归档验收结果",
+  "initial_untracked_evidence_preserved": [
+    "docs/performance/p22-2026-09-22/",
+    "docs/performance/p22-2026-09-23/",
+    "docs/performance/p24-2026-09-25/"
+  ],
+  "vendored_ncnn": "a4d2ea1d4422c9e849f166fd7a4aefb52f942f6a",
+  "build": {
+    "fresh_stage": "/tmp/ncnn-compiler-stage-p25-baseline-20260925-01",
+    "build_type": "Release",
+    "llvm_dir": "/usr/lib/llvm-21/lib/cmake/llvm",
+    "llvm_mlir_version": "21.1.8",
+    "cmake_version": "3.31.6",
+    "clang_version": "Debian clang 21.1.8",
+    "compiler_enable_format_targets": true,
+    "compiler_install_rpath": true,
+    "build_testing": true,
+    "build_parallelism": 8,
+    "ncnn_matmul_packing": "auto",
+    "ncnn_packed_conv_depthwise": false
+  },
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "12th Gen Intel(R) Core(TM) i5-12600KF",
+    "online_logical_cpus": 16,
+    "performance_target": "x86-64-v3/AVX2/FMA"
+  },
+  "engineering_validation": {
+    "format_check": "passed globally",
+    "tidy": "passed globally; 90 first-party translation units",
+    "full_build": "passed",
+    "numerical_targets": "numerical_tests, numerical_dynamic_operator_tests, numerical_dynamic_tests passed",
+    "ctest_registered": 449,
+    "ctest_passed": 449,
+    "ctest_failed": 0,
+    "ctest_skipped": [
+      "PerformanceModel.PPLCNetDocOriInt8",
+      "PerformanceModel.PPLCNetTextlineOriInt8"
+    ],
+    "ctest_elapsed_seconds": 766.13
+  },
+  "formal_performance_measurement": {
+    "mode": "end_to_end",
+    "threads": 6,
+    "warmup": 10,
+    "iterations": 20,
+    "measured_rows": 45,
+    "official_rows": 44,
+    "diagnostic_model": "resnet18_winograd",
+    "profile_instrumentation": false,
+    "official_ratio_p50": 1.803,
+    "official_ratio_p90": 2.862,
+    "official_ratio_max": 5.015,
+    "official_ratio_geometric_mean": 1.8522531866906844,
+    "official_ncnn_total_ms": 8616.392,
+    "official_compiled_total_ms": 10242.904,
+    "official_total_excess_ms": 1626.512
+  }
+}

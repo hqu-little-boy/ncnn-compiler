@@ -1,0 +1,49 @@
+{
+  "function": "yolov5x_seg",
+  "inputs": [
+    {
+      "dynamic_dim_mask": 0,
+      "element_type": "f32",
+      "name": "input1",
+      "shape": [
+        3,
+        640,
+        640
+      ]
+    }
+  ],
+  "openmp": true,
+  "outputs": [
+    {
+      "dynamic_dim_mask": 0,
+      "element_type": "f32",
+      "name": "output1",
+      "shape": [
+        32,
+        160,
+        160
+      ]
+    },
+    {
+      "dynamic_dim_mask": 0,
+      "element_type": "f32",
+      "name": "output2",
+      "shape": [
+        25200,
+        117
+      ]
+    }
+  ],
+  "target": {
+    "cpu": "",
+    "execution_profile": "x86-64-auto",
+    "features": [
+      "+avx2",
+      "+fma"
+    ],
+    "march": "x86-64-v3",
+    "triple": "x86_64-pc-linux-gnu",
+    "tune": ""
+  },
+  "vector_math": "libmvec"
+}

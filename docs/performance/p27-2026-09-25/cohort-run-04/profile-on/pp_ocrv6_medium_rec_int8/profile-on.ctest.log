@@ -1,0 +1,11 @@
+Internal ctest changing into directory: /tmp/ncnn-compiler-stage-p27-20260925-01
+Test project /tmp/ncnn-compiler-stage-p27-20260925-01
+    Start 438: PerformanceModel.PPOcrv6MediumRecInt8
+1/1 Test #438: PerformanceModel.PPOcrv6MediumRecInt8 ...   Passed    1.37 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Label Time Summary:
+performance    =   1.37 sec*proc (1 test)
+
+Total Test time (real) =   1.39 sec
