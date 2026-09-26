@@ -5,6 +5,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
 
@@ -25,8 +26,9 @@ class VerifyNoNCNNOpsPass final
         return;
       }
       foundResidual = true;
-      auto name = operation->getAttrOfType<StringAttr>("ncnn.name");
-      auto source = operation->getAttrOfType<IntegerAttr>("ncnn.source_layer");
+      auto name = operation->getAttrOfType<StringAttr>(contract::kName);
+      auto source =
+        operation->getAttrOfType<IntegerAttr>(contract::kSourceLayer);
       InFlightDiagnostic diagnostic =
         operation->emitOpError()
         << "remains after lowering; op=" << operation->getName().getStringRef()

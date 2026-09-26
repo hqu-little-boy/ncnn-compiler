@@ -4,8 +4,33 @@
 #include <vector>
 
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 
 namespace ncnn_mlir {
+
+mlir::ElementsAttr findConstantElements(mlir::Value value) {
+  while (mlir::Operation* defining = value.getDefiningOp()) {
+    if (auto constant = mlir::dyn_cast<mlir::arith::ConstantOp>(defining)) {
+      return mlir::dyn_cast<mlir::ElementsAttr>(constant.getValue());
+    }
+    if (auto cast = mlir::dyn_cast<mlir::tensor::CastOp>(defining)) {
+      value = cast.getSource();
+      continue;
+    }
+    if (auto collapse =
+          mlir::dyn_cast<mlir::tensor::CollapseShapeOp>(defining)) {
+      value = collapse.getSrc();
+      continue;
+    }
+    if (auto expand = mlir::dyn_cast<mlir::tensor::ExpandShapeOp>(defining)) {
+      value = expand.getSrc();
+      continue;
+    }
+    return {};
+  }
+  return {};
+}
 
 bool is_foldable_element_type(mlir::Type elementType) {
   return elementType.isIntOrFloat() &&

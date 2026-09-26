@@ -4,6 +4,9 @@
 #include <cmath>
 #include <cstring>
 
+#include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/ModelLedger.hpp"
+
 namespace ncnn_importer::detail {
 
 namespace {
@@ -85,10 +88,12 @@ void add_input_dim_relation(mlir::Value lhs,
   }
   auto model = lhs.getDefiningOp()->getParentOfType<mlir::ncnn::ModelOp>();
   mlir::Builder builder(model.getContext());
+  mlir::ncnn::contract::ModelLedger ledger =
+    mlir::ncnn::contract::ModelLedger::read(model);
   llvm::SmallVector<mlir::Attribute> relations;
-  if (auto existing =
-        model->getAttrOfType<mlir::ArrayAttr>("ncnn.input_dim_relations")) {
-    relations.append(existing.begin(), existing.end());
+  if (ledger.inputDimRelations) {
+    relations.append(ledger.inputDimRelations.begin(),
+                     ledger.inputDimRelations.end());
   }
   auto relation =
     builder.getDenseI64ArrayAttr({static_cast<std::int64_t>(*lhs_index),
@@ -98,7 +103,8 @@ void add_input_dim_relation(mlir::Value lhs,
                                   offset});
   if (!llvm::is_contained(relations, relation)) {
     relations.push_back(relation);
-    model->setAttr("ncnn.input_dim_relations", builder.getArrayAttr(relations));
+    ledger.inputDimRelations = builder.getArrayAttr(relations);
+    ledger.write(model);
   }
 }
 

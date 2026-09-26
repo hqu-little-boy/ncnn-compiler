@@ -27,6 +27,7 @@
 #include "mlir/IR/Location.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/ModelLedger.hpp"
 
 namespace mlir::ncnn {
 
@@ -214,12 +215,12 @@ SourceProvenance ownSourceProvenance(Operation* operation) {
     sourceProvenanceFromLocation(operation->getLoc());
   if (!provenance.layer) {
     if (auto source =
-          operation->getAttrOfType<IntegerAttr>("ncnn.source_layer")) {
+          operation->getAttrOfType<IntegerAttr>(contract::kSourceLayer)) {
       provenance.layer = source.getInt();
     }
   }
   if (!provenance.name) {
-    if (auto name = operation->getAttrOfType<StringAttr>("ncnn.name")) {
+    if (auto name = operation->getAttrOfType<StringAttr>(contract::kName)) {
       provenance.name = name.getValue().str();
     }
   }
@@ -248,8 +249,7 @@ void collectRegionSourceProvenance(
     if (!provenance.hasValue()) {
       return;
     }
-    if (std::find(distinct.begin(), distinct.end(), provenance) ==
-        distinct.end()) {
+    if (!std::ranges::contains(distinct, provenance)) {
       distinct.push_back(std::move(provenance));
     }
   });
@@ -443,7 +443,7 @@ class EmitModelPlanPass final
     const auto module_copy_fallback =
       module->getAttrOfType<IntegerAttr>(contract::kCopyFallbackCount);
     const auto module_copy_records =
-      module->getAttrOfType<ArrayAttr>(contract::kCopyRecords);
+      contract::ModelLedger::read(module).copyRecords;
     const bool copy_ledger_collected = module_copy_records != nullptr;
     const auto module_fusion_revision =
       module->getAttrOfType<StringAttr>(contract::kFusionRevision);
@@ -486,7 +486,7 @@ class EmitModelPlanPass final
             .str()
         : "";
     const auto module_fusion_records =
-      module->getAttrOfType<ArrayAttr>(contract::kFusionRecords);
+      contract::ModelLedger::read(module).fusionRecords;
     const bool has_module_fusion_records =
       module_fusion_records && !module_fusion_records.empty();
     std::set<std::string> unknown_reasons;
@@ -519,7 +519,7 @@ class EmitModelPlanPass final
     };
 
     const auto module_attention_records =
-      module->getAttrOfType<ArrayAttr>(contract::kAttentionSegments);
+      contract::ModelLedger::read(module).attentionSegments;
     const std::string attention_revision =
       module->getAttrOfType<StringAttr>(contract::kAttentionRevision)
         ? module->getAttrOfType<StringAttr>(contract::kAttentionRevision)
@@ -634,7 +634,7 @@ class EmitModelPlanPass final
     const bool int8_cast_chain =
       int8CastChainAttr ? int8CastChainAttr.getValue() : false;
     const auto packedConvDepthwiseAttr =
-      module->getAttrOfType<BoolAttr>("ncnn.packed_conv_depthwise");
+      module->getAttrOfType<BoolAttr>(contract::kPackedConvDepthwise);
     const bool packed_conv_depthwise =
       packedConvDepthwiseAttr && packedConvDepthwiseAttr.getValue();
     const std::string layout_island_revision = "layout-island-v1";
@@ -925,24 +925,24 @@ class EmitModelPlanPass final
             lifetime_object[field.str()] = value.getInt();
           }
         };
-        copy_workspace_string("ncnn.workspace_reuse_status",
+        copy_workspace_string(contract::kWorkspaceReuseStatus,
                               "workspace_reuse_status");
-        copy_workspace_string("ncnn.workspace_fallback_reason",
+        copy_workspace_string(contract::kWorkspaceFallbackReason,
                               "workspace_fallback_reason");
-        copy_workspace_string("ncnn.workspace_slot_owner",
+        copy_workspace_string(contract::kWorkspaceSlotOwner,
                               "workspace_slot_owner");
-        copy_workspace_string("ncnn.workspace_slot_thread_visibility",
+        copy_workspace_string(contract::kWorkspaceSlotThreadVisibility,
                               "workspace_slot_thread_visibility");
-        copy_workspace_integer("ncnn.workspace_slot", "workspace_slot");
-        copy_workspace_integer("ncnn.workspace_slot_lifetime_begin",
+        copy_workspace_integer(contract::kWorkspaceSlot, "workspace_slot");
+        copy_workspace_integer(contract::kWorkspaceSlotLifetimeBegin,
                                "workspace_slot_lifetime_begin");
-        copy_workspace_integer("ncnn.workspace_slot_lifetime_end",
+        copy_workspace_integer(contract::kWorkspaceSlotLifetimeEnd,
                                "workspace_slot_lifetime_end");
-        copy_workspace_integer("ncnn.workspace_slot_bytes",
+        copy_workspace_integer(contract::kWorkspaceSlotBytes,
                                "workspace_slot_bytes");
-        copy_workspace_integer("ncnn.workspace_slot_alignment",
+        copy_workspace_integer(contract::kWorkspaceSlotAlignment,
                                "workspace_slot_alignment");
-        copy_workspace_integer("ncnn.workspace_reuse_count",
+        copy_workspace_integer(contract::kWorkspaceReuseCount,
                                "workspace_reuse_count");
         if (!proven) {
           add_unknown("buffer_liveness_unknown");
@@ -1416,13 +1416,13 @@ class EmitModelPlanPass final
             buffer["liveness_status"] = proven ? "proven" : "unknown";
           }
           if (auto status = alloc->getAttrOfType<StringAttr>(
-                "ncnn.workspace_reuse_status")) {
+                contract::kWorkspaceReuseStatus)) {
             buffer["workspace_reuse_status"] = status.getValue().str();
             if (status.getValue() == "fallback") {
               ++workspace_fallback_count;
               buffer["workspace_join_status"] = "fallback";
               if (auto reason = alloc->getAttrOfType<StringAttr>(
-                    "ncnn.workspace_fallback_reason")) {
+                    contract::kWorkspaceFallbackReason)) {
                 const std::string reason_value = reason.getValue().str();
                 workspace_fallback_reasons.insert(reason_value);
                 buffer["workspace_join_reason"] = reason_value;
@@ -1432,7 +1432,7 @@ class EmitModelPlanPass final
             }
           }
           if (auto slot =
-                alloc->getAttrOfType<IntegerAttr>("ncnn.workspace_slot")) {
+                alloc->getAttrOfType<IntegerAttr>(contract::kWorkspaceSlot)) {
             buffer["workspace_slot"] = slot.getInt();
             buffer["workspace_join_status"] = "joined";
             buffer["workspace_join_reason"] = nullptr;
@@ -1441,7 +1441,7 @@ class EmitModelPlanPass final
             if (workspace_slot_ids.insert(slotId).second) {
               ++workspace_slot_count;
               if (auto bytes = alloc->getAttrOfType<IntegerAttr>(
-                    "ncnn.workspace_slot_bytes")) {
+                    contract::kWorkspaceSlotBytes)) {
                 if (!workspace_slot_bytes_unknown && bytes.getInt() >= 0 &&
                     workspace_slot_bytes <=
                       std::numeric_limits<std::int64_t>::max() -
@@ -1467,24 +1467,24 @@ class EmitModelPlanPass final
               buffer[field.str()] = value.getInt();
             }
           };
-          copy_buffer_workspace_string("ncnn.workspace_slot_owner",
+          copy_buffer_workspace_string(contract::kWorkspaceSlotOwner,
                                        "workspace_slot_owner");
-          copy_buffer_workspace_string("ncnn.workspace_slot_thread_visibility",
+          copy_buffer_workspace_string(contract::kWorkspaceSlotThreadVisibility,
                                        "workspace_slot_thread_visibility");
-          copy_buffer_workspace_integer("ncnn.workspace_slot_lifetime_begin",
+          copy_buffer_workspace_integer(contract::kWorkspaceSlotLifetimeBegin,
                                         "workspace_slot_lifetime_begin");
-          copy_buffer_workspace_integer("ncnn.workspace_slot_lifetime_end",
+          copy_buffer_workspace_integer(contract::kWorkspaceSlotLifetimeEnd,
                                         "workspace_slot_lifetime_end");
           if (auto bytes = alloc->getAttrOfType<IntegerAttr>(
-                "ncnn.workspace_slot_bytes")) {
+                contract::kWorkspaceSlotBytes)) {
             buffer["workspace_slot_bytes"] = bytes.getInt();
           }
           if (auto alignment = alloc->getAttrOfType<IntegerAttr>(
-                "ncnn.workspace_slot_alignment")) {
+                contract::kWorkspaceSlotAlignment)) {
             buffer["workspace_slot_alignment"] = alignment.getInt();
           }
           if (auto reuseCount = alloc->getAttrOfType<IntegerAttr>(
-                "ncnn.workspace_reuse_count")) {
+                contract::kWorkspaceReuseCount)) {
             buffer["workspace_reuse_count"] = reuseCount.getInt();
             if (reuseCount.getInt() > 1 &&
                 workspace_reused_allocation_count <=
@@ -1979,7 +1979,7 @@ class EmitModelPlanPass final
     root["build_identity"] = plan_hash;
     root["codegen_identity"] = codegenIdentity;
     root["codegen_identity_encoding"] = "hex-utf8-or-empty";
-    root["kind"] = "ncnn.model_execution_plan";
+    root["kind"] = contract::kModelExecutionPlanKind;
     root["model"] = model;
     root["target"] = std::move(target);
     root["fusion"] = std::move(fusion);

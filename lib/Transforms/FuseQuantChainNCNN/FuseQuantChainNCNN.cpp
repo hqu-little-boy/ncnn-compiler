@@ -9,6 +9,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
 
@@ -344,7 +345,7 @@ class FuseQuantChainNCNNPass final
     RewritePatternSet patterns(&getContext());
     patterns.add<FuseElementwiseProducer>(&getContext());
     auto castChain =
-      getOperation()->getAttrOfType<BoolAttr>("ncnn.int8_cast_chain");
+      getOperation()->getAttrOfType<BoolAttr>(contract::kInt8CastChain);
     if (castChain && castChain.getValue()) {
       patterns.add<NormalizeMapConsumer>(&getContext());
     }

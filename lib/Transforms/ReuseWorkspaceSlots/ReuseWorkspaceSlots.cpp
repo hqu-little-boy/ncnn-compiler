@@ -16,6 +16,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
 
@@ -24,28 +25,6 @@ namespace mlir::ncnn {
 
 namespace {
 
-constexpr StringLiteral kReuseStatus = "ncnn.workspace_reuse_status";
-constexpr StringLiteral kFallbackReason = "ncnn.workspace_fallback_reason";
-constexpr StringLiteral kSlot = "ncnn.workspace_slot";
-constexpr StringLiteral kSlotBytes = "ncnn.workspace_slot_bytes";
-constexpr StringLiteral kSlotAlignment = "ncnn.workspace_slot_alignment";
-constexpr StringLiteral kSlotThreadVisibility =
-  "ncnn.workspace_slot_thread_visibility";
-constexpr StringLiteral kSlotOwner = "ncnn.workspace_slot_owner";
-constexpr StringLiteral kSlotLifetimeBegin =
-  "ncnn.workspace_slot_lifetime_begin";
-constexpr StringLiteral kSlotLifetimeEnd = "ncnn.workspace_slot_lifetime_end";
-constexpr StringLiteral kReuseCount = "ncnn.workspace_reuse_count";
-
-void setStringAttr(Operation* operation, StringRef name, StringRef value) {
-  operation->setAttr(name, StringAttr::get(operation->getContext(), value));
-}
-
-void setIntegerAttr(Operation* operation, StringRef name, int64_t value) {
-  operation->setAttr(
-    name,
-    IntegerAttr::get(IntegerType::get(operation->getContext(), 64), value));
-}
 
 std::optional<int64_t> staticByteSize(MemRefType type) {
   if (!type.hasStaticShape()) {
@@ -125,8 +104,8 @@ struct Slot final {
 };
 
 void markFallback(memref::AllocOp allocation, StringRef reason) {
-  setStringAttr(allocation, kReuseStatus, "fallback");
-  setStringAttr(allocation, kFallbackReason, reason);
+  contract::setString(allocation, contract::kWorkspaceReuseStatus, "fallback");
+  contract::setString(allocation, contract::kWorkspaceFallbackReason, reason);
 }
 
 bool hasMemRefResult(Operation* operation) {
@@ -233,19 +212,26 @@ class ReuseWorkspaceSlotsPass final
                            int64_t slotNumber,
                            func::FuncOp function) {
     memref::AllocOp allocation = slot.representative->allocation;
-    setStringAttr(
-      allocation, kReuseStatus, slot.memberCount > 1 ? "reused" : "dedicated");
-    setIntegerAttr(allocation, kSlot, slotNumber);
-    setIntegerAttr(allocation, kSlotBytes, slot.bytes);
-    setIntegerAttr(allocation, kSlotAlignment, slot.alignment);
-    setStringAttr(allocation, kSlotThreadVisibility, "function_serial");
-    setStringAttr(allocation, kSlotOwner, function.getName());
-    setIntegerAttr(
-      allocation, kSlotLifetimeBegin, slot.representative->allocationPosition);
-    setIntegerAttr(
-      allocation, kSlotLifetimeEnd, slot.latestDeallocationPosition);
-    setIntegerAttr(allocation, kReuseCount, slot.memberCount);
-    allocation->removeAttr(kFallbackReason);
+    contract::setString(allocation,
+                        contract::kWorkspaceReuseStatus,
+                        slot.memberCount > 1 ? "reused" : "dedicated");
+    contract::setInteger(allocation, contract::kWorkspaceSlot, slotNumber);
+    contract::setInteger(allocation, contract::kWorkspaceSlotBytes, slot.bytes);
+    contract::setInteger(
+      allocation, contract::kWorkspaceSlotAlignment, slot.alignment);
+    contract::setString(
+      allocation, contract::kWorkspaceSlotThreadVisibility, "function_serial");
+    contract::setString(
+      allocation, contract::kWorkspaceSlotOwner, function.getName());
+    contract::setInteger(allocation,
+                         contract::kWorkspaceSlotLifetimeBegin,
+                         slot.representative->allocationPosition);
+    contract::setInteger(allocation,
+                         contract::kWorkspaceSlotLifetimeEnd,
+                         slot.latestDeallocationPosition);
+    contract::setInteger(
+      allocation, contract::kWorkspaceReuseCount, slot.memberCount);
+    allocation->removeAttr(contract::kWorkspaceFallbackReason);
   }
 
   static void runOnFunction(func::FuncOp function) {

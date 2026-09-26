@@ -8,6 +8,8 @@
 #include <string>
 #include <string_view>
 
+#include "ncnn-mlir/Support/KernelContract.hpp"
+
 namespace ncnn_mlir {
 namespace {
 
@@ -119,17 +121,26 @@ std::string_view fp16_accumulator_mode_name(FP16AccumulatorMode mode) noexcept {
 
 OperatorPrecisionCapability operator_precision_capability(
   std::string_view operation) noexcept {
-  if (operation == "ncnn.convolution" ||
-      operation == "ncnn.convolution_depthwise") {
+  // Contract layer kinds are llvm::StringLiteral.  Compare through StringRef
+  // rather than against the raw std::string_view parameter: the two overloads
+  // sets overlap and the direct comparison is ambiguous.
+  const llvm::StringRef kind = operation;
+  if (kind == mlir::ncnn::contract::kLayerConvolution ||
+      kind == mlir::ncnn::contract::kLayerConvolutionDepthwise) {
     return OperatorPrecisionCapability::FP16Arithmetic;
   }
-  if (operation == "ncnn.sigmoid" || operation == "ncnn.hard_sigmoid" ||
-      operation == "ncnn.hard_swish" || operation == "ncnn.gelu" ||
-      operation == "ncnn.softmax" || operation == "ncnn.batch_norm" ||
-      operation == "ncnn.detection_output" ||
-      operation == "ncnn.deconvolution" || operation == "ncnn.gemm" ||
-      operation == "ncnn.binary" || operation == "ncnn.pooling" ||
-      operation == "ncnn.concat") {
+  if (kind == mlir::ncnn::contract::kLayerSigmoid ||
+      kind == mlir::ncnn::contract::kLayerHardSigmoid ||
+      kind == mlir::ncnn::contract::kLayerHardSwish ||
+      kind == mlir::ncnn::contract::kLayerGelu ||
+      kind == mlir::ncnn::contract::kLayerSoftmax ||
+      kind == mlir::ncnn::contract::kLayerBatchNorm ||
+      kind == mlir::ncnn::contract::kLayerDetectionOutput ||
+      kind == mlir::ncnn::contract::kLayerDeconvolution ||
+      kind == mlir::ncnn::contract::kLayerGemm ||
+      kind == mlir::ncnn::contract::kLayerBinary ||
+      kind == mlir::ncnn::contract::kLayerPooling ||
+      kind == mlir::ncnn::contract::kLayerConcat) {
     return OperatorPrecisionCapability::LowPrecisionBoundary;
   }
   return OperatorPrecisionCapability::Float32Only;

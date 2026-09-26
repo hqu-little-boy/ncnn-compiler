@@ -613,8 +613,7 @@ static void merge_worker_slots_locked(void) {
         region.end_ns > region.start_ns ? region.end_ns - region.start_ns : 0;
       parallel_record->region_worker_spans += (region_end - region_begin);
       if (parallel_record->worker_covered_wall_ns <= UINT64_MAX - covered_ns &&
-          parallel_record->sampled_window_wall_ns <=
-            UINT64_MAX - window_ns &&
+          parallel_record->sampled_window_wall_ns <= UINT64_MAX - window_ns &&
           parallel_record->region_wall_ns <= UINT64_MAX - region_wall) {
         parallel_record->worker_covered_wall_ns += covered_ns;
         parallel_record->sampled_window_wall_ns += window_ns;
@@ -702,8 +701,7 @@ static void merge_worker_slots_locked(void) {
     const uint64_t window = record->sampled_window_wall_ns;
     const uint64_t covered_in_window = record->worker_covered_wall_ns;
     const uint64_t region_wall = record->inclusive_ns;
-    const double covered_projected =
-      (double)covered_in_window * projection;
+    const double covered_projected = (double)covered_in_window * projection;
     if (covered_projected > (double)region_wall) {
       record->worker_covered_wall_estimated_ns = region_wall;
       record->wall_exclusive_estimated_ns = 0;
@@ -931,8 +929,8 @@ void __ncnn_profile_worker_event_begin(int64_t signed_id) {
   }
   ncnn_profile_slot* slot = ensure_slot();
   uint64_t window_limit = UINT64_MAX;
-  const int tracked = slot != NULL &&
-                      window_sampled(profile_now_coarse(), &window_limit);
+  const int tracked =
+    slot != NULL && window_sampled(profile_now_coarse(), &window_limit);
   const uint64_t start = tracked ? profile_now() : 0;
   if (tracked) {
     atomic_fetch_add_explicit(&open_worker_spans, 1, memory_order_relaxed);
@@ -1032,8 +1030,7 @@ void __ncnn_profile_worker_event_end(int64_t signed_id) {
   // Wall metrics use spans clipped to the sampled window so unions are
   // comparable with sampled_window_overlap(). CPU metrics keep the full
   // instance duration: they are per-instance sums in a different time domain.
-  const uint64_t span_end =
-    end < frame.window_limit ? end : frame.window_limit;
+  const uint64_t span_end = end < frame.window_limit ? end : frame.window_limit;
   ncnn_profile_slot* slot = my_slot;
   if (!slot) {
     return;
@@ -1806,9 +1803,10 @@ static void flush_profile_v2(const char* path) {
       }
       fputs(", \"wall_attributed_estimated_ns\": ", file);
       if (record->worker_wall_attributed_known) {
-        fprintf(file,
-                "%llu",
-                (unsigned long long)record->worker_wall_attributed_estimated_ns);
+        fprintf(
+          file,
+          "%llu",
+          (unsigned long long)record->worker_wall_attributed_estimated_ns);
       } else {
         fputs("null", file);
       }
@@ -2314,9 +2312,10 @@ void __ncnn_profile_flush(void) {
       }
       fputs(", \"wall_attributed_estimated_ns\": ", file);
       if (record->worker_wall_attributed_known) {
-        fprintf(file,
-                "%llu",
-                (unsigned long long)record->worker_wall_attributed_estimated_ns);
+        fprintf(
+          file,
+          "%llu",
+          (unsigned long long)record->worker_wall_attributed_estimated_ns);
       } else {
         fputs("null", file);
       }

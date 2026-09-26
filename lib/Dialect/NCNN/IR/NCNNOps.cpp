@@ -15,29 +15,18 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
+#include "ncnn-mlir/Support/CheckedMath.hpp"
+#include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/ModelLedger.hpp"
 
 namespace mlir::ncnn {
 namespace {
 
 // 与原自定义 IR 的 InferSupport 一致：溢出安全的整数算术。失败返回 failure()，
-// 由调用方附上语境错误。
-FailureOr<int64_t> checkedAdd(int64_t left, int64_t right) {
-  if ((right > 0 && left > std::numeric_limits<int64_t>::max() - right) ||
-      (right < 0 && left < std::numeric_limits<int64_t>::min() - right)) {
-    return failure();
-  }
-  return left + right;
-}
-
-FailureOr<int64_t> checkedMultiply(int64_t left, int64_t right) {
-  if (left < 0 || right < 0) {
-    return failure();
-  }
-  if (left != 0 && right > std::numeric_limits<int64_t>::max() / left) {
-    return failure();
-  }
-  return left * right;
-}
+// 由调用方附上语境错误。实现收敛到 CheckedMath.hpp，本文件不再自带一份。
+using ncnn_mlir::checkedAdd;
+using ncnn_mlir::checkedMul;
+using ncnn_mlir::checkedSub;
 
 // Convolution 结果类型推断（含全部结构校验）。inferReturnTypeComponents 与
 // verify 共用，避免两处重复。
@@ -165,7 +154,7 @@ FailureOr<RankedTensorType> computeConvResult(MLIRContext* context,
       (padTop < 0 || padBottom < 0 || padLeft < 0 || padRight < 0)) {
     return fail("convolution SAME padding must use one pad mode");
   }
-  FailureOr<int64_t> extentHeight = checkedMultiply(dilationH, kernelH - 1);
+  FailureOr<int64_t> extentHeight = checkedMul(dilationH, kernelH - 1);
   if (failed(extentHeight)) {
     return fail("convolution kernel height extent overflows");
   }
@@ -173,7 +162,7 @@ FailureOr<RankedTensorType> computeConvResult(MLIRContext* context,
   if (failed(extentHeight)) {
     return fail("convolution kernel height overflows");
   }
-  FailureOr<int64_t> extentWidth = checkedMultiply(dilationW, kernelW - 1);
+  FailureOr<int64_t> extentWidth = checkedMul(dilationW, kernelW - 1);
   if (failed(extentWidth)) {
     return fail("convolution kernel width extent overflows");
   }
@@ -283,8 +272,8 @@ FailureOr<RankedTensorType> computeDeconvResult(
     if (ShapedType::isDynamic(inputSize)) {
       return ShapedType::kDynamic;
     }
-    auto result = checkedMultiply(inputSize - 1, stride);
-    auto extent = checkedMultiply(kernel - 1, dilation);
+    auto result = checkedMul(inputSize - 1, stride);
+    auto extent = checkedMul(kernel - 1, dilation);
     if (failed(result) || failed(extent)) {
       return failure();
     }
@@ -296,10 +285,10 @@ FailureOr<RankedTensorType> computeDeconvResult(
       result = checkedAdd(*result, outputPad);
     }
     if (succeeded(result)) {
-      result = checkedAdd(*result, -padBefore);
+      result = checkedSub(*result, padBefore);
     }
     if (succeeded(result)) {
-      result = checkedAdd(*result, -padAfter);
+      result = checkedSub(*result, padAfter);
     }
     if (failed(result) || *result <= 0) {
       return failure();
@@ -400,7 +389,7 @@ FailureOr<RankedTensorType> computeInterpResult(
                             int64_t scale) -> FailureOr<int64_t> {
     return input.isDynamicDim(dimension)
              ? FailureOr<int64_t>(ShapedType::kDynamic)
-             : checkedMultiply(input.getShape()[dimension], scale);
+             : checkedMul(input.getShape()[dimension], scale);
   };
   FailureOr<int64_t> height =
     outputH == 0 ? scaleDimension(1, heightScale) : outputH;
@@ -475,7 +464,7 @@ FailureOr<RankedTensorType> computeDetectionOutputResult(
       priorboxElements != locationElements * 2) {
     return fail("DetectionOutput input shapes are inconsistent");
   }
-  auto perClass = checkedMultiply(numClass - 1, std::min(nmsTopK, numPrior));
+  auto perClass = checkedMul(numClass - 1, std::min(nmsTopK, numPrior));
   if (failed(perClass)) {
     return fail("DetectionOutput maximum detection count overflows");
   }
@@ -1042,7 +1031,7 @@ FailureOr<RankedTensorType> computeMultiHeadAttentionResult(
       "MultiHeadAttention dimensions must describe matching self attention and "
       "embed_dim must divide num_heads");
   }
-  auto weightCount = checkedMultiply(embedDim, qdim);
+  auto weightCount = checkedMul(embedDim, qdim);
   if (failed(weightCount) ||
       static_cast<uint64_t>(*weightCount) != adaptor.getWeightDataSize()) {
     return emitOptionalError(
@@ -1666,7 +1655,7 @@ LogicalResult ModelOp::verifyRegions() {
     return emitOpError("requires at least one ncnn.output");
   }
   auto constraints =
-    getOperation()->getAttrOfType<ArrayAttr>("ncnn.shape_constraints");
+    contract::ModelLedger::read(getOperation()).shapeConstraints;
   if (!constraints) {
     return success();
   }
@@ -2531,7 +2520,7 @@ LogicalResult SliceOp::verify() {
   }
   auto constraints =
     constraintOwner
-      ? constraintOwner->getAttrOfType<ArrayAttr>("ncnn.shape_constraints")
+      ? contract::ModelLedger::read(constraintOwner).shapeConstraints
       : nullptr;
   if (constraints) {
     for (Attribute attribute : constraints) {

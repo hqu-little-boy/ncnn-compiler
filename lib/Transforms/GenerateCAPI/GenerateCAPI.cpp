@@ -21,6 +21,8 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/FileUtilities.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNAttrs.hpp"
+#include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/ModelLedger.hpp"
 #include "ncnn-mlir/Support/ShapeProgram.hpp"
 
 namespace mlir::ncnn {
@@ -79,24 +81,6 @@ std::optional<StringRef> abiElementType(Type type) {
   }
 }
 
-constexpr StringLiteral kExportNameAttr = "ncnn.c_api.export_name";
-constexpr StringLiteral kInternalNameAttr = "ncnn.c_api.internal_name";
-constexpr StringLiteral kArgumentTypesAttr = "ncnn.c_api.argument_types";
-constexpr StringLiteral kOutputIndicesAttr = "ncnn.c_api.output_indices";
-constexpr StringLiteral kOutputShapeSourcesAttr =
-  "ncnn.c_api.output_shape_sources";
-constexpr StringLiteral kOutputShapeProgramsAttr =
-  "ncnn.c_api.output_shape_programs";
-constexpr StringLiteral kOutputShapeVersionsAttr =
-  "ncnn.c_api.output_shape_program_versions";
-constexpr StringLiteral kShapeCarrierIndicesAttr =
-  "ncnn.c_api.shape_carrier_indices";
-constexpr StringLiteral kInputShapeConstraintsAttr =
-  "ncnn.c_api.input_shape_constraints";
-constexpr StringLiteral kInputDimRelationsAttr =
-  "ncnn.c_api.input_dim_relations";
-constexpr StringLiteral kRankVariantNamesAttr = "ncnn.c_api.rank_variant_names";
-constexpr StringLiteral kRankVariantTypesAttr = "ncnn.c_api.rank_variant_types";
 
 bool isCIdentifier(StringRef name) {
   if (name.empty() ||
@@ -118,7 +102,7 @@ class GenerateCAPIPass final
   void runOnOperation() final {
     func::FuncOp nestedEntry;
     getOperation().walk([&](func::FuncOp function) {
-      if (function->hasAttr("ncnn.entry_point") &&
+      if (function->hasAttr(contract::kEntryPoint) &&
           function->getParentOp() != getOperation()) {
         nestedEntry = function;
         return WalkResult::interrupt();
@@ -134,12 +118,12 @@ class GenerateCAPIPass final
 
     SmallVector<func::FuncOp> entries;
     for (func::FuncOp function : getOperation().getOps<func::FuncOp>()) {
-      if (function->hasAttr("ncnn.entry_point")) {
+      if (function->hasAttr(contract::kEntryPoint)) {
         entries.push_back(function);
       }
     }
     if (entries.size() == 4 && llvm::all_of(entries, [](func::FuncOp function) {
-          return function->hasAttr("ncnn.dynamic_rank");
+          return contract::ModelLedger::read(function).dynamicRank != nullptr;
         })) {
       if (!isCIdentifier(exportName) ||
           failed(prepareDynamicRankABI(entries))) {
@@ -170,7 +154,7 @@ class GenerateCAPIPass final
     SmallVector<func::FuncOp, 4> variants(4);
     Type elementType;
     for (func::FuncOp function : functions) {
-      auto rankAttr = function->getAttrOfType<IntegerAttr>("ncnn.rank_variant");
+      auto rankAttr = contract::ModelLedger::read(function).rankVariant;
       if (!rankAttr || rankAttr.getInt() < 1 || rankAttr.getInt() > 4 ||
           variants[rankAttr.getInt() - 1]) {
         return function.emitOpError(
@@ -194,9 +178,9 @@ class GenerateCAPIPass final
           "identity-layout ranked memref specialization");
       }
       auto source =
-        function.getArgAttrOfType<IntegerAttr>(1, "ncnn.shape_source_input");
+        function.getArgAttrOfType<IntegerAttr>(1, contract::kShapeSourceInput);
       auto program =
-        function.getArgAttrOfType<ArrayAttr>(1, "ncnn.shape_program");
+        function.getArgAttrOfType<ArrayAttr>(1, contract::kShapeProgram);
       if (!source || source.getInt() != 0 || !program ||
           program.size() != rank || llvm::any_of(program, [](Attribute attr) {
             auto values = dyn_cast<DenseI64ArrayAttr>(attr);
@@ -253,15 +237,18 @@ class GenerateCAPIPass final
       }
       function.setPrivate();
       function->removeAttr("llvm.emit_c_interface");
-      function->removeAttr("ncnn.entry_point");
+      function->removeAttr(contract::kEntryPoint);
       names.push_back(builder.getStringAttr(name));
       types.push_back(
         builder.getArrayAttr({TypeAttr::get(function.getArgumentTypes()[0]),
                               TypeAttr::get(function.getArgumentTypes()[1])}));
     }
-    getOperation()->setAttr(kExportNameAttr, builder.getStringAttr(exportName));
-    getOperation()->setAttr(kRankVariantNamesAttr, builder.getArrayAttr(names));
-    getOperation()->setAttr(kRankVariantTypesAttr, builder.getArrayAttr(types));
+    getOperation()->setAttr(contract::kCApiExportName,
+                            builder.getStringAttr(exportName));
+    getOperation()->setAttr(contract::kCApiRankVariantNames,
+                            builder.getArrayAttr(names));
+    getOperation()->setAttr(contract::kCApiRankVariantTypes,
+                            builder.getArrayAttr(types));
     return success();
   }
 
@@ -293,14 +280,14 @@ class GenerateCAPIPass final
                << " rank exceeds the C ABI dynamic-dimension mask capacity";
       }
       auto dataDependentMask = function.getArgAttrOfType<IntegerAttr>(
-        index, "ncnn.data_dependent_dim_mask");
+        index, contract::kDataDependentDimMask);
       ArgumentInfo info{
         .functionIndex = index,
         .type = type,
         .output =
           static_cast<bool>(function.getArgAttr(index, "bufferize.result")),
-        .shapeCarrier =
-          static_cast<bool>(function.getArgAttr(index, "ncnn.shape_carrier")),
+        .shapeCarrier = static_cast<bool>(
+          function.getArgAttr(index, contract::kShapeCarrier)),
         .dataDependentDimMask =
           dataDependentMask ? static_cast<uint32_t>(dataDependentMask.getInt())
                             : 0};
@@ -318,7 +305,7 @@ class GenerateCAPIPass final
     SmallVector<int32_t> outputShapeVersions;
     SmallVector<Attribute> outputShapePrograms;
     auto shapeConstraints =
-      function->getAttrOfType<ArrayAttr>("ncnn.shape_constraints");
+      contract::ModelLedger::read(function).shapeConstraints;
     SmallVector<SmallVector<DimConstraintAttr>> constraintsByInput(
       inputs.size());
     if (shapeConstraints) {
@@ -339,7 +326,7 @@ class GenerateCAPIPass final
       }
     }
     auto relationAttrs =
-      function->getAttrOfType<ArrayAttr>("ncnn.input_dim_relations");
+      contract::ModelLedger::read(function).inputDimRelations;
     if (relationAttrs) {
       for (Attribute attribute : relationAttrs) {
         auto values = dyn_cast<DenseI64ArrayAttr>(attribute);
@@ -369,10 +356,10 @@ class GenerateCAPIPass final
         auto dataType =
           dyn_cast<MemRefType>(function.getArgumentTypes()[dataIndex]);
         auto dataMask = function.getArgAttrOfType<IntegerAttr>(
-          dataIndex, "ncnn.data_dependent_dim_mask");
+          dataIndex, contract::kDataDependentDimMask);
         if (!function.getArgAttr(dataIndex, "bufferize.result") ||
-            function.getArgAttr(dataIndex, "ncnn.shape_carrier") || !dataType ||
-            !dataMask || dataMask.getInt() == 0 ||
+            function.getArgAttr(dataIndex, contract::kShapeCarrier) ||
+            !dataType || !dataMask || dataMask.getInt() == 0 ||
             output.type.getShape()[0] != dataType.getRank()) {
           return function.emitOpError()
                  << "argument " << output.functionIndex
@@ -400,7 +387,7 @@ class GenerateCAPIPass final
         auto carrierType =
           dyn_cast<MemRefType>(function.getArgumentTypes()[carrierIndex]);
         if (!function.getArgAttr(carrierIndex, "bufferize.result") ||
-            !function.getArgAttr(carrierIndex, "ncnn.shape_carrier") ||
+            !function.getArgAttr(carrierIndex, contract::kShapeCarrier) ||
             !carrierType || !carrierType.hasStaticShape() ||
             !carrierType.getElementType().isInteger(64) ||
             carrierType.getRank() != 1 ||
@@ -412,12 +399,12 @@ class GenerateCAPIPass final
       }
       int32_t source = -1;
       if (auto attribute = function.getArgAttrOfType<IntegerAttr>(
-            output.functionIndex, "ncnn.shape_source_input")) {
+            output.functionIndex, contract::kShapeSourceInput)) {
         source = static_cast<int32_t>(attribute.getInt());
       }
       outputShapeSources.push_back(source);
       auto version = function.getArgAttrOfType<IntegerAttr>(
-        output.functionIndex, "ncnn.shape_program_version");
+        output.functionIndex, contract::kShapeProgramVersion);
       if (version && version.getInt() != 2) {
         return function.emitOpError("has an unsupported shape program version");
       }
@@ -436,8 +423,8 @@ class GenerateCAPIPass final
       }
       outputShapeVersions.push_back(
         version ? static_cast<int32_t>(version.getInt()) : 1);
-      auto program = function.getArgAttrOfType<ArrayAttr>(output.functionIndex,
-                                                          "ncnn.shape_program");
+      auto program = function.getArgAttrOfType<ArrayAttr>(
+        output.functionIndex, contract::kShapeProgram);
       SmallVector<unsigned> inputRanks;
       for (const ArgumentInfo& input : inputs) {
         inputRanks.push_back(input.type.getRank());
@@ -605,30 +592,30 @@ class GenerateCAPIPass final
     }
     function.setPrivate();
     function->removeAttr("llvm.emit_c_interface");
-    function->removeAttr("ncnn.entry_point");
-    function->removeAttr("ncnn.shape_constraints");
-    function->removeAttr("ncnn.input_dim_relations");
+    function->removeAttr(contract::kEntryPoint);
+    contract::ModelLedger::clearDimensionConstraints(function);
     Builder builder(function.getContext());
-    getOperation()->setAttr(kExportNameAttr, builder.getStringAttr(exportName));
-    getOperation()->setAttr(kInternalNameAttr,
+    getOperation()->setAttr(contract::kCApiExportName,
+                            builder.getStringAttr(exportName));
+    getOperation()->setAttr(contract::kCApiInternalName,
                             builder.getStringAttr(internalName));
-    getOperation()->setAttr(kArgumentTypesAttr,
+    getOperation()->setAttr(contract::kCApiArgumentTypes,
                             builder.getArrayAttr(argumentTypes));
-    getOperation()->setAttr(kOutputIndicesAttr,
+    getOperation()->setAttr(contract::kCApiOutputIndices,
                             builder.getDenseI32ArrayAttr(outputIndices));
-    getOperation()->setAttr(kOutputShapeSourcesAttr,
+    getOperation()->setAttr(contract::kCApiOutputShapeSources,
                             builder.getDenseI32ArrayAttr(outputShapeSources));
-    getOperation()->setAttr(kOutputShapeVersionsAttr,
+    getOperation()->setAttr(contract::kCApiOutputShapeProgramVersions,
                             builder.getDenseI32ArrayAttr(outputShapeVersions));
-    getOperation()->setAttr(kOutputShapeProgramsAttr,
+    getOperation()->setAttr(contract::kCApiOutputShapePrograms,
                             builder.getArrayAttr(outputShapePrograms));
-    getOperation()->setAttr(kShapeCarrierIndicesAttr,
+    getOperation()->setAttr(contract::kCApiShapeCarrierIndices,
                             builder.getDenseI32ArrayAttr(shapeCarrierIndices));
-    getOperation()->setAttr(kInputShapeConstraintsAttr,
+    getOperation()->setAttr(contract::kCApiInputShapeConstraints,
                             shapeConstraints
                               ? static_cast<Attribute>(shapeConstraints)
                               : builder.getArrayAttr({}));
-    getOperation()->setAttr(kInputDimRelationsAttr,
+    getOperation()->setAttr(contract::kCApiInputDimRelations,
                             relationAttrs
                               ? static_cast<Attribute>(relationAttrs)
                               : builder.getArrayAttr({}));
@@ -661,7 +648,7 @@ class GenerateCAPIPass final
     manifest["inputs"] = std::move(inputArray);
     manifest["outputs"] = std::move(outputArray);
     if (auto relations =
-          function->getAttrOfType<ArrayAttr>("ncnn.input_dim_relations")) {
+          contract::ModelLedger::read(function).inputDimRelations) {
       llvm::json::Array serializedRelations;
       for (Attribute attribute : relations) {
         ArrayRef<int64_t> relation =
@@ -676,7 +663,7 @@ class GenerateCAPIPass final
       }
       manifest["input_dimension_relations"] = std::move(serializedRelations);
     }
-    auto precision = function->getAttrOfType<StringAttr>("ncnn.precision");
+    auto precision = function->getAttrOfType<StringAttr>(contract::kPrecision);
     if (precision &&
         (precision.getValue() == "fp16" || precision.getValue() == "bf16")) {
       llvm::json::Object policy;
@@ -684,10 +671,10 @@ class GenerateCAPIPass final
       policy["complex_math"] = "f32";
       policy["complex_accumulator"] = "f32";
       if (auto accumulator =
-            function->getAttrOfType<StringAttr>("ncnn.fp16_accumulator")) {
+            function->getAttrOfType<StringAttr>(contract::kFp16Accumulator)) {
         policy["fp16_accumulator"] = accumulator.getValue();
       }
-      policy["fallback"] = function->hasAttr("ncnn.precision_fallback");
+      policy["fallback"] = function->hasAttr(contract::kPrecisionFallback);
       manifest["precision_policy"] = std::move(policy);
     }
     stream->os() << llvm::formatv("{0:2}\n",
@@ -712,15 +699,15 @@ class FinalizeCAPIPass final
 
   void runOnOperation() final {
     auto exportName =
-      getOperation()->getAttrOfType<StringAttr>(kExportNameAttr);
+      getOperation()->getAttrOfType<StringAttr>(contract::kCApiExportName);
     if (!exportName) {
       return;
     }
     auto rankVariantNames =
-      getOperation()->getAttrOfType<ArrayAttr>(kRankVariantNamesAttr);
+      getOperation()->getAttrOfType<ArrayAttr>(contract::kCApiRankVariantNames);
     if (rankVariantNames) {
-      auto rankVariantTypes =
-        getOperation()->getAttrOfType<ArrayAttr>(kRankVariantTypesAttr);
+      auto rankVariantTypes = getOperation()->getAttrOfType<ArrayAttr>(
+        contract::kCApiRankVariantTypes);
       if (!rankVariantTypes || rankVariantNames.size() != 4 ||
           rankVariantTypes.size() != 4 ||
           failed(finalizeDynamicRankABI(
@@ -729,29 +716,29 @@ class FinalizeCAPIPass final
         signalPassFailure();
         return;
       }
-      getOperation()->removeAttr(kExportNameAttr);
-      getOperation()->removeAttr(kRankVariantNamesAttr);
-      getOperation()->removeAttr(kRankVariantTypesAttr);
+      getOperation()->removeAttr(contract::kCApiExportName);
+      getOperation()->removeAttr(contract::kCApiRankVariantNames);
+      getOperation()->removeAttr(contract::kCApiRankVariantTypes);
       return;
     }
     auto internalName =
-      getOperation()->getAttrOfType<StringAttr>(kInternalNameAttr);
+      getOperation()->getAttrOfType<StringAttr>(contract::kCApiInternalName);
     auto argumentTypeAttrs =
-      getOperation()->getAttrOfType<ArrayAttr>(kArgumentTypesAttr);
-    auto outputIndices =
-      getOperation()->getAttrOfType<DenseI32ArrayAttr>(kOutputIndicesAttr);
-    auto outputShapeSources =
-      getOperation()->getAttrOfType<DenseI32ArrayAttr>(kOutputShapeSourcesAttr);
+      getOperation()->getAttrOfType<ArrayAttr>(contract::kCApiArgumentTypes);
+    auto outputIndices = getOperation()->getAttrOfType<DenseI32ArrayAttr>(
+      contract::kCApiOutputIndices);
+    auto outputShapeSources = getOperation()->getAttrOfType<DenseI32ArrayAttr>(
+      contract::kCApiOutputShapeSources);
     auto outputShapeVersions = getOperation()->getAttrOfType<DenseI32ArrayAttr>(
-      kOutputShapeVersionsAttr);
-    auto outputShapePrograms =
-      getOperation()->getAttrOfType<ArrayAttr>(kOutputShapeProgramsAttr);
+      contract::kCApiOutputShapeProgramVersions);
+    auto outputShapePrograms = getOperation()->getAttrOfType<ArrayAttr>(
+      contract::kCApiOutputShapePrograms);
     auto shapeCarrierIndices = getOperation()->getAttrOfType<DenseI32ArrayAttr>(
-      kShapeCarrierIndicesAttr);
-    auto inputShapeConstraints =
-      getOperation()->getAttrOfType<ArrayAttr>(kInputShapeConstraintsAttr);
-    auto inputDimRelationAttrs =
-      getOperation()->getAttrOfType<ArrayAttr>(kInputDimRelationsAttr);
+      contract::kCApiShapeCarrierIndices);
+    auto inputShapeConstraints = getOperation()->getAttrOfType<ArrayAttr>(
+      contract::kCApiInputShapeConstraints);
+    auto inputDimRelationAttrs = getOperation()->getAttrOfType<ArrayAttr>(
+      contract::kCApiInputDimRelations);
     if (!inputDimRelationAttrs) {
       inputDimRelationAttrs = ArrayAttr::get(getOperation().getContext(), {});
     }
@@ -1925,15 +1912,15 @@ class FinalizeCAPIPass final
       builder.create<LLVM::ReturnOp>(internal.getLoc(), shapeSuccessStatus);
     }
 
-    getOperation()->removeAttr(kExportNameAttr);
-    getOperation()->removeAttr(kInternalNameAttr);
-    getOperation()->removeAttr(kArgumentTypesAttr);
-    getOperation()->removeAttr(kOutputIndicesAttr);
-    getOperation()->removeAttr(kOutputShapeSourcesAttr);
-    getOperation()->removeAttr(kOutputShapeProgramsAttr);
-    getOperation()->removeAttr(kOutputShapeVersionsAttr);
-    getOperation()->removeAttr(kShapeCarrierIndicesAttr);
-    getOperation()->removeAttr(kInputShapeConstraintsAttr);
+    getOperation()->removeAttr(contract::kCApiExportName);
+    getOperation()->removeAttr(contract::kCApiInternalName);
+    getOperation()->removeAttr(contract::kCApiArgumentTypes);
+    getOperation()->removeAttr(contract::kCApiOutputIndices);
+    getOperation()->removeAttr(contract::kCApiOutputShapeSources);
+    getOperation()->removeAttr(contract::kCApiOutputShapePrograms);
+    getOperation()->removeAttr(contract::kCApiOutputShapeProgramVersions);
+    getOperation()->removeAttr(contract::kCApiShapeCarrierIndices);
+    getOperation()->removeAttr(contract::kCApiInputShapeConstraints);
     // Keep relation metadata visible in the generated artifact IR.
   }
 

@@ -40,7 +40,7 @@ bool isLiftableElementwise(Operation& operation) {
 
 void copySourceProvenance(Operation* source, Operation* target) {
   for (StringRef attribute :
-       {StringRef("ncnn.name"), StringRef("ncnn.source_layer")}) {
+       {StringRef(contract::kName), StringRef(contract::kSourceLayer)}) {
     if (Attribute value = source->getAttr(attribute)) {
       target->setAttr(attribute, value);
     }
@@ -432,10 +432,11 @@ LogicalResult vectorizeElementwiseRows(MLIRContext* context,
 LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
                                          ModuleOp module,
                                          unsigned lanes) {
-  auto int8Attribute = module->getAttrOfType<BoolAttr>("ncnn.int8_depthwise");
+  auto int8Attribute =
+    module->getAttrOfType<BoolAttr>(contract::kInt8Depthwise);
   const bool enableInt8 = int8Attribute && int8Attribute.getValue();
   auto packedAttribute =
-    module->getAttrOfType<BoolAttr>("ncnn.packed_conv_depthwise");
+    module->getAttrOfType<BoolAttr>(contract::kPackedConvDepthwise);
   const bool enablePacked = packedAttribute && packedAttribute.getValue();
   struct DepthwiseCandidate {
     linalg::DepthwiseConv2DNhwcHwcmOp op;
@@ -1130,7 +1131,7 @@ class VectorizeNCNNPass final
   void runOnOperation() final {
     ModuleOp module = getOperation();
     if (this->packedConvDepthwise.getValue()) {
-      module->setAttr("ncnn.packed_conv_depthwise",
+      module->setAttr(contract::kPackedConvDepthwise,
                       BoolAttr::get(&getContext(), true));
     }
     const unsigned lanes = this->lanes.getValue();

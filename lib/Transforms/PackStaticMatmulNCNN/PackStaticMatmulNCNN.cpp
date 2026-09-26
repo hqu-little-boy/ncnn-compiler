@@ -16,6 +16,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/SymbolTable.h"
+#include "ncnn-mlir/Support/ConstantFold.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
@@ -24,6 +25,8 @@ namespace mlir::ncnn {
 #include "ncnn-mlir/Passes.h.inc"
 
 namespace {
+
+using ncnn_mlir::findConstantElements;
 
 class PackStaticMatmulNCNNPass final
   : public impl::PackStaticMatmulNCNNPassBase<PackStaticMatmulNCNNPass> {
@@ -110,28 +113,6 @@ class PackStaticMatmulNCNNPass final
       }
     }
     return extent;
-  }
-
-  static arith::ConstantOp findConstant(Value value) {
-    while (Operation* defining = value.getDefiningOp()) {
-      if (auto constant = dyn_cast<arith::ConstantOp>(defining)) {
-        return constant;
-      }
-      if (auto cast = dyn_cast<tensor::CastOp>(defining)) {
-        value = cast.getSource();
-        continue;
-      }
-      if (auto collapse = dyn_cast<tensor::CollapseShapeOp>(defining)) {
-        value = collapse.getSrc();
-        continue;
-      }
-      if (auto expand = dyn_cast<tensor::ExpandShapeOp>(defining)) {
-        value = expand.getSrc();
-        continue;
-      }
-      return {};
-    }
-    return {};
   }
 
   static void annotateRejected(linalg::MatmulOp matmul, StringRef reason) {
@@ -581,12 +562,17 @@ class PackStaticMatmulNCNNPass final
       return;
     }
 
-    arith::ConstantOp constant = findConstant(rhs);
-    if (!constant) {
+    // Two distinct rejection reasons land in the plan and must stay stable:
+    // "not a constant" versus "constant of the wrong layout".  `rhs` is a
+    // tensor-typed SSA value, so anything that traces back to an
+    // `arith.constant` has an elements value — the shared lookup cannot
+    // collapse the two cases.
+    ElementsAttr constantElements = findConstantElements(rhs);
+    if (!constantElements) {
       annotateRejected(matmul, "packing_rejected_dynamic");
       return;
     }
-    auto elements = dyn_cast<DenseFPElementsAttr>(constant.getValueAttr());
+    auto elements = dyn_cast<DenseFPElementsAttr>(constantElements);
     if (!elements || elements.getElementType() != rhsType.getElementType() ||
         elements.getNumElements() != depth * columns) {
       annotateRejected(matmul, "packing_rejected_layout");
@@ -667,7 +653,7 @@ class PackStaticMatmulNCNNPass final
     auto family = matmul->getAttrOfType<StringAttr>(contract::kOperationFamily);
     auto packedLayout =
       matmul->getParentOfType<ModuleOp>()->getAttrOfType<BoolAttr>(
-        "ncnn.packed_conv_depthwise");
+        contract::kPackedConvDepthwise);
     if (family && family.getValue() == "conv" && packedLayout &&
         packedLayout.getValue()) {
       contract::annotateOperationFamily(

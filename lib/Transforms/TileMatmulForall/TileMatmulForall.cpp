@@ -74,7 +74,7 @@ bool findSoleIdentityElementwiseConsumer(MatmulOpT matmul,
   if (!resultType || !resultType.hasStaticShape() ||
       resultType.getRank() != 2 || generic.getNumDpsInputs() < 1 ||
       generic.getNumDpsInits() != 1 ||
-      generic->hasAttr("ncnn.strategy_lifted_epilogue")) {
+      generic->hasAttr(contract::kStrategyLiftedEpilogue)) {
     return false;
   }
   for (Value input : generic.getDpsInputs()) {

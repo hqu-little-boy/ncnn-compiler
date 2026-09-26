@@ -36,6 +36,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 #include "ncnn-mlir/Conversion/NCNNToTosa/NCNNToTosa.hpp"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 #include "ncnn-mlir/Transforms/BufferizeNCNN/BufferizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/EmitModelPlan/EmitModelPlan.hpp"
 #include "ncnn-mlir/Transforms/FoldLinalgConstantTranspose/FoldLinalgConstantTranspose.hpp"
@@ -169,7 +170,7 @@ class SetPackedLayoutOptionsPass final
 
   void runOnOperation() final {
     Builder builder(&getContext());
-    getOperation()->setAttr("ncnn.packed_conv_depthwise",
+    getOperation()->setAttr(contract::kPackedConvDepthwise,
                             builder.getBoolAttr(enabled));
   }
 
@@ -193,14 +194,16 @@ class SetLowPrecisionOptionsPass final
       preserveCasts(preserveCasts) {}
   void runOnOperation() final {
     Builder builder(&getContext());
-    getOperation()->setAttr("ncnn.int8_depthwise",
+    getOperation()->setAttr(contract::kInt8Depthwise,
                             builder.getBoolAttr(depthwise));
     if (!preserveCasts) {
-      getOperation()->setAttr("ncnn.int8_cast_chain",
+      getOperation()->setAttr(contract::kInt8CastChain,
                               builder.getBoolAttr(casts));
     }
-    getOperation()->setAttr("ncnn.int8_kernel", builder.getStringAttr(policy));
-    getOperation()->setAttr("ncnn.int8_target", builder.getStringAttr(target));
+    getOperation()->setAttr(contract::kInt8Kernel,
+                            builder.getStringAttr(policy));
+    getOperation()->setAttr(contract::kInt8Target,
+                            builder.getStringAttr(target));
   }
 
  private:

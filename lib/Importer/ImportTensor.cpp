@@ -4,6 +4,7 @@
 #include <cstddef>
 
 #include "llvm/ADT/SmallVector.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace ncnn_importer::detail {
 
@@ -285,7 +286,8 @@ ImportResult import_squeeze(ImportContext& importer,
     return std::unexpected(input.error());
   }
   if (auto padding = input->getDefiningOp<mlir::ncnn::PaddingOp>();
-      padding && padding->hasAttr("ncnn.normalized_rank4_reflection") &&
+      padding &&
+      padding->hasAttr(mlir::ncnn::contract::kNormalizedRank4Reflection) &&
       axes->size() == 1 && (*axes)[0] == 1) {
     return importer.bind_blob(
       context, context.layer.get_outputs()[0], padding.getOutput());

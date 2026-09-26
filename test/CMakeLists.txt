@@ -53,6 +53,13 @@ set_tests_properties(profile-runtime PROPERTIES
     RUN_SERIAL TRUE
     TIMEOUT 30)
 
+# ncnn.* 属性键单一事实源：KernelContract.hpp 之外不得再出现裸键字面量。
+add_test(NAME attribute-whitelist
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_attribute_whitelist.py)
+set_tests_properties(attribute-whitelist PROPERTIES
+    LABELS "tooling"
+    TIMEOUT 30)
+
 # repeated-call-memory 测试暂时屏蔽，当前阶段不做多次调用稳定性测试。
 # set(REPEATED_CALL_ARGS
 #     --mlir-opt ${MLIR_OPT}

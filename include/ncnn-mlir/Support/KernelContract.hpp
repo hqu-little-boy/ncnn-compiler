@@ -143,6 +143,138 @@ inline constexpr llvm::StringLiteral kLayoutPackFactor =
 inline constexpr llvm::StringLiteral kLayoutChannelBlocks =
   "ncnn.layout_channel_blocks";
 
+// ── Layer kinds ─────────────────────────────────────────────────────────
+// Operation names used as string *values* (conversion patterns, capability
+// tables).  Named so no call site spells an op name as a bare literal.
+inline constexpr llvm::StringLiteral kLayerBatchNorm = "ncnn.batch_norm";
+inline constexpr llvm::StringLiteral kLayerBinary = "ncnn.binary";
+inline constexpr llvm::StringLiteral kLayerConcat = "ncnn.concat";
+inline constexpr llvm::StringLiteral kLayerConvolution = "ncnn.convolution";
+inline constexpr llvm::StringLiteral kLayerConvolutionDepthwise =
+  "ncnn.convolution_depthwise";
+inline constexpr llvm::StringLiteral kLayerDeconvolution = "ncnn.deconvolution";
+inline constexpr llvm::StringLiteral kLayerDetectionOutput =
+  "ncnn.detection_output";
+inline constexpr llvm::StringLiteral kLayerExpandDims = "ncnn.expand_dims";
+inline constexpr llvm::StringLiteral kLayerGelu = "ncnn.gelu";
+inline constexpr llvm::StringLiteral kLayerGemm = "ncnn.gemm";
+inline constexpr llvm::StringLiteral kLayerHardSigmoid = "ncnn.hard_sigmoid";
+inline constexpr llvm::StringLiteral kLayerHardSwish = "ncnn.hard_swish";
+inline constexpr llvm::StringLiteral kLayerInnerProduct = "ncnn.inner_product";
+inline constexpr llvm::StringLiteral kLayerInterp = "ncnn.interp";
+inline constexpr llvm::StringLiteral kLayerMultiHeadAttention =
+  "ncnn.multi_head_attention";
+inline constexpr llvm::StringLiteral kLayerPadding = "ncnn.padding";
+inline constexpr llvm::StringLiteral kLayerPooling = "ncnn.pooling";
+inline constexpr llvm::StringLiteral kLayerReshape = "ncnn.reshape";
+inline constexpr llvm::StringLiteral kLayerSigmoid = "ncnn.sigmoid";
+inline constexpr llvm::StringLiteral kLayerSoftmax = "ncnn.softmax";
+inline constexpr llvm::StringLiteral kLayerSqueeze = "ncnn.squeeze";
+inline constexpr llvm::StringLiteral kLayerUnary = "ncnn.unary";
+
+// ── Shape contracts (module / function / argument level) ────────────────
+inline constexpr llvm::StringLiteral kShapeConstraints =
+  "ncnn.shape_constraints";
+inline constexpr llvm::StringLiteral kShapeProgram = "ncnn.shape_program";
+inline constexpr llvm::StringLiteral kShapeProgramVersion =
+  "ncnn.shape_program_version";
+inline constexpr llvm::StringLiteral kShapeCarrier = "ncnn.shape_carrier";
+inline constexpr llvm::StringLiteral kShapeSourceInput =
+  "ncnn.shape_source_input";
+inline constexpr llvm::StringLiteral kDataDependentDimMask =
+  "ncnn.data_dependent_dim_mask";
+inline constexpr llvm::StringLiteral kInputDimRelations =
+  "ncnn.input_dim_relations";
+
+// ── C API manifest keys (module level, consumed by GenerateCAPI) ────────
+inline constexpr llvm::StringLiteral kCApiExportName = "ncnn.c_api.export_name";
+inline constexpr llvm::StringLiteral kCApiInternalName =
+  "ncnn.c_api.internal_name";
+inline constexpr llvm::StringLiteral kCApiArgumentTypes =
+  "ncnn.c_api.argument_types";
+inline constexpr llvm::StringLiteral kCApiOutputIndices =
+  "ncnn.c_api.output_indices";
+inline constexpr llvm::StringLiteral kCApiOutputShapeSources =
+  "ncnn.c_api.output_shape_sources";
+inline constexpr llvm::StringLiteral kCApiOutputShapePrograms =
+  "ncnn.c_api.output_shape_programs";
+inline constexpr llvm::StringLiteral kCApiOutputShapeProgramVersions =
+  "ncnn.c_api.output_shape_program_versions";
+inline constexpr llvm::StringLiteral kCApiShapeCarrierIndices =
+  "ncnn.c_api.shape_carrier_indices";
+inline constexpr llvm::StringLiteral kCApiInputShapeConstraints =
+  "ncnn.c_api.input_shape_constraints";
+inline constexpr llvm::StringLiteral kCApiInputDimRelations =
+  "ncnn.c_api.input_dim_relations";
+inline constexpr llvm::StringLiteral kCApiRankVariantNames =
+  "ncnn.c_api.rank_variant_names";
+inline constexpr llvm::StringLiteral kCApiRankVariantTypes =
+  "ncnn.c_api.rank_variant_types";
+
+// ── Entry point / rank / precision policy ───────────────────────────────
+inline constexpr llvm::StringLiteral kEntryPoint = "ncnn.entry_point";
+inline constexpr llvm::StringLiteral kRankVariant = "ncnn.rank_variant";
+inline constexpr llvm::StringLiteral kDynamicRank = "ncnn.dynamic_rank";
+inline constexpr llvm::StringLiteral kPrecision = "ncnn.precision";
+inline constexpr llvm::StringLiteral kPrecisionFallback =
+  "ncnn.precision_fallback";
+inline constexpr llvm::StringLiteral kFp16Accumulator = "ncnn.fp16_accumulator";
+
+// ── Provenance ──────────────────────────────────────────────────────────
+inline constexpr llvm::StringLiteral kSourceLayer = "ncnn.source_layer";
+inline constexpr llvm::StringLiteral kName = "ncnn.name";
+
+// ── Workspace slot ledger (per allocation, emitted into the plan) ───────
+inline constexpr llvm::StringLiteral kWorkspaceSlot = "ncnn.workspace_slot";
+inline constexpr llvm::StringLiteral kWorkspaceSlotBytes =
+  "ncnn.workspace_slot_bytes";
+inline constexpr llvm::StringLiteral kWorkspaceSlotAlignment =
+  "ncnn.workspace_slot_alignment";
+inline constexpr llvm::StringLiteral kWorkspaceSlotOwner =
+  "ncnn.workspace_slot_owner";
+inline constexpr llvm::StringLiteral kWorkspaceSlotThreadVisibility =
+  "ncnn.workspace_slot_thread_visibility";
+inline constexpr llvm::StringLiteral kWorkspaceSlotLifetimeBegin =
+  "ncnn.workspace_slot_lifetime_begin";
+inline constexpr llvm::StringLiteral kWorkspaceSlotLifetimeEnd =
+  "ncnn.workspace_slot_lifetime_end";
+inline constexpr llvm::StringLiteral kWorkspaceReuseStatus =
+  "ncnn.workspace_reuse_status";
+inline constexpr llvm::StringLiteral kWorkspaceReuseCount =
+  "ncnn.workspace_reuse_count";
+inline constexpr llvm::StringLiteral kWorkspaceFallbackReason =
+  "ncnn.workspace_fallback_reason";
+
+// ── Profile instrumentation state ───────────────────────────────────────
+inline constexpr llvm::StringLiteral kProfileInstrumented =
+  "ncnn.profile_instrumented";
+inline constexpr llvm::StringLiteral kProfileMaterializedSitesInstrumented =
+  "ncnn.profile_materialized_sites_instrumented";
+inline constexpr llvm::StringLiteral kProfileFusionSitesInstrumented =
+  "ncnn.profile_fusion_sites_instrumented";
+inline constexpr llvm::StringLiteral kProfileRuntime = "ncnn.profile_runtime";
+
+// ── JSON document kinds ─────────────────────────────────────────────────
+// Values of the top-level `"kind"` field of the emitted plan/profile/
+// attribution documents.  The C profile runtime cannot include this header
+// (it is installed as a standalone .c and compiled per model, see the
+// `profile_allowed` symbol allow-list), so its copy of
+// `kModelExecutionProfileKind` stays a literal there by design.
+inline constexpr llvm::StringLiteral kModelExecutionPlanKind =
+  "ncnn.model_execution_plan";
+inline constexpr llvm::StringLiteral kModelExecutionProfileKind =
+  "ncnn.model_execution_profile";
+inline constexpr llvm::StringLiteral kModelPerformanceAttributionKind =
+  "ncnn.model_performance_attribution";
+
+// ── Model-level policy flags ────────────────────────────────────────────
+inline constexpr llvm::StringLiteral kPackedConvDepthwise =
+  "ncnn.packed_conv_depthwise";
+inline constexpr llvm::StringLiteral kNormalizedRank4Reflection =
+  "ncnn.normalized_rank4_reflection";
+inline constexpr llvm::StringLiteral kStrategyLiftedEpilogue =
+  "ncnn.strategy_lifted_epilogue";
+
 inline void setString(Operation* operation, StringRef name, StringRef value) {
   operation->setAttr(name, StringAttr::get(operation->getContext(), value));
 }

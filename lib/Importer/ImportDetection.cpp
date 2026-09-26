@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "llvm/ADT/SmallVector.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace ncnn_importer::detail {
 namespace {
@@ -103,7 +104,7 @@ ImportResult import_padding(ImportContext& importer,
                                           properties.value,
                                           properties.padding_type);
   if (normalizedRank4Reflection) {
-    operation->setAttr("ncnn.normalized_rank4_reflection",
+    operation->setAttr(mlir::ncnn::contract::kNormalizedRank4Reflection,
                        builder.getUnitAttr());
   }
   importer.tag_source(operation, context);

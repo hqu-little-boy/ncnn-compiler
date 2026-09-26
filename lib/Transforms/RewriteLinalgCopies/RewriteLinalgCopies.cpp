@@ -19,6 +19,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/ModelLedger.hpp"
 
 namespace mlir::ncnn {
 
@@ -582,7 +583,8 @@ class RewriteLinalgCopiesPass final
     }
 
     ModuleOp module = getOperation();
-    const bool hadLedger = module->hasAttr(contract::kCopyRecords);
+    const bool hadLedger =
+      contract::ModelLedger::read(module).copyRecords != nullptr;
     // A repeated invocation may leave unsupported copies in place. Keep the
     // durable ledger instead of replacing it with an empty observation.
     if (stats.records.empty() && hadLedger) {
@@ -594,7 +596,6 @@ class RewriteLinalgCopiesPass final
     module->removeAttr(contract::kCopyVectorizedCount);
     module->removeAttr(contract::kCopyFallbackCount);
     module->removeAttr(contract::kCopyFusedCount);
-    module->removeAttr(contract::kCopyRecords);
     SmallVector<Attribute> records;
     records.reserve(stats.records.size());
     for (const CopyRecord& copy : stats.records) {
@@ -614,8 +615,11 @@ class RewriteLinalgCopiesPass final
                                   copy.vectorLanes));
       records.push_back(DictionaryAttr::get(module.getContext(), record));
     }
-    module->setAttr(contract::kCopyRecords,
-                    ArrayAttr::get(module.getContext(), records));
+    // Replace just the copy ledger: write() only touches non-null fields, so
+    // the fusion and attention ledgers produced by other passes are untouched.
+    contract::ModelLedger updated;
+    updated.copyRecords = ArrayAttr::get(module.getContext(), records);
+    updated.write(module);
     contract::setInteger(
       module, contract::kCopyEliminatedCount, stats.eliminated);
     contract::setInteger(

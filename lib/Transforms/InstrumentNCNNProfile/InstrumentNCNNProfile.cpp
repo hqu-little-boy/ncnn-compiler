@@ -82,7 +82,8 @@ func::FuncOp declare(IRRewriter& rewriter,
   auto type = rewriter.getFunctionType(argumentTypes, {});
   auto function = rewriter.create<func::FuncOp>(module.getLoc(), name, type);
   function.setPrivate();
-  function->setAttr("ncnn.profile_runtime", UnitAttr::get(module.getContext()));
+  function->setAttr(contract::kProfileRuntime,
+                    UnitAttr::get(module.getContext()));
   return function;
 }
 
@@ -296,7 +297,7 @@ class InstrumentNCNNFusionSitesPass final
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
-    if (module->hasAttr("ncnn.profile_fusion_sites_instrumented")) {
+    if (module->hasAttr(contract::kProfileFusionSitesInstrumented)) {
       return;
     }
 
@@ -332,7 +333,7 @@ class InstrumentNCNNFusionSitesPass final
         constant(rewriter, site.operation->getLoc(), site.profileId);
       call(rewriter, site.operation->getLoc(), end, {endId});
     }
-    module->setAttr("ncnn.profile_fusion_sites_instrumented",
+    module->setAttr(contract::kProfileFusionSitesInstrumented,
                     UnitAttr::get(module.getContext()));
   }
 };
@@ -351,7 +352,7 @@ class InstrumentNCNNMaterializedSitesPass final
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
-    if (module->hasAttr("ncnn.profile_materialized_sites_instrumented")) {
+    if (module->hasAttr(contract::kProfileMaterializedSitesInstrumented)) {
       return;
     }
 
@@ -368,7 +369,7 @@ class InstrumentNCNNMaterializedSitesPass final
     };
     SmallVector<Site> sites;
     for (func::FuncOp function : module.getOps<func::FuncOp>()) {
-      if (function->hasAttr("ncnn.profile_runtime")) {
+      if (function->hasAttr(contract::kProfileRuntime)) {
         continue;
       }
       std::size_t ordinal = 0;
@@ -438,7 +439,7 @@ class InstrumentNCNNMaterializedSitesPass final
            materialized,
            {readId, readKind, readBytes, noExpectedReaders});
     }
-    module->setAttr("ncnn.profile_materialized_sites_instrumented",
+    module->setAttr(contract::kProfileMaterializedSitesInstrumented,
                     UnitAttr::get(module.getContext()));
   }
 };
@@ -459,7 +460,7 @@ class InstrumentNCNNProfilePass final
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
-    if (module->hasAttr("ncnn.profile_instrumented")) {
+    if (module->hasAttr(contract::kProfileInstrumented)) {
       return;
     }
 
@@ -482,7 +483,7 @@ class InstrumentNCNNProfilePass final
 
     SmallVector<func::FuncOp> functions;
     for (func::FuncOp function : module.getOps<func::FuncOp>()) {
-      if (!function->hasAttr("ncnn.profile_runtime")) {
+      if (!function->hasAttr(contract::kProfileRuntime)) {
         functions.push_back(function);
       }
     }
@@ -650,7 +651,7 @@ class InstrumentNCNNProfilePass final
             materializedReads.contains(operation) ||
             ((operation->getParentOp() == function.getOperation() &&
               isProfileCandidate(*operation) &&
-              !(module->hasAttr("ncnn.profile_fusion_sites_instrumented") &&
+              !(module->hasAttr(contract::kProfileFusionSitesInstrumented) &&
                 operation->hasAttr(contract::kFusionSiteId))) ||
              isDirectParallelWorkerCandidate(*operation))) {
           candidates.push_back(operation);
@@ -658,7 +659,7 @@ class InstrumentNCNNProfilePass final
       });
 
       std::optional<std::uint64_t> root_id;
-      if (function->hasAttr("ncnn.entry_point")) {
+      if (function->hasAttr(contract::kEntryPoint)) {
         if (auto root = operation_ids.find(function.getOperation());
             root != operation_ids.end()) {
           root_id = root->second;
@@ -850,7 +851,7 @@ class InstrumentNCNNProfilePass final
         }
       }
     }
-    module->setAttr("ncnn.profile_instrumented",
+    module->setAttr(contract::kProfileInstrumented,
                     UnitAttr::get(module.getContext()));
   }
 };

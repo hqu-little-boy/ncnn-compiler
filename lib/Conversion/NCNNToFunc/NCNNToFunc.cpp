@@ -14,6 +14,8 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
+#include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/ModelLedger.hpp"
 #include "ncnn-mlir/Support/ShapeProgram.hpp"
 
 namespace mlir::ncnn {
@@ -34,7 +36,7 @@ struct ShapeTransform {
 
 SmallVector<ShapeConstraint> getShapeConstraints(ModelOp model) {
   SmallVector<ShapeConstraint> result;
-  auto constraints = model->getAttrOfType<ArrayAttr>("ncnn.shape_constraints");
+  auto constraints = contract::ModelLedger::read(model).shapeConstraints;
   if (!constraints) {
     return result;
   }
@@ -132,33 +134,33 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
       model.getLoc(),
       model.getSymName(),
       FunctionType::get(model.getContext(), inputTypes, outputTypes));
-    function->setAttr("ncnn.entry_point", rewriter.getUnitAttr());
+    function->setAttr(contract::kEntryPoint, rewriter.getUnitAttr());
     function->setAttr("llvm.emit_c_interface", rewriter.getUnitAttr());
-    for (StringRef name : {"ncnn.precision",
-                           "ncnn.fp16_accumulator",
-                           "ncnn.precision_fallback"}) {
+    for (StringRef name : {contract::kPrecision,
+                           contract::kFp16Accumulator,
+                           contract::kPrecisionFallback}) {
       if (Attribute value = model->getAttr(name)) {
         function->setAttr(name, value);
       }
     }
     for (StringRef name :
-         {"ncnn.shape_constraints", "ncnn.input_dim_relations"}) {
+         {contract::kShapeConstraints, contract::kInputDimRelations}) {
       if (Attribute value = model->getAttr(name)) {
         function->setAttr(name, value);
       }
     }
-    if (Attribute rank = model->getAttr("ncnn.rank_variant")) {
-      function->setAttr("ncnn.rank_variant", rank);
-      function->setAttr("ncnn.dynamic_rank", rewriter.getUnitAttr());
+    if (Attribute rank = model->getAttr(contract::kRankVariant)) {
+      function->setAttr(contract::kRankVariant, rank);
+      function->setAttr(contract::kDynamicRank, rewriter.getUnitAttr());
     }
     unsigned functionResultIndex = 0;
     for (OutputOp output : outputs) {
       if (output.getInput().getDefiningOp<DetectionOutputOp>()) {
         function.setResultAttr(functionResultIndex,
-                               "ncnn.data_dependent_dim_mask",
+                               contract::kDataDependentDimMask,
                                rewriter.getI32IntegerAttr(1));
         function.setResultAttr(functionResultIndex + 1,
-                               "ncnn.shape_carrier",
+                               contract::kShapeCarrier,
                                rewriter.getUnitAttr());
         functionResultIndex += 2;
       } else {
@@ -867,16 +869,16 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
               : v1.serialize(dimensionIndex)));
         }
         function.setResultAttr(functionResultIndex,
-                               "ncnn.shape_program",
+                               contract::kShapeProgram,
                                rewriter.getArrayAttr(programs));
         if (v2) {
           function.setResultAttr(functionResultIndex,
-                                 "ncnn.shape_program_version",
+                                 contract::kShapeProgramVersion,
                                  rewriter.getI32IntegerAttr(2));
         } else {
           function.setResultAttr(
             functionResultIndex,
-            "ncnn.shape_source_input",
+            contract::kShapeSourceInput,
             rewriter.getI32IntegerAttr(static_cast<int32_t>(*sourceInput)));
         }
       }

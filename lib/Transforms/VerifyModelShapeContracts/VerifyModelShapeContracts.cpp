@@ -11,6 +11,8 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/ModelLedger.hpp"
 #include "ncnn-mlir/Support/ShapeMode.hpp"
 #include "ncnn-mlir/Support/ShapeProgram.hpp"
 
@@ -74,9 +76,9 @@ LogicalResult verifyShapeProgram(func::FuncOp function,
                                  MemRefType outputType,
                                  ArrayRef<unsigned> inputIndices) {
   auto source = function.getArgAttrOfType<IntegerAttr>(
-    outputIndex, "ncnn.shape_source_input");
+    outputIndex, contract::kShapeSourceInput);
   auto version = function.getArgAttrOfType<IntegerAttr>(
-    outputIndex, "ncnn.shape_program_version");
+    outputIndex, contract::kShapeProgramVersion);
   if (version && version.getInt() != 2) {
     return function.emitOpError()
            << "dynamic output " << outputIndex
@@ -88,8 +90,8 @@ LogicalResult verifyShapeProgram(func::FuncOp function,
              << "dynamic output " << outputIndex
              << " V2 program must not have a shape source";
     }
-    auto program =
-      function.getArgAttrOfType<ArrayAttr>(outputIndex, "ncnn.shape_program");
+    auto program = function.getArgAttrOfType<ArrayAttr>(
+      outputIndex, contract::kShapeProgram);
     if (!program ||
         program.size() != static_cast<std::size_t>(outputType.getRank())) {
       return function.emitOpError() << "dynamic output " << outputIndex
@@ -130,7 +132,7 @@ LogicalResult verifyShapeProgram(func::FuncOp function,
   }
 
   auto program =
-    function.getArgAttrOfType<ArrayAttr>(outputIndex, "ncnn.shape_program");
+    function.getArgAttrOfType<ArrayAttr>(outputIndex, contract::kShapeProgram);
   if (!program ||
       program.size() != static_cast<std::size_t>(outputType.getRank())) {
     return function.emitOpError() << "dynamic output " << outputIndex
@@ -180,9 +182,9 @@ LogicalResult verifyDataDependentOutput(func::FuncOp function,
   }
   const uint64_t validMask = (UINT64_C(1) << outputType.getRank()) - 1;
   if (!outputType.hasStaticShape() || (mask & ~validMask) != 0 ||
-      function.getArgAttr(outputIndex, "ncnn.shape_source_input") ||
-      function.getArgAttr(outputIndex, "ncnn.shape_program") ||
-      function.getArgAttr(outputIndex, "ncnn.shape_program_version")) {
+      function.getArgAttr(outputIndex, contract::kShapeSourceInput) ||
+      function.getArgAttr(outputIndex, contract::kShapeProgram) ||
+      function.getArgAttr(outputIndex, contract::kShapeProgramVersion)) {
     return function.emitOpError()
            << "output " << outputIndex
            << " has an invalid data-dependent shape contract";
@@ -194,7 +196,7 @@ LogicalResult verifyDataDependentOutput(func::FuncOp function,
   auto carrierType =
     dyn_cast<MemRefType>(function.getArgumentTypes()[outputIndex + 1]);
   if (!function.getArgAttr(outputIndex + 1, "bufferize.result") ||
-      !function.getArgAttr(outputIndex + 1, "ncnn.shape_carrier") ||
+      !function.getArgAttr(outputIndex + 1, contract::kShapeCarrier) ||
       !carrierType || !carrierType.hasStaticShape() ||
       !carrierType.getElementType().isInteger(64) ||
       carrierType.getRank() != 1 ||
@@ -208,7 +210,7 @@ LogicalResult verifyDataDependentOutput(func::FuncOp function,
 LogicalResult verifyDynamicRankFunction(func::FuncOp function,
                                         ArrayRef<unsigned> inputIndices,
                                         ArrayRef<unsigned> outputIndices) {
-  auto rank = function->getAttrOfType<IntegerAttr>("ncnn.rank_variant");
+  auto rank = contract::ModelLedger::read(function).rankVariant;
   if (!rank || rank.getInt() < 1 || rank.getInt() > 4) {
     return function.emitOpError(
       "dynamic rank specialization requires rank_variant in [1, 4]");
@@ -229,7 +231,7 @@ LogicalResult verifyDynamicRankFunction(func::FuncOp function,
       "memref");
   }
   auto program = function.getArgAttrOfType<ArrayAttr>(outputIndices.front(),
-                                                      "ncnn.shape_program");
+                                                      contract::kShapeProgram);
   if (failed(verifyShapeProgram(
         function, outputIndices.front(), output, inputIndices))) {
     return failure();
@@ -245,8 +247,10 @@ LogicalResult verifyDynamicRankFunction(func::FuncOp function,
 }
 
 LogicalResult verifyFunction(func::FuncOp function) {
-  const bool dynamicRank = function->hasAttr("ncnn.dynamic_rank");
-  const bool hasRankVariant = function->hasAttr("ncnn.rank_variant");
+  const bool dynamicRank =
+    contract::ModelLedger::read(function).dynamicRank != nullptr;
+  const bool hasRankVariant =
+    contract::ModelLedger::read(function).rankVariant != nullptr;
   if (dynamicRank != hasRankVariant) {
     return function.emitOpError(
       "dynamic_rank and rank_variant attributes must appear together");
@@ -257,7 +261,7 @@ LogicalResult verifyFunction(func::FuncOp function) {
   bool hasDynamicInput = false;
   for (unsigned index = 0; index < function.getNumArguments(); ++index) {
     if (function.getArgAttr(index, "bufferize.result")) {
-      if (!function.getArgAttr(index, "ncnn.shape_carrier")) {
+      if (!function.getArgAttr(index, contract::kShapeCarrier)) {
         outputIndices.push_back(index);
       }
       continue;
@@ -278,7 +282,7 @@ LogicalResult verifyFunction(func::FuncOp function) {
              << "output " << outputIndex << " must be a ranked memref";
     }
     auto maskAttr = function.getArgAttrOfType<IntegerAttr>(
-      outputIndex, "ncnn.data_dependent_dim_mask");
+      outputIndex, contract::kDataDependentDimMask);
     const uint64_t mask = maskAttr ? maskAttr.getUInt() : 0;
     if (mask != 0) {
       if (failed(verifyDataDependentOutput(
@@ -307,14 +311,14 @@ class VerifyModelShapeContractsPass final
   void runOnOperation() final {
     SmallVector<func::FuncOp> dynamicRankFunctions;
     for (func::FuncOp function : getOperation().getOps<func::FuncOp>()) {
-      if (!function->hasAttr("ncnn.entry_point")) {
+      if (!function->hasAttr(contract::kEntryPoint)) {
         continue;
       }
       if (failed(verifyFunction(function))) {
         signalPassFailure();
         return;
       }
-      if (function->hasAttr("ncnn.dynamic_rank")) {
+      if (contract::ModelLedger::read(function).dynamicRank != nullptr) {
         dynamicRankFunctions.push_back(function);
       }
     }
@@ -323,7 +327,7 @@ class VerifyModelShapeContractsPass final
       std::array<bool, 4> ranks{};
       for (func::FuncOp function : dynamicRankFunctions) {
         int64_t rank =
-          function->getAttrOfType<IntegerAttr>("ncnn.rank_variant").getInt();
+          contract::ModelLedger::read(function).rankVariant.getInt();
         ranks[rank - 1] = true;
       }
       if (dynamicRankFunctions.size() != 4 ||

@@ -24,6 +24,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Verifier.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/ModelLedger.hpp"
 
 namespace ncnn_importer {
 
@@ -530,9 +532,9 @@ void ImportContext::tag_source(mlir::Operation* operation,
                                const LayerContext& context) {
   const mlir::StringAttr name =
     builder_.getStringAttr(context.layer.get_name());
-  operation->setAttr("ncnn.name", name);
+  operation->setAttr(mlir::ncnn::contract::kName, name);
   operation->setAttr(
-    "ncnn.source_layer",
+    mlir::ncnn::contract::kSourceLayer,
     builder_.getI64IntegerAttr(static_cast<std::int64_t>(context.index)));
   // The layer identity is mirrored into the operation location as well,
   // because locations survive the NCNN -> TOSA -> Linalg -> memref
@@ -559,13 +561,14 @@ ImportResult ImportContext::prepare_model() {
   model_ = builder_.create<mlir::ncnn::ModelOp>(
     builder_.getUnknownLoc(), builder_.getStringAttr("model"));
   model_->setAttr(
-    "ncnn.precision",
+    mlir::ncnn::contract::kPrecision,
     builder_.getStringAttr(precision_mode_name(options_.precision.mode)));
-  model_->setAttr("ncnn.fp16_accumulator",
+  model_->setAttr(mlir::ncnn::contract::kFp16Accumulator,
                   builder_.getStringAttr(fp16_accumulator_mode_name(
                     options_.precision.fp16_accumulator)));
   if (options_.precision.used_fallback) {
-    model_->setAttr("ncnn.precision_fallback", builder_.getUnitAttr());
+    model_->setAttr(mlir::ncnn::contract::kPrecisionFallback,
+                    builder_.getUnitAttr());
   }
   if (!options_.input_dim_constraints.empty()) {
     llvm::SmallVector<mlir::Attribute> constraints;
@@ -579,14 +582,19 @@ ImportResult ImportContext::prepare_model() {
                                            constraint.minimum,
                                            constraint.multiple_of));
     }
-    model_->setAttr("ncnn.shape_constraints",
-                    builder_.getArrayAttr(constraints));
+    mlir::ncnn::contract::ModelLedger ledger =
+      mlir::ncnn::contract::ModelLedger::read(model_);
+    ledger.shapeConstraints = builder_.getArrayAttr(constraints);
+    ledger.write(model_);
   }
   if (options_.rank_specialization) {
     const std::uint32_t rank = *options_.rank_specialization;
     model_.setSymName(std::format("model_rank{}", rank));
-    model_->setAttr("ncnn.rank_variant", builder_.getI32IntegerAttr(rank));
-    model_->setAttr("ncnn.dynamic_rank", builder_.getUnitAttr());
+    mlir::ncnn::contract::ModelLedger rankLedger =
+      mlir::ncnn::contract::ModelLedger::read(model_);
+    rankLedger.rankVariant = builder_.getI32IntegerAttr(rank);
+    rankLedger.dynamicRank = builder_.getUnitAttr();
+    rankLedger.write(model_);
   }
   mlir::Block* block = &model_.getBody().emplaceBlock();
   builder_.setInsertionPointToStart(block);
@@ -597,9 +605,10 @@ ImportResult infer_shape_constraints(mlir::ncnn::ModelOp model) {
   std::map<std::pair<std::uint32_t, std::uint32_t>,
            ncnn_importer::InputDimConstraint>
     constraints;
-  if (auto existing =
-        model->getAttrOfType<mlir::ArrayAttr>("ncnn.shape_constraints")) {
-    for (mlir::Attribute attribute : existing) {
+  mlir::ncnn::contract::ModelLedger ledger =
+    mlir::ncnn::contract::ModelLedger::read(model);
+  if (ledger.shapeConstraints) {
+    for (mlir::Attribute attribute : ledger.shapeConstraints) {
       auto constraint = mlir::cast<mlir::ncnn::DimConstraintAttr>(attribute);
       constraints[{constraint.getInput(), constraint.getDim()}] = {
         .input = constraint.getInput(),
@@ -644,7 +653,8 @@ ImportResult infer_shape_constraints(mlir::ncnn::ModelOp model) {
                                          constraint.minimum,
                                          constraint.multiple_of));
   }
-  model->setAttr("ncnn.shape_constraints", builder.getArrayAttr(attributes));
+  ledger.shapeConstraints = builder.getArrayAttr(attributes);
+  ledger.write(model);
   return {};
 }
 

@@ -19,6 +19,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "ncnn-mlir/Support/CheckedMath.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
@@ -36,34 +37,12 @@ constexpr int64_t kMaxStrategyElements = 1LL << 28;
 // strategy limit even when the GEMM path is the established faster lowering.
 constexpr int64_t kMaxIm2colWindowElements = 1LL << 29;
 
-bool checkedMul(int64_t lhs, int64_t rhs, int64_t& result) {
-  if (lhs < 0 || rhs < 0 ||
-      (lhs != 0 && rhs > std::numeric_limits<int64_t>::max() / lhs)) {
-    return false;
-  }
-  result = lhs * rhs;
-  return true;
-}
-
-bool checkedAdd(int64_t lhs, int64_t rhs, int64_t& result) {
-  if (lhs < 0 || rhs < 0 || rhs > std::numeric_limits<int64_t>::max() - lhs) {
-    return false;
-  }
-  result = lhs + rhs;
-  return true;
-}
-
-bool checkedProduct(ArrayRef<int64_t> shape,
-                    int64_t& result,
-                    int64_t limit = kMaxStrategyElements) {
-  result = 1;
-  for (int64_t extent : shape) {
-    if (!checkedMul(result, extent, result) || result > limit) {
-      return false;
-    }
-  }
-  return true;
-}
+// Bounds proofs all run through one implementation (see CheckedMath.hpp).
+// The result type is FailureOr; inside `mlir::ncnn` the `failed`/`succeeded`
+// helpers resolve unqualified from the enclosing `mlir` namespace.
+using ncnn_mlir::checkedAdd;
+using ncnn_mlir::checkedMul;
+using ncnn_mlir::checkedProduct;
 
 StringRef knownLayout(Operation* operation) {
   for (StringRef attribute :
@@ -134,7 +113,7 @@ void copyConvContract(Operation* source, Operation* target) {
     }
   }
   for (StringRef attribute :
-       {StringRef("ncnn.name"), StringRef("ncnn.source_layer")}) {
+       {StringRef(contract::kName), StringRef(contract::kSourceLayer)}) {
     if (Attribute value = source->getAttr(attribute)) {
       target->setAttr(attribute, value);
     }
@@ -443,7 +422,7 @@ bool isCollapsibleElementwiseConsumer(linalg::GenericOp consumer,
   // A previous Strategy rewrite may leave a 2-D matmul result feeding a
   // generated generic; never try to collapse that already-collapsed domain a
   // second time.
-  if (rank != 4 || consumer->hasAttr("ncnn.strategy_lifted_epilogue")) {
+  if (rank != 4 || consumer->hasAttr(contract::kStrategyLiftedEpilogue)) {
     return false;
   }
   for (utils::IteratorType iteratorType : consumer.getIteratorTypesArray()) {
@@ -521,10 +500,9 @@ Value collapseToRows(RewriterBase& rewriter,
     auto sourceType = dyn_cast<RankedTensorType>(expand.getSrc().getType());
     if (sourceType && sourceType.getRank() == 2 &&
         tensorType.hasStaticShape() && sourceType.hasStaticShape()) {
-      int64_t rows = 0;
-      if (checkedProduct(ArrayRef<int64_t>{shape[0], shape[1], shape[2]},
-                         rows) &&
-          sourceType.getShape()[0] == rows &&
+      auto foldedRows = checkedProduct(
+        ArrayRef<int64_t>{shape[0], shape[1], shape[2]}, kMaxStrategyElements);
+      if (succeeded(foldedRows) && sourceType.getShape()[0] == *foldedRows &&
           sourceType.getShape()[1] == shape[3]) {
         return expand.getSrc();
       }
@@ -537,9 +515,11 @@ Value collapseToRows(RewriterBase& rewriter,
       dynamicRows = true;
       break;
     }
-    if (!checkedMul(rows, shape[dimension], rows)) {
+    auto accumulated = checkedMul(rows, shape[dimension]);
+    if (failed(accumulated)) {
       return {};
     }
+    rows = *accumulated;
   }
   if (!dynamicRows && rows > kMaxStrategyElements) {
     return {};
@@ -605,10 +585,9 @@ Value expandFromRows(RewriterBase& rewriter,
       return shape[dimension] == ShapedType::kDynamic;
     });
   if (!dynamicSpatial) {
-    int64_t rows = 0;
-    if (!checkedProduct(ArrayRef<int64_t>{shape[0], shape[1], shape[2]},
-                        rows) ||
-        tensorType.getShape()[0] != rows) {
+    auto foldedRows = checkedProduct(
+      ArrayRef<int64_t>{shape[0], shape[1], shape[2]}, kMaxStrategyElements);
+    if (failed(foldedRows) || tensorType.getShape()[0] != *foldedRows) {
       return {};
     }
     SmallVector<OpFoldResult> outputShape;
@@ -734,12 +713,11 @@ class StrategyNCNNPass final
     const auto bType = cast<RankedTensorType>(batch.getInputs()[1].getType());
     const auto cType =
       cast<RankedTensorType>(batch.getOutputs().front().getType());
-    int64_t ignoredElements = 0;
     if (!aType.hasStaticShape() || !bType.hasStaticShape() ||
         !cType.hasStaticShape() ||
-        !checkedProduct(aType.getShape(), ignoredElements) ||
-        !checkedProduct(bType.getShape(), ignoredElements) ||
-        !checkedProduct(cType.getShape(), ignoredElements)) {
+        failed(checkedProduct(aType.getShape(), kMaxStrategyElements)) ||
+        failed(checkedProduct(bType.getShape(), kMaxStrategyElements)) ||
+        failed(checkedProduct(cType.getShape(), kMaxStrategyElements))) {
       return;
     }
     const int64_t rows = aType.getShape()[1];
@@ -791,24 +769,25 @@ class StrategyNCNNPass final
                   int64_t dilationWidth,
                   int64_t strideHeight,
                   int64_t strideWidth) const {
-    int64_t weightElements = 0;
-    if (!checkedProduct(ArrayRef<int64_t>{inputChannels,
-                                          outputChannels,
-                                          kernelHeight,
-                                          kernelWidth,
-                                          dilationHeight,
-                                          dilationWidth,
-                                          strideHeight,
-                                          strideWidth},
-                        weightElements,
-                        std::numeric_limits<int64_t>::max())) {
+    // Pure overflow proof here: this predicate only needs "representable", not
+    // "small enough to rewrite", so the budget is the type's ceiling.
+    auto weightElements = checkedProduct(ArrayRef<int64_t>{inputChannels,
+                                                           outputChannels,
+                                                           kernelHeight,
+                                                           kernelWidth,
+                                                           dilationHeight,
+                                                           dilationWidth,
+                                                           strideHeight,
+                                                           strideWidth},
+                                         std::numeric_limits<int64_t>::max());
+    if (failed(weightElements)) {
       return true;
     }
-    int64_t weightBytes = 0;
-    if (!checkedMul(weightElements, sizeof(float) * 2, weightBytes)) {
+    auto weightBytes = checkedMul(*weightElements, sizeof(float) * 2);
+    if (failed(weightBytes)) {
       return true;
     }
-    return weightBytes > this->gemmL2Bytes.getValue() || inputChannels > 16 ||
+    return *weightBytes > this->gemmL2Bytes.getValue() || inputChannels > 16 ||
            outputChannels > 16;
   }
 
@@ -834,16 +813,20 @@ class StrategyNCNNPass final
       return std::nullopt;
     }
     const unsigned bitWidth = elements.getElementType().getIntOrFloatBitWidth();
-    int64_t depthExtent = 0;
-    int64_t elementCount = 0;
-    if (!checkedProduct(
-          ArrayRef<int64_t>{kernelHeight, kernelWidth, inputChannels},
-          depthExtent) ||
-        !checkedMul(outputChannels, depthExtent, elementCount) ||
-        elementCount > kMaxStrategyElements ||
-        !std::cmp_equal(elements.getNumElements(), elementCount)) {
+    auto depthExtentProof = checkedProduct(
+      ArrayRef<int64_t>{kernelHeight, kernelWidth, inputChannels},
+      kMaxStrategyElements);
+    if (failed(depthExtentProof)) {
       return std::nullopt;
     }
+    const int64_t depthExtent = *depthExtentProof;
+    auto elementCountProof = checkedMul(outputChannels, depthExtent);
+    if (failed(elementCountProof) ||
+        *elementCountProof > kMaxStrategyElements ||
+        !std::cmp_equal(elements.getNumElements(), *elementCountProof)) {
+      return std::nullopt;
+    }
+    const int64_t elementCount = *elementCountProof;
     SmallVector<APInt> transposed(static_cast<size_t>(elementCount),
                                   APInt(bitWidth, 0));
     auto values = elements.getValues<APInt>();
@@ -993,29 +976,31 @@ class StrategyNCNNPass final
                          inputChannels,
                          outputChannels);
 
-    int64_t roundedHeight = 0;
-    int64_t roundedWidth = 0;
-    if (!checkedAdd(outputHeight, kTile - 1, roundedHeight) ||
-        !checkedAdd(outputWidth, kTile - 1, roundedWidth)) {
+    auto roundedHeightProof = checkedAdd(outputHeight, kTile - 1);
+    auto roundedWidthProof = checkedAdd(outputWidth, kTile - 1);
+    if (failed(roundedHeightProof) || failed(roundedWidthProof)) {
       return false;
     }
-    const int64_t tileRows = roundedHeight / kTile;
-    const int64_t tileColumns = roundedWidth / kTile;
-    int64_t paddedHeight = 0;
-    int64_t paddedWidth = 0;
-    int64_t tileHeight = 0;
-    int64_t tileWidth = 0;
-    int64_t tiles = 0;
-    if (!checkedMul(tileRows, kTile, tileHeight) ||
-        !checkedMul(tileColumns, kTile, tileWidth) ||
-        !checkedAdd(tileHeight, 2, paddedHeight) ||
-        !checkedAdd(tileWidth, 2, paddedWidth) ||
-        !checkedMul(tileRows, tileColumns, tiles)) {
+    const int64_t tileRows = *roundedHeightProof / kTile;
+    const int64_t tileColumns = *roundedWidthProof / kTile;
+    auto tileHeightProof = checkedMul(tileRows, kTile);
+    auto tileWidthProof = checkedMul(tileColumns, kTile);
+    if (failed(tileHeightProof) || failed(tileWidthProof)) {
       return false;
     }
+    auto paddedHeightProof = checkedAdd(*tileHeightProof, 2);
+    auto paddedWidthProof = checkedAdd(*tileWidthProof, 2);
+    auto tilesProof = checkedMul(tileRows, tileColumns);
+    if (failed(paddedHeightProof) || failed(paddedWidthProof) ||
+        failed(tilesProof)) {
+      return false;
+    }
+    const int64_t paddedHeight = *paddedHeightProof;
+    const int64_t paddedWidth = *paddedWidthProof;
+    const int64_t tiles = *tilesProof;
+    // Winograd temporary buffers share the per-tensor strategy budget.
     auto safeShape = [](ArrayRef<int64_t> shape) {
-      int64_t elements = 0;
-      return checkedProduct(shape, elements);
+      return succeeded(checkedProduct(shape, kMaxStrategyElements));
     };
     if (!safeShape(
           ArrayRef<int64_t>{1, paddedHeight, paddedWidth, inputChannels}) ||
@@ -1508,36 +1493,36 @@ class StrategyNCNNPass final
       !ShapedType::isDynamic(resultShape[3]) &&
       !ShapedType::isDynamic(initShape[3]) && imageShape[3] == inputChannels &&
       resultShape[3] == outputChannels && initShape[3] == outputChannels;
-    int64_t ignoredElements = 0;
     const bool staticBatchOne =
       !ShapedType::isDynamic(imageShape[0]) && imageShape[0] == 1 &&
       !ShapedType::isDynamic(resultShape[0]) && resultShape[0] == 1 &&
       !ShapedType::isDynamic(initShape[0]) && initShape[0] == 1;
+    // Every rewrite below materializes a dense view or workspace sized by these
+    // shapes, so each must multiply out within the per-tensor budget.
     const bool unitViewShapesSafe =
       staticChannels && imageType.hasStaticShape() &&
       resultType.hasStaticShape() && initType.hasStaticShape() &&
       imageShape[0] == resultShape[0] && imageShape[0] == initShape[0] &&
       imageShape[1] == resultShape[1] && imageShape[1] == initShape[1] &&
       imageShape[2] == resultShape[2] && imageShape[2] == initShape[2] &&
-      checkedProduct(imageShape, ignoredElements) &&
-      checkedProduct(weightShape, ignoredElements) &&
-      checkedProduct(resultShape, ignoredElements) &&
-      checkedProduct(initShape, ignoredElements);
+      succeeded(checkedProduct(imageShape, kMaxStrategyElements)) &&
+      succeeded(checkedProduct(weightShape, kMaxStrategyElements)) &&
+      succeeded(checkedProduct(resultShape, kMaxStrategyElements)) &&
+      succeeded(checkedProduct(initShape, kMaxStrategyElements));
     const bool im2colShapesSafe =
       staticChannels && staticSpatial && staticBatchOne &&
       imageType.hasStaticShape() && resultType.hasStaticShape() &&
       initType.hasStaticShape() && initType == resultType &&
-      checkedProduct(imageShape, ignoredElements) &&
-      checkedProduct(weightShape, ignoredElements) &&
-      checkedProduct(resultShape, ignoredElements) &&
-      checkedProduct(initShape, ignoredElements) &&
-      checkedProduct(ArrayRef<int64_t>{resultShape[1],
-                                       resultShape[2],
-                                       kernelHeight,
-                                       kernelWidth,
-                                       inputChannels},
-                     ignoredElements,
-                     kMaxIm2colWindowElements);
+      succeeded(checkedProduct(imageShape, kMaxStrategyElements)) &&
+      succeeded(checkedProduct(weightShape, kMaxStrategyElements)) &&
+      succeeded(checkedProduct(resultShape, kMaxStrategyElements)) &&
+      succeeded(checkedProduct(initShape, kMaxStrategyElements)) &&
+      succeeded(checkedProduct(ArrayRef<int64_t>{resultShape[1],
+                                                 resultShape[2],
+                                                 kernelHeight,
+                                                 kernelWidth,
+                                                 inputChannels},
+                               kMaxIm2colWindowElements));
     bool useUnitView = false;
     bool useIm2col = false;
     switch (strategy) {
@@ -1773,7 +1758,8 @@ class StrategyNCNNPass final
         ValueRange{collapsedConsumerInit},
         liftedMaps,
         SmallVector<utils::IteratorType>(2, utils::IteratorType::parallel));
-      lifted->setAttr("ncnn.strategy_lifted_epilogue", rewriter.getUnitAttr());
+      lifted->setAttr(contract::kStrategyLiftedEpilogue,
+                      rewriter.getUnitAttr());
       IRMapping mapping;
       consumer->getRegion(0).cloneInto(&lifted->getRegion(0), mapping);
       Value expanded = expandFromRows(rewriter,

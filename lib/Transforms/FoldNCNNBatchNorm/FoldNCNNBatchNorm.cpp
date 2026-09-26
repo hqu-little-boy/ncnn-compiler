@@ -13,6 +13,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
+#include "ncnn-mlir/Support/ConstantFold.hpp"
 
 namespace mlir::ncnn {
 
@@ -21,13 +22,7 @@ namespace mlir::ncnn {
 
 namespace {
 
-ElementsAttr getConstantElements(Value value) {
-  auto constant = value.getDefiningOp<arith::ConstantOp>();
-  if (!constant) {
-    return {};
-  }
-  return dyn_cast<ElementsAttr>(constant.getValue());
-}
+using ncnn_mlir::findConstantElements;
 
 DenseElementsAttr scaleConstantChannels(ElementsAttr elements,
                                         RankedTensorType type,
@@ -80,11 +75,11 @@ Operation* foldBatchNormIntoConvolution(PatternRewriter& rewriter,
       parameterType.getElementType() != rewriter.getF32Type()) {
     return nullptr;
   }
-  ElementsAttr slope = getConstantElements(batchNorm.getSlope());
-  ElementsAttr mean = getConstantElements(batchNorm.getMean());
-  ElementsAttr variance = getConstantElements(batchNorm.getVariance());
-  ElementsAttr bias = getConstantElements(batchNorm.getBias());
-  ElementsAttr weight = getConstantElements(convolution.getWeight());
+  ElementsAttr slope = findConstantElements(batchNorm.getSlope());
+  ElementsAttr mean = findConstantElements(batchNorm.getMean());
+  ElementsAttr variance = findConstantElements(batchNorm.getVariance());
+  ElementsAttr bias = findConstantElements(batchNorm.getBias());
+  ElementsAttr weight = findConstantElements(convolution.getWeight());
   if (!slope || !mean || !variance || !bias || !weight) {
     return nullptr;
   }
@@ -126,7 +121,7 @@ Operation* foldBatchNormIntoConvolution(PatternRewriter& rewriter,
   }
   ElementsAttr originalBias =
     convolution.getHasBias()
-      ? getConstantElements(convolution.getBiasAndScales().front())
+      ? findConstantElements(convolution.getBiasAndScales().front())
       : ElementsAttr();
   DenseElementsAttr foldedBias;
   auto biasType = RankedTensorType::get({channels}, rewriter.getF32Type());

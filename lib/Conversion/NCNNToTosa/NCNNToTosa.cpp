@@ -25,6 +25,7 @@
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 #include "ncnn-mlir/Support/ConstantFold.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/ModelLedger.hpp"
 #include "ncnn-mlir/Support/Precision.hpp"
 
 namespace mlir::ncnn {
@@ -67,16 +68,16 @@ RankedTensorType getHWCFType(RankedTensorType oihwType) {
 
 bool usesFP16Arithmetic(Operation* operation) {
   auto function = operation->getParentOfType<func::FuncOp>();
-  auto precision = function->getAttrOfType<StringAttr>("ncnn.precision");
+  auto precision = function->getAttrOfType<StringAttr>(contract::kPrecision);
   auto accumulator =
-    function->getAttrOfType<StringAttr>("ncnn.fp16_accumulator");
+    function->getAttrOfType<StringAttr>(contract::kFp16Accumulator);
   return precision && precision.getValue() == "fp16" && accumulator &&
          accumulator.getValue() == "f16";
 }
 
 Type getLowPrecisionStorageType(OpBuilder& builder, Operation* operation) {
   auto function = operation->getParentOfType<func::FuncOp>();
-  auto precision = function->getAttrOfType<StringAttr>("ncnn.precision");
+  auto precision = function->getAttrOfType<StringAttr>(contract::kPrecision);
   if (!precision) {
     return {};
   }
@@ -92,7 +93,7 @@ Type getLowPrecisionStorageType(OpBuilder& builder, Operation* operation) {
 bool usesLowPrecisionBoundary(Operation* operation) {
   StringRef name = operation->getName().getStringRef();
   auto function = operation->getParentOfType<func::FuncOp>();
-  auto precision = function->getAttrOfType<StringAttr>("ncnn.precision");
+  auto precision = function->getAttrOfType<StringAttr>(contract::kPrecision);
   const bool lowPrecision = precision && (precision.getValue() == "fp16" ||
                                           precision.getValue() == "bf16");
   return lowPrecision &&
@@ -2128,7 +2129,7 @@ class ConvertSoftmax final : public OpConversionPattern<SoftmaxOp> {
 class ConvertPadding final : public ConversionPattern {
  public:
   ConvertPadding(const TypeConverter& typeConverter, MLIRContext* context)
-    : ConversionPattern(typeConverter, "ncnn.padding", 1, context) {}
+    : ConversionPattern(typeConverter, contract::kLayerPadding, 1, context) {}
 
   LogicalResult matchAndRewrite(
     Operation* operation,
@@ -2266,7 +2267,7 @@ class ConvertPadding final : public ConversionPattern {
 class ConvertInterp final : public ConversionPattern {
  public:
   ConvertInterp(const TypeConverter& typeConverter, MLIRContext* context)
-    : ConversionPattern(typeConverter, "ncnn.interp", 1, context) {}
+    : ConversionPattern(typeConverter, contract::kLayerInterp, 1, context) {}
 
   LogicalResult matchAndRewrite(
     Operation* operation,
@@ -2751,7 +2752,8 @@ class ConvertGridSample final : public OpConversionPattern<GridSampleOp> {
 class ConvertDeconvolution final : public ConversionPattern {
  public:
   ConvertDeconvolution(const TypeConverter& typeConverter, MLIRContext* context)
-    : ConversionPattern(typeConverter, "ncnn.deconvolution", 1, context) {}
+    : ConversionPattern(
+        typeConverter, contract::kLayerDeconvolution, 1, context) {}
 
   LogicalResult matchAndRewrite(
     Operation* operation,
@@ -3005,7 +3007,7 @@ class ConvertDeconvolution final : public ConversionPattern {
 class ConvertSigmoid final : public ConversionPattern {
  public:
   ConvertSigmoid(const TypeConverter& typeConverter, MLIRContext* context)
-    : ConversionPattern(typeConverter, "ncnn.sigmoid", 1, context) {}
+    : ConversionPattern(typeConverter, contract::kLayerSigmoid, 1, context) {}
 
   LogicalResult matchAndRewrite(
     Operation* operation,
@@ -3894,11 +3896,11 @@ void appendAttentionSegmentRecords(MultiHeadAttentionOp operation,
   module->setAttr(contract::kAttentionRevision,
                   StringAttr::get(module.getContext(), "attention-segment-v1"));
 
-  auto existing =
-    module->getAttrOfType<ArrayAttr>(contract::kAttentionSegments);
+  contract::ModelLedger ledger = contract::ModelLedger::read(module);
   SmallVector<Attribute> records;
-  if (existing) {
-    records.append(existing.begin(), existing.end());
+  if (ledger.attentionSegments) {
+    records.append(ledger.attentionSegments.begin(),
+                   ledger.attentionSegments.end());
   }
 
   std::optional<int64_t> transposeBytes;
@@ -3938,7 +3940,7 @@ void appendAttentionSegmentRecords(MultiHeadAttentionOp operation,
     record.set("id", StringAttr::get(context, prefix + "/" + phase.str()));
     record.set("function", StringAttr::get(context, function.getName()));
     record.set("source_operation",
-               StringAttr::get(context, "ncnn.multi_head_attention"));
+               StringAttr::get(context, contract::kLayerMultiHeadAttention));
     record.set("attention_ordinal",
                IntegerAttr::get(IntegerType::get(context, 64), ordinal));
     record.set("phase", StringAttr::get(context, phase));
@@ -4021,8 +4023,8 @@ void appendAttentionSegmentRecords(MultiHeadAttentionOp operation,
   append("context", seq, seq, headDim, layoutTransposeCount, status, reason);
   append("output_projection", seq, embed, qdim, 0, status, reason);
 
-  module->setAttr(contract::kAttentionSegments,
-                  ArrayAttr::get(module.getContext(), records));
+  ledger.attentionSegments = ArrayAttr::get(module.getContext(), records);
+  ledger.write(module);
 }
 
 class ConvertMultiHeadAttention final
@@ -6066,19 +6068,21 @@ class ConvertNCNNToTosaPass final
                  ConvertPermute,
                  ConvertGemm>(typeConverter, context);
     patterns.add<ConvertHardActivation>(
-      typeConverter, context, "ncnn.hard_sigmoid", false);
+      typeConverter, context, contract::kLayerHardSigmoid, false);
     patterns.add<ConvertHardActivation>(
-      typeConverter, context, "ncnn.hard_swish", true);
+      typeConverter, context, contract::kLayerHardSwish, true);
     patterns.add<ConvertDepthwiseConvolution>(
-      typeConverter, context, "ncnn.convolution_depthwise");
-    patterns.add<ConvertReshape>(typeConverter, context, "ncnn.reshape");
-    patterns.add<ConvertShapeChange>(typeConverter, context, "ncnn.squeeze");
+      typeConverter, context, contract::kLayerConvolutionDepthwise);
+    patterns.add<ConvertReshape>(
+      typeConverter, context, contract::kLayerReshape);
     patterns.add<ConvertShapeChange>(
-      typeConverter, context, "ncnn.expand_dims");
-    patterns.add<ConvertBinary>(typeConverter, context, "ncnn.binary");
+      typeConverter, context, contract::kLayerSqueeze);
+    patterns.add<ConvertShapeChange>(
+      typeConverter, context, contract::kLayerExpandDims);
+    patterns.add<ConvertBinary>(typeConverter, context, contract::kLayerBinary);
     patterns.add<ConvertUnary>(typeConverter, context);
     patterns.add<ConvertInnerProduct>(
-      typeConverter, context, "ncnn.inner_product");
+      typeConverter, context, contract::kLayerInnerProduct);
     patterns.add<ConvertPadding,
                  ConvertInterp,
                  ConvertDeconvolution,
@@ -6126,19 +6130,19 @@ class ConvertNCNNToTosaPass final
                         BatchNormOp,
                         PermuteOp,
                         GemmOp>();
-    for (StringRef name : {"ncnn.hard_sigmoid",
-                           "ncnn.hard_swish",
-                           "ncnn.convolution_depthwise",
-                           "ncnn.reshape",
-                           "ncnn.squeeze",
-                           "ncnn.expand_dims",
-                           "ncnn.binary",
-                           "ncnn.unary",
-                           "ncnn.inner_product",
-                           "ncnn.padding",
-                           "ncnn.interp",
-                           "ncnn.deconvolution",
-                           "ncnn.sigmoid"}) {
+    for (StringRef name : {contract::kLayerHardSigmoid,
+                           contract::kLayerHardSwish,
+                           contract::kLayerConvolutionDepthwise,
+                           contract::kLayerReshape,
+                           contract::kLayerSqueeze,
+                           contract::kLayerExpandDims,
+                           contract::kLayerBinary,
+                           contract::kLayerUnary,
+                           contract::kLayerInnerProduct,
+                           contract::kLayerPadding,
+                           contract::kLayerInterp,
+                           contract::kLayerDeconvolution,
+                           contract::kLayerSigmoid}) {
       target.addIllegalOp(OperationName(name, context));
     }
 

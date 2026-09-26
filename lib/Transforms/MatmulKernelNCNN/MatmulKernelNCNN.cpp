@@ -38,7 +38,7 @@ void copyConvContract(Operation* source, Operation* target) {
     }
   }
   for (StringRef attribute :
-       {StringRef("ncnn.name"), StringRef("ncnn.source_layer")}) {
+       {StringRef(contract::kName), StringRef(contract::kSourceLayer)}) {
     if (Attribute value = source->getAttr(attribute)) {
       target->setAttr(attribute, value);
     }

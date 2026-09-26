@@ -15,6 +15,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
 
@@ -312,7 +313,7 @@ class VerifyBufferizedModelPass final
       if (hasSingleBlockStraightLineBody(function)) {
         verifyAllocationLifetimes(function, failedVerification);
       }
-      if (!function->hasAttr("ncnn.entry_point")) {
+      if (!function->hasAttr(contract::kEntryPoint)) {
         return;
       }
       if (function.getNumResults() != 0) {
