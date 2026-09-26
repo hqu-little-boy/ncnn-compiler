@@ -144,6 +144,51 @@ int main(int argc, char** argv) {
 }
 '''
 
+WORKER_HARNESS = r'''
+#define _POSIX_C_SOURCE 200809L
+#include <pthread.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <time.h>
+extern void __ncnn_profile_event_begin(int64_t, int64_t);
+extern void __ncnn_profile_event_end(int64_t);
+extern void __ncnn_profile_worker_event_begin(int64_t);
+extern void __ncnn_profile_worker_event_end(int64_t);
+extern void __ncnn_profile_flush(void);
+static pthread_barrier_t start_barrier;
+static void delay(long nanoseconds) {
+  const struct timespec duration = {0, nanoseconds};
+  nanosleep(&duration, NULL);
+}
+static void* worker(void* unused) {
+  (void)unused;
+  pthread_barrier_wait(&start_barrier);
+  __ncnn_profile_worker_event_begin(42);
+  delay(20000000);
+  __ncnn_profile_worker_event_begin(43);
+  delay(2000000);
+  __ncnn_profile_worker_event_end(43);
+  __ncnn_profile_worker_event_end(42);
+  return NULL;
+}
+int main(void) {
+  pthread_t workers[2];
+  if (pthread_barrier_init(&start_barrier, NULL, 3) != 0) abort();
+  __ncnn_profile_event_begin(7, 0);
+  __ncnn_profile_event_begin(8, 4);
+  for (int i = 0; i < 2; ++i)
+    if (pthread_create(&workers[i], NULL, worker, NULL) != 0) abort();
+  pthread_barrier_wait(&start_barrier);
+  for (int i = 0; i < 2; ++i)
+    if (pthread_join(workers[i], NULL) != 0) abort();
+  pthread_barrier_destroy(&start_barrier);
+  __ncnn_profile_event_end(8);
+  __ncnn_profile_event_end(7);
+  __ncnn_profile_flush();
+  return 0;
+}
+'''
+
 
 def main() -> int:
   parser = argparse.ArgumentParser()
@@ -175,7 +220,7 @@ def main() -> int:
     document = json.loads(profile.read_text(encoding="utf-8"))
     assert document["kind"] == "ncnn.model_execution_profile"
     assert document["plan_revision"] == "static-v1|int8-target-v1"
-    assert document["attribution_revision"] == "attribution-v2"
+    assert document["attribution_revision"] == "attribution-v4"
     assert document["instrumentation"]["aggregation"] == "process-cumulative"
     assert document["instrumentation"]["invocation_count"] == 2
     assert document["mode"] == "line\bfeed\f"
@@ -263,7 +308,7 @@ def main() -> int:
     assert len(rows) == 2
     assert [row["schema_version"] for row in rows] == [2, 2]
     assert [row["invocation_id"] for row in rows] == [1, 2]
-    assert all(row["attribution_revision"] == "attribution-v2" for row in rows)
+    assert all(row["attribution_revision"] == "attribution-v4" for row in rows)
     assert all(row["complete"] is True for row in rows)
     for row in rows:
       events = {(event["id"], event["category"]): event
@@ -314,6 +359,103 @@ def main() -> int:
     assert missing_row["summary"]["materialized_read_bytes_known"] is False
     assert missing_row["summary"]["expected_materialized_read_bytes"] == 64
     assert missing_row["summary"]["materialized_read_complete"] is False
+
+    worker_source = root / "worker_harness.c"
+    worker_binary = root / "worker_harness"
+    worker_profile = root / "profile-v3.ndjson"
+    worker_source.write_text(WORKER_HARNESS, encoding="utf-8")
+    subprocess.run([
+      args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread",
+      str(worker_source), args.runtime, "-o", str(worker_binary),
+    ], check=True)
+    worker_environment = dict(environment)
+    worker_environment.update({
+      "NCNN_PROFILE_PATH": str(worker_profile),
+      "NCNN_PROFILE_SCHEMA": "3",
+      "NCNN_PROFILE_ATTRIBUTION_REVISION": "attribution-v4",
+      "NCNN_PROFILE_INPUT_HASH": "input-abc123",
+    })
+    subprocess.run([str(worker_binary)], check=True, env=worker_environment)
+    worker_rows = [
+      json.loads(line) for line in worker_profile.read_text().splitlines()
+      if line.strip()
+    ]
+    assert len(worker_rows) == 1
+    worker_document = worker_rows[0]
+    assert worker_document["schema_version"] == 3
+    assert worker_document["complete"] is True
+    assert worker_document["attribution_revision"] == "attribution-v4"
+    assert worker_document["input_hash"] == "input-abc123"
+    assert worker_document["summary"]["event_mismatch_count"] == 0
+    worker_events = {
+      (event["id"], event["category"]): event
+      for event in worker_document["events"]
+    }
+    parallel = worker_events[(8, "parallel")]
+    assert parallel["exclusive_semantics"] == \
+      "region_wall_minus_worker_span_union"
+    assert parallel["region_worker_spans"] > 0
+    assert parallel["worker_covered_wall_ns"] > 0
+    assert parallel["region_wall_ns"] == parallel["inclusive_ns"]
+    assert parallel["sample_scale"] == 1
+    assert 0.0 < parallel["wall_coverage_share"] <= 1.0
+    assert parallel["wall_exclusive_estimated_known"] is True
+    assert parallel["exclusive_ns"] == \
+      parallel["inclusive_ns"] - parallel["worker_covered_wall_ns"]
+    assert worker_document["summary"]["worker_sampling"]["duty"] == 1
+    assert worker_document["summary"]["worker_sampling"]["interval_overflow"] \
+      is False
+    assert worker_document["summary"]["worker_wall_attribution"]["additive"] \
+      is True
+    assert worker_events[(42, "worker_operation")]["time_domain"] == "worker_cpu"
+    assert worker_events[(42, "worker_operation")]["calls"] == 2
+    assert worker_events[(42, "worker_operation")]["calls_estimated"] == 2
+    assert worker_events[(42, "worker_operation")]["inclusive_ns"] > \
+      worker_events[(42, "worker_operation")]["exclusive_ns"]
+    assert worker_events[(42, "worker_operation")]["wall_attributed_known"]
+    assert worker_events[(42, "worker_operation")]["wall_attributed_ns"] > 0
+    assert worker_events[(42, "worker_operation")]["worker_wall_union_known"]
+    assert worker_events[(42, "worker_operation")]["worker_wall_union_ns"] > 0
+    assert worker_events[(42, "worker_operation")]["worker_wall_union_ns"] < \
+      worker_events[(7, "operation")]["inclusive_ns"]
+    assert worker_events[(43, "worker_operation")]["calls"] == 2
+    attributed_total = sum(
+      event.get("wall_attributed_ns") or 0
+      for event in worker_document["events"]
+      if event["category"] == "worker_operation")
+    assert attributed_total <= parallel["worker_covered_wall_ns"]
+    assert worker_document["summary"]["top_level_time_ns"] == \
+      worker_events[(7, "operation")]["inclusive_ns"]
+
+    sampled_profile = root / "profile-v3-sampled.ndjson"
+    sampled_environment = dict(worker_environment)
+    sampled_environment.update({
+      "NCNN_PROFILE_PATH": str(sampled_profile),
+      "NCNN_PROFILE_SAMPLE_DUTY": "4",
+    })
+    subprocess.run([str(worker_binary)], check=True, env=sampled_environment)
+    sampled_rows = [
+      json.loads(line) for line in sampled_profile.read_text().splitlines()
+      if line.strip()
+    ]
+    assert len(sampled_rows) == 1
+    sampled = sampled_rows[0]
+    assert sampled["summary"]["worker_sampling"]["duty"] == 4
+    assert sampled["summary"]["worker_sampling"]["basis"] == \
+      "instance_counter_duty"
+    sampled_parallel = {
+      (event["id"], event["category"]): event
+      for event in sampled["events"]
+    }[(8, "parallel")]
+    assert sampled_parallel["exclusive_semantics"] == "not_proven"
+    assert sampled_parallel["wall_exclusive_estimated_known"] is True
+    sampled_worker = {
+      (event["id"], event["category"]): event
+      for event in sampled["events"]
+    }.get((42, "worker_operation"))
+    if sampled_worker is not None and sampled_worker["calls"]:
+      assert sampled_worker["calls_estimated"] == \
+        sampled_worker["calls"] * 4
   return 0
 
 

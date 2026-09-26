@@ -28,8 +28,8 @@ module {
 // CHECK: "workspace_slot_lifetime_end": 8
 // CHECK: "workspace_slot_owner": "model"
 // CHECK: "workspace_slot_thread_visibility": "function_serial"
-// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v2"
-// CHECK: "plan_revision": "static-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v2"
+// CHECK: "contract_revision": "layout-kernel-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v4"
+// CHECK: "plan_revision": "static-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|tuning-v1|attribution-v4"
 // CHECK: "allocation_count": 1
 // CHECK: "deallocation_count": 1
 // CHECK: "workspace_fallback_count": 0

@@ -46,3 +46,14 @@ test-fixtures/
 # Editor temp files
 *.tmp
 *.bak
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Rebuildable codegen dumps from diagnostic compile stages (multi-hundred-MB)
+docs/performance/**/model.ll
+docs/performance/**/model.s
+docs/performance/**/model.linalg.mlir
+docs/performance/**/model.tosa.mlir
+docs/performance/**/model.ncnn.mlir

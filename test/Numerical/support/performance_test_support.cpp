@@ -1,12 +1,15 @@
 #include "performance_test_support.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -20,6 +23,13 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
+#ifdef __linux__
+#include <sched.h>
+#include <unistd.h>
+
+#include <sys/syscall.h>
+#endif
 
 #include "allocator.h"
 #include "cpu.h"
@@ -82,6 +92,79 @@ std::string escape_json(std::string_view value) {
   }
   return escaped;
 }
+
+std::string_view pair_execution_order_name(PairExecutionOrder order) {
+  return order == PairExecutionOrder::NcnnThenCompiled ? "ncnn_then_compiled"
+                                                       : "compiled_then_ncnn";
+}
+
+std::string format_pair_order(const std::vector<PairExecutionOrder>& orders) {
+  std::string formatted;
+  for (const PairExecutionOrder order : orders) {
+    if (!formatted.empty()) {
+      formatted += ",";
+    }
+    formatted += pair_execution_order_name(order);
+  }
+  return formatted;
+}
+
+std::mutex placement_mutex;
+BenchmarkCpuPlacement active_cpu_placement;
+#ifdef __linux__
+std::string format_cpu_list(const cpu_set_t& mask) {
+  std::string list;
+  for (int cpu = 0; cpu < CPU_SETSIZE;) {
+    if (!CPU_ISSET(cpu, &mask)) {
+      ++cpu;
+      continue;
+    }
+    const int start = cpu;
+    while (cpu + 1 < CPU_SETSIZE && CPU_ISSET(cpu + 1, &mask)) {
+      ++cpu;
+    }
+    if (!list.empty()) {
+      list += ",";
+    }
+    list += std::to_string(start);
+    if (cpu != start) {
+      list += std::format("-{}", cpu);
+    }
+    ++cpu;
+  }
+  return list;
+}
+
+std::expected<std::string, std::string> pin_to_common_big_cpu_set() {
+  cpu_set_t process_allowed;
+  if (sched_getaffinity(0, sizeof(process_allowed), &process_allowed) != 0) {
+    return std::unexpected(
+      std::format("sched_getaffinity failed: {}", std::strerror(errno)));
+  }
+  const ncnn::CpuSet& big_mask = ncnn::get_cpu_thread_affinity_mask(2);
+  cpu_set_t effective_mask;
+  CPU_ZERO(&effective_mask);
+  for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+    if (CPU_ISSET(cpu, &process_allowed) && CPU_ISSET(cpu, &big_mask.cpu_set)) {
+      CPU_SET(cpu, &effective_mask);
+    }
+  }
+  if (CPU_COUNT(&effective_mask) == 0) {
+    return std::unexpected(
+      "ncnn big-core affinity mask does not intersect the process CPU set");
+  }
+  if (sched_setaffinity(0, sizeof(effective_mask), &effective_mask) != 0) {
+    return std::unexpected(
+      std::format("sched_setaffinity failed: {}", std::strerror(errno)));
+  }
+  cpu_set_t applied_mask;
+  if (sched_getaffinity(0, sizeof(applied_mask), &applied_mask) != 0) {
+    return std::unexpected(std::format(
+      "sched_getaffinity verification failed: {}", std::strerror(errno)));
+  }
+  return format_cpu_list(applied_mask);
+}
+#endif
 
 std::expected<std::string, std::string> read_json_string_field(
   std::string_view text, std::string_view field) {
@@ -433,18 +516,110 @@ std::expected<int, std::string> resolve_benchmark_thread_count() {
   return threads;
 }
 
-void apply_benchncnn_threading(int threads) {
-  ncnn::set_cpu_powersave(2);
-  ncnn::set_omp_dynamic(0);
-  ncnn::set_omp_num_threads(threads);
-  // 兜底：若 dlopen 进来的 .so 携带独立的 OpenMP 运行时副本，其初始化会读取
-  // 该环境变量。主实例已通过 set_omp_num_threads 生效，此处尽力而为即可。
+std::string performance_input_hash(std::span<const float> input) {
+  std::uint64_t hash = 14695981039346656037ULL;
+  for (float value : input) {
+    const auto bits = std::bit_cast<std::uint32_t>(value);
+    for (unsigned shift = 0; shift < 32; shift += 8) {
+      hash ^= static_cast<std::uint8_t>(bits >> shift);
+      hash *= 1099511628211ULL;
+    }
+  }
+  return std::format("{:016x}", hash);
+}
+
+std::expected<void, std::string> apply_benchncnn_threading(int threads) {
   const std::string thread_text = std::to_string(threads);
 #ifdef _WIN32
   _putenv_s("OMP_NUM_THREADS", thread_text.c_str());
+  _putenv_s("OMP_PROC_BIND", "FALSE");
 #else
   ::setenv("OMP_NUM_THREADS", thread_text.c_str(), 1);
+  ::setenv("OMP_PROC_BIND", "FALSE", 1);
 #endif
+#ifdef __linux__
+  auto effective_cpu_list = pin_to_common_big_cpu_set();
+  if (!effective_cpu_list) {
+    return std::unexpected(effective_cpu_list.error());
+  }
+  {
+    std::scoped_lock lock(placement_mutex);
+    active_cpu_placement.effective_cpu_list = *effective_cpu_list;
+    active_cpu_placement.status = "common_big_core_mask_applied";
+    active_cpu_placement.verified = false;
+  }
+#else
+  {
+    std::scoped_lock lock(placement_mutex);
+    active_cpu_placement = BenchmarkCpuPlacement{
+      .effective_cpu_list = "",
+      .status = "placement_unverified_unsupported_platform",
+      .observed_task_count = 0,
+      .tasks_matching_mask = 0,
+      .verified = false,
+    };
+  }
+#endif
+  if (ncnn::set_cpu_powersave(2) != 0) {
+    return std::unexpected("ncnn failed to apply the big-core affinity policy");
+  }
+  ncnn::set_omp_dynamic(0);
+  ncnn::set_omp_num_threads(threads);
+  return {};
+}
+
+BenchmarkCpuPlacement verify_benchmark_cpu_placement() {
+  BenchmarkCpuPlacement placement;
+  {
+    std::scoped_lock lock(placement_mutex);
+    placement = active_cpu_placement;
+  }
+#ifdef __linux__
+  if (placement.effective_cpu_list.empty()) {
+    placement.status = "placement_unverified_no_effective_cpu_mask";
+    placement.verified = false;
+    return placement;
+  }
+  std::error_code error;
+  const std::filesystem::path task_directory("/proc/self/task");
+  int observed_tasks = 0;
+  int matching_tasks = 0;
+  bool all_tasks_readable = true;
+  for (const auto& entry :
+       std::filesystem::directory_iterator(task_directory, error)) {
+    if (error) {
+      all_tasks_readable = false;
+      break;
+    }
+    const std::string tid_text = entry.path().filename().string();
+    pid_t tid = 0;
+    const auto [end, status] =
+      std::from_chars(tid_text.data(), tid_text.data() + tid_text.size(), tid);
+    if (status != std::errc{} || end != tid_text.data() + tid_text.size()) {
+      continue;
+    }
+    ++observed_tasks;
+    cpu_set_t task_mask;
+    if (sched_getaffinity(tid, sizeof(task_mask), &task_mask) != 0) {
+      all_tasks_readable = false;
+      continue;
+    }
+    if (format_cpu_list(task_mask) == placement.effective_cpu_list) {
+      ++matching_tasks;
+    }
+  }
+  if (error) {
+    all_tasks_readable = false;
+  }
+  placement.observed_task_count = observed_tasks;
+  placement.tasks_matching_mask = matching_tasks;
+  placement.verified = all_tasks_readable && observed_tasks > 1 &&
+                       matching_tasks == observed_tasks;
+  placement.status = placement.verified
+                       ? "all_observed_process_tasks_match_common_mask"
+                       : "placement_unverified_task_affinity_mismatch";
+#endif
+  return placement;
 }
 
 std::expected<TimingPolicy, std::string> resolve_timing_policy(
@@ -513,6 +688,13 @@ PerformanceMetadata make_performance_metadata(PerformanceMode mode) {
         .allocation_source = "not_collected",
         .runtime_counters = "not_collected",
         .reason = {},
+        .target = {},
+        .input_seed = 0,
+        .input_hash = {},
+        .cpu_placement = {},
+        .plan_revision = "static-v1",
+        .plan_hash = {},
+        .build_identity = {},
       };
     case PerformanceMode::AllocationAudit:
       return PerformanceMetadata{
@@ -524,6 +706,13 @@ PerformanceMetadata make_performance_metadata(PerformanceMode mode) {
         .allocation_source = "ncnn_counting_allocator",
         .runtime_counters = "compiled_profile_not_collected",
         .reason = {},
+        .target = {},
+        .input_seed = 0,
+        .input_hash = {},
+        .cpu_placement = {},
+        .plan_revision = "static-v1",
+        .plan_hash = {},
+        .build_identity = {},
       };
   }
   return PerformanceMetadata{
@@ -535,6 +724,13 @@ PerformanceMetadata make_performance_metadata(PerformanceMode mode) {
     .allocation_source = "not_collected",
     .runtime_counters = "not_collected",
     .reason = "Unknown performance mode",
+    .target = {},
+    .input_seed = 0,
+    .input_hash = {},
+    .cpu_placement = {},
+    .plan_revision = "static-v1",
+    .plan_hash = {},
+    .build_identity = {},
   };
 }
 
@@ -563,6 +759,101 @@ std::expected<TimingStats, std::string> time_repeated_inference(
       std::chrono::duration<double, std::milli>(end - begin).count());
   }
   return summarize_samples(samples);
+}
+
+std::expected<PairBenchmarkResult, std::string> time_counterbalanced_inference(
+  const std::function<int()>& ncnn_inference,
+  const std::function<int()>& compiled_inference,
+  const TimingPolicy& policy,
+  const std::function<void()>& before_timed) {
+  if (policy.warmup_iterations < 0 || policy.timed_iterations <= 0) {
+    return std::unexpected(
+      "timing policy needs warmup >= 0 and iterations > 0");
+  }
+
+  PairBenchmarkResult result;
+  result.warmup_order.reserve(
+    static_cast<std::size_t>(policy.warmup_iterations));
+  result.timed_order.reserve(static_cast<std::size_t>(policy.timed_iterations));
+  std::vector<double> ncnn_samples;
+  std::vector<double> compiled_samples;
+  ncnn_samples.reserve(static_cast<std::size_t>(policy.timed_iterations));
+  compiled_samples.reserve(static_cast<std::size_t>(policy.timed_iterations));
+
+  const auto invoke =
+    [&](const std::function<int()>& inference,
+        std::string_view side,
+        std::vector<double>* samples) -> std::expected<void, std::string> {
+    if (samples == nullptr) {
+      if (inference() != 0) {
+        return std::unexpected(
+          std::format("{} warmup inference iteration failed", side));
+      }
+      return {};
+    }
+    const auto begin = std::chrono::steady_clock::now();
+    const int status = inference();
+    const auto end = std::chrono::steady_clock::now();
+    if (status != 0) {
+      return std::unexpected(
+        std::format("{} timed inference iteration failed", side));
+    }
+    samples->push_back(
+      std::chrono::duration<double, std::milli>(end - begin).count());
+    return {};
+  };
+  const auto run_pair = [&](PairExecutionOrder order,
+                            bool timed) -> std::expected<void, std::string> {
+    auto* first_samples = timed ? &ncnn_samples : nullptr;
+    auto* second_samples = timed ? &compiled_samples : nullptr;
+    const auto& first = order == PairExecutionOrder::NcnnThenCompiled
+                          ? ncnn_inference
+                          : compiled_inference;
+    const auto& second = order == PairExecutionOrder::NcnnThenCompiled
+                           ? compiled_inference
+                           : ncnn_inference;
+    if (auto status = invoke(
+          first,
+          order == PairExecutionOrder::NcnnThenCompiled ? "ncnn" : "compiled",
+          order == PairExecutionOrder::NcnnThenCompiled ? first_samples
+                                                        : second_samples);
+        !status) {
+      return status;
+    }
+    return invoke(
+      second,
+      order == PairExecutionOrder::NcnnThenCompiled ? "compiled" : "ncnn",
+      order == PairExecutionOrder::NcnnThenCompiled ? second_samples
+                                                    : first_samples);
+  };
+
+  for (int iteration = 0; iteration < policy.warmup_iterations; ++iteration) {
+    const auto order = iteration % 2 == 0
+                         ? PairExecutionOrder::NcnnThenCompiled
+                         : PairExecutionOrder::CompiledThenNcnn;
+    result.warmup_order.push_back(order);
+    if (auto status = run_pair(order, false); !status) {
+      return std::unexpected(status.error());
+    }
+  }
+  if (before_timed) {
+    before_timed();
+  }
+  for (int iteration = 0; iteration < policy.timed_iterations; ++iteration) {
+    const auto order = iteration % 2 == 0
+                         ? PairExecutionOrder::NcnnThenCompiled
+                         : PairExecutionOrder::CompiledThenNcnn;
+    result.timed_order.push_back(order);
+    if (auto status = run_pair(order, true); !status) {
+      return std::unexpected(status.error());
+    }
+  }
+  result.ncnn = summarize_samples(ncnn_samples);
+  result.compiled = summarize_samples(compiled_samples);
+  result.ratio = result.ncnn.mean_ms > 0.0
+                   ? result.compiled.mean_ms / result.ncnn.mean_ms
+                   : 0.0;
+  return result;
 }
 
 struct NcnnBenchRunner::Impl final {
@@ -843,6 +1134,7 @@ void emit_performance_report(std::string_view model,
              result.compiled.coefficient_of_variation);
   std::println(
     "PERF model={} mode={} status={} threads={} warmup={} iters={} "
+    "warmup_order={} timed_order={} placement={} "
     "ncnn_ms={:.3f} compiled_ms={:.3f} ratio={:.3f} "
     "ncnn_min_ms={:.3f} compiled_min_ms={:.3f} cv={:.4f} setup={}",
     model,
@@ -851,6 +1143,9 @@ void emit_performance_report(std::string_view model,
     threads,
     policy.warmup_iterations,
     policy.timed_iterations,
+    format_pair_order(result.warmup_order),
+    format_pair_order(result.timed_order),
+    metadata.cpu_placement.status,
     result.ncnn.mean_ms,
     result.compiled.mean_ms,
     result.ratio,
@@ -923,9 +1218,13 @@ std::expected<void, std::string> append_performance_json_record(
   stream << std::format(
     R"({{"model":"{}","mode":"{}","status":"{}","target":{},)"
     R"("plan_revision":"{}","plan_hash":{},"build_identity":{},"threads":{},)"
-    R"("warmup":{},"iterations":{},"setup":{{"ncnn":"{}","compiled":"{}"}},)"
+    R"("input_seed":{},"input_hash":"{}",)"
+    R"("warmup":{},"iterations":{},"order":{{"warmup":"{}","timed":"{}"}},)"
+    R"("setup":{{"ncnn":"{}","compiled":"{}"}},)"
     R"("diagnostics":{{"gate_eligible":{},"prepared_runner":"{}",)"
-    R"("allocation_source":"{}","runtime_counters":"{}"}},)"
+    R"("allocation_source":"{}","runtime_counters":"{}",)"
+    R"("cpu_placement_verified":{},"cpu_placement_status":"{}",)"
+    R"("cpu_list":{},"observed_tasks":{},"tasks_matching_mask":{}}},)"
     R"("ncnn_mean_ms":{:.3f},"ncnn_min_ms":{:.3f},"ncnn_median_ms":{:.3f},)"
     R"("compiled_mean_ms":{:.3f},"compiled_min_ms":{:.3f},)"
     R"("compiled_median_ms":{:.3f},"cv":{:.4f},"ratio":{:.3f},)"
@@ -939,14 +1238,23 @@ std::expected<void, std::string> append_performance_json_record(
     identity_json(metadata.plan_hash),
     identity_json(metadata.build_identity),
     threads,
+    metadata.input_seed,
+    escape_json(metadata.input_hash),
     policy.warmup_iterations,
     policy.timed_iterations,
+    escape_json(format_pair_order(result.warmup_order)),
+    escape_json(format_pair_order(result.timed_order)),
     escape_json(metadata.setup),
     "shared_library_loaded_before_timing",
     metadata.gate_eligible,
     escape_json(metadata.prepared_runner),
     escape_json(metadata.allocation_source),
     escape_json(metadata.runtime_counters),
+    metadata.cpu_placement.verified,
+    escape_json(metadata.cpu_placement.status),
+    identity_json(metadata.cpu_placement.effective_cpu_list),
+    metadata.cpu_placement.observed_task_count,
+    metadata.cpu_placement.tasks_matching_mask,
     result.ncnn.mean_ms,
     result.ncnn.minimum_ms,
     result.ncnn.median_ms,

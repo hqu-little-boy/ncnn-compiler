@@ -24,6 +24,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/Verifier.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNDialect.hpp"
 #include "ncnn-mlir/Graph/graph.hpp"
@@ -347,7 +348,10 @@ int main(int argc, char** argv) {
 
   std::string rendered;
   llvm::raw_string_ostream stream(rendered);
-  imported->get().print(stream);
+  // Locations carry the importer's source-layer provenance carrier and must
+  // survive the file boundary to the next MLIR stage.  Without debug info the
+  // printer elides them, and ncnn-compile would drop provenance at this write.
+  imported->get().print(stream, mlir::OpPrintingFlags().enableDebugInfo(true));
   stream.flush();
   rendered += "\n";
   if (!write_output(g_output_path, rendered)) {

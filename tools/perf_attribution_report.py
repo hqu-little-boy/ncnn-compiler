@@ -92,7 +92,7 @@ def validate_identity(plan: dict[str, Any], profile: dict[str, Any],
   if plan.get("schema_version") != 1 or plan.get("kind") != \
       "ncnn.model_execution_plan":
     raise AttributionError("plan has unsupported schema or kind")
-  if profile.get("schema_version") not in {1, 2} or profile.get("kind") != \
+  if profile.get("schema_version") not in {1, 2, 3} or profile.get("kind") != \
       "ncnn.model_execution_profile":
     raise AttributionError("profile has unsupported schema or kind")
   plan_attribution = plan.get("attribution_revision")
@@ -104,7 +104,7 @@ def validate_identity(plan: dict[str, Any], profile: dict[str, Any],
         "attribution revision mismatch between plan and profile")
   elif profile_attribution is not None:
     require_string(profile_attribution, "profile.attribution_revision")
-  if profile.get("schema_version") == 2:
+  if profile.get("schema_version") in {2, 3}:
     instrumentation = profile.get("instrumentation")
     if not isinstance(instrumentation, dict) or \
         instrumentation.get("aggregation") != "per-invocation":
@@ -142,6 +142,12 @@ def validate_identity(plan: dict[str, Any], profile: dict[str, Any],
   profile_hash = require_string(profile.get("plan_hash"), "profile.plan_hash")
   profile_build_identity = require_string(
     profile.get("build_identity"), "profile.build_identity")
+  if profile.get("schema_version") == 3:
+    profile_input_hash = require_string(
+      profile.get("input_hash"), "profile.input_hash")
+    perf_input_hash = require_string(perf.get("input_hash"), "perf.input_hash")
+    if profile_input_hash != perf_input_hash:
+      raise AttributionError("input hash mismatch between profile and perf")
   if profile_hash != plan_hash:
     raise AttributionError("plan hash mismatch")
   if profile_build_identity != plan_build_identity:
@@ -228,6 +234,8 @@ def allocation_metadata(plan: dict[str, Any]) -> dict[int, dict[str, Any]]:
 def category_name(category: Any) -> str:
   if not isinstance(category, str) or not category:
     return "unknown"
+  if category == "worker_operation":
+    return "worker_cpu"
   if category in {"allocation", "deallocation", "copy", "parallel",
                   "transpose", "pack", "unpack", "materialized_write",
                   "materialized_read"}:
@@ -325,6 +333,10 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
   joined: list[dict[str, Any]] = []
   allocation_events: dict[int, dict[str, Any]] = {}
   operation_events: dict[int, dict[str, Any]] = {}
+  worker_operation_events: dict[int, dict[str, Any]] = {}
+  worker_joined: list[dict[str, Any]] = []
+  worker_unattributed = 0
+  parallel_coverage: list[dict[str, Any]] = []
   movement_totals: dict[str, dict[str, Any]] = {
     kind: {"count": 0, "bytes": 0, "bytes_known": True}
     for kind in ("copy", "transpose", "pack", "unpack")
@@ -348,7 +360,7 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
     if raw_category not in {"operation", "allocation", "deallocation",
                             "copy", "parallel", "transpose", "pack",
                             "unpack", "materialized_write",
-                            "materialized_read"}:
+                            "materialized_read", "worker_operation"}:
       raise AttributionError("profile event category is unsupported")
     bytes_value = event.get("bytes")
     if bytes_value is not None:
@@ -366,6 +378,108 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
     if event_key in seen_events:
       raise AttributionError("duplicate profile event id/category")
     seen_events.add(event_key)
+    if raw_category == "worker_operation":
+      if profile.get("schema_version") != 3 or \
+          event.get("time_domain") != "worker_cpu":
+        raise AttributionError(
+          "worker_operation events require schema-3 worker_cpu time_domain")
+      inclusive_worker_ns = require_nonnegative_integer(
+        event.get("inclusive_ns"), "worker event.inclusive_ns")
+      calls = require_nonnegative_integer(
+        event.get("calls"), "worker event.calls")
+      if calls == 0:
+        raise AttributionError("worker event.calls must be positive")
+      exclusive_worker_value = event.get("exclusive_ns")
+      if exclusive_worker_value is None:
+        exclusive_worker_ns = None
+      else:
+        exclusive_worker_ns = require_nonnegative_integer(
+          exclusive_worker_value, "worker event.exclusive_ns")
+        if exclusive_worker_ns > inclusive_worker_ns:
+          raise AttributionError(
+            "worker exclusive_ns cannot exceed worker inclusive_ns")
+      wall_union_known = event.get("worker_wall_union_known")
+      if not isinstance(wall_union_known, bool):
+        raise AttributionError(
+          "worker event.worker_wall_union_known must be boolean")
+      wall_union_value = event.get("worker_wall_union_ns")
+      if wall_union_known:
+        wall_union_ns = require_nonnegative_integer(
+          wall_union_value, "worker event.worker_wall_union_ns")
+      elif wall_union_value is not None:
+        raise AttributionError(
+          "unknown worker wall union must have a null duration")
+      else:
+        wall_union_ns = None
+      worker_operation_events[identifier] = {
+        "calls": calls,
+        "inclusive_cpu_ns": inclusive_worker_ns,
+        "exclusive_cpu_ns": exclusive_worker_ns,
+        "wall_union_ns": wall_union_ns,
+        "wall_union_known": wall_union_known,
+      }
+      attributed_wall_value = event.get("wall_attributed_ns")
+      attributed_wall_known = event.get("wall_attributed_known") is True
+      if attributed_wall_value is None:
+        attributed_wall_ns = None
+        if attributed_wall_known:
+          raise AttributionError(
+            "known worker wall_attributed_ns cannot be null")
+      else:
+        attributed_wall_ns = require_nonnegative_integer(
+          attributed_wall_value, "worker event.wall_attributed_ns")
+        if not attributed_wall_known:
+          raise AttributionError(
+            "numeric worker wall_attributed_ns requires wall_attributed_known")
+      calls_estimated_value = event.get("calls_estimated")
+      calls_estimated = (
+        require_nonnegative_integer(calls_estimated_value,
+                                    "worker event.calls_estimated")
+        if calls_estimated_value is not None else None)
+      projected_wall_value = event.get("wall_attributed_estimated_ns")
+      projected_wall_ns = (
+        require_nonnegative_integer(projected_wall_value,
+                                    "worker event.wall_attributed_estimated_ns")
+        if projected_wall_value is not None else None)
+      window_share = event.get("wall_attributed_share_of_sampled_window")
+      if window_share is not None and (
+          isinstance(window_share, bool) or
+          not isinstance(window_share, (int, float)) or window_share < 0):
+        raise AttributionError(
+          "worker wall_attributed_share_of_sampled_window must be non-negative")
+      worker_operation_events[identifier].update({
+        "wall_attributed_ns": attributed_wall_ns,
+        "wall_attributed_estimated_ns": projected_wall_ns,
+        "wall_attributed_share_of_sampled_window": window_share,
+        "wall_attributed_known": attributed_wall_known,
+        "calls_estimated": calls_estimated,
+      })
+      operation = operations.get(identifier)
+      if operation is None:
+        worker_unattributed += 1
+        continue
+      worker_joined.append({
+        "id": identifier,
+        "operation": operation.get("id"),
+        "kind": operation.get("kind"),
+        "source_layer": operation.get("source_layer"),
+        "source_name": operation.get("source_name"),
+        "calls": calls,
+        "calls_estimated": calls_estimated,
+        "inclusive_cpu_ns": inclusive_worker_ns,
+        "exclusive_cpu_ns": exclusive_worker_ns,
+        "wall_union_ns": wall_union_ns,
+        "wall_union_known": wall_union_known,
+        "wall_attributed_ns": attributed_wall_ns,
+        "wall_attributed_estimated_ns": projected_wall_ns,
+        "wall_attributed_share_of_sampled_window": window_share,
+        "wall_attributed_known": attributed_wall_known,
+      })
+      continue
+    if profile.get("schema_version") == 3 and \
+        event.get("time_domain") != "wall":
+      raise AttributionError(
+        "schema-3 non-worker events must use wall time_domain")
     category = category_name(raw_category)
     if raw_category == "allocation":
       observed_allocations.add(identifier)
@@ -398,6 +512,28 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
         "inclusive_ns": inclusive,
         "exclusive_ns": event.get("exclusive_ns"),
       }
+    if raw_category == "parallel":
+      coverage_known = event.get("wall_exclusive_estimated_known")
+      if coverage_known is not None and not isinstance(coverage_known, bool):
+        raise AttributionError(
+          "parallel wall_exclusive_estimated_known must be boolean")
+      parallel_coverage.append({
+        "id": identifier,
+        "wall_ns": inclusive,
+        "worker_covered_wall_ns": event.get("worker_covered_wall_ns"),
+        "worker_covered_wall_sampled_ns":
+          event.get("worker_covered_wall_sampled_ns"),
+        "sampled_window_wall_ns": event.get("sampled_window_wall_ns"),
+        "region_wall_ns": event.get("region_wall_ns"),
+        "region_worker_spans": event.get("region_worker_spans"),
+        "sample_scale": event.get("sample_scale"),
+        "wall_projection_factor": event.get("wall_projection_factor"),
+        "wall_coverage_share": event.get("wall_coverage_share"),
+        "wall_exclusive_estimated_ns": event.get("wall_exclusive_estimated_ns"),
+        "wall_exclusive_estimated_known": coverage_known is True,
+        "exclusive_semantics": event.get("exclusive_semantics"),
+        "exclusive_ns": event.get("exclusive_ns"),
+      })
     exclusive_value = event.get("exclusive_ns")
     if exclusive_value is None:
       exclusive = None
@@ -574,12 +710,17 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       raise AttributionError(f"profile instrumentation {field} must be boolean")
   missing_allocations = sorted(static_allocations - observed_allocations)
   incomplete_reasons: list[str] = []
-  if profile.get("schema_version") == 2 and profile.get("complete") is False:
+  if profile.get("schema_version") in {2, 3} and \
+      profile.get("complete") is False:
     unknown = list(dict.fromkeys([*unknown, "runtime_profile_incomplete"]))
     incomplete_reasons.append("runtime_profile_incomplete")
   if unattributed:
     unknown = list(dict.fromkeys([*unknown, "runtime_unattributed_events"]))
     incomplete_reasons.append("runtime_unattributed_events")
+  if worker_unattributed:
+    unknown = list(dict.fromkeys(
+      [*unknown, "runtime_worker_operation_unattributed"]))
+    incomplete_reasons.append("runtime_worker_operation_unattributed")
   if fusion_site_summary["missing_count"] or fusion_site_summary["partial_count"]:
     unknown = list(dict.fromkeys([*unknown, "runtime_fusion_site_profile_missing"]))
     incomplete_reasons.append("runtime_fusion_site_profile_missing")
@@ -740,6 +881,167 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
     incomplete_reasons.append("runtime_workspace_join_incomplete")
   runtime_peak_live_proven = bool(
     profile_summary.get("peak_live_proven", False) and not missing_allocations)
+  top_level_wall_ns = profile_summary.get("top_level_time_ns")
+  if top_level_wall_ns is not None:
+    top_level_wall_ns = require_nonnegative_integer(
+      top_level_wall_ns, "profile summary top_level_time_ns")
+  sampling = profile_summary.get("worker_sampling", {})
+  sample_scale = sampling.get("duty", 1)
+  if isinstance(sample_scale, bool) or not isinstance(sample_scale, int) or \
+      sample_scale < 1:
+    raise AttributionError("worker sampling duty must be a positive integer")
+  # Wall shares are window-normalized and already projected by the runtime;
+  # do not scale them again.  Wall-union remains a raw sampled per-op union and
+  # is never projected, because unions are not additive across workers.
+  for event in worker_joined:
+    event["wall_union_share_of_top_level"] = (
+      event["wall_union_ns"] / top_level_wall_ns
+      if event["wall_union_known"] and top_level_wall_ns else None)
+  worker_joined.sort(
+    key=lambda row: (row["wall_union_ns"] or 0, row["id"]), reverse=True)
+  for event in worker_joined:
+    projected = event.get("wall_attributed_estimated_ns")
+    if event.get("wall_attributed_known") and isinstance(projected, int):
+      if top_level_wall_ns is not None and projected > top_level_wall_ns:
+        raise AttributionError(
+          "projected worker wall attribution cannot exceed top-level wall time")
+      event["wall_attributed_share_of_top_level"] = (
+        projected / top_level_wall_ns if top_level_wall_ns else None)
+    else:
+      event["wall_attributed_share_of_top_level"] = None
+  worker_joined_by_attributed = sorted(
+    worker_joined,
+    key=lambda row: (row.get("wall_attributed_ns") or 0, row["id"]),
+    reverse=True)
+  worker_exclusive_values = [
+    event["exclusive_cpu_ns"] for event in worker_joined
+    if isinstance(event["exclusive_cpu_ns"], int)]
+  worker_exclusive_unknown_count = (
+    len(worker_operation_events) - len(worker_exclusive_values))
+  worker_union_unknown_count = sum(
+    not event["wall_union_known"] for event in worker_joined)
+  wall_attributed_unknown_count = sum(
+    not event.get("wall_attributed_known") for event in worker_joined)
+  wall_attribution_expected = "worker_wall_attribution" in profile_summary
+  worker_attribution_complete = bool(worker_operation_events) and \
+    len(worker_joined) == len(worker_operation_events) and \
+    worker_exclusive_unknown_count == 0 and worker_union_unknown_count == 0 and \
+    (not wall_attribution_expected or wall_attributed_unknown_count == 0) and \
+    profile_summary.get("event_mismatch_count", 0) == 0 and \
+    profile.get("complete") is True
+  if worker_operation_events and not worker_attribution_complete:
+    unknown = list(dict.fromkeys(
+      [*unknown, "runtime_worker_attribution_incomplete"]))
+    incomplete_reasons.append("runtime_worker_attribution_incomplete")
+  worker_attribution = {
+    "time_domain": "worker_cpu",
+    "wall_union_semantics": "per_operation_non_additive",
+    "observed_event_count": len(worker_operation_events),
+    "joined_event_count": len(worker_joined),
+    "unattributed_event_count": worker_unattributed,
+    "exclusive_cpu_known_count": len(worker_exclusive_values),
+    "exclusive_cpu_unknown_count": worker_exclusive_unknown_count,
+    "exclusive_cpu_total_ns": sum(worker_exclusive_values),
+    "wall_union_unknown_count": worker_union_unknown_count,
+    "wall_attributed_unknown_count": sum(
+      not row.get("wall_attributed_known") for row in worker_joined),
+    "complete_for_observed_events": worker_attribution_complete,
+    "operations": worker_joined,
+    "top_operations_by_wall_union": worker_joined[:20],
+    "top_operations_by_wall_attributed": worker_joined_by_attributed[:20],
+  }
+
+  # Wall-domain partition of top-level time. Worker CPU time is never mixed in.
+  # Two normalizations are reported: raw sampled-window measurements, and the
+  # runtime's uniform projection of those measurements onto full region wall.
+  attributed_wall_total = sum(
+    row.get("wall_attributed_estimated_ns") or 0 for row in worker_joined
+    if row.get("wall_attributed_known") and
+    isinstance(row.get("wall_attributed_estimated_ns"), int))
+  attributed_share_total = sum(
+    row.get("wall_attributed_share_of_sampled_window") or 0
+    for row in worker_joined
+    if isinstance(row.get("wall_attributed_share_of_sampled_window"),
+                  (int, float)))
+  region_wall_total = 0
+  sampled_window_total = 0
+  covered_sampled_total = 0
+  covered_estimated_total = 0
+  exact_gap_wall_total = 0
+  estimated_gap_wall_total = 0
+  unproven_region_wall = 0
+  region_wall_without_sample = 0
+  for region in parallel_coverage:
+    region_wall_total += region["wall_ns"]
+    if region["wall_exclusive_estimated_known"] and isinstance(
+        region.get("wall_exclusive_estimated_ns"), int):
+      if region["exclusive_semantics"] == \
+          "region_wall_minus_worker_span_union":
+        exact_gap_wall_total += region["wall_exclusive_estimated_ns"]
+      else:
+        estimated_gap_wall_total += region["wall_exclusive_estimated_ns"]
+      if isinstance(region.get("worker_covered_wall_ns"), int):
+        covered_estimated_total += region["worker_covered_wall_ns"]
+      if isinstance(region.get("worker_covered_wall_sampled_ns"), int):
+        covered_sampled_total += region["worker_covered_wall_sampled_ns"]
+      if isinstance(region.get("sampled_window_wall_ns"), int):
+        sampled_window_total += region["sampled_window_wall_ns"]
+    else:
+      unproven_region_wall += region["wall_ns"]
+      if not region.get("region_worker_spans"):
+        region_wall_without_sample += region["wall_ns"]
+  sequential_exclusive_total = sum(
+    row["attributed_ns"] for row in joined
+    if row["category"] != "parallel" and isinstance(row.get("attributed_ns"), int))
+  projection_values = [region.get("wall_projection_factor")
+                       for region in parallel_coverage
+                       if isinstance(region.get("wall_projection_factor"),
+                                     (int, float))]
+  projection = projection_values[0] if projection_values else 1.0
+  parallel_gap_total = exact_gap_wall_total + estimated_gap_wall_total
+  worker_unjoined_wall = (
+    covered_estimated_total - attributed_wall_total
+    if covered_estimated_total >= attributed_wall_total else None)
+  accounted_wall_total = (sequential_exclusive_total + attributed_wall_total +
+                          (worker_unjoined_wall or 0) + parallel_gap_total)
+  wall_partition = {
+    "basis": "equal_split_across_concurrent_worker_spans",
+    "additive": True,
+    "time_domain": "wall",
+    "normalization": "sampled_window_duration",
+    "sample_scale": sample_scale,
+    "wall_projection_factor": projection,
+    "top_level_wall_ns": top_level_wall_ns,
+    "parallel_region_wall_ns": region_wall_total,
+    "parallel_region_exact_gap_wall_ns": exact_gap_wall_total,
+    "parallel_region_estimated_gap_wall_ns": estimated_gap_wall_total,
+    "parallel_wall_gap_wall_ns": parallel_gap_total,
+    "parallel_region_unproven_wall_ns": unproven_region_wall,
+    "parallel_region_wall_without_sampled_spans_ns": region_wall_without_sample,
+    "sampled_window_wall_ns": sampled_window_total,
+    "sampled_window_fraction_of_parallel_wall": (
+      sampled_window_total / region_wall_total if region_wall_total else None),
+    "worker_covered_wall_sampled_ns": covered_sampled_total,
+    "worker_covered_wall_estimated_ns": covered_estimated_total,
+    "worker_ops_wall_attributed_ns": attributed_wall_total,
+    "worker_ops_wall_unjoined_ns": worker_unjoined_wall,
+    "worker_ops_wall_share_of_sampled_window": attributed_share_total,
+    "parallel_wall_coverage_share": (
+      covered_sampled_total / sampled_window_total
+      if sampled_window_total else None),
+    "parallel_wall_gap_share": (
+      1.0 - covered_sampled_total / sampled_window_total
+      if sampled_window_total else None),
+    "sequential_ops_exclusive_ns": sequential_exclusive_total,
+    "sequential_ops_share_of_top_level": (
+      sequential_exclusive_total / top_level_wall_ns
+      if top_level_wall_ns else None),
+    "accounted_wall_ns": accounted_wall_total,
+    "unaccounted_wall_ns": (
+      top_level_wall_ns - accounted_wall_total
+      if top_level_wall_ns is not None else None),
+    "parallel_regions": parallel_coverage,
+  }
   return {
     "schema_version": 1,
     "kind": "ncnn.model_performance_attribution",
@@ -754,6 +1056,7 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       "threads": plan["target"].get("threads"),
       "plan_hash": plan.get("plan_hash"),
       "build_identity": plan.get("build_identity"),
+      "input_hash": perf.get("input_hash"),
       "codegen_identity": plan.get("codegen_identity"),
     },
     "performance": {
@@ -781,6 +1084,8 @@ def build_report(plan: dict[str, Any], profile: dict[str, Any],
       "allocation_coverage": allocation_coverage,
       "workspace_coverage": workspace_coverage,
       "copy_layout": copy_layout,
+      "worker_attribution": worker_attribution,
+      "wall_partition": wall_partition,
       "packed_kernels": packed_kernel_runtime,
       "packed_kernel_summary": packed_kernel_summary,
       "fusion_sites": fusion_site_runtime,
@@ -1119,6 +1424,118 @@ def aggregate_v2_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
   top_costs.sort(key=lambda item: (item["attributed_ns"] or 0, item["id"]),
                  reverse=True)
 
+  worker_reports = [report["runtime"].get("worker_attribution", {})
+                    for report in reports]
+  worker_rows_by_id: dict[int, list[dict[str, Any]]] = defaultdict(list)
+  for worker_report in worker_reports:
+    for row in worker_report.get("operations", []):
+      worker_rows_by_id[row["id"]].append(row)
+  aggregated_worker_operations = []
+  for identifier, rows in worker_rows_by_id.items():
+    row = dict(rows[0])
+    union_values = [item["wall_union_ns"] for item in rows
+                    if item.get("wall_union_known") is True and
+                    isinstance(item.get("wall_union_ns"), int)]
+    cpu_values = [item["exclusive_cpu_ns"] for item in rows
+                  if isinstance(item.get("exclusive_cpu_ns"), int)]
+    inclusive_values = [item["inclusive_cpu_ns"] for item in rows
+                        if isinstance(item.get("inclusive_cpu_ns"), int)]
+    share_values = [item["wall_union_share_of_top_level"] for item in rows
+                    if isinstance(item.get("wall_union_share_of_top_level"),
+                                  (int, float))]
+    attributed_values = [item["wall_attributed_ns"] for item in rows
+                         if item.get("wall_attributed_known") is True and
+                         isinstance(item.get("wall_attributed_ns"), int)]
+    attributed_share_values = [
+      item["wall_attributed_share_of_top_level"] for item in rows
+      if isinstance(item.get("wall_attributed_share_of_top_level"),
+                    (int, float))]
+    estimated_calls = [item["calls_estimated"] for item in rows
+                       if isinstance(item.get("calls_estimated"), int)]
+    row["event_join_status"] = (
+      "joined" if len(rows) == len(reports) else "partial")
+    row["invocation_count"] = len(reports)
+    row["joined_invocation_count"] = len(rows)
+    row["wall_union_ns"] = median_scalar(union_values) \
+      if len(union_values) == len(reports) else None
+    row["exclusive_cpu_ns"] = median_scalar(cpu_values) \
+      if len(cpu_values) == len(reports) else None
+    row["inclusive_cpu_ns"] = median_scalar(inclusive_values) \
+      if len(inclusive_values) == len(reports) else None
+    row["wall_union_share_of_top_level"] = median_scalar(share_values) \
+      if len(share_values) == len(reports) else None
+    row["wall_attributed_ns"] = median_scalar(attributed_values) \
+      if len(attributed_values) == len(reports) else None
+    row["wall_attributed_known"] = len(attributed_values) == len(reports)
+    row["wall_attributed_share_of_top_level"] = median_scalar(
+      attributed_share_values) \
+      if len(attributed_share_values) == len(reports) else None
+    row["calls_estimated"] = median_scalar(estimated_calls) \
+      if len(estimated_calls) == len(reports) else None
+    row["per_invocation"] = {
+      "wall_union_ns": numeric_stats(union_values),
+      "exclusive_cpu_ns": numeric_stats(cpu_values),
+      "inclusive_cpu_ns": numeric_stats(inclusive_values),
+      "wall_union_share_of_top_level": numeric_stats(share_values),
+      "wall_attributed_ns": numeric_stats(attributed_values),
+      "wall_attributed_share_of_top_level": numeric_stats(
+        attributed_share_values),
+      "calls_estimated": numeric_stats(estimated_calls),
+    }
+    aggregated_worker_operations.append(row)
+  aggregated_worker_operations.sort(
+    key=lambda row: (row.get("wall_union_ns") or 0, row["id"]), reverse=True)
+  worker_known_totals = [worker_report.get("exclusive_cpu_total_ns")
+                         for worker_report in worker_reports
+                         if isinstance(worker_report.get(
+                           "exclusive_cpu_total_ns"), int)]
+  worker_attribution_complete = bool(worker_rows_by_id) and all(
+    worker_report.get("complete_for_observed_events") is True
+    for worker_report in worker_reports) and all(
+      len(rows) == len(reports) for rows in worker_rows_by_id.values())
+  runtime["worker_attribution"] = {
+    "time_domain": "worker_cpu",
+    "wall_union_semantics": "per_operation_non_additive",
+    "observed_event_count": len(worker_rows_by_id),
+    "joined_event_count": sum(
+      len(rows) == len(reports) for rows in worker_rows_by_id.values()),
+    "invocation_count": len(reports),
+    "exclusive_cpu_total_ns": median_scalar(worker_known_totals)
+      if len(worker_known_totals) == len(reports) else None,
+    "exclusive_cpu_total_per_invocation": numeric_stats(worker_known_totals),
+    "complete_for_observed_events": worker_attribution_complete,
+    "operations": aggregated_worker_operations,
+    "top_operations_by_wall_union": aggregated_worker_operations[:20],
+    "top_operations_by_wall_attributed": sorted(
+      aggregated_worker_operations,
+      key=lambda row: (row.get("wall_attributed_ns") or 0, row["id"]),
+      reverse=True)[:20],
+    "wall_attributed_unknown_count": sum(
+      row.get("wall_attributed_ns") is None
+      for row in aggregated_worker_operations),
+  }
+  wall_partitions = [report["runtime"].get("wall_partition", {})
+                     for report in reports]
+  partition_fields = (
+    "worker_ops_wall_attributed_ns", "parallel_region_wall_ns",
+    "parallel_region_gap_wall_ns", "parallel_region_estimated_gap_wall_ns",
+    "parallel_region_unproven_wall_ns", "sequential_ops_exclusive_ns",
+    "accounted_wall_ns", "unaccounted_wall_ns")
+  aggregated_partition: dict[str, Any] = {
+    "basis": "equal_split_across_concurrent_worker_spans",
+    "additive": True,
+    "top_level_wall_ns": median_scalar(summary_values["top_level_time_ns"])
+      if len(summary_values["top_level_time_ns"]) == len(reports) else None,
+    "invocation_count": len(reports),
+    "parallel_regions": wall_partitions[0].get("parallel_regions", []),
+  }
+  for field in partition_fields:
+    values = [partition.get(field) for partition in wall_partitions
+              if isinstance(partition.get(field), int)]
+    aggregated_partition[field] = (
+      median_scalar(values) if len(values) == len(reports) else None)
+    aggregated_partition[f"{field}_per_invocation"] = numeric_stats(values)
+  runtime["wall_partition"] = aggregated_partition
   runtime["complete"] = runtime["complete"] and runtime["complete_all"]
   runtime["incomplete_reasons"] = sorted(set(
     reason for report in reports for reason in report["runtime"]["incomplete_reasons"]
@@ -1147,9 +1564,9 @@ def main() -> int:
     if isinstance(profile_value, list):
       reports = []
       for profile in profile_value:
-        if profile.get("schema_version") != 2:
+        if profile.get("schema_version") not in {2, 3}:
           raise AttributionError(
-            "profile NDJSON rows must use schema-2 per-invocation records")
+            "profile NDJSON rows must use schema-2/3 per-invocation records")
         validate_identity(plan, profile, perf, arguments.mode)
         reports.append(build_report(plan, profile, perf, arguments.mode))
       report = aggregate_v2_reports(reports)

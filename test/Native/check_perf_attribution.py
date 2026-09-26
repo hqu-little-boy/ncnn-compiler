@@ -607,6 +607,139 @@ def main() -> int:
     ], capture_output=True, text=True)
     if result.returncode == 0 or "copy_bytes_known=true" not in result.stderr:
       raise RuntimeError("inconsistent summary bytes were accepted")
+
+    worker_plan = root / "worker.plan.json"
+    worker_profile = root / "worker.profile.json"
+    worker_perf = root / "worker-perf.ndjson"
+    worker_perf_value = json.loads(perf.read_text().splitlines()[0])
+    worker_perf_value["input_hash"] = "input-abc123"
+    worker_perf.write_text(json.dumps(worker_perf_value) + "\n")
+    worker_plan_value = json.loads(plan.read_text())
+    worker_plan_value["attribution_revision"] = "attribution-v4"
+    worker_plan.write_text(json.dumps(worker_plan_value))
+    worker_profile.write_text(json.dumps({
+      "schema_version": 3,
+      "kind": "ncnn.model_execution_profile",
+      "plan_revision": "static-v1",
+      "attribution_revision": "attribution-v4",
+      "model": "fixture",
+      "plan_hash": "plan-123",
+      "build_identity": "plan-123",
+      "input_hash": "input-abc123",
+      "target": "x86_64-pc-linux-gnu",
+      "threads": 2,
+      "mode": "prepared",
+      "invocation_id": 1,
+      "complete": True,
+      "instrumentation": {
+        "coverage": "parallel-worker-coarse-sites",
+        "aggregation": "per-invocation",
+        "invocation_count": 1,
+        "record_overflow": False,
+        "allocation_table_overflow": False,
+      },
+      "summary": {
+        "event_mismatch_count": 0,
+        "top_level_time_ns": 1000,
+        "top_level_time_known": True,
+        "peak_live_proven": False,
+        "peak_live_bytes": None,
+        "worker_sampling": {
+          "duty": 1,
+          "window_ns": 2000000,
+          "basis": "time_window_duty_cycle",
+          "interval_overflow": False,
+        },
+        "worker_wall_attribution": {
+          "basis": "equal_split_across_concurrent_worker_spans",
+          "additive": True,
+          "time_domain": "wall",
+        },
+      },
+      "events": [{
+        "id": 16011668676398822909,
+        "category": "parallel",
+        "time_domain": "wall",
+        "calls": 1,
+        "inclusive_ns": 1000,
+        "exclusive_ns": 300,
+        "worker_covered_wall_ns": 700,
+        "worker_covered_wall_sampled_ns": 700,
+        "sampled_window_wall_ns": 1000,
+        "region_wall_ns": 1000,
+        "region_worker_spans": 4,
+        "sample_scale": 1,
+        "wall_projection_factor": 1.0,
+        "wall_coverage_share": 0.7,
+        "wall_exclusive_estimated_ns": 300,
+        "wall_exclusive_estimated_known": True,
+        "exclusive_semantics": "region_wall_minus_worker_span_union",
+        "bytes": None,
+        "bytes_known": False,
+      }, {
+        "id": 16011668676398822909,
+        "category": "worker_operation",
+        "time_domain": "worker_cpu",
+        "calls": 4,
+        "calls_estimated": 4,
+        "inclusive_ns": 1000,
+        "exclusive_ns": 800,
+        "worker_wall_union_ns": 300,
+        "worker_wall_union_known": True,
+        "wall_attributed_ns": 700,
+        "wall_attributed_estimated_ns": 700,
+        "wall_attributed_share_of_sampled_window": 0.7,
+        "wall_attributed_known": True,
+        "bytes": None,
+        "bytes_known": False,
+      }],
+    }))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(worker_perf), "--plan",
+      str(worker_plan), "--profile", str(worker_profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+      raise RuntimeError(result.stderr)
+    worker_report = json.loads(result.stdout)
+    worker_attribution = worker_report["runtime"]["worker_attribution"]
+    if worker_attribution["complete_for_observed_events"] is not True:
+      raise RuntimeError("complete worker-operation join was not recognized")
+    if worker_attribution["exclusive_cpu_total_ns"] != 800:
+      raise RuntimeError("worker CPU exclusive time was not retained separately")
+    worker_cost = worker_attribution["top_operations_by_wall_union"][0]
+    if worker_cost["wall_union_share_of_top_level"] != 0.3:
+      raise RuntimeError("worker wall-union share used the wrong denominator")
+    if worker_report["runtime"]["unknown_time_ns"] != 0:
+      raise RuntimeError("worker CPU time polluted wall-exclusive uncertainty")
+    partition = worker_report["runtime"]["wall_partition"]
+    if partition["worker_ops_wall_attributed_ns"] != 700:
+      raise RuntimeError("additive worker wall attribution was not reported")
+    if partition["parallel_wall_gap_wall_ns"] != 300:
+      raise RuntimeError("parallel-region wall gap was not reported")
+    if partition["worker_ops_wall_unjoined_ns"] != 0:
+      raise RuntimeError("joined worker wall attribution was not exhaustive")
+    if abs(partition["parallel_wall_coverage_share"] - 0.7) > 1e-9 or \
+        abs(partition["parallel_wall_gap_share"] - 0.3) > 1e-9:
+      raise RuntimeError("wall coverage share was not window-normalized")
+    if partition["sampled_window_wall_ns"] != 1000:
+      raise RuntimeError("sampled-window normalization was not reported")
+    if partition["accounted_wall_ns"] != 1000 or \
+        partition["unaccounted_wall_ns"] != 0:
+      raise RuntimeError("wall partition did not account for top-level wall")
+    if worker_cost["wall_attributed_ns"] != 700 or \
+        worker_cost["wall_attributed_share_of_top_level"] != 0.7:
+      raise RuntimeError("worker additive wall share used the wrong denominator")
+    if worker_cost["calls_estimated"] != 4:
+      raise RuntimeError("sampled call estimate was not preserved")
+    mismatched_worker_profile = json.loads(worker_profile.read_text())
+    mismatched_worker_profile["input_hash"] = "different-input"
+    worker_profile.write_text(json.dumps(mismatched_worker_profile))
+    result = subprocess.run([
+      sys.executable, str(SCRIPT), "--perf", str(worker_perf), "--plan",
+      str(worker_plan), "--profile", str(worker_profile), "--mode", "prepared",
+    ], capture_output=True, text=True)
+    if result.returncode == 0 or "input hash mismatch" not in result.stderr:
+      raise RuntimeError("profile/perf input mismatch was accepted")
   return 0
 
 

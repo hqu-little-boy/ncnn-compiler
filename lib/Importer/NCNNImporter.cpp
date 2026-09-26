@@ -22,6 +22,7 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/Verifier.h"
 
 namespace ncnn_importer {
@@ -527,11 +528,27 @@ std::expected<mlir::Value, ImportError> ImportContext::make_constant(
 
 void ImportContext::tag_source(mlir::Operation* operation,
                                const LayerContext& context) {
-  operation->setAttr("ncnn.name",
-                     builder_.getStringAttr(context.layer.get_name()));
+  const mlir::StringAttr name =
+    builder_.getStringAttr(context.layer.get_name());
+  operation->setAttr("ncnn.name", name);
   operation->setAttr(
     "ncnn.source_layer",
     builder_.getI64IntegerAttr(static_cast<std::int64_t>(context.index)));
+  // The layer identity is mirrored into the operation location as well,
+  // because locations survive the NCNN -> TOSA -> Linalg -> memref
+  // conversions while unknown attributes do not.  EmitModelPlan recovers
+  // this carrier (attributes remain the fallback):
+  //
+  //   NameLoc(layer_name, FileLineColLoc("ncnn-layer", layer_index, 0))
+  //
+  // printed as loc("conv7"("ncnn-layer":7:0)).  The reserved filename
+  // "ncnn-layer" and the column 0 mark the carrier; line is the layer index.
+  operation->setLoc(mlir::NameLoc::get(
+    name,
+    mlir::FileLineColLoc::get(builder_.getContext(),
+                              "ncnn-layer",
+                              static_cast<unsigned>(context.index),
+                              0)));
 }
 
 const std::string& ImportContext::captured_diagnostic() const noexcept {

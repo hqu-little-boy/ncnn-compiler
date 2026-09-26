@@ -30,6 +30,8 @@ namespace {
 
 constexpr StringLiteral kBegin = "__ncnn_profile_event_begin";
 constexpr StringLiteral kEnd = "__ncnn_profile_event_end";
+constexpr StringLiteral kWorkerBegin = "__ncnn_profile_worker_event_begin";
+constexpr StringLiteral kWorkerEnd = "__ncnn_profile_worker_event_end";
 constexpr StringLiteral kAlloc = "__ncnn_profile_alloc";
 constexpr StringLiteral kDealloc = "__ncnn_profile_dealloc";
 constexpr StringLiteral kCopy = "__ncnn_profile_copy";
@@ -51,6 +53,7 @@ enum class EventCategory : std::int64_t {
   MaterializedWrite = 8,
   MaterializedRead = 9,
   FusionSite = 10,
+  WorkerOperation = 11,
 };
 
 struct MaterializedEvent {
@@ -269,6 +272,19 @@ bool isProfileCandidate(Operation& operation) {
          name.starts_with("scf.") || name.starts_with("omp.");
 }
 
+bool isDirectParallelWorkerCandidate(Operation& operation) {
+  if (!isa<scf::ForallOp, scf::ParallelOp, omp::ParallelOp>(
+        operation.getParentOp()) ||
+      !isProfileCandidate(operation) ||
+      isa<memref::AllocOp, memref::CopyOp, memref::TransposeOp>(operation)) {
+    return false;
+  }
+  StringRef name = operation.getName().getStringRef();
+  // Time coarse per-worker loop/kernel scopes only. Instrumenting each vector
+  // lane or scalar operation would distort the profile and dominate tiny ops.
+  return isa<scf::ForOp>(operation) || name.starts_with("linalg.");
+}
+
 class InstrumentNCNNFusionSitesPass final
   : public PassWrapper<InstrumentNCNNFusionSitesPass, OperationPass<ModuleOp>> {
  public:
@@ -455,6 +471,8 @@ class InstrumentNCNNProfilePass final
     const SmallVector<Type> fourIds{i64, i64, i64, i64};
     auto begin = declare(rewriter, module, kBegin, {i64, i64});  // id, category
     auto end = declare(rewriter, module, kEnd, oneId);
+    auto workerBegin = declare(rewriter, module, kWorkerBegin, oneId);
+    auto workerEnd = declare(rewriter, module, kWorkerEnd, oneId);
     auto alloc = declare(rewriter, module, kAlloc, twoIds);
     auto dealloc = declare(rewriter, module, kDealloc, oneId);
     auto copy = declare(rewriter, module, kCopy, twoIds);
@@ -630,10 +648,11 @@ class InstrumentNCNNProfilePass final
             operation->hasAttr(contract::kCopyContract) ||
             materializedWrites.contains(operation) ||
             materializedReads.contains(operation) ||
-            (operation->getParentOp() == function.getOperation() &&
-             isProfileCandidate(*operation) &&
-             !(module->hasAttr("ncnn.profile_fusion_sites_instrumented") &&
-               operation->hasAttr(contract::kFusionSiteId)))) {
+            ((operation->getParentOp() == function.getOperation() &&
+              isProfileCandidate(*operation) &&
+              !(module->hasAttr("ncnn.profile_fusion_sites_instrumented") &&
+                operation->hasAttr(contract::kFusionSiteId))) ||
+             isDirectParallelWorkerCandidate(*operation))) {
           candidates.push_back(operation);
         }
       });
@@ -685,8 +704,11 @@ class InstrumentNCNNProfilePass final
         rewriter.setInsertionPoint(operation);
         Value idValue = constant(
           rewriter, operation->getLoc(), static_cast<std::int64_t>(id));
+        const bool workerTimed = isDirectParallelWorkerCandidate(*operation);
         const bool timed = operation->getParentOp() == function.getOperation();
-        if (timed) {
+        if (workerTimed) {
+          call(rewriter, operation->getLoc(), workerBegin, {idValue});
+        } else if (timed) {
           Value categoryValue = constant(
             rewriter, operation->getLoc(), static_cast<std::int64_t>(category));
           call(rewriter, operation->getLoc(), begin, {idValue, categoryValue});
@@ -745,11 +767,14 @@ class InstrumentNCNNProfilePass final
                  {eventId, kind, bytes, expectedReaders});
           }
         }
-        if (timed) {
+        if (workerTimed || timed) {
           rewriter.setInsertionPointAfter(operation);
           Value endId = constant(
             rewriter, operation->getLoc(), static_cast<std::int64_t>(id));
-          call(rewriter, operation->getLoc(), end, {endId});
+          call(rewriter,
+               operation->getLoc(),
+               workerTimed ? workerEnd : end,
+               {endId});
         }
       }
 

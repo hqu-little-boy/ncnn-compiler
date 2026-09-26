@@ -26,12 +26,16 @@
 #define NCNN_PROFILE_DEFAULT_PLAN_REVISION ""
 #endif
 #ifndef NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION
-#define NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION "attribution-v2"
+#define NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION "attribution-v4"
 #endif
 
 #define NCNN_PROFILE_MAX_RECORDS 4096
 #define NCNN_PROFILE_MAX_STACK 128
 #define NCNN_PROFILE_MAX_ALLOCS 4096
+#define NCNN_PROFILE_MAX_SLOTS 256
+#define NCNN_PROFILE_HASH_SIZE 8192
+#define NCNN_PROFILE_DEFAULT_INTERVAL_CAP 262144
+#define NCNN_PROFILE_DEFAULT_WINDOW_NS 8000000ULL
 
 enum {
   NCNN_PROFILE_OPERATION = 0,
@@ -45,6 +49,7 @@ enum {
   NCNN_PROFILE_MATERIALIZED_WRITE = 8,
   NCNN_PROFILE_MATERIALIZED_READ = 9,
   NCNN_PROFILE_FUSION_SITE = 10,
+  NCNN_PROFILE_WORKER_OPERATION = 11,
 };
 
 typedef struct {
@@ -53,8 +58,21 @@ typedef struct {
   uint64_t inclusive_ns;
   uint64_t exclusive_ns;
   uint64_t bytes;
+  uint64_t worker_wall_union_ns;
+  uint64_t worker_wall_attributed_ns;
+  uint64_t worker_wall_attributed_estimated_ns;
+  uint64_t worker_sampled_calls;
+  uint64_t worker_covered_wall_ns;
+  uint64_t worker_covered_wall_estimated_ns;
+  uint64_t sampled_window_wall_ns;
+  uint64_t region_wall_ns;
+  uint64_t wall_exclusive_estimated_ns;
+  uint64_t region_worker_spans;
   int64_t category;
   int exclusive_known;
+  int worker_wall_union_known;
+  int worker_wall_attributed_known;
+  int wall_coverage_known;
   int bytes_known;
 } ncnn_profile_record;
 
@@ -62,9 +80,46 @@ typedef struct {
   uint64_t id;
   uint64_t start_ns;
   uint64_t child_ns;
+  uint64_t window_limit;
   int64_t category;
   int record;
+  int sampled;
 } ncnn_profile_frame;
+
+/* Worker spans are collected per thread and merged at flush.  This keeps the
+   parallel hot path free of the global profile lock; only thread registration
+   and flush take it. */
+typedef struct {
+  uint64_t id;
+  uint64_t calls;
+  uint64_t inclusive_ns;
+  uint64_t exclusive_ns;
+} ncnn_profile_worker_acc;
+
+typedef struct {
+  uint64_t id;
+  uint64_t start_ns;
+  uint64_t end_ns;
+} ncnn_profile_span;
+
+typedef struct {
+  ncnn_profile_worker_acc* accs;
+  unsigned acc_count;
+  unsigned acc_cap;
+  int acc_hash[NCNN_PROFILE_HASH_SIZE];
+  ncnn_profile_span* spans;
+  unsigned span_count;
+  unsigned span_cap;
+  unsigned countdown;
+  int used;
+  int span_overflow;
+} ncnn_profile_slot;
+
+typedef struct {
+  uint64_t id;
+  uint64_t start_ns;
+  uint64_t end_ns;
+} ncnn_profile_region;
 
 typedef struct {
   uint64_t id;
@@ -75,10 +130,23 @@ typedef struct {
 static ncnn_profile_record records[NCNN_PROFILE_MAX_RECORDS];
 static unsigned record_count;
 static int record_overflow;
+static int record_hash[NCNN_PROFILE_HASH_SIZE];
+static ncnn_profile_slot* slots[NCNN_PROFILE_MAX_SLOTS];
+static unsigned slot_count;
+static _Thread_local ncnn_profile_slot* my_slot;
+static ncnn_profile_region regions[NCNN_PROFILE_MAX_RECORDS];
+static unsigned region_count;
+static unsigned sampling_duty = 1;
+static unsigned sampling_window_ns = NCNN_PROFILE_DEFAULT_WINDOW_NS;
+static int sampling_parsed;
+static int interval_overflow;
+static uint64_t attribution_window_total;
+static double attribution_projection = 1.0;
 static ncnn_profile_allocation allocations[NCNN_PROFILE_MAX_ALLOCS];
 static unsigned allocation_count;
 static int allocation_overflow;
 static atomic_flag profile_lock = ATOMIC_FLAG_INIT;
+static atomic_uint_fast64_t open_worker_spans = 0;
 static _Thread_local ncnn_profile_frame stack[NCNN_PROFILE_MAX_STACK];
 static _Thread_local unsigned stack_depth;
 static uint64_t allocation_events;
@@ -123,15 +191,37 @@ static int invocation_active;
 static int invocation_complete = 1;
 static int v2_output_initialized;
 
-static int profile_v2_enabled(void) {
+static unsigned profile_schema_version(void) {
   const char* schema = getenv("NCNN_PROFILE_SCHEMA");
-  return schema && strcmp(schema, "2") == 0;
+  if (schema && strcmp(schema, "3") == 0) {
+    return 3;
+  }
+  if (schema && strcmp(schema, "2") == 0) {
+    return 2;
+  }
+  return 1;
+}
+
+static int profile_v2_enabled(void) {
+  return profile_schema_version() >= 2;
 }
 
 static void reset_profile_state_locked(void) {
   memset(records, 0, sizeof(records));
   record_count = 0;
   record_overflow = 0;
+  memset(record_hash, 0, sizeof(record_hash));
+  for (unsigned index = 0; index < slot_count; ++index) {
+    if (slots[index]) {
+      slots[index]->acc_count = 0;
+      slots[index]->span_count = 0;
+      slots[index]->span_overflow = 0;
+      memset(slots[index]->acc_hash, 0, sizeof(slots[index]->acc_hash));
+    }
+  }
+  region_count = 0;
+  interval_overflow = 0;
+  atomic_store_explicit(&open_worker_spans, 0, memory_order_relaxed);
   memset(allocations, 0, sizeof(allocations));
   allocation_count = 0;
   allocation_overflow = 0;
@@ -189,32 +279,74 @@ static uint64_t profile_now(void) {
   return ((uint64_t)value.tv_sec * 1000000000ULL) + (uint64_t)value.tv_nsec;
 }
 
+/* Sampling gate only.  The coarse clock is cheap enough to read on every
+   worker call and, being process-wide, makes all threads agree on which
+   windows are sampled.  Exact span timestamps still use CLOCK_MONOTONIC. */
+static uint64_t profile_now_coarse(void) {
+#ifdef CLOCK_MONOTONIC_COARSE
+  struct timespec value;
+  if (clock_gettime(CLOCK_MONOTONIC_COARSE, &value) == 0) {
+    return ((uint64_t)value.tv_sec * 1000000000ULL) + (uint64_t)value.tv_nsec;
+  }
+#endif
+  return profile_now();
+}
+
+static unsigned record_hash_slot(uint64_t id, int64_t category) {
+  uint64_t key = id ^ ((uint64_t)category * 0x9E3779B97F4A7C15ULL);
+  key ^= key >> 32;
+  key *= 0xBF58476D1CE4E5B9ULL;
+  key ^= key >> 29;
+  return (unsigned)(key & (NCNN_PROFILE_HASH_SIZE - 1));
+}
+
 static int record_for(uint64_t id, int64_t category) {
-  unsigned index;
-  for (index = 0; index < record_count; ++index) {
+  unsigned slot = record_hash_slot(id, category);
+  for (unsigned probe = 0; probe < NCNN_PROFILE_HASH_SIZE; ++probe) {
+    int entry = record_hash[slot];
+    if (entry == 0) {
+      break;
+    }
+    unsigned index = (unsigned)(entry - 1);
     if (records[index].id == id && records[index].category == category) {
       return (int)index;
     }
+    slot = (slot + 1) & (NCNN_PROFILE_HASH_SIZE - 1);
   }
   if (record_count == NCNN_PROFILE_MAX_RECORDS) {
     record_overflow = 1;
     return -1;
   }
-  records[record_count].id = id;
-  records[record_count].calls = 0;
-  records[record_count].inclusive_ns = 0;
-  records[record_count].exclusive_ns = 0;
-  records[record_count].bytes = 0;
-  records[record_count].category = category;
-  records[record_count].exclusive_known = 1;
-  records[record_count].bytes_known =
+  unsigned index = record_count++;
+  record_hash[slot] = (int)index + 1;
+  records[index].id = id;
+  records[index].calls = 0;
+  records[index].inclusive_ns = 0;
+  records[index].exclusive_ns = 0;
+  records[index].bytes = 0;
+  records[index].worker_wall_union_ns = 0;
+  records[index].worker_wall_attributed_ns = 0;
+  records[index].worker_wall_attributed_estimated_ns = 0;
+  records[index].worker_sampled_calls = 0;
+  records[index].worker_covered_wall_ns = 0;
+  records[index].worker_covered_wall_estimated_ns = 0;
+  records[index].sampled_window_wall_ns = 0;
+  records[index].region_wall_ns = 0;
+  records[index].wall_exclusive_estimated_ns = 0;
+  records[index].region_worker_spans = 0;
+  records[index].category = category;
+  records[index].exclusive_known = 1;
+  records[index].worker_wall_union_known = 1;
+  records[index].worker_wall_attributed_known = 1;
+  records[index].wall_coverage_known = 1;
+  records[index].bytes_known =
     category == NCNN_PROFILE_ALLOCATION ||
     category == NCNN_PROFILE_DEALLOCATION || category == NCNN_PROFILE_COPY ||
     category == NCNN_PROFILE_TRANSPOSE || category == NCNN_PROFILE_PACK ||
     category == NCNN_PROFILE_UNPACK ||
     category == NCNN_PROFILE_MATERIALIZED_WRITE ||
     category == NCNN_PROFILE_MATERIALIZED_READ;
-  return (int)record_count++;
+  return (int)index;
 }
 
 static void add_record_bytes(int record, int64_t bytes) {
@@ -249,8 +381,509 @@ static int allocation_for(uint64_t id) {
   return (int)allocation_count++;
 }
 
-void __ncnn_profile_event_begin(int64_t signed_id, int64_t category) {
+static void parse_sampling_options(void);
+static uint64_t sampled_window_overlap(uint64_t start, uint64_t end);
+static unsigned parse_unsigned(const char* value, int* known);
+
+static int span_before(const ncnn_profile_span* left,
+                       const ncnn_profile_span* right) {
+  if (left->start_ns != right->start_ns) {
+    return left->start_ns < right->start_ns;
+  }
+  return left->id < right->id;
+}
+
+static int span_id_before(const ncnn_profile_span* left,
+                          const ncnn_profile_span* right) {
+  if (left->id != right->id) {
+    return left->id < right->id;
+  }
+  return left->start_ns < right->start_ns;
+}
+
+static void insertion_sort_spans(ncnn_profile_span* spans,
+                                 unsigned count,
+                                 int (*before)(const ncnn_profile_span*,
+                                               const ncnn_profile_span*)) {
+  for (unsigned index = 1; index < count; ++index) {
+    ncnn_profile_span value = spans[index];
+    unsigned position = index;
+    while (position != 0 && before(&value, &spans[position - 1])) {
+      spans[position] = spans[position - 1];
+      --position;
+    }
+    spans[position] = value;
+  }
+}
+
+static void merge_sort_spans(ncnn_profile_span* spans,
+                             unsigned count,
+                             int (*before)(const ncnn_profile_span*,
+                                           const ncnn_profile_span*)) {
+  if (count < 32) {
+    insertion_sort_spans(spans, count, before);
+    return;
+  }
+  unsigned middle = count / 2;
+  merge_sort_spans(spans, middle, before);
+  merge_sort_spans(spans + middle, count - middle, before);
+  ncnn_profile_span* merged =
+    (ncnn_profile_span*)malloc((size_t)count * sizeof(ncnn_profile_span));
+  if (!merged) {
+    insertion_sort_spans(spans, count, before);
+    return;
+  }
+  unsigned left = 0;
+  unsigned right = middle;
+  unsigned out = 0;
+  while (left < middle && right < count) {
+    merged[out++] =
+      before(&spans[right], &spans[left]) ? spans[right++] : spans[left++];
+  }
+  while (left < middle) {
+    merged[out++] = spans[left++];
+  }
+  while (right < count) {
+    merged[out++] = spans[right++];
+  }
+  memcpy(spans, merged, (size_t)count * sizeof(ncnn_profile_span));
+  free(merged);
+}
+
+/* Merge lock-free worker accumulations and compute wall attribution.
+   Worker spans are siblings inside one parallel region, so a sweep with an
+   open-span list partitions region wall time additively: each instant is split
+   equally among the spans executing at that instant.  Region wall time not
+   covered by any worker span is explicit gap time, not attributed to an op. */
+static void merge_worker_slots_locked(void) {
+  unsigned total_spans = 0;
+  int overflow = 0;
+  for (unsigned index = 0; index < slot_count; ++index) {
+    ncnn_profile_slot* slot = slots[index];
+    if (!slot) {
+      continue;
+    }
+    if (slot->span_overflow) {
+      overflow = 1;
+    }
+    if (slot->span_count > UINT32_MAX - total_spans) {
+      overflow = 1;
+      break;
+    }
+    total_spans += slot->span_count;
+    for (unsigned acc = 0; acc < slot->acc_count; ++acc) {
+      const int record =
+        record_for(slot->accs[acc].id, NCNN_PROFILE_WORKER_OPERATION);
+      if (record < 0) {
+        overflow = 1;
+        continue;
+      }
+      records[record].calls += slot->accs[acc].calls;
+      records[record].worker_sampled_calls += slot->accs[acc].calls;
+      records[record].inclusive_ns += slot->accs[acc].inclusive_ns;
+      records[record].exclusive_ns += slot->accs[acc].exclusive_ns;
+    }
+  }
+  interval_overflow = overflow;
+  if (total_spans == 0) {
+    return;
+  }
+  ncnn_profile_span* spans =
+    (ncnn_profile_span*)malloc((size_t)total_spans * sizeof(ncnn_profile_span));
+  if (!spans) {
+    interval_overflow = 1;
+    return;
+  }
+  unsigned count = 0;
+  for (unsigned index = 0; index < slot_count; ++index) {
+    ncnn_profile_slot* slot = slots[index];
+    if (!slot) {
+      continue;
+    }
+    memcpy(spans + count,
+           slot->spans,
+           (size_t)slot->span_count * sizeof(ncnn_profile_span));
+    count += slot->span_count;
+  }
+  merge_sort_spans(spans, count, span_before);
+
+  ncnn_profile_region* sorted_regions = (ncnn_profile_region*)malloc(
+    (size_t)(region_count ? region_count : 1) * sizeof(ncnn_profile_region));
+  if (!sorted_regions) {
+    free(spans);
+    interval_overflow = 1;
+    return;
+  }
+  memcpy(sorted_regions,
+         regions,
+         (size_t)region_count * sizeof(ncnn_profile_region));
+  for (unsigned index = 1; index < region_count; ++index) {
+    ncnn_profile_region value = sorted_regions[index];
+    unsigned position = index;
+    while (position != 0 &&
+           sorted_regions[position - 1].start_ns > value.start_ns) {
+      sorted_regions[position] = sorted_regions[position - 1];
+      --position;
+    }
+    sorted_regions[position] = value;
+  }
+
+  unsigned span_index = 0;
+  for (unsigned region_index = 0; region_index < region_count; ++region_index) {
+    const ncnn_profile_region region = sorted_regions[region_index];
+    while (span_index < count && spans[span_index].end_ns <= region.start_ns) {
+      ++span_index;
+    }
+    const unsigned region_begin = span_index;
+    while (span_index < count && spans[span_index].start_ns < region.end_ns) {
+      ++span_index;
+    }
+    const unsigned region_end = span_index;
+    const uint64_t window_ns =
+      sampled_window_overlap(region.start_ns, region.end_ns);
+    uint64_t covered_ns = 0;
+    if (region_end > region_begin) {
+      unsigned open[NCNN_PROFILE_MAX_SLOTS];
+      unsigned open_count = 0;
+      unsigned next = region_begin;
+      uint64_t cursor = region.start_ns;
+      while (next < region_end || open_count != 0) {
+        uint64_t next_start =
+          next < region_end ? spans[next].start_ns : UINT64_MAX;
+        uint64_t next_end = UINT64_MAX;
+        for (unsigned slot = 0; slot < open_count; ++slot) {
+          if (spans[open[slot]].end_ns < next_end) {
+            next_end = spans[open[slot]].end_ns;
+          }
+        }
+        const uint64_t step = next_start < next_end ? next_start : next_end;
+        if (step == UINT64_MAX) {
+          break;
+        }
+        if (step > cursor) {
+          const uint64_t delta = step - cursor;
+          if (open_count != 0) {
+            covered_ns += delta;
+            const uint64_t share = delta / open_count;
+            uint64_t remainder = delta % open_count;
+            for (unsigned slot = 0; slot < open_count; ++slot) {
+              const int record =
+                record_for(spans[open[slot]].id, NCNN_PROFILE_WORKER_OPERATION);
+              if (record < 0) {
+                continue;
+              }
+              const uint64_t attributed = share + (remainder ? 1 : 0);
+              if (remainder) {
+                --remainder;
+              }
+              if (records[record].worker_wall_attributed_ns <=
+                  UINT64_MAX - attributed) {
+                records[record].worker_wall_attributed_ns += attributed;
+              } else {
+                records[record].worker_wall_attributed_known = 0;
+              }
+            }
+          }
+          cursor = step;
+        }
+        while (next < region_end && spans[next].start_ns <= cursor) {
+          if (open_count == NCNN_PROFILE_MAX_SLOTS) {
+            interval_overflow = 1;
+          } else {
+            open[open_count++] = next;
+          }
+          ++next;
+        }
+        for (unsigned slot = 0; slot < open_count;) {
+          if (spans[open[slot]].end_ns <= cursor) {
+            memmove(&open[slot],
+                    &open[slot + 1],
+                    (size_t)(open_count - slot - 1) * sizeof(unsigned));
+            --open_count;
+          } else {
+            ++slot;
+          }
+        }
+      }
+    }
+    const int record = record_for(region.id, NCNN_PROFILE_PARALLEL);
+    if (record >= 0) {
+      ncnn_profile_record* parallel_record = &records[record];
+      const uint64_t region_wall =
+        region.end_ns > region.start_ns ? region.end_ns - region.start_ns : 0;
+      parallel_record->region_worker_spans += (region_end - region_begin);
+      if (parallel_record->worker_covered_wall_ns <= UINT64_MAX - covered_ns &&
+          parallel_record->sampled_window_wall_ns <=
+            UINT64_MAX - window_ns &&
+          parallel_record->region_wall_ns <= UINT64_MAX - region_wall) {
+        parallel_record->worker_covered_wall_ns += covered_ns;
+        parallel_record->sampled_window_wall_ns += window_ns;
+        parallel_record->region_wall_ns += region_wall;
+      } else {
+        parallel_record->wall_coverage_known = 0;
+      }
+    }
+  }
+  free(sorted_regions);
+
+  merge_sort_spans(spans, count, span_id_before);
+  for (unsigned index = 0; index < count;) {
+    const uint64_t id = spans[index].id;
+    uint64_t run_start = spans[index].start_ns;
+    uint64_t run_end = spans[index].end_ns;
+    uint64_t union_total = 0;
+    unsigned cursor = index + 1;
+    while (cursor < count && spans[cursor].id == id) {
+      if (spans[cursor].start_ns > run_end) {
+        union_total += run_end - run_start;
+        run_start = spans[cursor].start_ns;
+        run_end = spans[cursor].end_ns;
+      } else if (spans[cursor].end_ns > run_end) {
+        run_end = spans[cursor].end_ns;
+      }
+      ++cursor;
+    }
+    union_total += run_end - run_start;
+    const int record = record_for(id, NCNN_PROFILE_WORKER_OPERATION);
+    if (record >= 0) {
+      if (records[record].worker_wall_union_ns <= UINT64_MAX - union_total) {
+        records[record].worker_wall_union_ns += union_total;
+      } else {
+        records[record].worker_wall_union_known = 0;
+      }
+    }
+    index = cursor;
+  }
+  free(spans);
+  parse_sampling_options();
+  // One projection factor for the whole invocation keeps wall accounting
+  // additive: every per-op attributed duration and every region covered
+  // duration is scaled by the same region_wall / sampled_window ratio. At
+  // duty=1 the factor is exactly 1 and nothing is estimated.
+  double projection = 1.0;
+  uint64_t window_total = 0;
+  uint64_t region_wall_total = 0;
+  for (unsigned index = 0; index < record_count; ++index) {
+    ncnn_profile_record* record = &records[index];
+    if (record->category != NCNN_PROFILE_PARALLEL ||
+        !record->wall_coverage_known || interval_overflow ||
+        record->region_worker_spans == 0 ||
+        record->sampled_window_wall_ns == 0 ||
+        record->worker_covered_wall_ns > record->sampled_window_wall_ns) {
+      if (record->category == NCNN_PROFILE_PARALLEL) {
+        record->wall_coverage_known = 0;
+      }
+      continue;
+    }
+    window_total += record->sampled_window_wall_ns;
+    region_wall_total += record->inclusive_ns;
+  }
+  if (window_total != 0 && region_wall_total > window_total) {
+    projection = (double)region_wall_total / (double)window_total;
+  }
+  attribution_window_total = window_total;
+  attribution_projection = projection;
+  for (unsigned index = 0; index < record_count; ++index) {
+    ncnn_profile_record* record = &records[index];
+    if (record->category == NCNN_PROFILE_WORKER_OPERATION &&
+        record->worker_wall_attributed_known) {
+      const double projected =
+        (double)record->worker_wall_attributed_ns * projection;
+      if (projected > (double)UINT64_MAX) {
+        record->worker_wall_attributed_known = 0;
+      } else {
+        record->worker_wall_attributed_estimated_ns = (uint64_t)projected;
+      }
+    }
+    if (record->category != NCNN_PROFILE_PARALLEL ||
+        !record->wall_coverage_known) {
+      continue;
+    }
+    const uint64_t window = record->sampled_window_wall_ns;
+    const uint64_t covered_in_window = record->worker_covered_wall_ns;
+    const uint64_t region_wall = record->inclusive_ns;
+    const double covered_projected =
+      (double)covered_in_window * projection;
+    if (covered_projected > (double)region_wall) {
+      record->worker_covered_wall_estimated_ns = region_wall;
+      record->wall_exclusive_estimated_ns = 0;
+    } else {
+      record->worker_covered_wall_estimated_ns = (uint64_t)covered_projected;
+      record->wall_exclusive_estimated_ns =
+        region_wall - (uint64_t)covered_projected;
+    }
+    if (sampling_duty <= 1 && window == region_wall) {
+      // Complete interval accounting with observed worker spans: region wall
+      // not covered by any measured worker span is exactly the
+      // non-overlapping remainder, matching the serial exclusive definition
+      // when children do not overlap.
+      record->exclusive_ns = region_wall - covered_in_window;
+      record->exclusive_known = 1;
+    }
+  }
+}
+
+static void parse_sampling_options(void) {
+  if (sampling_parsed) {
+    return;
+  }
+  const char* duty = getenv("NCNN_PROFILE_SAMPLE_DUTY");
+  if (duty && *duty) {
+    int known = 0;
+    const unsigned value = parse_unsigned(duty, &known);
+    if (known && value >= 1) {
+      sampling_duty = value;
+    }
+  }
+  const char* window = getenv("NCNN_PROFILE_SAMPLE_WINDOW_NS");
+  if (window && *window) {
+    int known = 0;
+    const unsigned value = parse_unsigned(window, &known);
+    if (known && value >= 1) {
+      sampling_window_ns = value;
+    }
+  }
+  sampling_parsed = 1;
+}
+
+/* Coherent time-window duty sampling.  All threads evaluate the same window
+   pattern, so cross-worker interval unions stay comparable and wall shares are
+   normalized by the sampled-window duration rather than scaled by duty.  Only
+   spans that start in a sampled window are timed; their ends are clipped to
+   that window so every recorded span lies inside one sampled window. */
+static int window_sampled(uint64_t now, uint64_t* window_limit) {
+  parse_sampling_options();
+  if (sampling_duty <= 1) {
+    *window_limit = UINT64_MAX;
+    return 1;
+  }
+  const uint64_t window_index = now / sampling_window_ns;
+  *window_limit = (window_index + 1) * sampling_window_ns;
+  return (window_index % sampling_duty) == 0;
+}
+
+/* Wall time of [start,end) lying inside sampled windows. */
+static uint64_t sampled_window_overlap(uint64_t start, uint64_t end) {
+  parse_sampling_options();
+  if (sampling_duty <= 1) {
+    return end > start ? end - start : 0;
+  }
+  if (end <= start) {
+    return 0;
+  }
+  uint64_t first = start / sampling_window_ns;
+  const uint64_t last = (end - 1) / sampling_window_ns;
+  if (first % sampling_duty != 0) {
+    first += sampling_duty - (first % sampling_duty);
+  }
+  uint64_t total = 0;
+  for (uint64_t index = first; index <= last; index += sampling_duty) {
+    const uint64_t window_start = index * sampling_window_ns;
+    const uint64_t window_end = window_start + sampling_window_ns;
+    const uint64_t from = start > window_start ? start : window_start;
+    const uint64_t to = end < window_end ? end : window_end;
+    if (to > from) {
+      total += to - from;
+    }
+  }
+  return total;
+}
+
+static ncnn_profile_slot* ensure_slot(void) {
+  if (my_slot) {
+    return my_slot;
+  }
+  ncnn_profile_slot* slot =
+    (ncnn_profile_slot*)calloc(1, sizeof(ncnn_profile_slot));
+  if (!slot) {
+    return NULL;
+  }
+  lock_profile();
+  if (slot_count == NCNN_PROFILE_MAX_SLOTS) {
+    unlock_profile();
+    free(slot);
+    return NULL;
+  }
+  slots[slot_count++] = slot;
+  unlock_profile();
+  // Stagger the sampling phase per thread so a periodic workload cannot line
+  // up with the same counter residue on every worker.
+  parse_sampling_options();
+  slot->countdown =
+    sampling_duty > 1 ? ((slot_count - 1) % sampling_duty) + 1 : 0;
+  my_slot = slot;
+  return slot;
+}
+
+static ncnn_profile_worker_acc* slot_acc_for(ncnn_profile_slot* slot,
+                                             uint64_t id) {
+  unsigned bucket = record_hash_slot(id, NCNN_PROFILE_WORKER_OPERATION);
+  for (unsigned probe = 0; probe < NCNN_PROFILE_HASH_SIZE; ++probe) {
+    const int entry = slot->acc_hash[bucket];
+    if (entry == 0) {
+      break;
+    }
+    const unsigned index = (unsigned)(entry - 1);
+    if (slot->accs[index].id == id) {
+      return &slot->accs[index];
+    }
+    bucket = (bucket + 1) & (NCNN_PROFILE_HASH_SIZE - 1);
+  }
+  if (slot->acc_count == slot->acc_cap) {
+    const unsigned next = slot->acc_cap ? slot->acc_cap * 2 : 64;
+    if (next > NCNN_PROFILE_MAX_RECORDS) {
+      return NULL;
+    }
+    ncnn_profile_worker_acc* grown = (ncnn_profile_worker_acc*)realloc(
+      slot->accs, (size_t)next * sizeof(ncnn_profile_worker_acc));
+    if (!grown) {
+      return NULL;
+    }
+    slot->accs = grown;
+    slot->acc_cap = next;
+  }
+  const unsigned index = slot->acc_count++;
+  slot->acc_hash[bucket] = (int)index + 1;
+  slot->accs[index].id = id;
+  slot->accs[index].calls = 0;
+  slot->accs[index].inclusive_ns = 0;
+  slot->accs[index].exclusive_ns = 0;
+  return &slot->accs[index];
+}
+
+static void slot_record_span(ncnn_profile_slot* slot,
+                             uint64_t id,
+                             uint64_t start,
+                             uint64_t end) {
+  if (slot->span_count == slot->span_cap) {
+    const unsigned next = slot->span_cap ? slot->span_cap * 2 : 1024;
+    if (next > NCNN_PROFILE_DEFAULT_INTERVAL_CAP * 8U) {
+      slot->span_overflow = 1;
+      return;
+    }
+    ncnn_profile_span* grown = (ncnn_profile_span*)realloc(
+      slot->spans, (size_t)next * sizeof(ncnn_profile_span));
+    if (!grown) {
+      slot->span_overflow = 1;
+      return;
+    }
+    slot->spans = grown;
+    slot->span_cap = next;
+  }
+  slot->spans[slot->span_count].id = id;
+  slot->spans[slot->span_count].start_ns = start;
+  slot->spans[slot->span_count].end_ns = end;
+  ++slot->span_count;
+}
+
+static void profile_event_begin(int64_t signed_id, int64_t category) {
   const uint64_t id = (uint64_t)signed_id;
+  if (stack_depth == NCNN_PROFILE_MAX_STACK) {
+    lock_profile();
+    mismatch_events++;
+    unlock_profile();
+    return;
+  }
   const uint64_t start = profile_now();
   const int root = stack_depth == 0 && category == NCNN_PROFILE_OPERATION;
   lock_profile();
@@ -274,21 +907,47 @@ void __ncnn_profile_event_begin(int64_t signed_id, int64_t category) {
     parallel_events++;
   }
   unlock_profile();
+  stack[stack_depth].id = id;
+  stack[stack_depth].start_ns = start;
+  stack[stack_depth].child_ns = 0;
+  stack[stack_depth].window_limit = UINT64_MAX;
+  stack[stack_depth].category = category;
+  stack[stack_depth].record = record;
+  stack[stack_depth].sampled = 1;
+  stack_depth++;
+}
+
+void __ncnn_profile_event_begin(int64_t signed_id, int64_t category) {
+  profile_event_begin(signed_id, category);
+}
+
+void __ncnn_profile_worker_event_begin(int64_t signed_id) {
+  const uint64_t id = (uint64_t)signed_id;
   if (stack_depth == NCNN_PROFILE_MAX_STACK) {
     lock_profile();
     mismatch_events++;
     unlock_profile();
     return;
   }
+  ncnn_profile_slot* slot = ensure_slot();
+  uint64_t window_limit = UINT64_MAX;
+  const int tracked = slot != NULL &&
+                      window_sampled(profile_now_coarse(), &window_limit);
+  const uint64_t start = tracked ? profile_now() : 0;
+  if (tracked) {
+    atomic_fetch_add_explicit(&open_worker_spans, 1, memory_order_relaxed);
+  }
   stack[stack_depth].id = id;
   stack[stack_depth].start_ns = start;
   stack[stack_depth].child_ns = 0;
-  stack[stack_depth].category = category;
-  stack[stack_depth].record = record;
+  stack[stack_depth].window_limit = window_limit;
+  stack[stack_depth].category = NCNN_PROFILE_WORKER_OPERATION;
+  stack[stack_depth].record = -1;
+  stack[stack_depth].sampled = tracked;
   stack_depth++;
 }
 
-void __ncnn_profile_event_end(int64_t signed_id) {
+static void profile_event_end(int64_t signed_id) {
   const uint64_t id = (uint64_t)signed_id;
   const uint64_t end = profile_now();
   if (stack_depth == 0 || stack[stack_depth - 1].id != id) {
@@ -298,19 +957,35 @@ void __ncnn_profile_event_end(int64_t signed_id) {
     return;
   }
   ncnn_profile_frame frame = stack[--stack_depth];
+  if (frame.category == NCNN_PROFILE_WORKER_OPERATION) {
+    lock_profile();
+    mismatch_events++;
+    unlock_profile();
+    return;
+  }
   const int root = stack_depth == 0 && frame.category == NCNN_PROFILE_OPERATION;
   const uint64_t elapsed = end >= frame.start_ns ? end - frame.start_ns : 0;
   const uint64_t exclusive =
     elapsed >= frame.child_ns ? elapsed - frame.child_ns : 0;
   lock_profile();
   if (frame.record >= 0) {
-    records[frame.record].inclusive_ns += elapsed;
+    ncnn_profile_record* record = &records[frame.record];
+    record->inclusive_ns += elapsed;
     if (frame.category == NCNN_PROFILE_PARALLEL) {
-      // Worker callbacks run on different TLS stacks, so their time cannot be
-      // subtracted from the parent frame without a runtime-wide span model.
-      records[frame.record].exclusive_known = 0;
-    } else if (records[frame.record].exclusive_known) {
-      records[frame.record].exclusive_ns += exclusive;
+      // Worker CPU time is emitted under its own category and is not a
+      // subtractable child of this wall-clock region span.  The region wall
+      // interval is retained so flush can compute worker coverage.
+      record->exclusive_known = 0;
+      if (region_count < NCNN_PROFILE_MAX_RECORDS) {
+        regions[region_count].id = id;
+        regions[region_count].start_ns = frame.start_ns;
+        regions[region_count].end_ns = end;
+        ++region_count;
+      } else {
+        record_overflow = 1;
+      }
+    } else if (record->exclusive_known) {
+      record->exclusive_ns += exclusive;
     }
   }
   if (stack_depth != 0) {
@@ -330,6 +1005,56 @@ void __ncnn_profile_event_end(int64_t signed_id) {
     }
   }
   unlock_profile();
+}
+
+void __ncnn_profile_event_end(int64_t signed_id) {
+  profile_event_end(signed_id);
+}
+
+void __ncnn_profile_worker_event_end(int64_t signed_id) {
+  const uint64_t id = (uint64_t)signed_id;
+  if (stack_depth == 0 || stack[stack_depth - 1].id != id ||
+      stack[stack_depth - 1].category != NCNN_PROFILE_WORKER_OPERATION) {
+    lock_profile();
+    mismatch_events++;
+    unlock_profile();
+    return;
+  }
+  const ncnn_profile_frame frame = stack[--stack_depth];
+  if (!frame.sampled) {
+    return;
+  }
+  const uint64_t end = profile_now();
+  atomic_fetch_sub_explicit(&open_worker_spans, 1, memory_order_relaxed);
+  if (end <= frame.start_ns) {
+    return;
+  }
+  // Wall metrics use spans clipped to the sampled window so unions are
+  // comparable with sampled_window_overlap(). CPU metrics keep the full
+  // instance duration: they are per-instance sums in a different time domain.
+  const uint64_t span_end =
+    end < frame.window_limit ? end : frame.window_limit;
+  ncnn_profile_slot* slot = my_slot;
+  if (!slot) {
+    return;
+  }
+  const uint64_t elapsed = end - frame.start_ns;
+  const uint64_t exclusive =
+    elapsed >= frame.child_ns ? elapsed - frame.child_ns : 0;
+  if (stack_depth != 0) {
+    stack[stack_depth - 1].child_ns += elapsed;
+  }
+  ncnn_profile_worker_acc* acc = slot_acc_for(slot, id);
+  if (acc) {
+    ++acc->calls;
+    acc->inclusive_ns += elapsed;
+    acc->exclusive_ns += exclusive;
+  } else {
+    interval_overflow = 1;
+  }
+  if (span_end > frame.start_ns) {
+    slot_record_span(slot, id, frame.start_ns, span_end);
+  }
 }
 
 void __ncnn_profile_alloc(int64_t signed_id, int64_t bytes) {
@@ -608,6 +1333,8 @@ static const char* category_name(int64_t category) {
       return "materialized_read";
     case NCNN_PROFILE_FUSION_SITE:
       return "operation";
+    case NCNN_PROFILE_WORKER_OPERATION:
+      return "worker_operation";
     default:
       return "operation";
   }
@@ -707,8 +1434,20 @@ static void flush_profile_v2(const char* path) {
     local_invocation_id = ++invocation_sequence;
   }
   local_complete = invocation_complete;
+  if (atomic_load_explicit(&open_worker_spans, memory_order_acquire) != 0) {
+    // A worker span is still open: its interval cannot be merged, so wall
+    // coverage is incomplete and must not be reported as proven.
+    interval_overflow = 1;
+    local_complete = 0;
+  }
+  merge_worker_slots_locked();
   snapshot_count = record_count;
   for (index = 0; index < snapshot_count; ++index) {
+    if (!records[index].worker_wall_union_known ||
+        !records[index].worker_wall_attributed_known ||
+        !records[index].wall_coverage_known) {
+      local_complete = 0;
+    }
     snapshot[index] = records[index];
   }
   local_allocation_events = allocation_events;
@@ -772,6 +1511,7 @@ static void flush_profile_v2(const char* path) {
     environment_or_default("NCNN_PROFILE_MODEL", NCNN_PROFILE_DEFAULT_MODEL);
   const char* plan = environment_or_default("NCNN_PROFILE_PLAN_HASH",
                                             NCNN_PROFILE_DEFAULT_PLAN_HASH);
+  const char* input_hash = getenv("NCNN_PROFILE_INPUT_HASH");
   const char* build_identity = environment_or_default(
     "NCNN_PROFILE_BUILD_IDENTITY", NCNN_PROFILE_DEFAULT_BUILD_IDENTITY);
   const char* target =
@@ -791,7 +1531,7 @@ static void flush_profile_v2(const char* path) {
   const char* attribution_revision =
     environment_or_default("NCNN_PROFILE_ATTRIBUTION_REVISION",
                            NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION);
-  fputs("{\n  \"schema_version\": 2,\n", file);
+  fprintf(file, "{\n  \"schema_version\": %u,\n", profile_schema_version());
   fputs("  \"kind\": \"ncnn.model_execution_profile\",\n", file);
   fputs("  \"plan_revision\": ", file);
   if (revision && *revision) {
@@ -807,6 +1547,12 @@ static void flush_profile_v2(const char* path) {
   fputs(",\n  \"plan_hash\": ", file);
   if (plan && *plan) {
     write_json_string(file, plan);
+  } else {
+    fputs("null", file);
+  }
+  fputs(",\n  \"input_hash\": ", file);
+  if (input_hash && *input_hash) {
+    write_json_string(file, input_hash);
   } else {
     fputs("null", file);
   }
@@ -1004,6 +1750,17 @@ static void flush_profile_v2(const char* path) {
           "    \"top_level_time_known\": %s,\n",
           local_top_level_time_known ? "true" : "false");
   fprintf(file,
+          "    \"worker_sampling\": {\"duty\": %u, "
+          "\"basis\": \"instance_counter_duty\", "
+          "\"interval_overflow\": %s},\n",
+          sampling_duty,
+          interval_overflow ? "true" : "false");
+  fputs(
+    "    \"worker_wall_attribution\": {\"basis\": "
+    "\"equal_split_across_concurrent_worker_spans\", \"additive\": true, "
+    "\"time_domain\": \"wall\"},\n",
+    file);
+  fprintf(file,
           "    \"event_mismatch_count\": %llu\n",
           (unsigned long long)local_mismatch_events);
   fputs("  },\n  \"events\": [", file);
@@ -1016,6 +1773,11 @@ static void flush_profile_v2(const char* path) {
             "\n    {\"id\": %llu, \"category\": ",
             (unsigned long long)record->id);
     write_json_string(file, category_name(record->category));
+    fputs(", \"time_domain\": ", file);
+    write_json_string(file,
+                      record->category == NCNN_PROFILE_WORKER_OPERATION
+                        ? "worker_cpu"
+                        : "wall");
     fprintf(file,
             ", \"calls\": %llu, \"inclusive_ns\": %llu, \"exclusive_ns\": ",
             (unsigned long long)record->calls,
@@ -1024,6 +1786,90 @@ static void flush_profile_v2(const char* path) {
       fprintf(file, "%llu", (unsigned long long)record->exclusive_ns);
     } else {
       fputs("null", file);
+    }
+    if (record->category == NCNN_PROFILE_WORKER_OPERATION) {
+      fputs(", \"worker_wall_union_ns\": ", file);
+      if (record->worker_wall_union_known) {
+        fprintf(file, "%llu", (unsigned long long)record->worker_wall_union_ns);
+      } else {
+        fputs("null", file);
+      }
+      fprintf(file,
+              ", \"worker_wall_union_known\": %s",
+              record->worker_wall_union_known ? "true" : "false");
+      fputs(", \"wall_attributed_ns\": ", file);
+      if (record->worker_wall_attributed_known) {
+        fprintf(
+          file, "%llu", (unsigned long long)record->worker_wall_attributed_ns);
+      } else {
+        fputs("null", file);
+      }
+      fputs(", \"wall_attributed_estimated_ns\": ", file);
+      if (record->worker_wall_attributed_known) {
+        fprintf(file,
+                "%llu",
+                (unsigned long long)record->worker_wall_attributed_estimated_ns);
+      } else {
+        fputs("null", file);
+      }
+      fputs(", \"wall_attributed_share_of_sampled_window\": ", file);
+      if (record->worker_wall_attributed_known &&
+          attribution_window_total != 0) {
+        fprintf(file,
+                "%.9f",
+                (double)record->worker_wall_attributed_ns /
+                  (double)attribution_window_total);
+      } else {
+        fputs("null", file);
+      }
+      fprintf(file,
+              ", \"wall_attributed_known\": %s, \"calls_estimated\": %llu",
+              record->worker_wall_attributed_known ? "true" : "false",
+              (unsigned long long)(sampling_duty <= 1
+                                     ? record->calls
+                                     : record->calls * sampling_duty));
+    }
+    if (record->category == NCNN_PROFILE_PARALLEL) {
+      fprintf(file,
+              ", \"worker_covered_wall_ns\": %llu, "
+              "\"worker_covered_wall_sampled_ns\": %llu, "
+              "\"sampled_window_wall_ns\": %llu, "
+              "\"region_wall_ns\": %llu, "
+              "\"region_worker_spans\": %llu, "
+              "\"sample_scale\": %u, "
+              "\"wall_projection_factor\": %.9f",
+              (unsigned long long)record->worker_covered_wall_estimated_ns,
+              (unsigned long long)record->worker_covered_wall_ns,
+              (unsigned long long)record->sampled_window_wall_ns,
+              (unsigned long long)record->region_wall_ns,
+              (unsigned long long)record->region_worker_spans,
+              sampling_duty,
+              attribution_projection);
+      fputs(", \"wall_coverage_share\": ", file);
+      if (record->wall_coverage_known && record->sampled_window_wall_ns != 0) {
+        fprintf(file,
+                "%.9f",
+                (double)record->worker_covered_wall_ns /
+                  (double)record->sampled_window_wall_ns);
+      } else {
+        fputs("null", file);
+      }
+      fputs(", \"wall_exclusive_estimated_ns\": ", file);
+      if (record->wall_coverage_known) {
+        fprintf(file,
+                "%llu",
+                (unsigned long long)record->wall_exclusive_estimated_ns);
+      } else {
+        fputs("null", file);
+      }
+      fprintf(file,
+              ", \"wall_exclusive_estimated_known\": %s, "
+              "\"exclusive_semantics\": ",
+              record->wall_coverage_known ? "true" : "false");
+      write_json_string(file,
+                        record->exclusive_known
+                          ? "region_wall_minus_worker_span_union"
+                          : "not_proven");
     }
     fputs(", \"bytes\": ", file);
     if (record->bytes_known) {
@@ -1110,6 +1956,7 @@ void __ncnn_profile_flush(void) {
   lock_profile();
   ++flush_count;
   local_flush_count = flush_count;
+  merge_worker_slots_locked();
   snapshot_count = record_count;
   unsigned index;
   for (index = 0; index < snapshot_count; ++index) {
@@ -1172,6 +2019,7 @@ void __ncnn_profile_flush(void) {
     environment_or_default("NCNN_PROFILE_MODEL", NCNN_PROFILE_DEFAULT_MODEL);
   const char* plan = environment_or_default("NCNN_PROFILE_PLAN_HASH",
                                             NCNN_PROFILE_DEFAULT_PLAN_HASH);
+  const char* input_hash = getenv("NCNN_PROFILE_INPUT_HASH");
   const char* build_identity = environment_or_default(
     "NCNN_PROFILE_BUILD_IDENTITY", NCNN_PROFILE_DEFAULT_BUILD_IDENTITY);
   const char* target =
@@ -1210,6 +2058,12 @@ void __ncnn_profile_flush(void) {
   fputs(",\n  \"plan_hash\": ", file);
   if (plan && *plan) {
     write_json_string(file, plan);
+  } else {
+    fputs("null", file);
+  }
+  fputs(",\n  \"input_hash\": ", file);
+  if (input_hash && *input_hash) {
+    write_json_string(file, input_hash);
   } else {
     fputs("null", file);
   }
@@ -1404,6 +2258,17 @@ void __ncnn_profile_flush(void) {
           "    \"top_level_time_known\": %s,\n",
           local_top_level_time_known ? "true" : "false");
   fprintf(file,
+          "    \"worker_sampling\": {\"duty\": %u, "
+          "\"basis\": \"instance_counter_duty\", "
+          "\"interval_overflow\": %s},\n",
+          sampling_duty,
+          interval_overflow ? "true" : "false");
+  fputs(
+    "    \"worker_wall_attribution\": {\"basis\": "
+    "\"equal_split_across_concurrent_worker_spans\", \"additive\": true, "
+    "\"time_domain\": \"wall\"},\n",
+    file);
+  fprintf(file,
           "    \"event_mismatch_count\": %llu\n",
           (unsigned long long)local_mismatch_events);
   fputs("  },\n  \"events\": [", file);
@@ -1416,6 +2281,11 @@ void __ncnn_profile_flush(void) {
             "\n    {\"id\": %llu, \"category\": ",
             (unsigned long long)record->id);
     write_json_string(file, category_name(record->category));
+    fputs(", \"time_domain\": ", file);
+    write_json_string(file,
+                      record->category == NCNN_PROFILE_WORKER_OPERATION
+                        ? "worker_cpu"
+                        : "wall");
     fprintf(file,
             ", \"calls\": %llu, \"inclusive_ns\": %llu, \"exclusive_ns\": ",
             (unsigned long long)record->calls,
@@ -1424,6 +2294,90 @@ void __ncnn_profile_flush(void) {
       fprintf(file, "%llu", (unsigned long long)record->exclusive_ns);
     } else {
       fputs("null", file);
+    }
+    if (record->category == NCNN_PROFILE_WORKER_OPERATION) {
+      fputs(", \"worker_wall_union_ns\": ", file);
+      if (record->worker_wall_union_known) {
+        fprintf(file, "%llu", (unsigned long long)record->worker_wall_union_ns);
+      } else {
+        fputs("null", file);
+      }
+      fprintf(file,
+              ", \"worker_wall_union_known\": %s",
+              record->worker_wall_union_known ? "true" : "false");
+      fputs(", \"wall_attributed_ns\": ", file);
+      if (record->worker_wall_attributed_known) {
+        fprintf(
+          file, "%llu", (unsigned long long)record->worker_wall_attributed_ns);
+      } else {
+        fputs("null", file);
+      }
+      fputs(", \"wall_attributed_estimated_ns\": ", file);
+      if (record->worker_wall_attributed_known) {
+        fprintf(file,
+                "%llu",
+                (unsigned long long)record->worker_wall_attributed_estimated_ns);
+      } else {
+        fputs("null", file);
+      }
+      fputs(", \"wall_attributed_share_of_sampled_window\": ", file);
+      if (record->worker_wall_attributed_known &&
+          attribution_window_total != 0) {
+        fprintf(file,
+                "%.9f",
+                (double)record->worker_wall_attributed_ns /
+                  (double)attribution_window_total);
+      } else {
+        fputs("null", file);
+      }
+      fprintf(file,
+              ", \"wall_attributed_known\": %s, \"calls_estimated\": %llu",
+              record->worker_wall_attributed_known ? "true" : "false",
+              (unsigned long long)(sampling_duty <= 1
+                                     ? record->calls
+                                     : record->calls * sampling_duty));
+    }
+    if (record->category == NCNN_PROFILE_PARALLEL) {
+      fprintf(file,
+              ", \"worker_covered_wall_ns\": %llu, "
+              "\"worker_covered_wall_sampled_ns\": %llu, "
+              "\"sampled_window_wall_ns\": %llu, "
+              "\"region_wall_ns\": %llu, "
+              "\"region_worker_spans\": %llu, "
+              "\"sample_scale\": %u, "
+              "\"wall_projection_factor\": %.9f",
+              (unsigned long long)record->worker_covered_wall_estimated_ns,
+              (unsigned long long)record->worker_covered_wall_ns,
+              (unsigned long long)record->sampled_window_wall_ns,
+              (unsigned long long)record->region_wall_ns,
+              (unsigned long long)record->region_worker_spans,
+              sampling_duty,
+              attribution_projection);
+      fputs(", \"wall_coverage_share\": ", file);
+      if (record->wall_coverage_known && record->sampled_window_wall_ns != 0) {
+        fprintf(file,
+                "%.9f",
+                (double)record->worker_covered_wall_ns /
+                  (double)record->sampled_window_wall_ns);
+      } else {
+        fputs("null", file);
+      }
+      fputs(", \"wall_exclusive_estimated_ns\": ", file);
+      if (record->wall_coverage_known) {
+        fprintf(file,
+                "%llu",
+                (unsigned long long)record->wall_exclusive_estimated_ns);
+      } else {
+        fputs("null", file);
+      }
+      fprintf(file,
+              ", \"wall_exclusive_estimated_known\": %s, "
+              "\"exclusive_semantics\": ",
+              record->wall_coverage_known ? "true" : "false");
+      write_json_string(file,
+                        record->exclusive_known
+                          ? "region_wall_minus_worker_span_union"
+                          : "not_proven");
     }
     fputs(", \"bytes\": ", file);
     if (record->bytes_known) {

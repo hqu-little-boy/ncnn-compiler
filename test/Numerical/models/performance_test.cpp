@@ -16,7 +16,9 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -81,6 +83,11 @@ bool sanity_check_enabled() {
   return raw == nullptr || *raw == '\0' || std::strcmp(raw, "0") == 0;
 }
 
+bool profile_on_diagnostic() {
+  const char* raw = std::getenv("NCNN_PERF_PROFILED");
+  return raw != nullptr && std::strcmp(raw, "1") == 0;
+}
+
 // 线程口径与 benchncnn 一致：物理大核数，两侧统一。首次调用时解析并生效，
 // NCNN_PERF_THREADS 配置错误直接终止进程。
 int resolved_thread_count() {
@@ -90,7 +97,10 @@ int resolved_thread_count() {
       std::cerr << value.error() << "\n";
       std::exit(1);
     }
-    apply_benchncnn_threading(*value);
+    if (auto placement = apply_benchncnn_threading(*value); !placement) {
+      std::cerr << placement.error() << "\n";
+      std::exit(1);
+    }
     return *value;
   }();
   return threads;
@@ -119,6 +129,57 @@ double default_ratio_gate(const ModelSpec& spec) {
   return 6.0;
 }
 
+TEST(PerformanceOrder, InputHashIsDeterministic) {
+  const std::array<float, 4> input{0.0F, -1.0F, 0.5F, 3.25F};
+  EXPECT_EQ(performance_input_hash(input), performance_input_hash(input));
+  const std::array<float, 4> different{0.0F, -1.0F, 0.5F, 3.5F};
+  EXPECT_NE(performance_input_hash(input), performance_input_hash(different));
+}
+
+TEST(PerformanceOrder, AlternatesWarmupsAndTimedPairs) {
+  std::vector<std::string> calls;
+  const auto ncnn = [&] {
+    calls.emplace_back("ncnn");
+    return 0;
+  };
+  const auto compiled = [&] {
+    calls.emplace_back("compiled");
+    return 0;
+  };
+  const auto result = time_counterbalanced_inference(
+    ncnn,
+    compiled,
+    TimingPolicy{.warmup_iterations = 3, .timed_iterations = 4},
+    [&] { calls.emplace_back("before_timed"); });
+
+  ASSERT_TRUE(result.has_value()) << result.error();
+  ASSERT_EQ(result->warmup_order.size(), 3U);
+  EXPECT_EQ(result->warmup_order[0], PairExecutionOrder::NcnnThenCompiled);
+  EXPECT_EQ(result->warmup_order[1], PairExecutionOrder::CompiledThenNcnn);
+  EXPECT_EQ(result->warmup_order[2], PairExecutionOrder::NcnnThenCompiled);
+  ASSERT_EQ(result->timed_order.size(), 4U);
+  EXPECT_EQ(result->timed_order[0], PairExecutionOrder::NcnnThenCompiled);
+  EXPECT_EQ(result->timed_order[1], PairExecutionOrder::CompiledThenNcnn);
+  EXPECT_EQ(result->timed_order[2], PairExecutionOrder::NcnnThenCompiled);
+  EXPECT_EQ(result->timed_order[3], PairExecutionOrder::CompiledThenNcnn);
+  EXPECT_EQ(calls,
+            (std::vector<std::string>{"ncnn",
+                                      "compiled",
+                                      "compiled",
+                                      "ncnn",
+                                      "ncnn",
+                                      "compiled",
+                                      "before_timed",
+                                      "ncnn",
+                                      "compiled",
+                                      "compiled",
+                                      "ncnn",
+                                      "ncnn",
+                                      "compiled",
+                                      "compiled",
+                                      "ncnn"}));
+}
+
 void run_model_benchmark(const ModelSpec& spec) {
   if (kUnderSanitizer) {
     GTEST_SKIP() << "performance measurements are meaningless under sanitizers";
@@ -134,11 +195,30 @@ void run_model_benchmark(const ModelSpec& spec) {
   ASSERT_TRUE(input_elements.has_value()) << input_elements.error();
   const std::vector<float> input =
     make_random_input(*input_elements, spec.seed);
+  const std::string input_hash = performance_input_hash(input);
+  const bool profile_diagnostic = profile_on_diagnostic();
+  if (profile_diagnostic) {
+#ifdef _WIN32
+    _putenv_s("NCNN_PROFILE_INPUT_HASH", input_hash.c_str());
+#else
+    ::setenv("NCNN_PROFILE_INPUT_HASH", input_hash.c_str(), 1);
+#endif
+  }
 
-  CompiledModel compiled(spec.library_path, spec.symbol);
+  std::string library_path(spec.library_path);
+  if (const char* override_dir = std::getenv("NCNN_PERF_LIBRARY_OVERRIDE_DIR");
+      override_dir != nullptr && *override_dir != '\0') {
+    const std::filesystem::path override_library =
+      std::filesystem::path(override_dir) /
+      ("lib" + std::string(spec.name) + ".so");
+    ASSERT_TRUE(std::filesystem::is_regular_file(override_library))
+      << "profile override library is missing: " << override_library;
+    library_path = override_library.string();
+  }
+  CompiledModel compiled(library_path, spec.symbol);
   ASSERT_TRUE(compiled.valid()) << compiled.error();
   const std::filesystem::path plan_path =
-    std::filesystem::path(spec.library_path).parent_path() /
+    std::filesystem::path(library_path).parent_path() /
     (std::string(spec.name) + ".plan.json");
   auto performance_identity = read_performance_identity(plan_path.string());
   ASSERT_TRUE(performance_identity.has_value()) << performance_identity.error();
@@ -213,31 +293,34 @@ void run_model_benchmark(const ModelSpec& spec) {
     }
   }
 
-  PairBenchmarkResult result;
-  const auto ncnn_stats =
-    time_repeated_inference(reference_inference, *policy, [&] {
+  auto paired_stats = time_counterbalanced_inference(
+    reference_inference, compiled_inference, *policy, [&] {
       if (*mode == PerformanceMode::AllocationAudit) {
         prepared_runner->reset_allocation_audit();
       }
     });
-  ASSERT_TRUE(ncnn_stats.has_value()) << ncnn_stats.error();
-  result.ncnn = *ncnn_stats;
+  ASSERT_TRUE(paired_stats.has_value()) << paired_stats.error();
+  PairBenchmarkResult result = std::move(*paired_stats);
   if (*mode == PerformanceMode::AllocationAudit) {
     result.ncnn_allocation = prepared_runner->allocation_audit();
   }
-  const auto compiled_stats =
-    time_repeated_inference(compiled_inference, *policy);
-  ASSERT_TRUE(compiled_stats.has_value()) << compiled_stats.error();
-  result.compiled = *compiled_stats;
-  result.ratio = result.ncnn.mean_ms > 0.0
-                   ? result.compiled.mean_ms / result.ncnn.mean_ms
-                   : 0.0;
 
   PerformanceMetadata metadata = make_performance_metadata(*mode);
   metadata.target = performance_identity->target;
+  metadata.input_seed = spec.seed;
+  metadata.input_hash = input_hash;
+  if (profile_diagnostic) {
+    metadata.status = "diagnostic";
+    metadata.gate_eligible = false;
+    metadata.reason = "profile-on instrumentation; not formal performance data";
+  }
   metadata.plan_revision = performance_identity->plan_revision;
   metadata.plan_hash = performance_identity->plan_hash;
   metadata.build_identity = performance_identity->build_identity;
+  metadata.cpu_placement = verify_benchmark_cpu_placement();
+  if (!metadata.cpu_placement.verified) {
+    metadata.gate_eligible = false;
+  }
   emit_performance_report(spec.name, threads, *policy, result, metadata);
   const auto json_result = append_performance_json_record(
     spec.name, threads, *policy, result, metadata);

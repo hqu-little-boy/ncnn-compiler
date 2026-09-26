@@ -24,6 +24,7 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Location.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 
@@ -160,6 +161,98 @@ std::uint64_t profileId(StringRef operationId) {
     result *= 1099511628211ULL;
   }
   return result;
+}
+
+// NCNN source-layer provenance recovered for one operation.  The importer
+// (ImportContext::tag_source) mirrors ncnn.name / ncnn.source_layer into the
+// operation location, because locations survive dialect conversion while
+// unknown attributes do not.  The carrier encoding is:
+//
+//   NameLoc(layer_name, FileLineColLoc("ncnn-layer", layer_index, 0))
+//   e.g. loc("conv7"("ncnn-layer":7:0))
+//
+// where the reserved filename "ncnn-layer" marks the carrier, line is the
+// layer index and column is unused (always 0).  The attributes stay as the
+// fallback for operations whose location was not carried.
+struct SourceProvenance {
+  std::optional<std::int64_t> layer;
+  std::optional<std::string> name;
+
+  bool hasValue() const { return layer.has_value() || name.has_value(); }
+  bool operator==(const SourceProvenance& other) const = default;
+};
+
+struct RecoveredSource final {
+  SourceProvenance provenance;
+  // True when a parallel worker site had to give up: the provenance-bearing
+  // operations inside its region disagree, so nothing is inherited.
+  bool ambiguous = false;
+};
+
+constexpr StringRef kSourceProvenanceFilename = "ncnn-layer";
+
+SourceProvenance sourceProvenanceFromLocation(Location location) {
+  SourceProvenance provenance;
+  auto named = dyn_cast<NameLoc>(location);
+  if (!named) {
+    return provenance;
+  }
+  auto file = dyn_cast<FileLineColLoc>(named.getChildLoc());
+  if (!file || file.getFilename().getValue() != kSourceProvenanceFilename) {
+    return provenance;
+  }
+  provenance.layer = static_cast<std::int64_t>(file.getLine());
+  if (StringRef layerName = named.getName().getValue(); !layerName.empty()) {
+    provenance.name = layerName.str();
+  }
+  return provenance;
+}
+
+// Location carrier first, then the legacy attributes as the fallback.
+SourceProvenance ownSourceProvenance(Operation* operation) {
+  SourceProvenance provenance =
+    sourceProvenanceFromLocation(operation->getLoc());
+  if (!provenance.layer) {
+    if (auto source =
+          operation->getAttrOfType<IntegerAttr>("ncnn.source_layer")) {
+      provenance.layer = source.getInt();
+    }
+  }
+  if (!provenance.name) {
+    if (auto name = operation->getAttrOfType<StringAttr>("ncnn.name")) {
+      provenance.name = name.getValue().str();
+    }
+  }
+  return provenance;
+}
+
+// Direct children of scf.forall / scf.parallel / omp.parallel are the
+// operation sites InstrumentNCNNProfile times as parallel workers (see
+// isDirectParallelWorkerCandidate).  They are typically generated loops that
+// carry no provenance of their own.
+bool isParallelWorkerSite(Operation* operation) {
+  Operation* parent = operation->getParentOp();
+  return parent && isa<scf::ForallOp, scf::ParallelOp, omp::ParallelOp>(parent);
+}
+
+// Distinct (layer, name) pairs carried by operations inside `operation`'s
+// regions.  Only own provenance is considered so the result never depends on
+// visit order or on nested inheritance.
+void collectRegionSourceProvenance(
+  Operation* operation, llvm::SmallVectorImpl<SourceProvenance>& distinct) {
+  operation->walk([&](Operation* nested) {
+    if (nested == operation) {
+      return;
+    }
+    SourceProvenance provenance = ownSourceProvenance(nested);
+    if (!provenance.hasValue()) {
+      return;
+    }
+    if (std::find(distinct.begin(), distinct.end(), provenance) ==
+        distinct.end()) {
+      distinct.push_back(std::move(provenance));
+    }
+  });
 }
 
 // Audit only the INT8 kernel contracts visible at this pass boundary. In
@@ -403,6 +496,28 @@ class EmitModelPlanPass final
       }
     };
 
+    // Recover NCNN source-layer provenance for every operation: the location
+    // carrier first, the attributes as the fallback.  A parallel worker site
+    // without provenance of its own inherits (source_layer, source_name) from
+    // the operations inside its region, but only when they all agree;
+    // disagreement is reported as a plan diagnostic and never guessed.
+    auto recoverSource = [&](Operation* operation) {
+      RecoveredSource recovered;
+      recovered.provenance = ownSourceProvenance(operation);
+      if (recovered.provenance.hasValue() || !isParallelWorkerSite(operation)) {
+        return recovered;
+      }
+      SmallVector<SourceProvenance> distinct;
+      collectRegionSourceProvenance(operation, distinct);
+      if (distinct.size() == 1) {
+        recovered.provenance = std::move(distinct.front());
+      } else if (distinct.size() > 1) {
+        add_unknown("worker_site_source_ambiguous");
+        recovered.ambiguous = true;
+      }
+      return recovered;
+    };
+
     const auto module_attention_records =
       module->getAttrOfType<ArrayAttr>(contract::kAttentionSegments);
     const std::string attention_revision =
@@ -548,7 +663,7 @@ class EmitModelPlanPass final
       "|matmul-i8-rows=" + std::to_string(matmulI8Rows.getValue()) +
       "|matmul-i8-acc-columns=" + std::to_string(matmulI8AccColumns.getValue());
 
-    constexpr StringLiteral attribution_revision = "attribution-v2";
+    constexpr StringLiteral attribution_revision = "attribution-v4";
     std::string plan_hash_input =
       "static-v1|layout-kernel-v1|workspace-slot-v1|fusion-v2|copy-v1|"
       "conv-depthwise-v1|packed-gemm-v1|" +
@@ -920,6 +1035,8 @@ class EmitModelPlanPass final
       function.walk([&](Operation* operation) {
         const std::string kind = operationKind(*operation);
         const std::string& operation_id = operation_ids[operation];
+        const RecoveredSource recovered = recoverSource(operation);
+        const SourceProvenance& source = recovered.provenance;
         plan_hash_input += "|" + operation_id + "|" + kind;
         for (Value operand : operation->getOperands()) {
           plan_hash_input += "|" + printType(operand.getType());
@@ -950,12 +1067,13 @@ class EmitModelPlanPass final
             }
           }
         }
-        if (auto source =
-              operation->getAttrOfType<IntegerAttr>("ncnn.source_layer")) {
-          plan_hash_input += "|source-layer=" + std::to_string(source.getInt());
+        // Fold the recovered provenance into the plan hash so the build
+        // identity covers exactly the source fields the plan reports.
+        if (source.layer) {
+          plan_hash_input += "|source-layer=" + std::to_string(*source.layer);
         }
-        if (auto name = operation->getAttrOfType<StringAttr>("ncnn.name")) {
-          plan_hash_input += "|source-name=" + name.getValue().str();
+        if (source.name) {
+          plan_hash_input += "|source-name=" + *source.name;
         }
 
         // Copy events are serialized from the module-level ledger below.  The
@@ -1111,14 +1229,13 @@ class EmitModelPlanPass final
           familyEntry["operation"] = kind;
           familyEntry["function"] = function_name;
           familyEntry["family"] = familyName;
-          if (auto source =
-                operation->getAttrOfType<IntegerAttr>("ncnn.source_layer")) {
-            familyEntry["source_layer"] = source.getInt();
+          if (source.layer) {
+            familyEntry["source_layer"] = *source.layer;
           } else {
             familyEntry["source_layer"] = nullptr;
           }
-          if (auto name = operation->getAttrOfType<StringAttr>("ncnn.name")) {
-            familyEntry["source_name"] = name.getValue().str();
+          if (source.name) {
+            familyEntry["source_name"] = *source.name;
           } else {
             familyEntry["source_name"] = nullptr;
           }
@@ -1234,25 +1351,30 @@ class EmitModelPlanPass final
         JsonObject operation_object;
         operation_object["id"] = operation_id;
         operation_object["profile_id"] = operation_profile_ids.at(operation);
-        if (auto source =
-              operation->getAttrOfType<IntegerAttr>("ncnn.source_layer")) {
-          operation_object["source_layer"] = source.getInt();
+        if (source.layer) {
+          operation_object["source_layer"] = *source.layer;
+        } else if (recovered.ambiguous) {
+          // A worker site whose region disagreed reports an explicit null so
+          // the plan distinguishes "conflicting provenance" (see
+          // diagnostics.unknown_fields: worker_site_source_ambiguous) from
+          // "no provenance recorded".
+          operation_object["source_layer"] = nullptr;
         }
-        if (auto name = operation->getAttrOfType<StringAttr>("ncnn.name")) {
-          operation_object["source_name"] = name.getValue().str();
+        if (source.name) {
+          operation_object["source_name"] = *source.name;
+        } else if (recovered.ambiguous) {
+          operation_object["source_name"] = nullptr;
         }
-        if (operation->hasAttr("ncnn.source_layer") ||
-            operation->hasAttr("ncnn.name")) {
-          JsonObject source;
-          source["operation"] = operation_id;
-          if (auto layer =
-                operation->getAttrOfType<IntegerAttr>("ncnn.source_layer")) {
-            source["layer"] = layer.getInt();
+        if (source.hasValue()) {
+          JsonObject source_entry;
+          source_entry["operation"] = operation_id;
+          if (source.layer) {
+            source_entry["layer"] = *source.layer;
           }
-          if (auto name = operation->getAttrOfType<StringAttr>("ncnn.name")) {
-            source["name"] = name.getValue().str();
+          if (source.name) {
+            source_entry["name"] = *source.name;
           }
-          provenance.push_back(std::move(source));
+          provenance.push_back(std::move(source_entry));
         }
         operation_object["function"] = function_name;
         operation_object["kind"] = kind;
@@ -1844,11 +1966,11 @@ class EmitModelPlanPass final
     root["plan_revision"] =
       "static-v1|workspace-slot-v1|fusion-v2|copy-v1|attention-segment-v1|"
       "conv-depthwise-v1|packed-gemm-v1|layout-island-v1|int8-target-v1|"
-      "tuning-v1|attribution-v2";
+      "tuning-v1|attribution-v4";
     root["contract_revision"] =
       "layout-kernel-v1|workspace-slot-v1|fusion-v2|copy-v1|"
       "attention-segment-v1|conv-depthwise-v1|packed-gemm-v1|"
-      "layout-island-v1|int8-target-v1|tuning-v1|attribution-v2";
+      "layout-island-v1|int8-target-v1|tuning-v1|attribution-v4";
     root["attribution_revision"] = attribution_revision.str();
     root["plan_hash"] = plan_hash;
     // This identity is deliberately derived from the complete plan/codegen

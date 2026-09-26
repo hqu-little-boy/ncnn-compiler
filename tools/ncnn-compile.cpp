@@ -2720,6 +2720,7 @@ int main(int argc, char** argv) {
   }
   if (int status = run({opt_path,
                         "--ncnn-to-tosa-pipeline",
+                        "--mlir-print-debuginfo",
                         ncnn_ir.string(),
                         "-o",
                         tosa_ir.string()})) {
@@ -2748,6 +2749,7 @@ int main(int argc, char** argv) {
   }
   if (int status = run({opt_path,
                         tosa_linalg_pipeline_option,
+                        "--mlir-print-debuginfo",
                         tosa_ir.string(),
                         "-o",
                         linalg_ir.string()})) {
@@ -2830,7 +2832,7 @@ int main(int argc, char** argv) {
   }
   std::string execution_plan_hash;
   std::string execution_plan_revision;
-  std::string execution_attribution_revision = "attribution-v2";
+  std::string execution_attribution_revision = "attribution-v4";
   if (g_profile) {
     auto hash = read_execution_plan_field(execution_plan_path, "plan_hash");
     if (!hash) {
@@ -3104,7 +3106,8 @@ int main(int argc, char** argv) {
                                                 "memset",
                                                 "powf",
                                                 "tanhf"};
-  const std::set<std::string> profile_allowed = {"clock_gettime",
+  const std::set<std::string> profile_allowed = {"calloc",
+                                                 "clock_gettime",
                                                  "fclose",
                                                  "fopen",
                                                  "fputc",
@@ -3113,7 +3116,9 @@ int main(int argc, char** argv) {
                                                  "fflush",
                                                  "fwrite",
                                                  "getenv",
+                                                 "memmove",
                                                  "open_memstream",
+                                                 "realloc",
                                                  "__tls_get_addr"};
   const auto is_allowed_undefined = [&](const std::string& symbol) {
     // SLEEF 静态档案的分发器运行需要这两个 libc 例程（计时与对齐分配）。

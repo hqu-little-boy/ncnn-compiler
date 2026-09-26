@@ -18,6 +18,7 @@ namespace ncnn_compiler::test {
 // benchncnn 约定的线程口径：物理大核数，参考侧与编译产物侧必须一致才公平。
 // 环境变量 NCNN_PERF_THREADS 可覆盖；非数字值返回错误（配置错误要响亮失败）。
 [[nodiscard]] std::expected<int, std::string> resolve_benchmark_thread_count();
+[[nodiscard]] std::string performance_input_hash(std::span<const float> input);
 
 // 按 vendored ncnn benchmark/benchncnn.cpp 的惯例配置线程：
 // set_cpu_powersave(2)、set_omp_dynamic(0)、set_omp_num_threads(n)，并设置
@@ -25,7 +26,17 @@ namespace ncnn_compiler::test {
 // libomp）在进程内是两个独立 OpenMP 运行时：ncnn 侧的线程数经其自带的
 // set_omp_num_threads 生效，dlopen 加载的 libomp 在初始化时读取
 // OMP_NUM_THREADS——两条路径缺一不可。必须在任何计时之前调用。
-void apply_benchncnn_threading(int threads);
+struct BenchmarkCpuPlacement final {
+  std::string effective_cpu_list;
+  std::string status = "unverified";
+  int observed_task_count = 0;
+  int tasks_matching_mask = 0;
+  bool verified = false;
+};
+
+[[nodiscard]] std::expected<void, std::string> apply_benchncnn_threading(
+  int threads);
+[[nodiscard]] BenchmarkCpuPlacement verify_benchmark_cpu_placement();
 
 struct TimingPolicy final {
   int warmup_iterations = 0;
@@ -58,6 +69,9 @@ struct PerformanceMetadata final {
   std::string_view runtime_counters = "not_collected";
   std::string_view reason;
   std::string target;
+  std::uint32_t input_seed = 0;
+  std::string input_hash;
+  BenchmarkCpuPlacement cpu_placement;
   std::string plan_revision = "static-v1";
   std::string plan_hash;
   std::string build_identity;
@@ -161,12 +175,30 @@ class NcnnPreparedBenchRunner final {
   Impl* impl_;
 };
 
+enum class PairExecutionOrder {
+  NcnnThenCompiled,
+  CompiledThenNcnn,
+};
+
 struct PairBenchmarkResult final {
   TimingStats ncnn;
   TimingStats compiled;
   double ratio = 0.0;  // compiled.mean_ms / ncnn.mean_ms
   std::optional<AllocationAuditStats> ncnn_allocation;
+  // One entry per paired warmup/timed iteration, preserving actual execution
+  // order.
+  std::vector<PairExecutionOrder> warmup_order;
+  std::vector<PairExecutionOrder> timed_order;
 };
+
+// Run paired warmups and samples in alternating order so neither implementation
+// consistently receives the earlier (or later) position within a
+// PerformanceModel.
+[[nodiscard]] std::expected<PairBenchmarkResult, std::string>
+time_counterbalanced_inference(const std::function<int()>& ncnn_inference,
+                               const std::function<int()>& compiled_inference,
+                               const TimingPolicy& policy,
+                               const std::function<void()>& before_timed = {});
 
 // 固定格式单行报告，机器可 grep：
 // PERF model=<name> threads=<n> warmup=<w> iters=<it>

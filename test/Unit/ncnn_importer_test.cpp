@@ -17,6 +17,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNDialect.hpp"
@@ -363,6 +364,39 @@ class NcnnImporterTest : public ::testing::Test {
 };
 
 }  // namespace
+
+TEST_F(NcnnImporterTest, TagsSourceIdentityIntoLocationCarrier) {
+  auto imported = import(make_supported_graph());
+  ASSERT_TRUE(imported.has_value()) << imported.error().to_string();
+  int checked = 0;
+  imported->get()->walk([&](mlir::Operation* operation) {
+    auto name = operation->getAttrOfType<mlir::StringAttr>("ncnn.name");
+    auto layer =
+      operation->getAttrOfType<mlir::IntegerAttr>("ncnn.source_layer");
+    if (!name || !layer) {
+      return;
+    }
+    // Carrier encoding written by ImportContext::tag_source:
+    //   NameLoc(layer_name, FileLineColLoc("ncnn-layer", layer_index, 0))
+    auto named = mlir::dyn_cast<mlir::NameLoc>(operation->getLoc());
+    EXPECT_TRUE(named) << "missing NameLoc carrier on "
+                       << operation->getName().getStringRef().str();
+    if (!named) {
+      return;
+    }
+    EXPECT_EQ(named.getName(), name);
+    auto file = mlir::dyn_cast<mlir::FileLineColLoc>(named.getChildLoc());
+    EXPECT_TRUE(file);
+    if (!file) {
+      return;
+    }
+    EXPECT_EQ(file.getFilename().getValue().str(), "ncnn-layer");
+    EXPECT_EQ(static_cast<std::int64_t>(file.getLine()), layer.getInt());
+    EXPECT_EQ(file.getColumn(), 0U);
+    ++checked;
+  });
+  EXPECT_GT(checked, 0);
+}
 
 TEST_F(NcnnImporterTest, ImportsDynamicInputShapeOverride) {
   ncnn_graph::Graph graph;
