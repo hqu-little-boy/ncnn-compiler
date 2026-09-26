@@ -20,6 +20,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/StableHash.hpp"
 
 namespace mlir::ncnn {
 
@@ -61,15 +62,6 @@ struct MaterializedEvent {
   std::int64_t bytes;
   std::int64_t expectedReaders;
 };
-
-std::uint64_t fnv1a(StringRef value) {
-  std::uint64_t result = 14695981039346656037ULL;
-  for (unsigned char character : value.bytes()) {
-    result ^= character;
-    result *= 1099511628211ULL;
-  }
-  return result;
-}
 
 func::FuncOp declare(IRRewriter& rewriter,
                      ModuleOp module,
@@ -197,9 +189,9 @@ bool isWholeBufferView(Operation& operation) {
   ArrayRef<int64_t> offsets = subview.getStaticOffsets();
   ArrayRef<int64_t> sizes = subview.getStaticSizes();
   ArrayRef<int64_t> strides = subview.getStaticStrides();
-  if (offsets.size() != sourceType.getRank() ||
-      sizes.size() != sourceType.getRank() ||
-      strides.size() != sourceType.getRank()) {
+  if (static_cast<std::int64_t>(offsets.size()) != sourceType.getRank() ||
+      static_cast<std::int64_t>(sizes.size()) != sourceType.getRank() ||
+      static_cast<std::int64_t>(strides.size()) != sourceType.getRank()) {
     return false;
   }
   for (int64_t dimension = 0; dimension < sourceType.getRank(); ++dimension) {
@@ -409,7 +401,7 @@ class InstrumentNCNNMaterializedSitesPass final
           sites.push_back(Site{
             .writer = writerOp,
             .reader = reader.getOperation(),
-            .id = fnv1a(siteName),
+            .id = ncnn_mlir::stableHash64(siteName),
             .bytes = bytes,
           });
         }
@@ -500,7 +492,8 @@ class InstrumentNCNNProfilePass final
         operation_ids.emplace(
           operation,
           fusionProfileId ? static_cast<std::uint64_t>(fusionProfileId.getInt())
-                          : fnv1a(ordinal_key + "#" + std::to_string(ordinal)));
+                          : ncnn_mlir::stableHash64(ordinal_key + "#" +
+                                                    std::to_string(ordinal)));
       });
 
       std::map<Operation*, SmallVector<Operation*>> producers;

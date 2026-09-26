@@ -20,6 +20,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "ncnn-mlir/Support/KernelContract.hpp"
+#include "ncnn-mlir/Support/StableHash.hpp"
 
 namespace mlir::ncnn {
 
@@ -437,12 +438,9 @@ int64_t fusionProfileId(StringRef functionName,
                         StringRef suffix = {}) {
   const std::string key = functionName.str() + "/fusion-site#" +
                           std::to_string(ordinal) + suffix.str();
-  uint64_t hash = 14695981039346656037ULL;
-  for (unsigned char character : key) {
-    hash ^= character;
-    hash *= 1099511628211ULL;
-  }
-  return static_cast<int64_t>(hash & 0x7fffffffffffffffULL);
+  // The result is stored in a signed i64 attribute, so keep it non-negative.
+  return static_cast<int64_t>(ncnn_mlir::stableHash64(key) &
+                              0x7fffffffffffffffULL);
 }
 
 linalg::GenericOp cloneEpilogue(RewriterBase& rewriter,

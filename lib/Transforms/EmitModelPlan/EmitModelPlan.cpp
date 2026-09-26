@@ -28,6 +28,7 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 #include "ncnn-mlir/Support/ModelLedger.hpp"
+#include "ncnn-mlir/Support/StableHash.hpp"
 
 namespace mlir::ncnn {
 
@@ -154,15 +155,8 @@ bool isViewLike(Operation& operation) {
              memref::AssumeAlignmentOp>(operation);
 }
 
-std::uint64_t profileId(StringRef operationId) {
-  // FNV-1a is deterministic across processes and does not expose addresses.
-  std::uint64_t result = 14695981039346656037ULL;
-  for (unsigned char character : operationId.bytes()) {
-    result ^= character;
-    result *= 1099511628211ULL;
-  }
-  return result;
-}
+// Site ids and plan_hash must hash exactly like the profile runtime's event
+// ids, so they all go through Support/StableHash.hpp rather than a local copy.
 
 // NCNN source-layer provenance recovered for one operation.  The importer
 // (ImportContext::tag_source) mirrors ncnn.name / ncnn.source_layer into the
@@ -849,7 +843,7 @@ void PlanCollector::initPlanHash() {
     tuning_hash_input + "|" + attention_hash_input;
 }
 
-void PlanCollector::collectFusionRecords(ModuleOp module) {
+void PlanCollector::collectFusionRecords([[maybe_unused]] ModuleOp module) {
   if (module_fusion_records) {
     std::int64_t recordOrdinal = 0;
     for (Attribute attribute : module_fusion_records) {
@@ -934,7 +928,7 @@ void PlanCollector::collectFunction(func::FuncOp function) {
     operation_profile_ids.emplace(
       operation,
       fusionProfileId ? static_cast<std::uint64_t>(fusionProfileId.getInt())
-                      : profileId(operation_id));
+                      : ncnn_mlir::stableHash64(operation_id));
     operation_positions.emplace(operation, operation_position++);
   });
 
@@ -1016,7 +1010,7 @@ void PlanCollector::collectStaticLiveness() {
 
     JsonObject lifetime_object;
     lifetime_object["id"] = lifetime.id;
-    lifetime_object["profile_id"] = profileId(lifetime.id);
+    lifetime_object["profile_id"] = ncnn_mlir::stableHash64(lifetime.id);
     if (lifetime.bytes) {
       lifetime_object["bytes"] = *lifetime.bytes;
     } else {
@@ -1560,7 +1554,7 @@ void PlanCollector::collectMemoryOperations(Operation* operation,
     buffer["function"] = function_name;
     buffer["ownership"] = "internal";
     buffer["type"] = printType(alloc.getType());
-    buffer["profile_id"] = profileId(operation_id);
+    buffer["profile_id"] = ncnn_mlir::stableHash64(operation_id);
     add_size_fields(buffer, alloc.getType());
     const ByteSize size = checkedByteSize(alloc.getType());
     buffer["bytes_known"] = size.bytes.has_value();
@@ -1776,7 +1770,7 @@ void PlanCollector::collectOperation(Operation* operation,
 }
 
 
-void PlanCollector::collectCopyRecords(ModuleOp module) {
+void PlanCollector::collectCopyRecords([[maybe_unused]] ModuleOp module) {
   if (module_copy_records) {
     std::int64_t recordOrdinal = 0;
     for (Attribute attribute : module_copy_records) {
@@ -2161,7 +2155,8 @@ JsonObject PlanCollector::assembleRoot(JsonObject summary) {
   tuning["matmul_i8_acc_columns"] = matmulI8AccColumns;
   JsonObject target = collectTargetSection();
   JsonObject diagnostics = collectDiagnostics();
-  const std::string plan_hash = std::to_string(profileId(plan_hash_input));
+  const std::string plan_hash =
+    std::to_string(ncnn_mlir::stableHash64(plan_hash_input));
   JsonObject root;
   root["schema_version"] = 1;
   root["plan_revision"] =
@@ -2200,7 +2195,7 @@ JsonObject PlanCollector::assembleRoot(JsonObject summary) {
   root["provenance"] = std::move(provenance);
   root["summary"] = std::move(summary);
   root["diagnostics"] = std::move(diagnostics);
-  return std::move(root);
+  return root;
 }
 
 LogicalResult PlanCollector::writePlan(ModuleOp module,

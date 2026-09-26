@@ -8,6 +8,7 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -143,19 +144,12 @@ void annotateConvContract(Operation* operation,
 }
 
 std::optional<ConvStrategy> parseStrategy(StringRef strategy) {
-  if (strategy == "auto") {
-    return ConvStrategy::Auto;
-  }
-  if (strategy == "gemm") {
-    return ConvStrategy::Gemm;
-  }
-  if (strategy == "conv") {
-    return ConvStrategy::Conv;
-  }
-  if (strategy == "winograd") {
-    return ConvStrategy::Winograd;
-  }
-  return std::nullopt;
+  return llvm::StringSwitch<std::optional<ConvStrategy>>(strategy)
+    .Case("auto", ConvStrategy::Auto)
+    .Case("gemm", ConvStrategy::Gemm)
+    .Case("conv", ConvStrategy::Conv)
+    .Case("winograd", ConvStrategy::Winograd)
+    .Default(std::nullopt);
 }
 
 // Winograd F(6,3)（P7）：ncnn conv3x3s1_winograd63 的编译期化。3×3 s1

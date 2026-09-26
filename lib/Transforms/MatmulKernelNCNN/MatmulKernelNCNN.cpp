@@ -1,6 +1,7 @@
 #include "ncnn-mlir/Transforms/MatmulKernelNCNN/MatmulKernelNCNN.hpp"
 
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -77,12 +78,17 @@ class MatmulKernelNCNNPass final
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
-    if ((int8Kernel != "portable" && int8Kernel != "auto" &&
-         int8Kernel != "vnni") ||
-        (int8Target != "portable" && int8Target != "avx-vnni" &&
-         int8Target != "avx-vnni-int8" && int8Target != "avx512-vnni") ||
-        (int8Kernel == "vnni" &&
-         (int8Target == "portable" || int8Target == "avx-vnni-int8"))) {
+    const bool kernelAllowed = llvm::StringSwitch<bool>(int8Kernel)
+                                 .Cases("portable", "auto", "vnni", true)
+                                 .Default(false);
+    const bool targetAllowed =
+      llvm::StringSwitch<bool>(int8Target)
+        .Cases("portable", "avx-vnni", "avx-vnni-int8", "avx512-vnni", true)
+        .Default(false);
+    const bool vnniTargetAllowed =
+      int8Kernel != "vnni" ||
+      (int8Target != "portable" && int8Target != "avx-vnni-int8");
+    if (!kernelAllowed || !targetAllowed || !vnniTargetAllowed) {
       module.emitError("invalid INT8 policy or unavailable VNNI target");
       signalPassFailure();
       return;

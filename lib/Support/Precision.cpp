@@ -5,9 +5,11 @@
 #include <expected>
 #include <format>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 
+#include "llvm/ADT/StringSwitch.h"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace ncnn_mlir {
@@ -68,23 +70,21 @@ std::string target_description(const TargetSpec& target) {
 
 std::expected<PrecisionMode, std::string> parse_precision_mode(
   std::string_view value) {
-  if (value == "auto") {
-    return PrecisionMode::Auto;
+  const std::optional<PrecisionMode> mode =
+    llvm::StringSwitch<std::optional<PrecisionMode>>(
+      llvm::StringRef(value.data(), value.size()))
+      .Case("auto", PrecisionMode::Auto)
+      .Cases("f32", "fp32", PrecisionMode::Float32)
+      .Cases("f16", "fp16", PrecisionMode::Float16)
+      .Case("bf16", PrecisionMode::BFloat16)
+      .Cases("i8", "int8", PrecisionMode::Int8)
+      .Default(std::nullopt);
+  if (!mode) {
+    return std::unexpected(std::format(
+      "invalid precision '{}'; expected auto, f32, fp16, bf16, or int8",
+      value));
   }
-  if (value == "f32" || value == "fp32") {
-    return PrecisionMode::Float32;
-  }
-  if (value == "f16" || value == "fp16") {
-    return PrecisionMode::Float16;
-  }
-  if (value == "bf16") {
-    return PrecisionMode::BFloat16;
-  }
-  if (value == "i8" || value == "int8") {
-    return PrecisionMode::Int8;
-  }
-  return std::unexpected(std::format(
-    "invalid precision '{}'; expected auto, f32, fp16, bf16, or int8", value));
+  return *mode;
 }
 
 std::string_view precision_mode_name(PrecisionMode mode) noexcept {
@@ -105,14 +105,17 @@ std::string_view precision_mode_name(PrecisionMode mode) noexcept {
 
 std::expected<FP16AccumulatorMode, std::string> parse_fp16_accumulator_mode(
   std::string_view value) {
-  if (value == "f16" || value == "fp16") {
-    return FP16AccumulatorMode::Float16;
+  const std::optional<FP16AccumulatorMode> mode =
+    llvm::StringSwitch<std::optional<FP16AccumulatorMode>>(
+      llvm::StringRef(value.data(), value.size()))
+      .Cases("f16", "fp16", FP16AccumulatorMode::Float16)
+      .Cases("f32", "fp32", FP16AccumulatorMode::Float32)
+      .Default(std::nullopt);
+  if (!mode) {
+    return std::unexpected(
+      std::format("invalid FP16 accumulator '{}'; expected f16 or f32", value));
   }
-  if (value == "f32" || value == "fp32") {
-    return FP16AccumulatorMode::Float32;
-  }
-  return std::unexpected(
-    std::format("invalid FP16 accumulator '{}'; expected f16 or f32", value));
+  return *mode;
 }
 
 std::string_view fp16_accumulator_mode_name(FP16AccumulatorMode mode) noexcept {

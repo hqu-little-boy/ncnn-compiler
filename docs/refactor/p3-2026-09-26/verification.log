@@ -1,0 +1,201 @@
+P3 门禁与对照记录（2026-09-26）
+================================================================
+阶段：P3 = T-A1 + T-A3 + T-S5（T-A2 不做）
+分支：p8-implementation
+门禁跑了两次：#1 在 T-A1/T-A3 之后（identity 稳定窗口），#2 在 T-S5 之后。
+完整原始输出见 /tmp/p3-gate1.log、/tmp/p3-gate2.log（未入库；关键行抄录如下）。
+
+
+## 1. clang-format（全局）
+
+    $ cmake --build <stage> --target format --parallel
+    Reformatting code with clang-format (Google)
+    Built target format
+
+    $ cmake --build <stage> --target format_check --parallel
+    Checking code style with clang-format (Google)
+    Built target format_check
+
+覆盖 lib/ include/ bin/ tools/ test/ 全部 *.cpp/*.c/*.h/*.hpp
+（排除 *build* / third_party / generated）。两次门禁各跑一次，均通过。
+非本次改动的文件也纳入同一检查。
+
+
+## 2. clang-tidy（全局，94 个 first-party TU）
+
+门禁 #1（T-A1/T-A3 后）：
+    34148 warnings generated.
+    Suppressed 34148 warnings (34148 in non-user code).
+    Built target tidy          → exit 0
+
+门禁 #2（T-S5 后）：
+    [94/94][27.4s] ...
+    38899 warnings generated.
+    Suppressed 38899 warnings (37597 in non-user code, 1302 with check filters).
+    Built target tidy          → exit 0
+
+**未抑制的项目代码 warning / error：0**。
+Checks: google-* / modernize-* / readability-*（readability-function-size 已关），
+WarningsAsErrors: '*'。
+
+
+## 3. 构建（全新 /tmp stage）
+
+门禁 #1：/tmp/ncnn-compiler-stage-refactor-p3
+门禁 #2：/tmp/ncnn-compiler-stage-refactor-p3-final
+
+    cmake -S compiler -B <stage> \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+      -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+      -DCOMPILER_INSTALL_RPATH=ON \
+      -DBUILD_TESTING=ON
+    cmake --build <stage> --parallel
+
+两次均配置成功、构建 0 错误、0 项目代码告警。
+
+存量编译告警已按 policy §7 顺带修复（详见 task-diffs.md 末节）：
+PackStaticMatmulNCNN 的 unused-but-set、EmitModelPlan 的 pessimizing-move 与
+2 个 unused parameter、InstrumentNCNNProfile 的 3 处 sign-compare、
+NCNNToTosa 的 gcc std::optional 三元误报。修完后项目代码编译告警归零。
+
+
+## 4. 三个 numerical target
+
+    cmake --build <stage> --target \
+      numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests \
+      --parallel
+
+两次均成功（显式 build，ctest 不重建夹具）。
+
+
+## 5. 全量 CTest
+
+门禁 #1：
+    100% tests passed, 0 tests failed out of 456
+    Total Test time (real) = 763.49 sec
+
+门禁 #2：
+    100% tests passed, 0 tests failed out of 456
+    Total Test time (real) = 741.44 sec
+
+两次都是 456/456，与 P2 收尾基线（456 全绿）一致。
+
+两个既有 upstream INT8 参考崩溃 skip，原样披露（与 P1/P2 基线相同）：
+    435 - PerformanceModel.PPLCNetDocOriInt8 (Skipped)
+    436 - PerformanceModel.PPLCNetTextlineOriInt8 (Skipped)
+
+标签分布（门禁 #2）：
+    numerical-dynamic         = 331.81 sec*proc (116 tests)
+    performance               = 335.84 sec*proc (55 tests)
+    numerical-static-baseline =  41.75 sec*proc (201 tests)
+    native / integration      =  28.46 sec*proc (6 tests)
+    tooling                   =   1.45 sec*proc (7 tests)
+
+
+## 6. 逐字节对照（T-A1/T-A3 零行为变化的直接证据）
+
+采证脚本：docs/refactor/p3-2026-09-26/emit-plans.sh
+模型清单：P2 的 9 模型 + resnet18_winograd（覆盖 --conv-strategy 分派，
+T-A1 改了 parseStrategy）：
+
+    squeezenet_v1_1              静态
+    resnet18                     静态
+    resnet18_winograd            静态 + CONV_STRATEGY=winograd
+    chineseocr_lite_anglenet     静态
+    yolov5n                      静态
+    yolov5x_seg                  静态（大常量）
+    pp_ocrv6_tiny_rec            静态
+    pp_ocrv6_tiny_det            静态
+    pp_ocrv6_tiny_rec_dynamic    动态维 + 约束（覆盖 finalizeDynamicRankABI）
+    pp_ocrv6_tiny_det_dynamic    动态维 + 约束
+
+每模型 7 种产物，共 70 个文件：
+    .plan.json / .h / manifest .json / lib<model>.so
+    model.ncnn.mlir / model.tosa.mlir / model.linalg.mlir
+
+    STAGE=<baseline>  ./emit-plans.sh /tmp/p3-before   （T-A1/T-A3 前，干净 HEAD）
+    STAGE=<after>     ./emit-plans.sh /tmp/p3-after    （T-A1/T-A3 后）
+    diff -ru /tmp/p3-before /tmp/p3-after
+    → 仅 2 个文件不同，且**只**在 loc() 路径里的随机临时目录 token
+
+逐条：
+    Files .../pp_ocrv6_tiny_det/model.linalg.mlir differ
+    Files .../pp_ocrv6_tiny_rec/model.linalg.mlir differ
+
+差异行全部形如
+    -#loc16 = loc("/tmp/ncnn-compile-4fd6b0/model.tosa.mlir":231:15)
+    +#loc16 = loc("/tmp/ncnn-compile-5e5f26/model.tosa.mlir":231:15)
+即编译期临时目录 /tmp/ncnn-compile-XXXXXX 的随机名，无语义。
+
+**`.plan.json` / `.h` / manifest / `.so` 不含该 token，是逐字节比对，全一致。**
+
+归一化（token → /tmp/ncnn-compile-TMPDIR）后：
+
+    diff -ru /tmp/p3-before-norm /tmp/p3-after-norm
+    NORMALIZED_EXIT=0
+    0 lines
+
+结果归档在 plan-before-after.diff（**内容为空 = 全部一致**）。
+
+
+## 7. T-S5 identity 变化复核
+
+（1）哈希调用点归一：
+    grep -rn "stableHash64" lib tools include
+    → 7 个调用点，分布在且仅在 3 个文件
+      InstrumentNCNNProfile.cpp（2）、EmitModelPlan.cpp（4）、
+      FuseLinalgEpilogue.cpp（1）
+    → 三个文件均 include Support/StableHash.hpp
+
+（2）手写 FNV-1a 归零：
+    grep -rn "fnv\|14695981039346656037\|1099511628211" lib tools include
+    → 空
+
+    仅剩两处**有意不动**的另一个哈希（见 identity-changes.md §1.4）：
+      test/Native/check_perf_attribution.py        python fixture 生成器
+      test/Numerical/support/performance_test_support.cpp
+                                                   performance_input_hash
+
+（3）identity 变值证据（squeezenet_v1_1）：
+    plan_hash                 12677497241874684592 → 1771926188015674330
+    build_identity            12677497241874684592 → 1771926188015674330
+    operations[0].profile_id  14712359705534835900 → 10762451831299475511
+    operations[1].profile_id  14712360805046464111 →  5007957240008162491
+    operations[2].profile_id  14712361904558092322 →  6337618360253299886
+
+    build_identity == plan_hash 的关系保持不变；plan_hash 输出格式
+    （std::to_string(uint64) 十进制）不变。
+
+（4）同轮内 join 仍成立：门禁 #2 的 ctest 含
+    perf-attribution / attr-partition / attr-report / plan-hash-whitelist /
+    check_ncnn_compile / check_int8_target 等护栏，456/456 全绿。
+    其中 check_perf_attribution.py 走 plan/profile/perf 三方 identity
+    严格字符串相等 + join 覆盖率统计 —— 全绿即证 join 未破。
+
+（5）跨期 join 已停止：tools/perf_json_summary.py 对同一 NDJSON 内
+    build_identity 冲突直接 ValueError，这是预期强制点，未改动。
+
+
+## 8. T-A3 契约复核
+
+    grep -n "dyn_cast<mlir::arith::ConstantOp>" lib/Support/ConstantFold.cpp
+    → 空（末端已换成 matchPattern(value, m_Constant(&attr))）
+
+    findConstantElements 仍只一处定义：
+      include/ncnn-mlir/Support/ConstantFold.hpp（声明）
+      lib/Support/ConstantFold.cpp（定义）
+
+视图穿透集合未扩大：仍是 tensor.cast / collapse_shape / expand_shape，
+排除 extract_slice / from_elements；视图 walk 在末端之前。
+m_Constant 的加宽面（ncnn.const / tosa.const）已记入 identity-changes.md §2。
+
+
+## 9. 提交前检查
+
+    git diff --check
+    git status --short
+    git diff --cached
+    git log --oneline -10
+
+见提交信息中的门禁行。

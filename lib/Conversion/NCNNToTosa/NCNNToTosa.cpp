@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/MathExtras.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -81,13 +82,10 @@ Type getLowPrecisionStorageType(OpBuilder& builder, Operation* operation) {
   if (!precision) {
     return {};
   }
-  if (precision.getValue() == "fp16") {
-    return builder.getF16Type();
-  }
-  if (precision.getValue() == "bf16") {
-    return builder.getBF16Type();
-  }
-  return {};
+  return llvm::StringSwitch<Type>(precision.getValue())
+    .Case("fp16", builder.getF16Type())
+    .Case("bf16", builder.getBF16Type())
+    .Default(Type());
 }
 
 bool usesLowPrecisionBoundary(Operation* operation) {
@@ -3974,11 +3972,11 @@ void appendAttentionSegmentRecords(MultiHeadAttentionOp operation,
                                phase == "score" || phase == "context"
                                  ? "indexed_attention_contraction"
                                  : "projection_or_softmax"));
-    const StringRef parallelPolicy = phase == "score"     ? "head_query_key"
-                                     : phase == "softmax" ? "head_query"
-                                     : phase == "context"
-                                       ? "sequence_head_feature"
-                                       : "sequence_feature";
+    const StringRef parallelPolicy = llvm::StringSwitch<StringRef>(phase)
+                                       .Case("score", "head_query_key")
+                                       .Case("softmax", "head_query")
+                                       .Case("context", "sequence_head_feature")
+                                       .Default("sequence_feature");
     record.set("parallel_policy", StringAttr::get(context, parallelPolicy));
     record.set("tile_policy",
                StringAttr::get(context, "shape_driven_linalg_parallel"));
@@ -4003,8 +4001,12 @@ void appendAttentionSegmentRecords(MultiHeadAttentionOp operation,
 
   const StringRef status = dynamicSequence ? "fallback" : "selected";
   const StringRef reason = dynamicSequence ? "dynamic_sequence" : "";
-  const std::optional<int64_t> seq =
-    dynamicSequence ? std::nullopt : std::optional(sequence);
+  // Written as a conditional assignment rather than a ternary: gcc 14 reports
+  // a false -Wmaybe-uninitialized on `std::optional` built from a ternary.
+  std::optional<int64_t> seq;
+  if (!dynamicSequence) {
+    seq = sequence;
+  }
   const int64_t layoutTransposeCount = dynamicSequence ? 1 : 0;
   append(
     "q_projection", seq, qdim, embed, layoutTransposeCount, status, reason);

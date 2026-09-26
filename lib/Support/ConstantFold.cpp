@@ -6,14 +6,12 @@
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/Matchers.h"
 
 namespace ncnn_mlir {
 
 mlir::ElementsAttr findConstantElements(mlir::Value value) {
   while (mlir::Operation* defining = value.getDefiningOp()) {
-    if (auto constant = mlir::dyn_cast<mlir::arith::ConstantOp>(defining)) {
-      return mlir::dyn_cast<mlir::ElementsAttr>(constant.getValue());
-    }
     if (auto cast = mlir::dyn_cast<mlir::tensor::CastOp>(defining)) {
       value = cast.getSource();
       continue;
@@ -26,6 +24,14 @@ mlir::ElementsAttr findConstantElements(mlir::Value value) {
     if (auto expand = mlir::dyn_cast<mlir::tensor::ExpandShapeOp>(defining)) {
       value = expand.getSrc();
       continue;
+    }
+    // Terminal hop: any ConstantLike op whose fold yields an attribute.  The
+    // view walk above stays exact — a ConstantLike view would be walked as a
+    // view first, so widening the terminal cannot hand callers view-folded
+    // data that the walk deliberately excluded.
+    mlir::Attribute attribute;
+    if (mlir::matchPattern(value, mlir::m_Constant(&attribute))) {
+      return mlir::dyn_cast<mlir::ElementsAttr>(attribute);
     }
     return {};
   }

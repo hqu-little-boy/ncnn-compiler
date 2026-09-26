@@ -21,6 +21,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileSystem/UniqueID.h"
@@ -1789,8 +1790,9 @@ ClangTargetArguments build_clang_target_arguments(
   bool vector_active,
   bool vector_scalable) {
   std::string resolved_int8_target = "portable";
-  if (g_int8_kernel != "portable" && g_int8_kernel != "auto" &&
-      g_int8_kernel != "vnni") {
+  if (!llvm::StringSwitch<bool>(g_int8_kernel.getValue())
+         .Cases("portable", "auto", "vnni", true)
+         .Default(false)) {
     return std::unexpected("--int8-kernel must be one of portable, auto, vnni");
   }
   if (g_int8_kernel != "portable") {
@@ -2014,15 +2016,17 @@ int CompileSession::parseArguments(int argc, char** argv) {
     return fail(llvm::Twine("cannot use weight file '") + bin_path +
                 "': " + (error ? error.message() : "not a regular file"));
   }
-  if (g_optimization != "0" && g_optimization != "1" && g_optimization != "2" &&
-      g_optimization != "3") {
+  if (!llvm::StringSwitch<bool>(g_optimization.getValue())
+         .Cases("0", "1", "2", "3", true)
+         .Default(false)) {
     return fail("-O must be one of -O0, -O1, -O2, or -O3");
   }
   if (g_vector_width != 0 && g_vector_width % 64 != 0) {
     return fail("--vector-width must be 0 or a multiple of 64 bits");
   }
-  if (g_tuning_profile != "stable" && g_tuning_profile != "p16-int8" &&
-      g_tuning_profile != "native-int8") {
+  if (!llvm::StringSwitch<bool>(g_tuning_profile.getValue())
+         .Cases("stable", "p16-int8", "native-int8", true)
+         .Default(false)) {
     return fail(
       "--tuning-profile must be one of stable, p16-int8, or native-int8");
   }
@@ -2208,41 +2212,57 @@ int CompileSession::resolveTarget() {
   vector_lanes = 0;
   vector_scalable = false;
   vector_active = false;
-  if (g_conv_strategy != "auto" && g_conv_strategy != "gemm" &&
-      g_conv_strategy != "conv" && g_conv_strategy != "winograd") {
+  if (!llvm::StringSwitch<bool>(g_conv_strategy.getValue())
+         .Cases("auto", "gemm", "conv", "winograd", true)
+         .Default(false)) {
     return fail("--conv-strategy must be one of auto, gemm, conv, winograd");
   }
-  if (g_vector_mode == "off") {
-    // 历史行为：不做 MLIR 级向量化。
-  } else if (g_vector_mode == "auto") {
-    switch (vector_info.mode) {
-      case ncnn_mlir::TargetVectorInfo::Mode::FixedWidth:
-        vector_lanes = vector_info.lanes;
-        break;
-      case ncnn_mlir::TargetVectorInfo::Mode::Scalable:
-        vector_lanes = vector_info.lanes;
-        vector_scalable = true;
-        break;
-      case ncnn_mlir::TargetVectorInfo::Mode::Scalar:
-        break;
-    }
-  } else if (g_vector_mode == "fixed-width") {
-    vector_lanes =
-      vector_info.mode == ncnn_mlir::TargetVectorInfo::Mode::FixedWidth
-        ? vector_info.lanes
-        : 4;
-  } else if (g_vector_mode == "scalable") {
-    vector_scalable = true;
-    vector_lanes =
-      vector_info.mode == ncnn_mlir::TargetVectorInfo::Mode::Scalable
-        ? vector_info.lanes
-        : 4;
-  } else {
+  enum class VectorMode { Off, Auto, FixedWidth, Scalable };
+  const std::optional<VectorMode> vector_mode =
+    llvm::StringSwitch<std::optional<VectorMode>>(g_vector_mode.getValue())
+      .Case("off", VectorMode::Off)
+      .Case("auto", VectorMode::Auto)
+      .Case("fixed-width", VectorMode::FixedWidth)
+      .Case("scalable", VectorMode::Scalable)
+      .Default(std::nullopt);
+  if (!vector_mode) {
     return fail(
       "--vector-mode must be one of off, auto, fixed-width, "
       "scalable");
   }
-  if (g_vector_mode == "fixed-width" || g_vector_mode == "scalable") {
+  switch (*vector_mode) {
+    case VectorMode::Off:
+      // 历史行为：不做 MLIR 级向量化。
+      break;
+    case VectorMode::Auto:
+      switch (vector_info.mode) {
+        case ncnn_mlir::TargetVectorInfo::Mode::FixedWidth:
+          vector_lanes = vector_info.lanes;
+          break;
+        case ncnn_mlir::TargetVectorInfo::Mode::Scalable:
+          vector_lanes = vector_info.lanes;
+          vector_scalable = true;
+          break;
+        case ncnn_mlir::TargetVectorInfo::Mode::Scalar:
+          break;
+      }
+      break;
+    case VectorMode::FixedWidth:
+      vector_lanes =
+        vector_info.mode == ncnn_mlir::TargetVectorInfo::Mode::FixedWidth
+          ? vector_info.lanes
+          : 4;
+      break;
+    case VectorMode::Scalable:
+      vector_scalable = true;
+      vector_lanes =
+        vector_info.mode == ncnn_mlir::TargetVectorInfo::Mode::Scalable
+          ? vector_info.lanes
+          : 4;
+      break;
+  }
+  if (*vector_mode == VectorMode::FixedWidth ||
+      *vector_mode == VectorMode::Scalable) {
     if (g_vector_width != 0 && g_vector_width % 32 == 0 &&
         g_vector_width / 32 > vector_lanes) {
       vector_lanes = g_vector_width / 32;
@@ -2253,7 +2273,9 @@ int CompileSession::resolveTarget() {
   tuning = TuningSettings{};
   tuning.profile = g_tuning_profile.getValue();
   tuning.matmulPacking = g_matmul_packing.getValue();
-  if (tuning.matmulPacking != "auto" && tuning.matmulPacking != "off") {
+  if (!llvm::StringSwitch<bool>(tuning.matmulPacking)
+         .Cases("auto", "off", true)
+         .Default(false)) {
     return fail("--matmul-packing must be one of off or auto");
   }
   if (g_matmul_m_rows.getNumOccurrences() != 0) {
@@ -2383,8 +2405,9 @@ int CompileSession::resolveTarget() {
   uses_libmvec = false;
   sleef_archive.clear();
   {
-    if (g_vector_math != "auto" && g_vector_math != "libmvec" &&
-        g_vector_math != "sleef" && g_vector_math != "none") {
+    if (!llvm::StringSwitch<bool>(g_vector_math.getValue())
+           .Cases("auto", "libmvec", "sleef", "none", true)
+           .Default(false)) {
       return fail("--vector-math must be one of auto, libmvec, sleef, none");
     }
     const llvm::StringRef backend_triple(effective_target_triple);
@@ -2488,41 +2511,59 @@ int CompileSession::resolveTarget() {
       return available;
     };
 
-    if (g_vector_math == "none") {
+    enum class VectorMathBackend { Auto, Libmvec, Sleef, None };
+    // Unknown tokens were already rejected by the --vector-math validation
+    // above, so the default is the inert "no vector math" choice and never
+    // triggers a probe.
+    const VectorMathBackend vector_math_backend =
+      llvm::StringSwitch<VectorMathBackend>(g_vector_math.getValue())
+        .Case("auto", VectorMathBackend::Auto)
+        .Case("libmvec", VectorMathBackend::Libmvec)
+        .Case("sleef", VectorMathBackend::Sleef)
+        .Case("none", VectorMathBackend::None)
+        .Default(VectorMathBackend::None);
+    if (vector_math_backend == VectorMathBackend::None) {
       resolved_vector_math = "none";
     } else {
       // SLEEF 静态档案的宽度入口自带运行时 ISA 分发；scalable 目标无
       // 固定宽度入口，v1 不选 SLEEF。
       const bool sleef_ready =
         !vector_scalable && locate_sleef_archive(sleef_archive);
-      if (g_vector_math == "auto") {
-        if (probe_libmvec()) {
+      switch (vector_math_backend) {
+        case VectorMathBackend::Auto:
+          if (probe_libmvec()) {
+            uses_libmvec = true;
+          } else if (sleef_ready) {
+            llvm::errs() << "ncnn-compile: info: libmvec unavailable for the "
+                            "target; using vendored SLEEF\n";
+          } else {
+            llvm::errs()
+              << "ncnn-compile: warning: neither libmvec nor "
+                 "vendored SLEEF is available; keeping scalar math\n";
+          }
+          break;
+        case VectorMathBackend::Libmvec:
+          if (!probe_libmvec()) {
+            return fail(
+              "--vector-math=libmvec is not available for target " +
+              effective_target_triple +
+              "; provide a sysroot whose libm pulls in the required _ZGV "
+              "symbols or choose --vector-math=auto");
+          }
           uses_libmvec = true;
-        } else if (sleef_ready) {
-          llvm::errs() << "ncnn-compile: info: libmvec unavailable for the "
-                          "target; using vendored SLEEF\n";
-        } else {
-          llvm::errs() << "ncnn-compile: warning: neither libmvec nor "
-                          "vendored SLEEF is available; keeping scalar math\n";
-        }
-      } else if (g_vector_math == "libmvec") {
-        if (!probe_libmvec()) {
-          return fail(
-            "--vector-math=libmvec is not available for target " +
-            effective_target_triple +
-            "; provide a sysroot whose libm pulls in the required _ZGV "
-            "symbols or choose --vector-math=auto");
-        }
-        uses_libmvec = true;
-      } else {  // sleef
-        if (!sleef_ready) {
-          return fail(
-            std::string(
-              "--vector-math=sleef requires the vendored SLEEF static archive "
-              "(libsleef.a); point --sleef-path at its directory") +
-            (vector_scalable ? "; scalable targets are not supported yet"
-                             : ""));
-        }
+          break;
+        case VectorMathBackend::Sleef:
+          if (!sleef_ready) {
+            return fail(
+              std::string("--vector-math=sleef requires the vendored SLEEF "
+                          "static archive "
+                          "(libsleef.a); point --sleef-path at its directory") +
+              (vector_scalable ? "; scalable targets are not supported yet"
+                               : ""));
+          }
+          break;
+        case VectorMathBackend::None:
+          break;
       }
       resolved_vector_math =
         uses_libmvec ? "libmvec" : (!sleef_archive.empty() ? "sleef" : "none");

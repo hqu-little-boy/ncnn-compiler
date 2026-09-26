@@ -237,7 +237,7 @@ class PackStaticMatmulNCNNPass final
 
       OpBuilder globalBuilder(module.getContext());
       globalBuilder.setInsertionPointToStart(module.getBody());
-      auto global = globalBuilder.create<memref::GlobalOp>(
+      [[maybe_unused]] auto global = globalBuilder.create<memref::GlobalOp>(
         rhsSource.global.getLoc(),
         symbolName,
         globalBuilder.getStringAttr("private"),
