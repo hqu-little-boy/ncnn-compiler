@@ -1,3 +1,19 @@
+// GenerateCAPI：推理入口定义发射。
+//
+// 职责
+//   发射 `ncnn_*_infer` 一类 C 入口的实现体，把 C 调用接到内部模型。
+//
+// 不变量
+//   * 只读 GenerateCAPIPrepare 产出的签名，不自行推导；
+//   * 返回码契约与 CLI 一致（0 成功 / 非 0 失败）。
+//
+// 顺序依赖
+//   * 必须在 GenerateCAPIPrepare 之后。
+//
+// 明确不做
+//   * 不做包装层（GenerateCAPIEmitWrapper）；
+//   * 不做 ABI 兜底改名（GenerateCAPIFinalize）。
+
 #include "GenerateCAPIInternal.hpp"
 
 namespace mlir::ncnn::capi_detail {

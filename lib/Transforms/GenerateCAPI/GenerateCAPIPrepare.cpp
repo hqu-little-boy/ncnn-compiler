@@ -1,3 +1,21 @@
+// GenerateCAPI：ABI 构造准备（prepareABI）。
+//
+// 职责
+//   校验输入签名、构造 C ABI 类型与函数签名、发出前置声明。
+//
+// 不变量
+//   * 签名一旦生成即不可变，后续 TU 只读；
+//   * 动态 rank 的符号名由 finalizeDynamicRankABI 统一派生，本 TU 不改名；
+//   * 失败必须事务性——不留半成品声明。
+//
+// 顺序依赖
+//   * 必须在 EmitModelPlan 之后（plan 与 ABI 同源）；
+//   * 必须在 GenerateCAPIEmit* 之前（签名先于定义）。
+//
+// 明确不做
+//   * 不写 manifest（GenerateCAPIFinalize）；
+//   * 不写实现体（GenerateCAPIEmitInfer / EmitWrapper）。
+
 #include <cctype>
 #include <cstdint>
 #include <format>

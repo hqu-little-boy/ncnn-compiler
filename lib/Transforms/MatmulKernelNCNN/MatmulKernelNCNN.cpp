@@ -1,3 +1,33 @@
+// MatmulKernelNCNN：把静态 memref matmul 形态内核化为显式向量内核。
+//
+// 职责
+//   1. f32 / batch f32 / int8 row-dot 三种 M×N 寄存器分块微内核；
+//   2. 恒等自拷贝循环消除（「load X 后 store 回 X」）；
+//   3. 行级 generic 向量化（relu 等逐元 epilogue）与 im2col gather 向量化；
+//   4. im2col 物化消除（gather-free K 直取源图）。
+//
+// 不变量
+//   * tileRows × accColumns ≤ 对应 accumulator 预算（kAccumulatorFloatBudget
+//     / kInt8AccumulatorBudget），否则 LLVM 寄存器溢出吃掉分块收益；
+//   * 累加器数量 == rowCount（f32）或 rowCount × blockColumns（int8）；
+//   * 行段与列块边界都是静态推导的界内区域，transfer 全标 inBounds；
+//   * 物理面板布局只在 RHS 为常量且 packing 契约成立时启用，失败即整个
+//     pass 延后报错（packingFailure），不在半途留下错布局。
+//
+// 顺序依赖
+//   * 必须在 StrategyNCNN 之后：im2col+matmul / batch_matmul / int8
+//     matmul_transpose_b 形态由它定型；
+//   * 必须在 PackStaticMatmulNCNN 之后：prepacked_B 与 pack_tile_k 由它注解；
+//   * 必须在 TileMatmulForall 之前：forall 网格由它提供，内核认
+//     scf.forall 内的实例（inForall）。
+//
+// 明确不做
+//   * 不改数据布局（packing 物理重排在 PackStaticMatmulNCNN）；
+//   * 不做 requant / epilogue 融合决策（FuseQuantChainNCNN /
+//     FuseLinalgEpilogue 已定，这里只做内联发射）；
+//   * 不决定并行策略（OpenMP 由 forall 转换给）；
+//   * 不做动态形状——所有内核只吃静态 MemRefType。
+
 #include "ncnn-mlir/Transforms/MatmulKernelNCNN/MatmulKernelNCNN.hpp"
 
 #include "llvm/ADT/SmallPtrSet.h"
@@ -43,6 +73,132 @@ void copyConvContract(Operation* source, Operation* target) {
     if (Attribute value = source->getAttr(attribute)) {
       target->setAttr(attribute, value);
     }
+  }
+}
+
+// matmul 内核的行块 × 列块循环外壳。f32 / batch f32 / int8 row-dot 三个
+// 内核的嵌套逐字同构：满行块按 tileRows 步距扫、余数行单行扫；每个行段内
+// 满列块按 accColumns 步距扫、余数列用窄块。差异全部在块体（累加器初始
+// 化、K 归约形态、写回），由 TileBlockEmitter 承担。
+//
+// shape.depth 是归约长度，只随形状记录：循环外壳与 K 无关，K 循环住在块
+// 体内且四种形态互不相同（平坦 / packed-K 分块 / im2col 窗口 / 带 VNNI
+// 头的 int8），无法用一个 kIndex 回调统一。
+struct TileShape {
+  int64_t rows;
+  int64_t columns;
+  int64_t depth;
+  int64_t tileRows;
+  int64_t accColumns;
+};
+
+// 块体发射器：每个 (行块, 列块) 调用一次。rowCount 是 tileRows（满行块）
+// 或 1（余数行）；blockColumns 是 accColumns 或 tailColumns。
+using TileBlockEmitter = llvm::function_ref<void(
+  Value rowStart, int64_t rowCount, Value columnStart, int64_t blockColumns)>;
+
+// 物化 base + i（i ∈ [0, count)）。i == 0 直接复用 base，不发射多余的
+// addi——块体按行/列索引寻址 A / B / C，保持与历史内核同一条值。
+SmallVector<Value> materializeIndices(ImplicitLocOpBuilder& builder,
+                                      Value base,
+                                      int64_t count) {
+  SmallVector<Value> indices;
+  indices.reserve(count);
+  for (int64_t i = 0; i < count; ++i) {
+    indices.push_back(i == 0
+                        ? base
+                        : builder
+                            .create<arith::AddIOp>(
+                              base, builder.create<arith::ConstantIndexOp>(i))
+                            .getResult());
+  }
+  return indices;
+}
+
+// 向量累加器读入：按 (rowIndices[i], columnStart) 取 rowCount 个
+// blockColumns 宽的界内向量。f32 与 batch f32 共用（只是面板 memref 不同）；
+// int8 走标量 load，不经过这里。
+SmallVector<Value> readTileAccumulators(ImplicitLocOpBuilder& builder,
+                                        Value target,
+                                        VectorType vectorType,
+                                        ArrayRef<Value> rowIndices,
+                                        Value columnStart) {
+  SmallVector<Value> accumulators;
+  accumulators.reserve(rowIndices.size());
+  for (Value row : rowIndices) {
+    accumulators.push_back(
+      builder.create<vector::TransferReadOp>(vectorType,
+                                             target,
+                                             ValueRange{row, columnStart},
+                                             std::nullopt,
+                                             SmallVector<bool>(1, true)));
+  }
+  return accumulators;
+}
+
+// 向量累加器写回：与读入同址同宽，全部标 inBounds，动态 n 块偏移下也
+// 下降为无掩码的 vector.store。
+void writeTileAccumulators(ImplicitLocOpBuilder& builder,
+                           Value target,
+                           ArrayRef<Value> results,
+                           ArrayRef<Value> rowIndices,
+                           Value columnStart) {
+  for (auto [row, result] : llvm::zip(rowIndices, results)) {
+    auto rowWrite = builder.create<vector::TransferWriteOp>(
+      result, target, ValueRange{row, columnStart});
+    rowWrite.setInBoundsAttr(
+      builder.getBoolArrayAttr(SmallVector<bool>(1, true)));
+  }
+}
+
+// 发射行块 × 列块嵌套，对每个 (行块, 列块) 调用一次 emitTileBlock。
+// zero/one 由调用方创建：块体也要用同一对常量，避免重复物化。
+void emitTileLoopNest(ImplicitLocOpBuilder& builder,
+                      const TileShape& shape,
+                      Value zero,
+                      Value one,
+                      TileBlockEmitter emitTileBlock) {
+  const int64_t fullColumnBlocks = shape.columns / shape.accColumns;
+  const int64_t tailColumns = shape.columns % shape.accColumns;
+  const int64_t fullRowExtent = shape.rows / shape.tileRows * shape.tileRows;
+
+  // 一个 M 行段扫完整列块再扫列尾块。
+  auto emitRowBlock = [&](Value rowStart, int64_t rowCount) {
+    if (fullColumnBlocks > 1) {
+      auto columnBound = builder.create<arith::ConstantIndexOp>(
+        fullColumnBlocks * shape.accColumns);
+      auto columnStep =
+        builder.create<arith::ConstantIndexOp>(shape.accColumns);
+      auto columnLoop =
+        builder.create<scf::ForOp>(zero, columnBound, columnStep);
+      builder.setInsertionPointToStart(columnLoop.getBody());
+      emitTileBlock(
+        rowStart, rowCount, columnLoop.getInductionVar(), shape.accColumns);
+      builder.setInsertionPointAfter(columnLoop);
+    } else {
+      emitTileBlock(rowStart, rowCount, zero, shape.accColumns);
+    }
+    if (tailColumns > 0) {
+      auto tailStart = builder.create<arith::ConstantIndexOp>(fullColumnBlocks *
+                                                              shape.accColumns);
+      emitTileBlock(rowStart, rowCount, tailStart, tailColumns);
+    }
+  };
+
+  if (fullRowExtent > 0) {
+    auto rowBound = builder.create<arith::ConstantIndexOp>(fullRowExtent);
+    auto rowStep = builder.create<arith::ConstantIndexOp>(shape.tileRows);
+    auto rowLoop = builder.create<scf::ForOp>(zero, rowBound, rowStep);
+    builder.setInsertionPointToStart(rowLoop.getBody());
+    emitRowBlock(rowLoop.getInductionVar(), shape.tileRows);
+    builder.setInsertionPointAfter(rowLoop);
+  }
+  if (shape.rows % shape.tileRows) {
+    auto rowStart = builder.create<arith::ConstantIndexOp>(fullRowExtent);
+    auto rowBound = builder.create<arith::ConstantIndexOp>(shape.rows);
+    auto rowLoop = builder.create<scf::ForOp>(rowStart, rowBound, one);
+    builder.setInsertionPointToStart(rowLoop.getBody());
+    emitRowBlock(rowLoop.getInductionVar(), 1);
   }
 }
 
@@ -1470,9 +1626,9 @@ class MatmulKernelNCNNPass final
       std::min<int64_t>(
         {matmulMRows, rows, kAccumulatorFloatBudget / accColumns}));
 
-    const int64_t fullColumnBlocks = columns / accColumns;
+    // 只保留契约注解用到的余数列宽；满块/余数行的切分由 emitTileLoopNest
+    // 自行推导。
     const int64_t tailColumns = columns % accColumns;
-    const int64_t fullRowExtent = rows / tileRows * tileRows;
 
     if (auto forall = matmul->getParentOfType<scf::ForallOp>()) {
       copyConvContract(matmul.getOperation(), forall.getOperation());
@@ -1527,26 +1683,11 @@ class MatmulKernelNCNNPass final
                              Value columnStart,
                              int64_t blockColumns) {
       auto vectorType = VectorType::get({blockColumns}, elementType);
-      SmallVector<Value> rowIndices;
-      rowIndices.reserve(rowCount);
-      for (int64_t i = 0; i < rowCount; ++i) {
-        rowIndices.push_back(
-          i == 0 ? rowStart
-                 : builder
-                     .create<arith::AddIOp>(
-                       rowStart, builder.create<arith::ConstantIndexOp>(i))
-                     .getResult());
-      }
+      SmallVector<Value> rowIndices =
+        materializeIndices(builder, rowStart, rowCount);
 
-      SmallVector<Value> accumulators;
-      for (int64_t i = 0; i < rowCount; ++i) {
-        accumulators.push_back(builder.create<vector::TransferReadOp>(
-          vectorType,
-          acc,
-          ValueRange{rowIndices[i], columnStart},
-          std::nullopt,
-          SmallVector<bool>(1, true)));
-      }
+      SmallVector<Value> accumulators =
+        readTileAccumulators(builder, acc, vectorType, rowIndices, columnStart);
 
       // 单舍入 FMA：mul+add 分离会让 LLVM 侧因无 fastmath/contract 而无
       // 法合成 vfmadd（每个 MAC 双指令、依赖链延迟翻倍）；vector.fma 一
@@ -1760,51 +1901,19 @@ class MatmulKernelNCNNPass final
         }
         builder.setInsertionPointAfter(outer);
       }
-      for (int64_t i = 0; i < rowCount; ++i) {
-        auto rowWrite = builder.create<vector::TransferWriteOp>(
-          results[i], acc, ValueRange{rowIndices[i], columnStart});
-        rowWrite.setInBoundsAttr(
-          builder.getBoolArrayAttr(SmallVector<bool>(1, true)));
-      }
+      writeTileAccumulators(builder, acc, results, rowIndices, columnStart);
     };
 
-    // 一个 M 行段扫完整列块再扫列尾块。
-    auto emitRowBlock = [&](Value rowStart, int64_t rowCount) {
-      if (fullColumnBlocks > 1) {
-        auto columnBound =
-          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
-        auto columnStep = builder.create<arith::ConstantIndexOp>(accColumns);
-        auto columnLoop =
-          builder.create<scf::ForOp>(zero, columnBound, columnStep);
-        builder.setInsertionPointToStart(columnLoop.getBody());
-        emitTileBlock(
-          rowStart, rowCount, columnLoop.getInductionVar(), accColumns);
-        builder.setInsertionPointAfter(columnLoop);
-      } else {
-        emitTileBlock(rowStart, rowCount, zero, accColumns);
-      }
-      if (tailColumns > 0) {
-        auto tailStart =
-          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
-        emitTileBlock(rowStart, rowCount, tailStart, tailColumns);
-      }
-    };
-
-    if (fullRowExtent > 0) {
-      auto rowBound = builder.create<arith::ConstantIndexOp>(fullRowExtent);
-      auto rowStep = builder.create<arith::ConstantIndexOp>(tileRows);
-      auto rowLoop = builder.create<scf::ForOp>(zero, rowBound, rowStep);
-      builder.setInsertionPointToStart(rowLoop.getBody());
-      emitRowBlock(rowLoop.getInductionVar(), tileRows);
-      builder.setInsertionPointAfter(rowLoop);
-    }
-    if (rows % tileRows) {
-      auto rowStart = builder.create<arith::ConstantIndexOp>(fullRowExtent);
-      auto rowBound = builder.create<arith::ConstantIndexOp>(rows);
-      auto rowLoop = builder.create<scf::ForOp>(rowStart, rowBound, one);
-      builder.setInsertionPointToStart(rowLoop.getBody());
-      emitRowBlock(rowLoop.getInductionVar(), 1);
-    }
+    // 一个 M 行段扫完整列块再扫列尾块（外壳见 emitTileLoopNest）。
+    emitTileLoopNest(builder,
+                     TileShape{.rows = rows,
+                               .columns = columns,
+                               .depth = depth,
+                               .tileRows = tileRows,
+                               .accColumns = accColumns},
+                     zero,
+                     one,
+                     emitTileBlock);
 
     rewriter.eraseOp(matmul);
   }
@@ -1837,9 +1946,9 @@ class MatmulKernelNCNNPass final
       1,
       std::min<int64_t>(
         {matmulMRows, rows, kAccumulatorFloatBudget / accColumns}));
-    const int64_t fullColumnBlocks = columns / accColumns;
+    // 只保留契约注解用到的余数列宽；满块/余数行的切分由 emitTileLoopNest
+    // 自行推导。
     const int64_t tailColumns = columns % accColumns;
-    const int64_t fullRowExtent = rows / tileRows * tileRows;
 
     auto zero = builder.create<arith::ConstantIndexOp>(0);
     auto one = builder.create<arith::ConstantIndexOp>(1);
@@ -1896,25 +2005,10 @@ class MatmulKernelNCNNPass final
                              Value columnStart,
                              int64_t blockColumns) {
       auto vectorType = VectorType::get({blockColumns}, elementType);
-      SmallVector<Value> rowIndices;
-      rowIndices.reserve(rowCount);
-      for (int64_t i = 0; i < rowCount; ++i) {
-        rowIndices.push_back(
-          i == 0 ? rowStart
-                 : builder
-                     .create<arith::AddIOp>(
-                       rowStart, builder.create<arith::ConstantIndexOp>(i))
-                     .getResult());
-      }
-      SmallVector<Value> accumulators;
-      for (int64_t i = 0; i < rowCount; ++i) {
-        accumulators.push_back(builder.create<vector::TransferReadOp>(
-          vectorType,
-          accPanel,
-          ValueRange{rowIndices[i], columnStart},
-          std::nullopt,
-          SmallVector<bool>(1, true)));
-      }
+      SmallVector<Value> rowIndices =
+        materializeIndices(builder, rowStart, rowCount);
+      SmallVector<Value> accumulators = readTileAccumulators(
+        builder, accPanel, vectorType, rowIndices, columnStart);
       auto depthBound = builder.create<arith::ConstantIndexOp>(depth);
       auto kLoop = builder.create<scf::ForOp>(
         zero, depthBound, one, ValueRange(accumulators));
@@ -1939,48 +2033,24 @@ class MatmulKernelNCNNPass final
       builder.create<scf::YieldOp>(updated);
 
       builder.setInsertionPointAfter(kLoop);
+      SmallVector<Value> results;
+      results.reserve(rowCount);
       for (int64_t i = 0; i < rowCount; ++i) {
-        auto rowWrite = builder.create<vector::TransferWriteOp>(
-          kLoop.getResult(i), accPanel, ValueRange{rowIndices[i], columnStart});
-        rowWrite.setInBoundsAttr(
-          builder.getBoolArrayAttr(SmallVector<bool>(1, true)));
+        results.push_back(kLoop.getResult(i));
       }
+      writeTileAccumulators(
+        builder, accPanel, results, rowIndices, columnStart);
     };
-    auto emitRowBlock = [&](Value rowStart, int64_t rowCount) {
-      if (fullColumnBlocks > 1) {
-        auto columnBound =
-          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
-        auto columnStep = builder.create<arith::ConstantIndexOp>(accColumns);
-        auto columnLoop =
-          builder.create<scf::ForOp>(zero, columnBound, columnStep);
-        builder.setInsertionPointToStart(columnLoop.getBody());
-        emitTileBlock(
-          rowStart, rowCount, columnLoop.getInductionVar(), accColumns);
-        builder.setInsertionPointAfter(columnLoop);
-      } else {
-        emitTileBlock(rowStart, rowCount, zero, accColumns);
-      }
-      if (tailColumns > 0) {
-        auto tailStart =
-          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
-        emitTileBlock(rowStart, rowCount, tailStart, tailColumns);
-      }
-    };
-    if (fullRowExtent > 0) {
-      auto rowBound = builder.create<arith::ConstantIndexOp>(fullRowExtent);
-      auto rowStep = builder.create<arith::ConstantIndexOp>(tileRows);
-      auto rowLoop = builder.create<scf::ForOp>(zero, rowBound, rowStep);
-      builder.setInsertionPointToStart(rowLoop.getBody());
-      emitRowBlock(rowLoop.getInductionVar(), tileRows);
-      builder.setInsertionPointAfter(rowLoop);
-    }
-    if (rows % tileRows) {
-      auto rowStart = builder.create<arith::ConstantIndexOp>(fullRowExtent);
-      auto rowBound = builder.create<arith::ConstantIndexOp>(rows);
-      auto rowLoop = builder.create<scf::ForOp>(rowStart, rowBound, one);
-      builder.setInsertionPointToStart(rowLoop.getBody());
-      emitRowBlock(rowLoop.getInductionVar(), 1);
-    }
+    // 一个 M 行段扫完整列块再扫列尾块（外壳见 emitTileLoopNest）。
+    emitTileLoopNest(builder,
+                     TileShape{.rows = rows,
+                               .columns = columns,
+                               .depth = depth,
+                               .tileRows = tileRows,
+                               .accColumns = accColumns},
+                     zero,
+                     one,
+                     emitTileBlock);
 
     rewriter.eraseOp(batch);
   }
@@ -2193,9 +2263,9 @@ class MatmulKernelNCNNPass final
       std::min<int64_t>(
         {matmulI8Rows, rows, kInt8AccumulatorBudget / accColumns}));
 
-    const int64_t fullColumnBlocks = columns / accColumns;
+    // 只保留契约注解用到的余数列宽；满块/余数行的切分由 emitTileLoopNest
+    // 自行推导。
     const int64_t tailColumns = columns % accColumns;
-    const int64_t fullRowExtent = rows / tileRows * tileRows;
 
     if (auto forall = matmul->getParentOfType<scf::ForallOp>()) {
       contract::annotateTile(
@@ -2281,26 +2351,10 @@ class MatmulKernelNCNNPass final
                              int64_t rowCount,
                              Value columnStart,
                              int64_t blockColumns) {
-      SmallVector<Value> rowIndices;
-      rowIndices.reserve(rowCount);
-      for (int64_t i = 0; i < rowCount; ++i) {
-        rowIndices.push_back(
-          i == 0 ? rowStart
-                 : builder
-                     .create<arith::AddIOp>(
-                       rowStart, builder.create<arith::ConstantIndexOp>(i))
-                     .getResult());
-      }
-      SmallVector<Value> columnIndices;
-      columnIndices.reserve(blockColumns);
-      for (int64_t j = 0; j < blockColumns; ++j) {
-        columnIndices.push_back(
-          j == 0 ? columnStart
-                 : builder
-                     .create<arith::AddIOp>(
-                       columnStart, builder.create<arith::ConstantIndexOp>(j))
-                     .getResult());
-      }
+      SmallVector<Value> rowIndices =
+        materializeIndices(builder, rowStart, rowCount);
+      SmallVector<Value> columnIndices =
+        materializeIndices(builder, columnStart, blockColumns);
 
       // 累加链初值 = C 初始化（linalg.matmul 语义 C += A·B）。
       auto flatIndex = [&](int64_t i, int64_t j) {
@@ -2377,42 +2431,16 @@ class MatmulKernelNCNNPass final
       }
     };
 
-    auto emitRowBlock = [&](Value rowStart, int64_t rowCount) {
-      if (fullColumnBlocks > 1) {
-        auto columnBound =
-          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
-        auto columnStep = builder.create<arith::ConstantIndexOp>(accColumns);
-        auto columnLoop =
-          builder.create<scf::ForOp>(zero, columnBound, columnStep);
-        builder.setInsertionPointToStart(columnLoop.getBody());
-        emitTileBlock(
-          rowStart, rowCount, columnLoop.getInductionVar(), accColumns);
-        builder.setInsertionPointAfter(columnLoop);
-      } else {
-        emitTileBlock(rowStart, rowCount, zero, accColumns);
-      }
-      if (tailColumns > 0) {
-        auto tailStart =
-          builder.create<arith::ConstantIndexOp>(fullColumnBlocks * accColumns);
-        emitTileBlock(rowStart, rowCount, tailStart, tailColumns);
-      }
-    };
-
-    if (fullRowExtent > 0) {
-      auto rowBound = builder.create<arith::ConstantIndexOp>(fullRowExtent);
-      auto rowStep = builder.create<arith::ConstantIndexOp>(tileRows);
-      auto rowLoop = builder.create<scf::ForOp>(zero, rowBound, rowStep);
-      builder.setInsertionPointToStart(rowLoop.getBody());
-      emitRowBlock(rowLoop.getInductionVar(), tileRows);
-      builder.setInsertionPointAfter(rowLoop);
-    }
-    if (rows % tileRows) {
-      auto rowStart = builder.create<arith::ConstantIndexOp>(fullRowExtent);
-      auto rowBound = builder.create<arith::ConstantIndexOp>(rows);
-      auto rowLoop = builder.create<scf::ForOp>(rowStart, rowBound, one);
-      builder.setInsertionPointToStart(rowLoop.getBody());
-      emitRowBlock(rowLoop.getInductionVar(), 1);
-    }
+    // 一个 M 行段扫完整列块再扫列尾块（外壳见 emitTileLoopNest）。
+    emitTileLoopNest(builder,
+                     TileShape{.rows = rows,
+                               .columns = columns,
+                               .depth = depth,
+                               .tileRows = tileRows,
+                               .accColumns = accColumns},
+                     zero,
+                     one,
+                     emitTileBlock);
 
     // 融合的 epilogue 全量被内核写回覆盖，独立 pass 删除。
     if (requantEpilogue) {

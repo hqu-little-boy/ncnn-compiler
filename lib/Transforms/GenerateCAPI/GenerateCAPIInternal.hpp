@@ -1,3 +1,21 @@
+// GenerateCAPI 各 TU 共享的内部声明。
+//
+// 职责
+//   放 capi_detail 自由函数与共享结构，供 Prepare / EmitInfer /
+//   EmitWrapper / Finalize 四个 TU 使用。
+//
+// 不变量
+//   * GEN_PASS_DEF_* 段只能单 TU 包含（其 create<Pass>() 非 inline），
+//     因此 pass 类各自独占 TU，跨 TU 只走本头里的自由函数；
+//   * 这里的类型是内部实现，不是公开 ABI。
+//
+// 顺序依赖
+//   * 无（纯声明）。
+//
+// 明确不做
+//   * 不放实现（各 TU 自己实现）；
+//   * 不暴露到 include/ncnn-mlir/ 公开头。
+
 #pragma once
 
 #include <cctype>

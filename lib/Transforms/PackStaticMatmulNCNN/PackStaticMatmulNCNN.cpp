@@ -1,3 +1,28 @@
+// PackStaticMatmulNCNN：把静态 matmul 的 RHS 常量物理重排成面板布局。
+//
+// 职责
+//   * f32：把 [K,N] 行主序常量重排为 p20-panel-nk-v1 面板（packN=16）；
+//   * INT8（opt-in）：把 [N,K] 常量重排为 p23-int8-panel-row-kpad64-v1。
+//
+// 不变量
+//   * 只处理常量 RHS；非常量一律 fallback 并写明 reason；
+//   * P20-v1 面板宽固定 16，自定义 pack-n 直接拒绝——bufferized 内核按
+//     面板边界寻址，改宽可能跨面板；
+//   * 预算（max-total-bytes）是**模块级**共享的：先到先得，超出即拒绝，
+//     且 f32 / int8 记在同一本账上；
+//   * 拒绝 reason 字符串（packing_rejected_* / packing_skipped_* /
+//     unpacked_direct）进 plan，不得漂移。
+//
+// 顺序依赖
+//   * 必须在 StrategyNCNN 之后（gemm/im2col 形态已定）；
+//   * 必须在 TileMatmulForall 之前（行/列 tile 因子会被写进契约）；
+//   * 必须在 MatmulKernelNCNN 之前（内核按 prepacked_B 选择寻址）。
+//
+// 明确不做
+//   * 不做内核选择（那是 MatmulKernelNCNN / StrategyNCNN）；
+//   * 不做运行期 unpack（pack_runtime 恒为 compile_time_B）；
+//   * 不为「顺便提速」放宽预算或小形状门槛。
+
 #include "ncnn-mlir/Transforms/PackStaticMatmulNCNN/PackStaticMatmulNCNN.hpp"
 
 #include <algorithm>

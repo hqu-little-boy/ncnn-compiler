@@ -1,3 +1,21 @@
+// GenerateCAPI：包装层与动态 rank ABI 发射。
+//
+// 职责
+//   发射处理动态 rank / 可变形状的包装入口，把 C 侧的扁平缓冲接到
+//   模型的形状约定上。
+//
+// 不变量
+//   * 动态维来源只能是显式输入，不得从缓冲内容推断；
+//   * 形状检查失败必须返回错误码而不是继续执行。
+//
+// 顺序依赖
+//   * 必须在 GenerateCAPIPrepare 之后；
+//   * finalizeDynamicRankABI 在 GenerateCAPIFinalize 收口。
+//
+// 明确不做
+//   * 不改推理入口本体（GenerateCAPIEmitInfer）；
+//   * 不写 manifest。
+
 #include "GenerateCAPIInternal.hpp"
 
 namespace mlir::ncnn::capi_detail {

@@ -1,3 +1,27 @@
+// EmitModelPlan：把 bufferized 模型的静态执行计划写成 .plan.json。
+//
+// 职责
+//   单次确定性遍历产出 13 个顶层 JSON 段（functions / operations /
+//   buffers / regions / contracts / conv_depthwise / fusions /
+//   attention_segments / low_precision / unknown_fields / provenance /
+//   static_liveness / summary）并派生 plan_hash。
+//
+// 不变量
+//   * 只做一次遍历：plan_hash_input 在 6 个位置**顺序**累加，拆成独立
+//     遍历会改变拼接顺序与计数器口径 → plan_hash 变值 → identity 变化；
+//   * plan_hash 参与字段是白名单（见 plan-hash-whitelist 守卫），未登记
+//     的字段改动不得改变 hash；
+//   * 字段增减一律记为 identity 变化，禁止跨 identity 误 join。
+//
+// 顺序依赖
+//   * 必须在全部改写与内核化之后：计划描述的是最终形态；
+//   * 必须在 GenerateCAPI / 产物归档之前：manifest 与 plan 要同源。
+//
+// 明确不做
+//   * 不改 IR（纯只读遍历）；
+//   * 不做任何策略决策，只如实记录其它 pass 留下的 ncnn.* 契约属性；
+//   * 不做浮点输出（数值字段全出整数），避开 JSON 的 NaN/Infinity 陷阱。
+
 #include "ncnn-mlir/Transforms/EmitModelPlan/EmitModelPlan.hpp"
 
 #include <algorithm>

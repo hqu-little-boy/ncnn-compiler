@@ -472,4 +472,56 @@ inline void appendFusionRecord(
   operation->setAttr(kFusionRecords, ArrayAttr::get(context, records));
 }
 
+// 卷积族契约注解：operation_family=conv + 几何属性。StrategyNCNN 的三条
+// 改写路径（gemm/direct/winograd）与 Winograd63NCNN 的 IR 发射共用，保证
+// 「选了哪条路径」与「注解写了哪条路径」永远同源。
+inline void annotateConvContract(Operation* operation,
+                                 StringRef implementation,
+                                 int64_t kernelHeight,
+                                 int64_t kernelWidth,
+                                 int64_t strideHeight,
+                                 int64_t strideWidth,
+                                 int64_t dilationHeight,
+                                 int64_t dilationWidth,
+                                 int64_t inputChannels,
+                                 int64_t outputChannels) {
+  annotateOperationFamily(operation, "conv", implementation);
+  annotateGeometry(operation,
+                   kernelHeight,
+                   kernelWidth,
+                   strideHeight,
+                   strideWidth,
+                   dilationHeight,
+                   dilationWidth,
+                   inputChannels,
+                   outputChannels);
+}
+
+// 把源算子的卷积契约（含布局岛与来源标注）复制到目标算子。复制的是
+// 「语义标签」而非数据：改写产生新 op 时用它承接原 conv 的身份，下游
+// EmitModelPlan / InstrumentNCNNProfile 仍能溯源到 ncnn 层。
+//
+// 注意 MatmulKernelNCNN.cpp 另有一个更窄的本地 copyConvContract（不复制
+// 布局岛属性），两者的属性集并不相同，历史如此、语义差异未收敛；本函数
+// 是卷积改写路径的完整版本。
+inline void copyConvContract(Operation* source, Operation* target) {
+  for (StringRef attribute :
+       {kOperationFamily,    kImplementation,   kKernelStatic,
+        kKernelHeight,       kKernelWidth,      kStrideHeight,
+        kStrideWidth,        kDilationHeight,   kDilationWidth,
+        kInputChannels,      kOutputChannels,   kMultiplier,
+        kFallback,           kLayoutIslandId,   kLayoutIslandStatus,
+        kLayoutIslandEntry,  kLayoutIslandExit, kLayoutIslandCost,
+        kLayoutIslandReason, kLayoutPackFactor, kLayoutChannelBlocks}) {
+    if (Attribute value = source->getAttr(attribute)) {
+      target->setAttr(attribute, value);
+    }
+  }
+  for (StringRef attribute : {StringRef(kName), StringRef(kSourceLayer)}) {
+    if (Attribute value = source->getAttr(attribute)) {
+      target->setAttr(attribute, value);
+    }
+  }
+}
+
 }  // namespace mlir::ncnn::contract

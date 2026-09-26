@@ -1,3 +1,20 @@
+// GenerateCAPI：收口与 manifest 序列化。
+//
+// 职责
+//   finalizeDynamicRankABI 收口动态 rank 命名，并把 ABI 摘要写成
+//   manifest JSON。
+//
+// 不变量
+//   * manifest 字段与 .plan.json 同源，不得出现 plan 里没有的键；
+//   * 动态 rank 符号名一经收口不再变化（是公开契约）。
+//
+// 顺序依赖
+//   * 必须在 GenerateCAPIEmit* 之后。
+//
+// 明确不做
+//   * 不改签名（GenerateCAPIPrepare 已定）；
+//   * 不做浮点输出（数值字段全出整数）。
+
 #include "GenerateCAPIInternal.hpp"
 
 #include "ncnn-mlir/Transforms/GenerateCAPI/GenerateCAPI.hpp"

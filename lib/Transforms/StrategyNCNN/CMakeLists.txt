@@ -10,6 +10,7 @@ target_include_directories(StrategyNCNN SYSTEM PUBLIC
 target_compile_definitions(StrategyNCNN PUBLIC ${LLVM_DEFINITIONS})
 target_compile_options(StrategyNCNN PRIVATE -fno-rtti)
 target_link_libraries(StrategyNCNN PUBLIC
+    Winograd63NCNN
     MLIRArithDialect
     MLIRFuncDialect
     MLIRIR

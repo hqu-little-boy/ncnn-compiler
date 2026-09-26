@@ -1,3 +1,24 @@
+// InstrumentNCNNProfile：为归因报告插入运行期计数器站点。
+//
+// 职责
+//   在分配 / 拷贝 / 算子 / worker / fusion 各站点插入 profile_runtime 的
+//   事件调用，并派生稳定 profile_id（stableHash64）。
+//
+// 不变量
+//   * 插桩是 opt-in（NCNN_NATIVE_INT8_PROFILE 等开关关闭时全不插）；
+//   * profile_id 由 stableHash64 派生——换哈希算法即 identity 变化；
+//   * 站点 source-op 溯源必须唯一；来源不明的 worker 站点宁可不插；
+//   * 计时边界不得跨 worker join（P27/P28 的归因 bug 即源于此）。
+//
+// 顺序依赖
+//   * 必须在全部改写与内核化之后（站点要落在最终形态上）；
+//   * 必须在 EmitModelPlan 之前（plan 记录的 profile_id 要与插桩同源）。
+//
+// 明确不做
+//   * 不改变计算语义（只加旁路调用）；
+//   * 不引入未定义符号白名单之外的依赖（profile_allowed 约束）；
+//   * 不做数值采样——只出整数计数与时钟。
+
 #include "ncnn-mlir/Transforms/InstrumentNCNNProfile/InstrumentNCNNProfile.hpp"
 
 #include <algorithm>

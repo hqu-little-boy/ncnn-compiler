@@ -1,0 +1,220 @@
+# P4 验证记录
+
+> 阶段：P4（T-C5 / T-C6 / T-C7 / T-M1 / T-M2）
+> 日期：2026-09-26
+> 门禁：format_check + tidy + 全新 /tmp stage 构建 + 三个 numerical target + 全量 CTest
+> 纪律：每次全量测试在全新 /tmp 目录进行，避免被之前的模型编译产物误导
+
+---
+
+## 1. format_check（全局）
+
+```
+$ cmake --build /tmp/ncnn-compiler-stage-p4-work --target format_check --parallel 16
+[100%] Checking code style with clang-format (Google)
+[100%] Built target format_check
+```
+
+首轮报出 Winograd63NCNN.cpp 的续行缩进问题（成员函数去缩进后悬挂参数未跟进）
+与 MatmulKernelNCNN.cpp 的 designated initializer 换行，已跑 `format` 目标修复后复检通过。
+**按用户约束，非本次产生的格式问题一并修复**——`format` 目标对全仓生效，
+复检覆盖全部项目 `.hpp`/`.cpp`。
+
+---
+
+## 2. clang-tidy（全局）
+
+```
+$ cmake --build /tmp/ncnn-compiler-stage-p4-work --target tidy --parallel 16
+exit=0
+```
+
+首轮报出 **9 处**，全部在本次新代码，已逐项修复：
+
+| 文件 | 问题 | check | 修复 |
+|---|---|---|---|
+| `MatmulKernelNCNN.cpp` ×3 | `TileShape{rows, columns, ...}` | `modernize-use-designated-initializers` | 改 `TileShape{.rows = rows, ...}` |
+| `TosaLoweringUtils.cpp` | `TosaLoweringUtils.hpp` 被 include 两次 | `readability-duplicate-include` | 去重 |
+| `TosaLoweringUtils.cpp` ×5 | 与头文件重复的前向声明 | `readability-redundant-declaration` | 删除（头文件已声明） |
+
+复检 exit=0，**零警告**（`WarningsAsErrors: '*'`）。
+
+---
+
+## 3. lit 全量
+
+```
+$ python3 /usr/lib/llvm-21/build/utils/lit/lit.py /tmp/ncnn-compiler-stage-p4-work/test
+Total Discovered Tests: 206
+Passed: 206 (100.00%)
+```
+
+192 → 206（+14 个新增 lit，见 §5）。
+
+---
+
+## 4. 产物逐字节对照（T-C5 / T-C6 / T-C7 的护栏）
+
+**手法**：`docs/refactor/p3-2026-09-26/emit-plans.sh` 对固定 10 模型跑
+`ncnn-compile`，收集 `.plan.json` / `.h` / manifest `.json` / `.so` /
+三份 IR dump。before = P3 `3d1c0fc`（git worktree 独立构建），after = 本阶段工作树。
+
+**模型清单**（含 2 个动态形状用例、1 个 `--conv-strategy=winograd` 用例）：
+`squeezenet_v1_1` / `resnet18` / `resnet18_winograd` / `chineseocr_lite_anglenet` /
+`yolov5n` / `yolov5x_seg` / `pp_ocrv6_tiny_rec` / `pp_ocrv6_tiny_det` /
+`pp_ocrv6_tiny_rec_dynamic` / `pp_ocrv6_tiny_det_dynamic`
+
+**结果**：
+
+```
+$ diff -ru before after-final          # 原始
+exit=1，72 行，全部是 /tmp/ncnn-compile-<随机目录>/ 路径（IR dump 的 loc() 元数据）
+$ # 归一化 scratch 目录名后
+exit=0，0 字节
+```
+
+`plan-before-after.diff` **为空（0 bytes）** = 归一化后逐字节一致。
+
+**归一化只替换 ncnn-compile 每次运行随机生成的 scratch 目录名**，不触碰任何
+语义字段。**0 行非路径差异**——这是「产物 IR 不变」的直接证据。
+采了两次 after（T-C5/C6/C7 之后一次、DeconvToTosa 再拆之后一次），两次均为空。
+
+---
+
+## 5. T-M1 测试计数
+
+| pass | 拆分前 | 拆分后 | 新增 |
+|---|---:|---:|---:|
+| `TileMatmulForall` | 1 | 5 | `nested-skip` `prime-extents` `tile-position` `transpose-b-columns` |
+| `PackStaticMatmulNCNN` | 4 | 7 | `panel-width-guard` `min-shape-gates` `int8-gates` |
+| `RewriteLinalgCopies` | 2 | 6 | `eliminate-same-value` `alias-guard` `non-contiguous` `vectorized-ranks` |
+| `FoldLinalgConstantTranspose` | 1 | 4 | `non-square` `constant-through-cast` `reject-paths` |
+| **合计** | **8** | **22** | **14** |
+
+四目录目标 5/7/6/4 全部达成。
+
+---
+
+## 6. 文件尺寸验收（T-C6：每文件 ≤1200 行）
+
+```
+NCNNToTosa.cpp      204  TosaLoweringUtils.cpp   848  TosaLoweringUtils.hpp  196
+ConvToTosa.cpp      959  DeconvToTosa.cpp        342  PoolingToTosa.cpp      604
+AttentionToTosa.cpp 1073 SDPAToTosa.cpp          354  QuantToTosa.cpp        358
+GemmToTosa.cpp      298  ElementwiseToTosa.cpp   516  DetectionToTosa.cpp     75
+LayoutToTosa.cpp   1145  ReduceToTosa.cpp        364
+```
+
+最大 **1145 行**（`LayoutToTosa.cpp`），**全部 ≤1200**。
+Conversion lit **48/48** 全绿。
+
+---
+
+## 7. T-C5 / T-C7 行数验收
+
+| 文件 | 拆分前 | 拆分后 | 说明 |
+|---|---:|---:|---|
+| `StrategyNCNN.cpp` | 1780 | **1109** | −671，目标「约 600」达成 |
+| `MatmulKernelNCNN.cpp` | 2427 | 2455 | **+28 全是 T-M2 设计注释**，代码净行数 0 |
+
+T-C5 的去重效果（行数不代表一切）：
+
+| 重复项 | 前 | 后 |
+|---|---:|---:|
+| `emitRowBlock` + 满/余行循环 | 3 份（108 行） | 1 份 |
+| 手工 `rowIndices` 物化 | 3 份 | 0 |
+| 向量累加器读 / 写 | 各 2 份 | 各 1 份 |
+| `fullColumnBlocks > 1` | 3 处 | 1 处 |
+
+---
+
+## 8. 全新 /tmp stage 门禁
+
+按用户纪律「验收失败时不提交，修复后重新从全新 `/tmp` 目录构建和测试」执行了
+**两轮**：首轮发现 `DeconvToTosa.cpp`（T-C6 尾段拆出）漏跑 format_check，
+格式化修复后**另起全新目录**重做，不复用首轮产物。
+
+### 首轮 `/tmp/ncnn-compiler-stage-refactor-p4`
+
+```
+$ cmake -S compiler -B /tmp/ncnn-compiler-stage-refactor-p4 \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+    -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+    -DCOMPILER_INSTALL_RPATH=ON \
+    -DBUILD_TESTING=ON
+$ cmake --build /tmp/ncnn-compiler-stage-refactor-p4 --parallel 16   # 100%，0 错误
+$ cmake --build ... --target numerical_tests numerical_dynamic_operator_tests \
+                    numerical_dynamic_tests --parallel 16           # OK
+$ cmake --build ... --target format_check --parallel 16
+  DeconvToTosa.cpp:20/335/336/337  code should be clang-formatted   ← 失败
+```
+
+**处置**：跑 `format` 修复 → 复检 `format_check` 通过 → `tidy` 复检 exit=0 →
+**按纪律另起全新目录重做全部门禁**。
+
+### 二轮 `/tmp/ncnn-compiler-stage-refactor-p4-final`（提交依据）
+
+```
+$ cmake -S compiler -B /tmp/ncnn-compiler-stage-refactor-p4-final \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+    -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+    -DCOMPILER_INSTALL_RPATH=ON \
+    -DBUILD_TESTING=ON
+-- Configuring done / Generating done
+$ cmake --build /tmp/ncnn-compiler-stage-refactor-p4-final --parallel 16
+BUILD_OK                                    # 230 个 fixture，0 错误
+$ cmake --build ... --target numerical_tests \
+                    numerical_dynamic_operator_tests \
+                    numerical_dynamic_tests --parallel 16
+NUMERICAL_OK
+$ cmake --build ... --target format_check --parallel 16
+Checking code style with clang-format (Google)
+Built target format_check                   # 通过
+$ ctest --test-dir /tmp/ncnn-compiler-stage-refactor-p4-final --output-on-failure
+
+100% tests passed, 0 tests failed out of 456
+Total Test time (real) = 848.64 sec
+
+The following tests did not run:
+        435 - PerformanceModel.PPLCNetDocOriInt8 (Skipped)
+        436 - PerformanceModel.PPLCNetTextlineOriInt8 (Skipped)
+```
+
+**456/456 通过、0 失败**。2 个 skip 是**既有 upstream INT8 skip**，
+与 P2/P3 基线逐条一致（原样披露，非本次引入）。
+
+### 格式化对产物的影响（已证无）
+
+`format` 只改了 `DeconvToTosa.cpp` 的 4 处续行缩进，**纯空白**。抽样复核：
+用二轮 stage 的 `ncnn-compile` 重采 `squeezenet_v1_1` 与
+`resnet18_winograd`（含 `--conv-strategy=winograd` 分派路径），
+与格式化前的 `after-final` 归一化后 **逐字节一致（IDENTICAL）**。
+
+---
+
+## 9. 提交前检查
+
+```
+$ git diff --check                    # 无空白错误
+$ git status --short                  # 16 改 / 32 新增
+$ git diff --cached                   # 提交内容见下
+$ git log --oneline -10               # 格式见前序 refactor(ncnn) 提交
+```
+
+---
+
+## 10. 汇总
+
+| 门禁项 | 结果 |
+|---|---|
+| `format_check`（全局） | ✅ 通过 |
+| `clang-tidy`（全局，`WarningsAsErrors: '*'`） | ✅ exit=0，零警告 |
+| lit 全量 | ✅ 206/206 |
+| Conversion lit | ✅ 48/48 |
+| 产物逐字节对照（10 模型 × 7 产物） | ✅ 归一化后 0 字节差异 |
+| 全新 `/tmp` stage 构建 | ✅ 0 错误 |
+| 三个 numerical target | ✅ 全部构建成功 |
+| 全量 CTest | ✅ **456/456 通过、0 失败**（2 既有 skip 披露） |
+| identity 变化 | ✅ 无 |
