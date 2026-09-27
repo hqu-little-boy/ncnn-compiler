@@ -1,0 +1,44 @@
+# T-M4 产物逐字节对照（--profile 插桩路径）
+#
+# 方法：git worktree @ HEAD 构建参考编译器 (/tmp/p5-ref)，与本次构建
+# (/tmp/ncnn-compiler-stage-p5 或 /tmp/p5-dev) 各带 --profile --emit=all
+# 编同一组模型，归一化 /tmp/ncnn-compile-<随机> scratch 路径后 diff -ru。
+#
+# 为何不用 P3 的 emit-plans.sh：T-M4 只动 InstrumentNCNNProfile 的文件
+# 组织，非 profile 编译根本不跑这些 pass，emit-plans.sh（不带 --profile）
+# 测不到它。因此对照面必须是 --profile 路径。
+#
+# .so / .o 不参与比对：含 profile_runtime 机器码，两侧源不同（T-J1）。
+
+## 结果
+
+$ docs/refactor/p5-2026-09-27/compare-profile-instrumentation.sh \
+    /tmp/p5-ref /tmp/p5-dev /tmp/p5-profile-compare
+PASS squeezenet_v1_1: 全部产物归一化后逐字节一致
+PASS resnet18: 全部产物归一化后逐字节一致
+
+## diff 文件字节数（0 = 逐字节一致）
+
+  0  /tmp/p5-profile-compare/resnet18.diff
+  0  /tmp/p5-profile-compare/resnet18.filelist.diff
+  0  /tmp/p5-profile-compare/squeezenet_v1_1.diff
+  0  /tmp/p5-profile-compare/squeezenet_v1_1.filelist.diff
+
+## 参与比对的产物
+
+  model.ncnn.mlir  model.tosa.mlir  model.linalg.mlir  model.memref.mlir
+  model.capi.mlir  model.llvm.mlir  model.ll           model.s
+  <model>.h        <model>.json     <model>.plan.json
+
+  model.memref.mlir 是插桩落地的那一层，是本对照的关键面。
+
+## T-J1 侧的对照（另一条独立证据线）
+
+$ capture-profile-golden.sh   # 3 schema x 8 用例 = 24 份 profile
+  归一化时序字段后逐字节相同 : 12/24  （全部合法输入）
+  仅非法 UTF-8 路径变化      : 12/24  （预期：�� 转义，修 bug）
+  改后 json.loads 可解析     : 24/24  （修前 12/24）
+
+  注意：profile_runtime 的 JSON 字节格式未被任何测试锁定（check_profile_runtime.py
+  走 json.loads 语义断言），但仍做了字节对照作为额外护栏——合法输入必须逐字节
+  不变，否则说明 T-J1 的收敛改写了编码。

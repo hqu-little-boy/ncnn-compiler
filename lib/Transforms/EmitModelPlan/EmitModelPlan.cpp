@@ -50,6 +50,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "ncnn-mlir/Support/Diagnostics.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 #include "ncnn-mlir/Support/ModelLedger.hpp"
 #include "ncnn-mlir/Support/StableHash.hpp"
@@ -659,6 +660,11 @@ RecoveredSource PlanCollector::recoverSource(Operation* operation) {
   } else if (distinct.size() > 1) {
     add_unknown("worker_site_source_ambiguous");
     recovered.ambiguous = true;
+    // worker 站点 region 里的溯源不一致 → 无法唯一归属，报告里只能落进
+    // unattributed。这不是错误（模型照编），但值得让用户看见。
+    emitNcnnWarning(operation,
+                    "worker_site_source_ambiguous",
+                    operation->getName().getStringRef());
   }
   return recovered;
 }
@@ -2297,6 +2303,10 @@ class EmitModelPlanPass final
     collector.collectPackedConstants();
     JsonObject root = collector.assembleRoot(collector.collectSummary());
     if (failed(collector.writePlan(module, path, std::move(root)))) {
+      signalPassFailure();
+    }
+
+    if (consumeDiagnosticFailure()) {
       signalPassFailure();
     }
   }

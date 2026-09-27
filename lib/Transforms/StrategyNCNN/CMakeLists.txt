@@ -17,4 +17,4 @@ target_link_libraries(StrategyNCNN PUBLIC
     MLIRLinalgDialect
     MLIRMathDialect
     MLIRPass
-    MLIRTensorDialect)
+    MLIRTensorDialect NCNNDiagnosticsSupport)

@@ -12,4 +12,4 @@ target_link_libraries(PackStaticMatmulNCNN PUBLIC
     MLIRIR
     MLIRLinalgDialect
     MLIRPass
-    MLIRTensorDialect)
+    MLIRTensorDialect NCNNDiagnosticsSupport)

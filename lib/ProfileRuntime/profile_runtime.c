@@ -7,6 +7,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "profile_json_writer.h"
+
 #ifndef NCNN_PROFILE_DEFAULT_MODEL
 #define NCNN_PROFILE_DEFAULT_MODEL ""
 #endif
@@ -1269,45 +1271,6 @@ void __ncnn_profile_movement(int64_t signed_id, int64_t kind, int64_t bytes) {
   unlock_profile();
 }
 
-static void write_json_string(FILE* file, const char* value) {
-  const unsigned char* cursor = (const unsigned char*)(value ? value : "");
-  fputc('"', file);
-  while (*cursor) {
-    switch (*cursor) {
-      case '"':
-        fputs("\\\"", file);
-        break;
-      case '\\':
-        fputs("\\\\", file);
-        break;
-      case '\b':
-        fputs("\\b", file);
-        break;
-      case '\f':
-        fputs("\\f", file);
-        break;
-      case '\n':
-        fputs("\\n", file);
-        break;
-      case '\r':
-        fputs("\\r", file);
-        break;
-      case '\t':
-        fputs("\\t", file);
-        break;
-      default:
-        if (*cursor < 0x20) {
-          fprintf(file, "\\u%04x", (unsigned)*cursor);
-        } else {
-          fputc(*cursor, file);
-        }
-        break;
-    }
-    ++cursor;
-  }
-  fputc('"', file);
-}
-
 static const char* category_name(int64_t category) {
   switch (category) {
     case NCNN_PROFILE_ALLOCATION:
@@ -1528,355 +1491,389 @@ static void flush_profile_v2(const char* path) {
   const char* attribution_revision =
     environment_or_default("NCNN_PROFILE_ATTRIBUTION_REVISION",
                            NCNN_PROFILE_DEFAULT_ATTRIBUTION_REVISION);
-  fprintf(file, "{\n  \"schema_version\": %u,\n", profile_schema_version());
+  fputs("{\n  \"schema_version\": ", file);
+  pj_u64(file, (uint64_t)(profile_schema_version()));
+  fputs(",\n", file);
+  ;
   fputs("  \"kind\": \"ncnn.model_execution_profile\",\n", file);
   fputs("  \"plan_revision\": ", file);
   if (revision && *revision) {
-    write_json_string(file, revision);
+    pj_string(file, revision);
   } else {
     fputs("\"static-v1\"", file);
   }
   fputs(",\n  \"attribution_revision\": ", file);
-  write_json_string(file,
-                    attribution_revision ? attribution_revision : "unknown");
+  pj_string(file, attribution_revision ? attribution_revision : "unknown");
   fputs(",\n  \"model\": ", file);
-  write_json_string(file, model ? model : "unknown");
+  pj_string(file, model ? model : "unknown");
   fputs(",\n  \"plan_hash\": ", file);
   if (plan && *plan) {
-    write_json_string(file, plan);
+    pj_string(file, plan);
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
   fputs(",\n  \"input_hash\": ", file);
   if (input_hash && *input_hash) {
-    write_json_string(file, input_hash);
+    pj_string(file, input_hash);
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
   fputs(",\n  \"build_identity\": ", file);
   if (build_identity && *build_identity) {
-    write_json_string(file, build_identity);
+    pj_string(file, build_identity);
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
   fputs(",\n  \"target\": ", file);
   if (target && *target) {
-    write_json_string(file, target);
+    pj_string(file, target);
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
   fputs(",\n  \"mode\": ", file);
-  write_json_string(file, mode ? mode : "diagnostic");
+  pj_string(file, mode ? mode : "diagnostic");
   fputs(",\n  \"threads\": ", file);
   if (thread_known) {
-    fprintf(file, "%u", thread_count);
+    pj_u64(file, (uint64_t)(thread_count));
+    ;
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
-  fprintf(file,
-          ",\n  \"invocation_id\": %llu,\n"
-          "  \"complete\": %s,\n"
-          "  \"instrumentation\": {\"enabled\": true, \"coverage\": "
-          "\"explicit-callbacks\", \"aggregation\": \"per-invocation\", "
-          "\"invocation_count\": 1, \"record_overflow\": %s, "
-          "\"allocation_table_overflow\": %s},\n",
-          (unsigned long long)local_invocation_id,
-          local_complete ? "true" : "false",
-          local_record_overflow ? "true" : "false",
-          local_allocation_overflow ? "true" : "false");
+  fputs(",\n  \"invocation_id\": ", file);
+  pj_u64(file, local_invocation_id);
+  fputs(",\n  \"complete\": ", file);
+  pj_bool(file, (local_complete));
+  fputs(
+    ",\n  \"instrumentation\": {\"enabled\": true, \"coverage\": "
+    "\"explicit-callbacks\", \"aggregation\": \"per-invocation\", "
+    "\"invocation_count\": 1, \"record_overflow\": ",
+    file);
+  pj_bool(file, (local_record_overflow));
+  fputs(", \"allocation_table_overflow\": ", file);
+  pj_bool(file, (local_allocation_overflow));
+  fputs("},\n", file);
+  ;
   fputs("  \"summary\": {\n", file);
-  fprintf(file,
-          "    \"allocation_count\": %llu,\n",
-          (unsigned long long)local_allocation_events);
+  fputs("    \"allocation_count\": ", file);
+  pj_u64(file, local_allocation_events);
+  fputs(",\n", file);
+  ;
   if (local_allocation_bytes_known) {
-    fprintf(file,
-            "    \"allocation_bytes\": %llu,\n",
-            (unsigned long long)local_allocation_bytes);
+    fputs("    \"allocation_bytes\": ", file);
+    pj_u64(file, local_allocation_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"allocation_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"allocation_bytes_known\": %s,\n",
-          local_allocation_bytes_known ? "true" : "false");
-  fprintf(file,
-          "    \"deallocation_count\": %llu,\n",
-          (unsigned long long)local_deallocation_events);
+  fputs("    \"allocation_bytes_known\": ", file);
+  pj_bool(file, (local_allocation_bytes_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"deallocation_count\": ", file);
+  pj_u64(file, local_deallocation_events);
+  fputs(",\n", file);
+  ;
   if (local_deallocation_bytes_known) {
-    fprintf(file,
-            "    \"deallocation_bytes\": %llu,\n",
-            (unsigned long long)local_deallocation_bytes);
+    fputs("    \"deallocation_bytes\": ", file);
+    pj_u64(file, local_deallocation_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"deallocation_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"deallocation_bytes_known\": %s,\n",
-          local_deallocation_bytes_known ? "true" : "false");
-  fprintf(
-    file, "    \"copy_count\": %llu,\n", (unsigned long long)local_copy_events);
+  fputs("    \"deallocation_bytes_known\": ", file);
+  pj_bool(file, (local_deallocation_bytes_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"copy_count\": ", file);
+  pj_u64(file, local_copy_events);
+  fputs(",\n", file);
+  ;
   if (local_copy_bytes_known) {
-    fprintf(file,
-            "    \"copy_bytes\": %llu,\n",
-            (unsigned long long)local_copy_bytes);
+    fputs("    \"copy_bytes\": ", file);
+    pj_u64(file, local_copy_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"copy_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"copy_bytes_known\": %s,\n",
-          local_copy_bytes_known ? "true" : "false");
-  fprintf(file,
-          "    \"materialized_write_count\": %llu,\n",
-          (unsigned long long)local_materialized_write_events);
+  fputs("    \"copy_bytes_known\": ", file);
+  pj_bool(file, (local_copy_bytes_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"materialized_write_count\": ", file);
+  pj_u64(file, local_materialized_write_events);
+  fputs(",\n", file);
+  ;
   if (local_materialized_write_events != 0 &&
       local_materialized_write_bytes_known) {
-    fprintf(file,
-            "    \"runtime_materialized_write_bytes\": %llu,\n",
-            (unsigned long long)local_materialized_write_bytes);
+    fputs("    \"runtime_materialized_write_bytes\": ", file);
+    pj_u64(file, local_materialized_write_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"runtime_materialized_write_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"materialized_write_bytes_known\": %s,\n",
-          (local_materialized_write_events != 0 &&
-           local_materialized_write_bytes_known)
-            ? "true"
-            : "false");
-  fprintf(file,
-          "    \"materialized_read_count\": %llu,\n",
-          (unsigned long long)local_materialized_read_events);
+  fputs("    \"materialized_write_bytes_known\": ", file);
+  pj_bool(file,
+          ((local_materialized_write_events != 0 &&
+            local_materialized_write_bytes_known)));
+  fputs(",\n", file);
+  ;
+  fputs("    \"materialized_read_count\": ", file);
+  pj_u64(file, local_materialized_read_events);
+  fputs(",\n", file);
+  ;
   if (local_materialized_read_events != 0 &&
       local_materialized_read_bytes_known) {
-    fprintf(file,
-            "    \"runtime_materialized_read_bytes\": %llu,\n",
-            (unsigned long long)local_materialized_read_bytes);
+    fputs("    \"runtime_materialized_read_bytes\": ", file);
+    pj_u64(file, local_materialized_read_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"runtime_materialized_read_bytes\": null,\n", file);
   }
-  fprintf(
-    file,
-    "    \"materialized_read_bytes_known\": %s,\n",
-    (local_materialized_read_events != 0 && local_materialized_read_bytes_known)
-      ? "true"
-      : "false");
+  fputs("    \"materialized_read_bytes_known\": ", file);
+  pj_bool(file,
+          ((local_materialized_read_events != 0 &&
+            local_materialized_read_bytes_known)));
+  fputs(",\n", file);
+  ;
   if (local_materialized_write_events != 0 &&
       local_materialized_expected_read_bytes_known) {
-    fprintf(file,
-            "    \"expected_materialized_read_bytes\": %llu,\n",
-            (unsigned long long)local_materialized_expected_read_bytes);
+    fputs("    \"expected_materialized_read_bytes\": ", file);
+    pj_u64(file, local_materialized_expected_read_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"expected_materialized_read_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"expected_materialized_read_bytes_known\": %s,\n",
-          (local_materialized_write_events != 0 &&
-           local_materialized_expected_read_bytes_known)
-            ? "true"
-            : "false");
+  fputs("    \"expected_materialized_read_bytes_known\": ", file);
+  pj_bool(file,
+          ((local_materialized_write_events != 0 &&
+            local_materialized_expected_read_bytes_known)));
+  fputs(",\n", file);
+  ;
   if (local_materialized_write_events == 0 ||
       !local_materialized_expected_read_bytes_known ||
       !local_materialized_read_bytes_known) {
     fputs("    \"materialized_read_complete\": null,\n", file);
   } else {
-    fprintf(
-      file,
-      "    \"materialized_read_complete\": %s,\n",
-      local_materialized_expected_read_bytes == local_materialized_read_bytes
-        ? "true"
-        : "false");
+    fputs("    \"materialized_read_complete\": ", file);
+    pj_bool(file,
+            (local_materialized_expected_read_bytes ==
+             local_materialized_read_bytes));
+    fputs(",\n", file);
+    ;
   }
-  fprintf(file,
-          "    \"transpose_count\": %llu,\n",
-          (unsigned long long)local_transpose_events);
+  fputs("    \"transpose_count\": ", file);
+  pj_u64(file, local_transpose_events);
+  fputs(",\n", file);
+  ;
   if (local_transpose_write_bytes_known) {
-    fprintf(file,
-            "    \"runtime_transpose_write_bytes\": %llu,\n",
-            (unsigned long long)local_transpose_write_bytes);
+    fputs("    \"runtime_transpose_write_bytes\": ", file);
+    pj_u64(file, local_transpose_write_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"runtime_transpose_write_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"runtime_transpose_write_bytes_known\": %s,\n",
-          local_transpose_write_bytes_known ? "true" : "false");
-  fprintf(
-    file, "    \"pack_count\": %llu,\n", (unsigned long long)local_pack_events);
+  fputs("    \"runtime_transpose_write_bytes_known\": ", file);
+  pj_bool(file, (local_transpose_write_bytes_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"pack_count\": ", file);
+  pj_u64(file, local_pack_events);
+  fputs(",\n", file);
+  ;
   if (local_pack_events != 0 && local_pack_bytes_known) {
-    fprintf(file,
-            "    \"pack_bytes\": %llu,\n",
-            (unsigned long long)local_pack_bytes);
+    fputs("    \"pack_bytes\": ", file);
+    pj_u64(file, local_pack_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"pack_bytes\": null,\n", file);
   }
-  fprintf(
-    file,
-    "    \"pack_bytes_known\": %s,\n",
-    (local_pack_events != 0 && local_pack_bytes_known) ? "true" : "false");
-  fprintf(file,
-          "    \"unpack_count\": %llu,\n",
-          (unsigned long long)local_unpack_events);
+  fputs("    \"pack_bytes_known\": ", file);
+  pj_bool(file, ((local_pack_events != 0 && local_pack_bytes_known)));
+  fputs(",\n", file);
+  ;
+  fputs("    \"unpack_count\": ", file);
+  pj_u64(file, local_unpack_events);
+  fputs(",\n", file);
+  ;
   if (local_unpack_events != 0 && local_unpack_bytes_known) {
-    fprintf(file,
-            "    \"unpack_bytes\": %llu,\n",
-            (unsigned long long)local_unpack_bytes);
+    fputs("    \"unpack_bytes\": ", file);
+    pj_u64(file, local_unpack_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"unpack_bytes\": null,\n", file);
   }
-  fprintf(
-    file,
-    "    \"unpack_bytes_known\": %s,\n",
-    (local_unpack_events != 0 && local_unpack_bytes_known) ? "true" : "false");
-  fprintf(file,
-          "    \"parallel_region_count\": %llu,\n",
-          (unsigned long long)local_parallel_events);
+  fputs("    \"unpack_bytes_known\": ", file);
+  pj_bool(file, ((local_unpack_events != 0 && local_unpack_bytes_known)));
+  fputs(",\n", file);
+  ;
+  fputs("    \"parallel_region_count\": ", file);
+  pj_u64(file, local_parallel_events);
+  fputs(",\n", file);
+  ;
   if (local_live_bytes_known) {
-    fprintf(file,
-            "    \"peak_live_bytes\": %llu,\n",
-            (unsigned long long)local_peak_live_bytes);
+    fputs("    \"peak_live_bytes\": ", file);
+    pj_u64(file, local_peak_live_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"peak_live_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"peak_live_proven\": %s,\n",
-          local_live_bytes_known ? "true" : "false");
+  fputs("    \"peak_live_proven\": ", file);
+  pj_bool(file, (local_live_bytes_known));
+  fputs(",\n", file);
+  ;
   if (local_top_level_time_known) {
-    fprintf(file,
-            "    \"top_level_time_ns\": %llu,\n",
-            (unsigned long long)local_top_level_time_ns);
+    fputs("    \"top_level_time_ns\": ", file);
+    pj_u64(file, local_top_level_time_ns);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"top_level_time_ns\": null,\n", file);
   }
-  fprintf(file,
-          "    \"top_level_time_known\": %s,\n",
-          local_top_level_time_known ? "true" : "false");
-  fprintf(file,
-          "    \"worker_sampling\": {\"duty\": %u, "
-          "\"basis\": \"instance_counter_duty\", "
-          "\"interval_overflow\": %s},\n",
-          sampling_duty,
-          interval_overflow ? "true" : "false");
+  fputs("    \"top_level_time_known\": ", file);
+  pj_bool(file, (local_top_level_time_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"worker_sampling\": {\"duty\": ", file);
+  pj_u64(file, (uint64_t)(sampling_duty));
+  fputs(", \"basis\": \"instance_counter_duty\", \"interval_overflow\": ",
+        file);
+  pj_bool(file, (interval_overflow));
+  fputs("},\n", file);
+  ;
   fputs(
     "    \"worker_wall_attribution\": {\"basis\": "
     "\"equal_split_across_concurrent_worker_spans\", \"additive\": true, "
     "\"time_domain\": \"wall\"},\n",
     file);
-  fprintf(file,
-          "    \"event_mismatch_count\": %llu\n",
-          (unsigned long long)local_mismatch_events);
+  fputs("    \"event_mismatch_count\": ", file);
+  pj_u64(file, local_mismatch_events);
+  fputs("\n", file);
+  ;
   fputs("  },\n  \"events\": [", file);
   for (index = 0; index < snapshot_count; ++index) {
     const ncnn_profile_record* record = &snapshot[index];
     if (index != 0) {
       fputs(",", file);
     }
-    fprintf(file,
-            "\n    {\"id\": %llu, \"category\": ",
-            (unsigned long long)record->id);
-    write_json_string(file, category_name(record->category));
+    fputs("\n    {\"id\": ", file);
+    pj_u64(file, record->id);
+    fputs(", \"category\": ", file);
+    ;
+    pj_string(file, category_name(record->category));
     fputs(", \"time_domain\": ", file);
-    write_json_string(file,
-                      record->category == NCNN_PROFILE_WORKER_OPERATION
-                        ? "worker_cpu"
-                        : "wall");
-    fprintf(file,
-            ", \"calls\": %llu, \"inclusive_ns\": %llu, \"exclusive_ns\": ",
-            (unsigned long long)record->calls,
-            (unsigned long long)record->inclusive_ns);
+    pj_string(file,
+              record->category == NCNN_PROFILE_WORKER_OPERATION ? "worker_cpu"
+                                                                : "wall");
+    fputs(", \"calls\": ", file);
+    pj_u64(file, record->calls);
+    fputs(", \"inclusive_ns\": ", file);
+    pj_u64(file, record->inclusive_ns);
+    fputs(", \"exclusive_ns\": ", file);
+    ;
     if (record->exclusive_known) {
-      fprintf(file, "%llu", (unsigned long long)record->exclusive_ns);
+      pj_u64(file, record->exclusive_ns);
     } else {
-      fputs("null", file);
+      pj_null(file);
     }
     if (record->category == NCNN_PROFILE_WORKER_OPERATION) {
       fputs(", \"worker_wall_union_ns\": ", file);
       if (record->worker_wall_union_known) {
-        fprintf(file, "%llu", (unsigned long long)record->worker_wall_union_ns);
+        pj_u64(file, record->worker_wall_union_ns);
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
-      fprintf(file,
-              ", \"worker_wall_union_known\": %s",
-              record->worker_wall_union_known ? "true" : "false");
+      fputs(", \"worker_wall_union_known\": ", file);
+      pj_bool(file, (record->worker_wall_union_known));
+      ;
       fputs(", \"wall_attributed_ns\": ", file);
       if (record->worker_wall_attributed_known) {
-        fprintf(
-          file, "%llu", (unsigned long long)record->worker_wall_attributed_ns);
+        pj_u64(file, record->worker_wall_attributed_ns);
+        ;
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
       fputs(", \"wall_attributed_estimated_ns\": ", file);
       if (record->worker_wall_attributed_known) {
-        fprintf(
-          file,
-          "%llu",
-          (unsigned long long)record->worker_wall_attributed_estimated_ns);
+        pj_u64(file, record->worker_wall_attributed_estimated_ns);
+        ;
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
       fputs(", \"wall_attributed_share_of_sampled_window\": ", file);
       if (record->worker_wall_attributed_known &&
           attribution_window_total != 0) {
-        fprintf(file,
-                "%.9f",
-                (double)record->worker_wall_attributed_ns /
-                  (double)attribution_window_total);
+        pj_f64(file,
+               (double)record->worker_wall_attributed_ns /
+                 (double)attribution_window_total);
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
-      fprintf(file,
-              ", \"wall_attributed_known\": %s, \"calls_estimated\": %llu",
-              record->worker_wall_attributed_known ? "true" : "false",
-              (unsigned long long)(sampling_duty <= 1
-                                     ? record->calls
-                                     : record->calls * sampling_duty));
+      fputs(", \"wall_attributed_known\": ", file);
+      pj_bool(file, (record->worker_wall_attributed_known));
+      fputs(", \"calls_estimated\": ", file);
+      pj_u64(
+        file,
+        (sampling_duty <= 1 ? record->calls : record->calls * sampling_duty));
+      ;
     }
     if (record->category == NCNN_PROFILE_PARALLEL) {
-      fprintf(file,
-              ", \"worker_covered_wall_ns\": %llu, "
-              "\"worker_covered_wall_sampled_ns\": %llu, "
-              "\"sampled_window_wall_ns\": %llu, "
-              "\"region_wall_ns\": %llu, "
-              "\"region_worker_spans\": %llu, "
-              "\"sample_scale\": %u, "
-              "\"wall_projection_factor\": %.9f",
-              (unsigned long long)record->worker_covered_wall_estimated_ns,
-              (unsigned long long)record->worker_covered_wall_ns,
-              (unsigned long long)record->sampled_window_wall_ns,
-              (unsigned long long)record->region_wall_ns,
-              (unsigned long long)record->region_worker_spans,
-              sampling_duty,
-              attribution_projection);
+      fputs(", \"worker_covered_wall_ns\": ", file);
+      pj_u64(file, record->worker_covered_wall_estimated_ns);
+      fputs(", \"worker_covered_wall_sampled_ns\": ", file);
+      pj_u64(file, record->worker_covered_wall_ns);
+      fputs(", \"sampled_window_wall_ns\": ", file);
+      pj_u64(file, record->sampled_window_wall_ns);
+      fputs(", \"region_wall_ns\": ", file);
+      pj_u64(file, record->region_wall_ns);
+      fputs(", \"region_worker_spans\": ", file);
+      pj_u64(file, record->region_worker_spans);
+      fputs(", \"sample_scale\": ", file);
+      pj_u64(file, (uint64_t)(sampling_duty));
+      fputs(", \"wall_projection_factor\": ", file);
+      pj_f64(file, attribution_projection);
+      ;
       fputs(", \"wall_coverage_share\": ", file);
       if (record->wall_coverage_known && record->sampled_window_wall_ns != 0) {
-        fprintf(file,
-                "%.9f",
-                (double)record->worker_covered_wall_ns /
-                  (double)record->sampled_window_wall_ns);
+        pj_f64(file,
+               (double)record->worker_covered_wall_ns /
+                 (double)record->sampled_window_wall_ns);
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
       fputs(", \"wall_exclusive_estimated_ns\": ", file);
       if (record->wall_coverage_known) {
-        fprintf(file,
-                "%llu",
-                (unsigned long long)record->wall_exclusive_estimated_ns);
+        pj_u64(file, record->wall_exclusive_estimated_ns);
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
-      fprintf(file,
-              ", \"wall_exclusive_estimated_known\": %s, "
-              "\"exclusive_semantics\": ",
-              record->wall_coverage_known ? "true" : "false");
-      write_json_string(file,
-                        record->exclusive_known
-                          ? "region_wall_minus_worker_span_union"
-                          : "not_proven");
+      fputs(", \"wall_exclusive_estimated_known\": ", file);
+      pj_bool(file, (record->wall_coverage_known));
+      fputs(", \"exclusive_semantics\": ", file);
+      ;
+      pj_string(file,
+                record->exclusive_known ? "region_wall_minus_worker_span_union"
+                                        : "not_proven");
     }
     fputs(", \"bytes\": ", file);
     if (record->bytes_known) {
-      fprintf(file, "%llu", (unsigned long long)record->bytes);
+      pj_u64(file, record->bytes);
     } else {
-      fputs("null", file);
+      pj_null(file);
     }
-    fprintf(
-      file, ", \"bytes_known\": %s}", record->bytes_known ? "true" : "false");
+    fputs(", \"bytes_known\": ", file);
+    pj_bool(file, (record->bytes_known));
+    pj_object_end(file);
+    ;
   }
   if (snapshot_count != 0) {
     fputs("\n  ", file);
@@ -2044,348 +2041,380 @@ void __ncnn_profile_flush(void) {
   fputs("  \"kind\": \"ncnn.model_execution_profile\",\n", file);
   fputs("  \"plan_revision\": ", file);
   if (revision && *revision) {
-    write_json_string(file, revision);
+    pj_string(file, revision);
   } else {
     fputs("\"static-v1\"", file);
   }
   fputs(",\n  \"attribution_revision\": ", file);
-  write_json_string(file,
-                    attribution_revision ? attribution_revision : "unknown");
+  pj_string(file, attribution_revision ? attribution_revision : "unknown");
   fputs(",\n  \"model\": ", file);
-  write_json_string(file, model ? model : "unknown");
+  pj_string(file, model ? model : "unknown");
   fputs(",\n  \"plan_hash\": ", file);
   if (plan && *plan) {
-    write_json_string(file, plan);
+    pj_string(file, plan);
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
   fputs(",\n  \"input_hash\": ", file);
   if (input_hash && *input_hash) {
-    write_json_string(file, input_hash);
+    pj_string(file, input_hash);
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
   fputs(",\n  \"build_identity\": ", file);
   if (build_identity && *build_identity) {
-    write_json_string(file, build_identity);
+    pj_string(file, build_identity);
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
   fputs(",\n  \"target\": ", file);
   if (target && *target) {
-    write_json_string(file, target);
+    pj_string(file, target);
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
   fputs(",\n  \"mode\": ", file);
-  write_json_string(file, mode ? mode : "diagnostic");
+  pj_string(file, mode ? mode : "diagnostic");
   fputs(",\n  \"threads\": ", file);
   if (thread_known) {
-    fprintf(file, "%u", thread_count);
+    pj_u64(file, (uint64_t)(thread_count));
+    ;
   } else {
-    fputs("null", file);
+    pj_null(file);
   }
-  fprintf(file,
-          ",\n  \"instrumentation\": {\"enabled\": true, \"coverage\": "
-          "\"explicit-callbacks\", \"aggregation\": \"process-cumulative\", "
-          "\"invocation_count\": %llu, \"record_overflow\": %s, "
-          "\"allocation_table_overflow\": %s},\n",
-          (unsigned long long)local_flush_count,
-          local_record_overflow ? "true" : "false",
-          local_allocation_overflow ? "true" : "false");
+  fputs(
+    ",\n  \"instrumentation\": {\"enabled\": true, \"coverage\": "
+    "\"explicit-callbacks\", \"aggregation\": \"process-cumulative\", "
+    "\"invocation_count\": ",
+    file);
+  pj_u64(file, local_flush_count);
+  fputs(", \"record_overflow\": ", file);
+  pj_bool(file, (local_record_overflow));
+  fputs(", \"allocation_table_overflow\": ", file);
+  pj_bool(file, (local_allocation_overflow));
+  fputs("},\n", file);
+  ;
   fputs("  \"summary\": {\n", file);
-  fprintf(file,
-          "    \"allocation_count\": %llu,\n",
-          (unsigned long long)local_allocation_events);
+  fputs("    \"allocation_count\": ", file);
+  pj_u64(file, local_allocation_events);
+  fputs(",\n", file);
+  ;
   if (local_allocation_bytes_known) {
-    fprintf(file,
-            "    \"allocation_bytes\": %llu,\n",
-            (unsigned long long)local_allocation_bytes);
+    fputs("    \"allocation_bytes\": ", file);
+    pj_u64(file, local_allocation_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"allocation_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"allocation_bytes_known\": %s,\n",
-          local_allocation_bytes_known ? "true" : "false");
-  fprintf(file,
-          "    \"deallocation_count\": %llu,\n",
-          (unsigned long long)local_deallocation_events);
+  fputs("    \"allocation_bytes_known\": ", file);
+  pj_bool(file, (local_allocation_bytes_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"deallocation_count\": ", file);
+  pj_u64(file, local_deallocation_events);
+  fputs(",\n", file);
+  ;
   if (local_deallocation_bytes_known) {
-    fprintf(file,
-            "    \"deallocation_bytes\": %llu,\n",
-            (unsigned long long)local_deallocation_bytes);
+    fputs("    \"deallocation_bytes\": ", file);
+    pj_u64(file, local_deallocation_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"deallocation_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"deallocation_bytes_known\": %s,\n",
-          local_deallocation_bytes_known ? "true" : "false");
-  fprintf(
-    file, "    \"copy_count\": %llu,\n", (unsigned long long)local_copy_events);
+  fputs("    \"deallocation_bytes_known\": ", file);
+  pj_bool(file, (local_deallocation_bytes_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"copy_count\": ", file);
+  pj_u64(file, local_copy_events);
+  fputs(",\n", file);
+  ;
   if (local_copy_bytes_known) {
-    fprintf(file,
-            "    \"copy_bytes\": %llu,\n",
-            (unsigned long long)local_copy_bytes);
+    fputs("    \"copy_bytes\": ", file);
+    pj_u64(file, local_copy_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"copy_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"copy_bytes_known\": %s,\n",
-          local_copy_bytes_known ? "true" : "false");
-  fprintf(file,
-          "    \"materialized_write_count\": %llu,\n",
-          (unsigned long long)local_materialized_write_events);
+  fputs("    \"copy_bytes_known\": ", file);
+  pj_bool(file, (local_copy_bytes_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"materialized_write_count\": ", file);
+  pj_u64(file, local_materialized_write_events);
+  fputs(",\n", file);
+  ;
   if (local_materialized_write_events != 0 &&
       local_materialized_write_bytes_known) {
-    fprintf(file,
-            "    \"runtime_materialized_write_bytes\": %llu,\n",
-            (unsigned long long)local_materialized_write_bytes);
+    fputs("    \"runtime_materialized_write_bytes\": ", file);
+    pj_u64(file, local_materialized_write_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"runtime_materialized_write_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"materialized_write_bytes_known\": %s,\n",
-          (local_materialized_write_events != 0 &&
-           local_materialized_write_bytes_known)
-            ? "true"
-            : "false");
-  fprintf(file,
-          "    \"materialized_read_count\": %llu,\n",
-          (unsigned long long)local_materialized_read_events);
+  fputs("    \"materialized_write_bytes_known\": ", file);
+  pj_bool(file,
+          ((local_materialized_write_events != 0 &&
+            local_materialized_write_bytes_known)));
+  fputs(",\n", file);
+  ;
+  fputs("    \"materialized_read_count\": ", file);
+  pj_u64(file, local_materialized_read_events);
+  fputs(",\n", file);
+  ;
   if (local_materialized_read_events != 0 &&
       local_materialized_read_bytes_known) {
-    fprintf(file,
-            "    \"runtime_materialized_read_bytes\": %llu,\n",
-            (unsigned long long)local_materialized_read_bytes);
+    fputs("    \"runtime_materialized_read_bytes\": ", file);
+    pj_u64(file, local_materialized_read_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"runtime_materialized_read_bytes\": null,\n", file);
   }
-  fprintf(
-    file,
-    "    \"materialized_read_bytes_known\": %s,\n",
-    (local_materialized_read_events != 0 && local_materialized_read_bytes_known)
-      ? "true"
-      : "false");
+  fputs("    \"materialized_read_bytes_known\": ", file);
+  pj_bool(file,
+          ((local_materialized_read_events != 0 &&
+            local_materialized_read_bytes_known)));
+  fputs(",\n", file);
+  ;
   if (local_materialized_write_events != 0 &&
       local_materialized_expected_read_bytes_known) {
-    fprintf(file,
-            "    \"expected_materialized_read_bytes\": %llu,\n",
-            (unsigned long long)local_materialized_expected_read_bytes);
+    fputs("    \"expected_materialized_read_bytes\": ", file);
+    pj_u64(file, local_materialized_expected_read_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"expected_materialized_read_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"expected_materialized_read_bytes_known\": %s,\n",
-          (local_materialized_write_events != 0 &&
-           local_materialized_expected_read_bytes_known)
-            ? "true"
-            : "false");
+  fputs("    \"expected_materialized_read_bytes_known\": ", file);
+  pj_bool(file,
+          ((local_materialized_write_events != 0 &&
+            local_materialized_expected_read_bytes_known)));
+  fputs(",\n", file);
+  ;
   if (local_materialized_write_events == 0 ||
       !local_materialized_expected_read_bytes_known ||
       !local_materialized_read_bytes_known) {
     fputs("    \"materialized_read_complete\": null,\n", file);
   } else {
-    fprintf(
-      file,
-      "    \"materialized_read_complete\": %s,\n",
-      local_materialized_expected_read_bytes == local_materialized_read_bytes
-        ? "true"
-        : "false");
+    fputs("    \"materialized_read_complete\": ", file);
+    pj_bool(file,
+            (local_materialized_expected_read_bytes ==
+             local_materialized_read_bytes));
+    fputs(",\n", file);
+    ;
   }
-  fprintf(file,
-          "    \"transpose_count\": %llu,\n",
-          (unsigned long long)local_transpose_events);
+  fputs("    \"transpose_count\": ", file);
+  pj_u64(file, local_transpose_events);
+  fputs(",\n", file);
+  ;
   if (local_transpose_write_bytes_known) {
-    fprintf(file,
-            "    \"runtime_transpose_write_bytes\": %llu,\n",
-            (unsigned long long)local_transpose_write_bytes);
+    fputs("    \"runtime_transpose_write_bytes\": ", file);
+    pj_u64(file, local_transpose_write_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"runtime_transpose_write_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"runtime_transpose_write_bytes_known\": %s,\n",
-          local_transpose_write_bytes_known ? "true" : "false");
-  fprintf(
-    file, "    \"pack_count\": %llu,\n", (unsigned long long)local_pack_events);
+  fputs("    \"runtime_transpose_write_bytes_known\": ", file);
+  pj_bool(file, (local_transpose_write_bytes_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"pack_count\": ", file);
+  pj_u64(file, local_pack_events);
+  fputs(",\n", file);
+  ;
   if (local_pack_events != 0 && local_pack_bytes_known) {
-    fprintf(file,
-            "    \"pack_bytes\": %llu,\n",
-            (unsigned long long)local_pack_bytes);
+    fputs("    \"pack_bytes\": ", file);
+    pj_u64(file, local_pack_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"pack_bytes\": null,\n", file);
   }
-  fprintf(
-    file,
-    "    \"pack_bytes_known\": %s,\n",
-    (local_pack_events != 0 && local_pack_bytes_known) ? "true" : "false");
-  fprintf(file,
-          "    \"unpack_count\": %llu,\n",
-          (unsigned long long)local_unpack_events);
+  fputs("    \"pack_bytes_known\": ", file);
+  pj_bool(file, ((local_pack_events != 0 && local_pack_bytes_known)));
+  fputs(",\n", file);
+  ;
+  fputs("    \"unpack_count\": ", file);
+  pj_u64(file, local_unpack_events);
+  fputs(",\n", file);
+  ;
   if (local_unpack_events != 0 && local_unpack_bytes_known) {
-    fprintf(file,
-            "    \"unpack_bytes\": %llu,\n",
-            (unsigned long long)local_unpack_bytes);
+    fputs("    \"unpack_bytes\": ", file);
+    pj_u64(file, local_unpack_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"unpack_bytes\": null,\n", file);
   }
-  fprintf(
-    file,
-    "    \"unpack_bytes_known\": %s,\n",
-    (local_unpack_events != 0 && local_unpack_bytes_known) ? "true" : "false");
-  fprintf(file,
-          "    \"parallel_region_count\": %llu,\n",
-          (unsigned long long)local_parallel_events);
+  fputs("    \"unpack_bytes_known\": ", file);
+  pj_bool(file, ((local_unpack_events != 0 && local_unpack_bytes_known)));
+  fputs(",\n", file);
+  ;
+  fputs("    \"parallel_region_count\": ", file);
+  pj_u64(file, local_parallel_events);
+  fputs(",\n", file);
+  ;
   if (local_live_bytes_known) {
-    fprintf(file,
-            "    \"peak_live_bytes\": %llu,\n",
-            (unsigned long long)local_peak_live_bytes);
+    fputs("    \"peak_live_bytes\": ", file);
+    pj_u64(file, local_peak_live_bytes);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"peak_live_bytes\": null,\n", file);
   }
-  fprintf(file,
-          "    \"peak_live_proven\": %s,\n",
-          local_live_bytes_known ? "true" : "false");
+  fputs("    \"peak_live_proven\": ", file);
+  pj_bool(file, (local_live_bytes_known));
+  fputs(",\n", file);
+  ;
   if (local_top_level_time_known) {
-    fprintf(file,
-            "    \"top_level_time_ns\": %llu,\n",
-            (unsigned long long)local_top_level_time_ns);
+    fputs("    \"top_level_time_ns\": ", file);
+    pj_u64(file, local_top_level_time_ns);
+    fputs(",\n", file);
+    ;
   } else {
     fputs("    \"top_level_time_ns\": null,\n", file);
   }
-  fprintf(file,
-          "    \"top_level_time_known\": %s,\n",
-          local_top_level_time_known ? "true" : "false");
-  fprintf(file,
-          "    \"worker_sampling\": {\"duty\": %u, "
-          "\"basis\": \"instance_counter_duty\", "
-          "\"interval_overflow\": %s},\n",
-          sampling_duty,
-          interval_overflow ? "true" : "false");
+  fputs("    \"top_level_time_known\": ", file);
+  pj_bool(file, (local_top_level_time_known));
+  fputs(",\n", file);
+  ;
+  fputs("    \"worker_sampling\": {\"duty\": ", file);
+  pj_u64(file, (uint64_t)(sampling_duty));
+  fputs(", \"basis\": \"instance_counter_duty\", \"interval_overflow\": ",
+        file);
+  pj_bool(file, (interval_overflow));
+  fputs("},\n", file);
+  ;
   fputs(
     "    \"worker_wall_attribution\": {\"basis\": "
     "\"equal_split_across_concurrent_worker_spans\", \"additive\": true, "
     "\"time_domain\": \"wall\"},\n",
     file);
-  fprintf(file,
-          "    \"event_mismatch_count\": %llu\n",
-          (unsigned long long)local_mismatch_events);
+  fputs("    \"event_mismatch_count\": ", file);
+  pj_u64(file, local_mismatch_events);
+  fputs("\n", file);
+  ;
   fputs("  },\n  \"events\": [", file);
   for (index = 0; index < snapshot_count; ++index) {
     const ncnn_profile_record* record = &snapshot[index];
     if (index != 0) {
       fputs(",", file);
     }
-    fprintf(file,
-            "\n    {\"id\": %llu, \"category\": ",
-            (unsigned long long)record->id);
-    write_json_string(file, category_name(record->category));
+    fputs("\n    {\"id\": ", file);
+    pj_u64(file, record->id);
+    fputs(", \"category\": ", file);
+    ;
+    pj_string(file, category_name(record->category));
     fputs(", \"time_domain\": ", file);
-    write_json_string(file,
-                      record->category == NCNN_PROFILE_WORKER_OPERATION
-                        ? "worker_cpu"
-                        : "wall");
-    fprintf(file,
-            ", \"calls\": %llu, \"inclusive_ns\": %llu, \"exclusive_ns\": ",
-            (unsigned long long)record->calls,
-            (unsigned long long)record->inclusive_ns);
+    pj_string(file,
+              record->category == NCNN_PROFILE_WORKER_OPERATION ? "worker_cpu"
+                                                                : "wall");
+    fputs(", \"calls\": ", file);
+    pj_u64(file, record->calls);
+    fputs(", \"inclusive_ns\": ", file);
+    pj_u64(file, record->inclusive_ns);
+    fputs(", \"exclusive_ns\": ", file);
+    ;
     if (record->exclusive_known) {
-      fprintf(file, "%llu", (unsigned long long)record->exclusive_ns);
+      pj_u64(file, record->exclusive_ns);
     } else {
-      fputs("null", file);
+      pj_null(file);
     }
     if (record->category == NCNN_PROFILE_WORKER_OPERATION) {
       fputs(", \"worker_wall_union_ns\": ", file);
       if (record->worker_wall_union_known) {
-        fprintf(file, "%llu", (unsigned long long)record->worker_wall_union_ns);
+        pj_u64(file, record->worker_wall_union_ns);
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
-      fprintf(file,
-              ", \"worker_wall_union_known\": %s",
-              record->worker_wall_union_known ? "true" : "false");
+      fputs(", \"worker_wall_union_known\": ", file);
+      pj_bool(file, (record->worker_wall_union_known));
+      ;
       fputs(", \"wall_attributed_ns\": ", file);
       if (record->worker_wall_attributed_known) {
-        fprintf(
-          file, "%llu", (unsigned long long)record->worker_wall_attributed_ns);
+        pj_u64(file, record->worker_wall_attributed_ns);
+        ;
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
       fputs(", \"wall_attributed_estimated_ns\": ", file);
       if (record->worker_wall_attributed_known) {
-        fprintf(
-          file,
-          "%llu",
-          (unsigned long long)record->worker_wall_attributed_estimated_ns);
+        pj_u64(file, record->worker_wall_attributed_estimated_ns);
+        ;
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
       fputs(", \"wall_attributed_share_of_sampled_window\": ", file);
       if (record->worker_wall_attributed_known &&
           attribution_window_total != 0) {
-        fprintf(file,
-                "%.9f",
-                (double)record->worker_wall_attributed_ns /
-                  (double)attribution_window_total);
+        pj_f64(file,
+               (double)record->worker_wall_attributed_ns /
+                 (double)attribution_window_total);
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
-      fprintf(file,
-              ", \"wall_attributed_known\": %s, \"calls_estimated\": %llu",
-              record->worker_wall_attributed_known ? "true" : "false",
-              (unsigned long long)(sampling_duty <= 1
-                                     ? record->calls
-                                     : record->calls * sampling_duty));
+      fputs(", \"wall_attributed_known\": ", file);
+      pj_bool(file, (record->worker_wall_attributed_known));
+      fputs(", \"calls_estimated\": ", file);
+      pj_u64(
+        file,
+        (sampling_duty <= 1 ? record->calls : record->calls * sampling_duty));
+      ;
     }
     if (record->category == NCNN_PROFILE_PARALLEL) {
-      fprintf(file,
-              ", \"worker_covered_wall_ns\": %llu, "
-              "\"worker_covered_wall_sampled_ns\": %llu, "
-              "\"sampled_window_wall_ns\": %llu, "
-              "\"region_wall_ns\": %llu, "
-              "\"region_worker_spans\": %llu, "
-              "\"sample_scale\": %u, "
-              "\"wall_projection_factor\": %.9f",
-              (unsigned long long)record->worker_covered_wall_estimated_ns,
-              (unsigned long long)record->worker_covered_wall_ns,
-              (unsigned long long)record->sampled_window_wall_ns,
-              (unsigned long long)record->region_wall_ns,
-              (unsigned long long)record->region_worker_spans,
-              sampling_duty,
-              attribution_projection);
+      fputs(", \"worker_covered_wall_ns\": ", file);
+      pj_u64(file, record->worker_covered_wall_estimated_ns);
+      fputs(", \"worker_covered_wall_sampled_ns\": ", file);
+      pj_u64(file, record->worker_covered_wall_ns);
+      fputs(", \"sampled_window_wall_ns\": ", file);
+      pj_u64(file, record->sampled_window_wall_ns);
+      fputs(", \"region_wall_ns\": ", file);
+      pj_u64(file, record->region_wall_ns);
+      fputs(", \"region_worker_spans\": ", file);
+      pj_u64(file, record->region_worker_spans);
+      fputs(", \"sample_scale\": ", file);
+      pj_u64(file, (uint64_t)(sampling_duty));
+      fputs(", \"wall_projection_factor\": ", file);
+      pj_f64(file, attribution_projection);
+      ;
       fputs(", \"wall_coverage_share\": ", file);
       if (record->wall_coverage_known && record->sampled_window_wall_ns != 0) {
-        fprintf(file,
-                "%.9f",
-                (double)record->worker_covered_wall_ns /
-                  (double)record->sampled_window_wall_ns);
+        pj_f64(file,
+               (double)record->worker_covered_wall_ns /
+                 (double)record->sampled_window_wall_ns);
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
       fputs(", \"wall_exclusive_estimated_ns\": ", file);
       if (record->wall_coverage_known) {
-        fprintf(file,
-                "%llu",
-                (unsigned long long)record->wall_exclusive_estimated_ns);
+        pj_u64(file, record->wall_exclusive_estimated_ns);
       } else {
-        fputs("null", file);
+        pj_null(file);
       }
-      fprintf(file,
-              ", \"wall_exclusive_estimated_known\": %s, "
-              "\"exclusive_semantics\": ",
-              record->wall_coverage_known ? "true" : "false");
-      write_json_string(file,
-                        record->exclusive_known
-                          ? "region_wall_minus_worker_span_union"
-                          : "not_proven");
+      fputs(", \"wall_exclusive_estimated_known\": ", file);
+      pj_bool(file, (record->wall_coverage_known));
+      fputs(", \"exclusive_semantics\": ", file);
+      ;
+      pj_string(file,
+                record->exclusive_known ? "region_wall_minus_worker_span_union"
+                                        : "not_proven");
     }
     fputs(", \"bytes\": ", file);
     if (record->bytes_known) {
-      fprintf(file, "%llu", (unsigned long long)record->bytes);
+      pj_u64(file, record->bytes);
     } else {
-      fputs("null", file);
+      pj_null(file);
     }
-    fprintf(
-      file, ", \"bytes_known\": %s}", record->bytes_known ? "true" : "false");
+    fputs(", \"bytes_known\": ", file);
+    pj_bool(file, (record->bytes_known));
+    pj_object_end(file);
+    ;
   }
   if (snapshot_count != 0) {
     fputs("\n  ", file);

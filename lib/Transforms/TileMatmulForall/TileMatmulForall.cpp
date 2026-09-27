@@ -19,6 +19,7 @@
 #include "mlir/Interfaces/TilingInterface.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "ncnn-mlir/Support/Diagnostics.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
@@ -298,7 +299,7 @@ class TileMatmulForallPass final
       const bool isInt8 = int8Matmul != nullptr;
       if (!outputType.hasStaticShape() || !inputType || !inputType.hasRank() ||
           inputType.getRank() != 2 || !inputType.hasStaticShape()) {
-        contract::annotateFallback(forall.getOperation(), "dynamic_shape");
+        emitNcnnFallbackWarning(forall.getOperation(), "dynamic_shape");
         return;
       }
       const int64_t tileM = outputType.getShape()[0];
@@ -355,6 +356,10 @@ class TileMatmulForallPass final
                                   0);
       }
     });
+
+    if (consumeDiagnosticFailure()) {
+      signalPassFailure();
+    }
   }
 };
 

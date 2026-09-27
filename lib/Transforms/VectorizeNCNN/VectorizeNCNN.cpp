@@ -20,6 +20,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "ncnn-mlir/Support/Diagnostics.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
@@ -448,7 +449,7 @@ LogicalResult vectorizeDepthwiseConvRows(MLIRContext* context,
   SmallVector<DepthwiseCandidate> candidates;
   module.walk([&](linalg::DepthwiseConv2DNhwcHwcmOp op) {
     contract::annotateOperationFamily(op, "depthwise", "fallback");
-    contract::annotateFallback(op, "not_vectorized");
+    emitNcnnFallbackWarning(op, "not_vectorized");
   });
   const auto isVectorWidth = [](int64_t width) {
     return width >= 2 && (width & (width - 1)) == 0;
@@ -1145,7 +1146,7 @@ class VectorizeNCNNPass final
             contract::annotateOperationFamily(
               operation, "depthwise", "fallback");
           }
-          contract::annotateFallback(operation, "unsupported_scalable_vector");
+          emitNcnnFallbackWarning(operation, "unsupported_scalable_vector");
         }
       });
       return;
@@ -1170,6 +1171,10 @@ class VectorizeNCNNPass final
           applyPatternsAndFoldGreedily(module, std::move(cleanupPatterns)))) {
       signalPassFailure();
       return;
+    }
+
+    if (consumeDiagnosticFailure()) {
+      signalPassFailure();
     }
   }
 };

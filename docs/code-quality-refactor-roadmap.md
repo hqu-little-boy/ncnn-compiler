@@ -815,10 +815,15 @@ perf-baseline-diff.md     # P2/P5 的性能基线对比（若跑）
 | T-C7 | ☑ | 2026-09-26 | 2026-09-26 | P4 | `StrategyNCNN.cpp` −671 行 |
 | T-M1 | ☑ | 2026-09-26 | 2026-09-26 | P4 | +14 lit，192→206；「常量穿透」落负向 |
 | T-M2 | ☑ | 2026-09-26 | 2026-09-26 | P4 | 18 个文件四段式设计注释 |
-| T-M3 | ☐ | | | | |
-| T-M4 | ☐ | | | | |
-| T-M5 | ☐ | | | | |
-| T-J1 | ☐ | | | | ⚠️ latent bug |
+| T-M3 | ☑ | 2026-09-27 | 2026-09-27 | P5 | `docs/cli-options.md`，53 选项 / 10 分组 |
+| T-M4 | ☑ | 2026-09-27 | 2026-09-27 | P5 | 8 TU + 1 头；`runOnOperation` 883→171；插桩路径 2 模型逐字节一致 |
+| T-M5 | ☑ | 2026-09-27 | 2026-09-27 | P5 | `Support/Diagnostics` 三级；9 reason 去重报警；`--warnings-as-errors` 走 env 下沉 |
+| T-J1 | ☑ | 2026-09-27 | 2026-09-27 | P5 | ⚠️ latent bug 已修；24/24 可解析（修前 12/24）；`profile_allowed` diff 为空 |
 
-> 逐阶段归档：`compiler/docs/refactor/p{1..4}-2026-09-26/`。
-> P4 的「提交」列填 P4，指本次提交（哈希见 `git log`）。
+> 逐阶段归档：`compiler/docs/refactor/p{1..4}-2026-09-26/`、
+> `compiler/docs/refactor/p5-2026-09-27/`。
+> 「提交」列填阶段代号，指该阶段那一笔提交（哈希见 `git log`）。
+>
+> **21 任务收口**：19 项落地、T-A2 由用户判定不做（影响交叉编译，见 P3 backlog）、
+> P5 完成即 roadmap WBS 清零。P4/P5 各有若干处实测否定 roadmap 的数字与文件
+> 清单，见对应阶段 README 的「与 roadmap 的偏离」。

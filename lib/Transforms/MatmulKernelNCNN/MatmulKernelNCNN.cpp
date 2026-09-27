@@ -41,6 +41,7 @@
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "ncnn-mlir/Support/Diagnostics.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
@@ -398,6 +399,10 @@ class MatmulKernelNCNNPass final
       if (chain.alloc->use_empty()) {
         rewriter.eraseOp(chain.alloc);
       }
+    }
+
+    if (consumeDiagnosticFailure()) {
+      signalPassFailure();
     }
   }
 
@@ -2333,7 +2338,7 @@ class MatmulKernelNCNNPass final
                                  : !hasContiguousK(lhs) || !hasContiguousK(rhs)
                                    ? "non_contiguous_k"
                                    : "native_kernel_unavailable";
-        contract::setString(forall.getOperation(), contract::kFallback, reason);
+        emitNcnnFallbackWarning(forall.getOperation(), reason);
       }
       if (auto reason = matmul->getAttrOfType<StringAttr>(contract::kFallback);
           reason && !forall->hasAttr(contract::kFallback)) {

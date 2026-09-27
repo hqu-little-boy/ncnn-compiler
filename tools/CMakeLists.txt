@@ -29,11 +29,19 @@ target_link_libraries(ncnn-compile PRIVATE
 target_compile_definitions(ncnn-compile PRIVATE
     NCNN_SLEEF_ARCHIVE_DIR="$<TARGET_FILE_DIR:sleef>"
     NCNN_PROFILE_RUNTIME_SOURCE="${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_runtime.c"
-    NCNN_PROFILE_RUNTIME_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/profile_runtime.c")
+    NCNN_PROFILE_RUNTIME_WRITER_SOURCE="${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_json_writer.c"
+    NCNN_PROFILE_RUNTIME_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/profile_runtime.c"
+    NCNN_PROFILE_RUNTIME_WRITER_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/profile_json_writer.c")
 add_dependencies(ncnn-compile sleef)
 install(TARGETS ncnn-compile RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES $<TARGET_FILE:sleef> DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES ${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_runtime.c
+# profile runtime 与其 JSON writer 都以 `.c` 源 install：ncnn-compile 在每个
+# 模型编译期把它们编进产物 .so。writer 的头必须一并 install（源与头同目录，
+# clang 按包含者所在目录解析 #include）。
+install(FILES
+    ${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_runtime.c
+    ${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_json_writer.c
+    ${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_json_writer.h
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/ncnn-mlir)
 
 configure_file(

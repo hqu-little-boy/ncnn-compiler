@@ -67,7 +67,8 @@ set_tests_properties(attr-report PROPERTIES
 add_test(NAME profile-runtime
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_profile_runtime.py
             --cc ${CLANG}
-            --runtime ${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_runtime.c)
+            --runtime ${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_runtime.c
+            --runtime ${CMAKE_SOURCE_DIR}/lib/ProfileRuntime/profile_json_writer.c)
 set_tests_properties(profile-runtime PROPERTIES
     LABELS "performance;runtime;tooling"
     RUN_SERIAL TRUE

@@ -16,4 +16,4 @@ target_link_libraries(EmitModelPlan PUBLIC
     MLIROpenMPDialect
     MLIRPass
     MLIRSCFDialect
-    MLIRVectorDialect)
+    MLIRVectorDialect NCNNDiagnosticsSupport)

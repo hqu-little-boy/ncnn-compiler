@@ -21,6 +21,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "ncnn-mlir/Support/CheckedMath.hpp"
+#include "ncnn-mlir/Support/Diagnostics.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 #include "ncnn-mlir/Support/Winograd63.hpp"
 #include "ncnn-mlir/Transforms/Winograd63NCNN/Winograd63NCNN.hpp"
@@ -528,6 +529,10 @@ class StrategyNCNNPass final
     for (linalg::Conv2DNhwcHwcfOp convolution : candidates) {
       rewriteConvolution(rewriter, convolution, *strategy);
     }
+
+    if (consumeDiagnosticFailure()) {
+      signalPassFailure();
+    }
   }
 
   // [1,M,K]×[1,K,N] → [M,K]×[K,N] 的 linalg.matmul（前后配 collapse/
@@ -744,7 +749,7 @@ class StrategyNCNNPass final
         })) {
       // 权重恒为静态常量（TosaToLinalg 已物化）；动态权重实例保持原路径。
       contract::annotateOperationFamily(convolution, "conv", "fallback");
-      contract::annotateFallback(convolution, "dynamic_or_invalid_geometry");
+      emitNcnnFallbackWarning(convolution, "dynamic_or_invalid_geometry");
       return;
     }
     const ArrayRef<int64_t> imageShape = imageType.getShape();
@@ -763,7 +768,7 @@ class StrategyNCNNPass final
         llvm::any_of(strides, [](int64_t value) { return value <= 0; }) ||
         llvm::any_of(dilations, [](int64_t value) { return value <= 0; })) {
       contract::annotateOperationFamily(convolution, "conv", "fallback");
-      contract::annotateFallback(convolution, "invalid_geometry");
+      emitNcnnFallbackWarning(convolution, "invalid_geometry");
       return;
     }
     contract::annotateConvContract(convolution,
@@ -908,7 +913,7 @@ class StrategyNCNNPass final
                                        outputChannels);
       } else {
         contract::annotateOperationFamily(convolution, "conv", "fallback");
-        contract::annotateFallback(convolution, "dynamic_spatial");
+        emitNcnnFallbackWarning(convolution, "dynamic_spatial");
       }
       return;
     }

@@ -42,6 +42,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/SymbolTable.h"
 #include "ncnn-mlir/Support/ConstantFold.hpp"
+#include "ncnn-mlir/Support/Diagnostics.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 
 namespace mlir::ncnn {
@@ -81,6 +82,10 @@ class PackStaticMatmulNCNNPass final
     }
     for (linalg::MatmulTransposeBOp matmul : int8Candidates) {
       processInt8MemRef(matmul, module);
+    }
+
+    if (consumeDiagnosticFailure()) {
+      signalPassFailure();
     }
   }
 
@@ -150,7 +155,7 @@ class PackStaticMatmulNCNNPass final
       matmul.getOperation(), contract::kWeightLayout, "row_major_kxn");
     contract::setString(
       matmul.getOperation(), contract::kPackSchema, "p20-panel-nk-v1");
-    contract::annotateFallback(matmul.getOperation(), reason);
+    emitNcnnFallbackWarning(matmul.getOperation(), reason);
   }
 
   static void annotateInt8Rejected(linalg::MatmulTransposeBOp matmul,
@@ -162,7 +167,7 @@ class PackStaticMatmulNCNNPass final
                               /*unpackBytes=*/0);
     contract::setString(
       matmul.getOperation(), contract::kWeightLayout, "row_major_nk");
-    contract::annotateFallback(matmul.getOperation(), reason);
+    emitNcnnFallbackWarning(matmul.getOperation(), reason);
   }
 
   static std::optional<Int8RhsSource> findInt8RhsSource(ModuleOp module,

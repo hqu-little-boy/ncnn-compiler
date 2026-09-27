@@ -201,7 +201,9 @@ class CompileSession final {
   fs::path object;
   fs::path assembly;
   fs::path profile_object;
+  fs::path profile_writer_object;
   fs::path profile_runtime_source;
+  fs::path profile_writer_source;
   fs::path manifest_path;
   fs::path execution_plan_path;
   fs::path header;

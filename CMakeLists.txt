@@ -141,6 +141,8 @@ ncnn_enable_first_party_warnings("${CMAKE_SOURCE_DIR}")
 file(GLOB_RECURSE NCNN_FORMAT_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/lib/*.cpp"
     "${CMAKE_SOURCE_DIR}/lib/*.c"
+    "${CMAKE_SOURCE_DIR}/lib/*.h"
+    "${CMAKE_SOURCE_DIR}/lib/*.hpp"
     "${CMAKE_SOURCE_DIR}/include/*.h"
     "${CMAKE_SOURCE_DIR}/include/*.hpp"
     "${CMAKE_SOURCE_DIR}/include/*.c"

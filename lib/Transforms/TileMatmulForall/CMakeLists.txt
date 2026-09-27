@@ -13,4 +13,4 @@ target_link_libraries(TileMatmulForall PUBLIC
     MLIRLinalgDialect
     MLIRSCFDialect
     MLIRSCFTransforms
-    MLIRTensorDialect)
+    MLIRTensorDialect NCNNDiagnosticsSupport)

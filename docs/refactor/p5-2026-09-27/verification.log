@@ -1,0 +1,166 @@
+# P5 门禁验证记录（2026-09-27）
+#
+# 纪律（用户约束）：format_check + tidy 全局跑（非本次产生的一并修）→
+# 全新 /tmp 目录构建 → 三个 numerical target → 全量 CTest。
+# 验收失败不提交；修复后另起全新 /tmp 目录重做。
+
+================================================================
+1. clang-format（全局）
+================================================================
+
+$ cmake --build /tmp/ncnn-compiler-stage-p5 --target format_check --parallel
+Checking code style with clang-format (Google)
+Built target format_check
+
+  首轮有违例（本次新改文件 + runOnOperation 末尾插入的括号缩进），
+  跑 `--target format` 全局就地修正后复检通过。
+
+  顺带修：NCNN_FORMAT_SOURCES 此前只 glob lib/*.{cpp,c}，不含
+  lib/*.{h,hpp}——模块内头（profile_json_writer.h / ImporterInternal.hpp /
+  GenerateCAPIInternal.hpp）根本不在覆盖面内。已补 glob，三份头复检无需改动。
+
+================================================================
+2. clang-tidy（全局）
+================================================================
+
+$ cmake --build /tmp/ncnn-compiler-stage-p5 --target tidy --parallel
+EXIT=0
+error:/warning: 计数 = 0
+
+  全库 0 问题。.clang-tidy 的 WarningsAsErrors='*' 仍然生效，
+  说明本次新增的 Diagnostics.cpp / InstrumentNCNNProfile 7 TU /
+  profile_json_writer.{c,h} 全部干净。
+
+================================================================
+3. 全新 /tmp stage 构建
+================================================================
+
+$ mkdir /tmp/ncnn-compiler-stage-p5
+$ cmake -S compiler -B /tmp/ncnn-compiler-stage-p5 \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DLLVM_DIR=/usr/lib/llvm-21/lib/cmake/llvm \
+      -DCOMPILER_ENABLE_FORMAT_TARGETS=ON \
+      -DCOMPILER_INSTALL_RPATH=ON \
+      -DBUILD_TESTING=ON
+$ cmake --build /tmp/ncnn-compiler-stage-p5 --parallel 16
+EXIT=0
+error: 计数 = 0
+
+  新目录、干净缓存，未复用任何既有模型编译产物。
+
+================================================================
+4. 三个 numerical target
+================================================================
+
+$ cmake --build /tmp/ncnn-compiler-stage-p5 --target \
+      numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests \
+      --parallel 16
+EXIT=0
+  最后一项：Built target numerical_dynamic_tests
+
+================================================================
+5. 全量 CTest
+================================================================
+
+$ ctest --test-dir /tmp/ncnn-compiler-stage-p5 --output-on-failure
+100% tests passed, 0 tests failed out of 456
+Total Test time (real) = 763.52 sec
+
+  披露：2 个测试 Skipped，是 roadmap §6 记载的既有 upstream INT8 skip，
+  原样保留未动：
+    435 - PerformanceModel.PPLCNetDocOriInt8 (Skipped)
+    436 - PerformanceModel.PPLCNetTextlineOriInt8 (Skipped)
+
+  注册数 456（P4 时为 449）：+1 是 T-M5 新增的
+  test/Transforms/PackStaticMatmulNCNN/warning-grading.mlir，
+  余下为测试注册的自然增长，非本次引入。
+
+================================================================
+6. T-J1 转义边界（profile-runtime 测试内）
+================================================================
+
+$ python3 test/Native/check_profile_runtime.py --cc clang-21 \
+    --runtime lib/ProfileRuntime/profile_runtime.c \
+    --runtime lib/ProfileRuntime/profile_json_writer.c
+PROFILE_TEST_OK
+
+  11 个转义边界用例 + 既有 4 个 harness 全绿。
+  env 用 bytes 注入：Python 传 str 会被 fsencode 编成合法 UTF-8，
+  注不进裸非法字节，那样测不到本 bug。
+
+================================================================
+7. T-J1 golden 前后字节对照（24 份 profile）
+================================================================
+
+$ CC=clang-21 capture-profile-golden.sh /tmp/p5-golden-before   # 修前
+$ CC=clang-21 capture-profile-golden.sh /tmp/p5-golden-after2   # 修后
+
+  归一化时序字段后逐字节相同 : 12/24   （ASCII / 转义 / 合法 UTF-8 / 边界）
+  仅非法 UTF-8 路径变化      : 12/24   （04-orphan / 05-truncated /
+                                        06-overlong / 07-surrogate × 3 schema）
+  json.loads 可解析          : 修前 12/24 → 修后 24/24
+
+================================================================
+8. T-M4 插桩 IR 前后逐字节对照
+================================================================
+
+$ git worktree add /tmp/p5-ref-src HEAD && cmake -S /tmp/p5-ref-src ...
+$ compare-profile-instrumentation.sh /tmp/p5-ref /tmp/p5-dev /tmp/p5-profile-compare
+PASS squeezenet_v1_1: 全部产物归一化后逐字节一致
+PASS resnet18: 全部产物归一化后逐字节一致
+
+  4 个 diff 文件字节数均为 0。对照面含 model.memref.mlir（插桩落地层）。
+  见 plan-before-after.diff。
+
+================================================================
+9. T-J1 导出面与 .so 依赖（P26 正面性质）
+================================================================
+
+$ llvm-readelf-21 --needed-libs libsqueezenet_v1_1.so   # 带 --profile
+  ld-linux-x86-64.so.2
+  libc.so.6
+  libm.so.6
+  libomp.so.5
+
+$ llvm-nm-21 -D --defined-only libsqueezenet_v1_1.so
+  00000000000011a0 T squeezenet_v1_1
+
+  profile_allowed 白名单 diff 为空（未新增任何符号）。
+  期间被审计拦下过一次 strlen，处置是消除而非扩白名单。
+
+================================================================
+10. T-M5 报警实测（构建日志抽样）
+================================================================
+
+  全量构建期间的 stderr 统计（每个 reason 一次编译内去重，故次数 = 触发
+  该 reason 的编译次数）：
+    14  warning: ncnn: packing_rejected_budget
+    26  warning: ncnn: packing_skipped_small_shape
+    34  warning: ncnn: packing_rejected_layout
+      7  warning: ncnn: not_vectorized
+      5  warning: ncnn: dynamic_spatial
+      2  warning: ncnn: unpacked_direct
+
+  roadmap 的验收「可见预算拒绝的 warning 且不失败」：packing_rejected_budget
+  多次出现，且全部编译 exit 0。
+
+================================================================
+11. T-M5 lit（warning-grading.mlir）
+================================================================
+
+  默认通道：warning 形态，packing_skipped_small_shape / packing_rejected_dynamic
+           各一次，第三次出现被抑制（CHECK-NOT）；编译不失败。
+  ERR 通道：NCNN_WARNINGS_AS_ERRORS=1 时同一 reason 升为 error，
+           not ncnn-mlir-opt 确认 pass 失败。
+  结果：ncnn-mlir-lit 207/207 全绿。
+
+================================================================
+12. 提交前检查
+================================================================
+
+$ git diff --check
+$ git status --short
+$ git diff --cached
+$ git log --oneline -10
+
+  详见提交时的输出。只 commit 不 push。

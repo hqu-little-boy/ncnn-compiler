@@ -193,7 +193,9 @@ int main(void) {
 def main() -> int:
   parser = argparse.ArgumentParser()
   parser.add_argument("--cc", required=True)
-  parser.add_argument("--runtime", required=True)
+  parser.add_argument("--runtime", required=True, action="append",
+                      help="profile runtime C source(s); repeat for the "
+                           "JSON writer TU")
   args = parser.parse_args()
   with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
@@ -204,7 +206,7 @@ def main() -> int:
     subprocess.run([
       args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror",
       '-DNCNN_PROFILE_DEFAULT_PLAN_REVISION="static-v1|int8-target-v1"',
-      str(source), args.runtime, "-o", str(binary),
+      str(source), *args.runtime, "-o", str(binary),
     ], check=True)
     environment = dict(os.environ)
     environment.update({
@@ -274,7 +276,7 @@ def main() -> int:
     assert records[(8, "parallel")]["exclusive_ns"] is None
     source.write_text(CONCURRENT_HARNESS, encoding="utf-8")
     subprocess.run([args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror",
-                    "-pthread", str(source), args.runtime, "-o", str(binary)],
+                    "-pthread", str(source), *args.runtime, "-o", str(binary)],
                    check=True)
     subprocess.run([str(binary)], check=True, env=environment)
     concurrent = json.loads(profile.read_text())["summary"]
@@ -295,7 +297,7 @@ def main() -> int:
     v2_source.write_text(V2_HARNESS, encoding="utf-8")
     subprocess.run([
       args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread",
-      str(v2_source), args.runtime, "-o", str(v2_binary),
+      str(v2_source), *args.runtime, "-o", str(v2_binary),
     ], check=True)
     v2_environment = dict(environment)
     v2_environment.update({
@@ -366,7 +368,7 @@ def main() -> int:
     worker_source.write_text(WORKER_HARNESS, encoding="utf-8")
     subprocess.run([
       args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pthread",
-      str(worker_source), args.runtime, "-o", str(worker_binary),
+      str(worker_source), *args.runtime, "-o", str(worker_binary),
     ], check=True)
     worker_environment = dict(environment)
     worker_environment.update({
@@ -456,6 +458,71 @@ def main() -> int:
     if sampled_worker is not None and sampled_worker["calls"]:
       assert sampled_worker["calls_estimated"] == \
         sampled_worker["calls"] * 4
+
+    # T-J1：转义边界。pj_string 是唯一编码入口，注入点用 profile 的字符串
+    # 字段（NCNN_PROFILE_MODEL 等）——它们与层名走同一条 pj_string 路径。
+    # 期望分两类：
+    #   * 合法输入（ASCII / 合法 UTF-8）round-trip 得到原字符串；
+    #   * 非法 UTF-8 按「最大非法子部分」变成 U+FFFD，且输出必须仍是合法 JSON
+    #     （修复前这些用例产出的文件 json.loads 直接失败）。
+    #
+    # env 必须用 bytes 注入：Python 传 str 会先按 fsencode 编成合法 UTF-8，
+    # 注不进裸非法字节，那样测不到本 bug。
+    FFFD = "\ufffd"
+    escaping_cases = [
+      ("quote-and-backslash", b'a"b\\c', 'a"b\\c'),
+      ("control-chars", b"a\tb\nc\rd\be\ff\x01z",
+       "a\tb\nc\rd\be\ff\x01z"),
+      ("non-ascii-legal", "中文-é-\U0001F3AF-日本語".encode("utf-8"),
+       "中文-é-\U0001F3AF-日本語"),
+      ("empty", b"", ""),
+      ("only-quote", b'"', '"'),
+      # 输入本来就含 U+FFFD（合法 UTF-8 EF BF BD）：原样透传，不改写。
+      ("literal-fffd", FFFD.encode("utf-8"), FFFD),
+      # U+0080 的合法 UTF-8 编码（C2 80）不是非法字节：必须原样透传。
+      ("legal-u0080", b"\xc2\x80", "\x80"),
+      ("orphan-continuation", b"orphan-\x80-end", "orphan-" + FFFD + "-end"),
+      ("truncated-three-byte", b"trunc-\xe2\x82", "trunc-" + FFFD),
+      ("overlong-slash", b"o\xc0\xafe", "o" + FFFD * 2 + "e"),
+      ("surrogate-encoding", b"s\xed\xa0\x80e", "s" + FFFD * 3 + "e"),
+    ]
+    for name, raw, expected in escaping_cases:
+      case_binary = root / ("escape_" + name)
+      case_profile = root / ("escape_" + name + ".json")
+      case_source = root / ("escape_" + name + ".c")
+      case_source.write_text(HARNESS, encoding="utf-8")
+      subprocess.run(
+        [args.cc, "-std=c11", "-Wall", "-Wextra", "-Werror",
+         '-DNCNN_PROFILE_DEFAULT_PLAN_REVISION="static-v1|int8-target-v1"',
+         str(case_source), *args.runtime, "-o", str(case_binary)],
+        check=True)
+      case_environment = {k.encode(): v.encode() for k, v in os.environ.items()}
+      case_environment.update({
+        b"NCNN_PROFILE_PATH": str(case_profile).encode(),
+        b"NCNN_PROFILE_MODEL": raw,
+        b"NCNN_PROFILE_PLAN_HASH": raw,
+        b"NCNN_PROFILE_BUILD_IDENTITY": raw,
+        b"NCNN_PROFILE_TARGET": raw,
+        b"NCNN_PROFILE_THREADS": b"1",
+        b"NCNN_PROFILE_MODE": raw,
+        b"NCNN_PROFILE_INPUT_HASH": raw,
+      })
+      subprocess.run([str(case_binary)], check=True, env=case_environment)
+      # 非法 UTF-8 在修复前会让 json.loads 抛 UnicodeDecodeError。
+      document = json.loads(case_profile.read_text(encoding="utf-8"))
+      if document["model"] != expected:
+        raise RuntimeError("escaping case {}: model {!r} != {!r}".format(
+          name, document["model"], expected))
+      if document["mode"] != expected:
+        raise RuntimeError("escaping case {}: mode {!r} != {!r}".format(
+          name, document["mode"], expected))
+      # plan_hash / input_hash / build_identity / target 是可空字段：空输入
+      # 有意写成 null（而不是空串），这是既有 schema 契约，不是转义 bug。
+      optional = None if raw == b"" else expected
+      for field in ("plan_hash", "build_identity", "target", "input_hash"):
+        if document[field] != optional:
+          raise RuntimeError("escaping case {}: {} {!r} != {!r}".format(
+            name, field, document[field], optional))
   return 0
 
 

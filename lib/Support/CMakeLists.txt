@@ -28,3 +28,13 @@ target_include_directories(NCNNTargetVectorInfoSupport SYSTEM PUBLIC
 target_compile_definitions(NCNNTargetVectorInfoSupport PUBLIC ${LLVM_DEFINITIONS})
 target_compile_options(NCNNTargetVectorInfoSupport PRIVATE -fno-rtti)
 target_link_libraries(NCNNTargetVectorInfoSupport PUBLIC LLVMSupport)
+
+add_library(NCNNDiagnosticsSupport Diagnostics.cpp)
+target_include_directories(NCNNDiagnosticsSupport PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_BINARY_DIR}/include)
+target_include_directories(NCNNDiagnosticsSupport SYSTEM PUBLIC
+    ${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
+target_compile_definitions(NCNNDiagnosticsSupport PUBLIC ${LLVM_DEFINITIONS})
+target_compile_options(NCNNDiagnosticsSupport PRIVATE -fno-rtti)
+target_link_libraries(NCNNDiagnosticsSupport PUBLIC MLIRIR MLIRSupport)

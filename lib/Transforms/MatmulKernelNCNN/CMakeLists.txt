@@ -17,4 +17,4 @@ target_link_libraries(MatmulKernelNCNN PUBLIC
     MLIRMemRefDialect
     MLIRPass
     MLIRSCFDialect
-    MLIRVectorDialect)
+    MLIRVectorDialect NCNNDiagnosticsSupport)

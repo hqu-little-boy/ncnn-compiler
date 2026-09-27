@@ -1,5 +1,12 @@
 add_library(InstrumentNCNNProfile
     InstrumentNCNNProfile.cpp
+    InstrumentNCNNSites.cpp
+    InstrumentSiteAnalysis.cpp
+    InstrumentAllocationSites.cpp
+    InstrumentCopySites.cpp
+    InstrumentOperationSites.cpp
+    InstrumentFusionSites.cpp
+    InstrumentMaterializedSites.cpp
 )
 add_dependencies(InstrumentNCNNProfile NCNNPassesIncGen)
 target_compile_options(InstrumentNCNNProfile PRIVATE -fno-rtti)

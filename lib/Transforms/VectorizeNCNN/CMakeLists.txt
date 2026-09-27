@@ -22,4 +22,4 @@ target_link_libraries(VectorizeNCNN PUBLIC
     MLIRTensorDialect
     MLIRUBDialect
     MLIRVectorDialect
-    MLIRVectorTransforms)
+    MLIRVectorTransforms NCNNDiagnosticsSupport)

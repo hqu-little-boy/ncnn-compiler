@@ -299,6 +299,13 @@ llvm::cl::opt<bool> g_verify_execution(
   "verify-execution",
   llvm::cl::desc("Build and run an ABI smoke harness"),
   llvm::cl::cat(g_category));
+// 诊断策略，不进 identity 串：产物字节与 plan_hash 都不随它变。
+// 通过 NCNN_WARNINGS_AS_ERRORS 环境变量下沉到 ncnn-mlir-opt 子进程
+// （见 include/ncnn-mlir/Support/Diagnostics.hpp）。
+llvm::cl::opt<bool> g_warnings_as_errors(
+  "warnings-as-errors",
+  llvm::cl::desc("Escalate ncnn diagnostic warnings to errors (for CI)"));
+
 llvm::cl::opt<bool> g_profile(
   "profile",
   llvm::cl::desc("Instrument the generated library for diagnostic profiling"),
@@ -504,6 +511,34 @@ std::string c_identifier(std::string_view name) {
     }
   }
   return std::nullopt;
+}
+
+// Profile runtime 的 `.c` 源既可能来自构建树（绝对路径，由 CMake 注入），
+// 也可能来自安装布局（相对可执行文件的固定相对路径）。未启用 --profile 时
+// 返回空路径，调用侧不必再判。
+std::string resolve_profile_source(const char* build_tree_source,
+                                   const char* installed_relative) {
+  if (!g_profile) {
+    return {};
+  }
+  std::string source = build_tree_source != nullptr ? build_tree_source : "";
+  if (!source.empty() && fs::is_regular_file(source)) {
+    return source;
+  }
+  if (installed_relative == nullptr || *installed_relative == '\0') {
+    return source;
+  }
+  std::error_code executable_error;
+  const fs::path executable =
+    fs::read_symlink("/proc/self/exe", executable_error);
+  if (executable_error) {
+    return source;
+  }
+  const fs::path installed = executable.parent_path() / installed_relative;
+  if (fs::is_regular_file(installed)) {
+    return installed.string();
+  }
+  return source;
 }
 
 void print_command(const std::vector<std::string>& command) {
@@ -2602,25 +2637,34 @@ int CompileSession::declareArtifacts() {
   object = staging.path() / "model.o";
   assembly = staging.path() / "model.s";
   profile_object = staging.path() / "profile_runtime.o";
+  profile_writer_object = staging.path() / "profile_json_writer.o";
+  // profile runtime 与它的 JSON writer 是两个独立 TU，都以 `.c` 源 install，
+  // 由每个模型编译期编进产物 .so（见 lib/ProfileRuntime/profile_json_writer.h
+  // 的硬约束说明）。构建树里用绝对源路径，安装布局里按可执行文件相对路径兜底。
+  profile_runtime_source = resolve_profile_source(
 #ifdef NCNN_PROFILE_RUNTIME_SOURCE
-  profile_runtime_source = NCNN_PROFILE_RUNTIME_SOURCE;
+    NCNN_PROFILE_RUNTIME_SOURCE,
 #else
-  profile_runtime_source.clear();
+    "",
 #endif
 #ifdef NCNN_PROFILE_RUNTIME_RELATIVE_PATH
-  if (g_profile && !fs::is_regular_file(profile_runtime_source)) {
-    std::error_code executable_error;
-    const fs::path executable =
-      fs::read_symlink("/proc/self/exe", executable_error);
-    if (!executable_error) {
-      const fs::path installed_source =
-        executable.parent_path() / NCNN_PROFILE_RUNTIME_RELATIVE_PATH;
-      if (fs::is_regular_file(installed_source)) {
-        profile_runtime_source = installed_source;
-      }
-    }
-  }
+    NCNN_PROFILE_RUNTIME_RELATIVE_PATH
+#else
+    ""
 #endif
+  );
+  profile_writer_source = resolve_profile_source(
+#ifdef NCNN_PROFILE_RUNTIME_WRITER_SOURCE
+    NCNN_PROFILE_RUNTIME_WRITER_SOURCE,
+#else
+    "",
+#endif
+#ifdef NCNN_PROFILE_RUNTIME_WRITER_RELATIVE_PATH
+    NCNN_PROFILE_RUNTIME_WRITER_RELATIVE_PATH
+#else
+    ""
+#endif
+  );
   manifest_path = staging.path() / (model_name + ".json");
   execution_plan_path = staging.path() / (model_name + ".plan.json");
   header = staging.path() / (model_name + ".h");
@@ -2641,6 +2685,11 @@ int CompileSession::declareArtifacts() {
 }
 
 int CompileSession::runPipeline() {
+  // 诊断策略下沉到 ncnn-mlir-opt 子进程：ExecuteAndWait 的 env 传 nullopt，
+  // 子进程继承本进程环境。不进 identity 串——产物与 plan_hash 均不变。
+  if (g_warnings_as_errors) {
+    ::setenv("NCNN_WARNINGS_AS_ERRORS", "1", /*overwrite=*/1);
+  }
   std::vector<std::string> driver_command{
     driver_path, param_path, "--bin", bin_path, "-o", ncnn_ir.string()};
   driver_command.push_back("--precision=" + g_precision);
@@ -2869,6 +2918,10 @@ int CompileSession::runPipeline() {
         !fs::is_regular_file(profile_runtime_source)) {
       return fail("diagnostic profile runtime source is unavailable");
     }
+    if (profile_writer_source.empty() ||
+        !fs::is_regular_file(profile_writer_source)) {
+      return fail("diagnostic profile JSON writer source is unavailable");
+    }
     std::vector<std::string> profile_compile{
       clang_path,
       "-std=c11",
@@ -2888,11 +2941,16 @@ int CompileSession::runPipeline() {
       profile_compile.end(), target_args.begin(), target_args.end());
     profile_compile.insert(
       profile_compile.end(), codegen_args.begin(), codegen_args.end());
-    profile_compile.insert(
-      profile_compile.end(),
-      {"-c", profile_runtime_source.string(), "-o", profile_object.string()});
-    if (int status = ::run(profile_compile)) {
-      return status;
+    const std::pair<const fs::path*, const fs::path*> profile_units[] = {
+      {&profile_runtime_source, &profile_object},
+      {&profile_writer_source, &profile_writer_object},
+    };
+    for (const auto& [source, output] : profile_units) {
+      std::vector<std::string> unit = profile_compile;
+      unit.insert(unit.end(), {"-c", source->string(), "-o", output->string()});
+      if (int status = ::run(unit)) {
+        return status;
+      }
     }
   }
   std::vector<std::string> assemble = {clang_path, "-x", "ir", optimization};
@@ -3015,6 +3073,7 @@ int CompileSession::linkAndAudit() {
   link.push_back(object.string());
   if (g_profile) {
     link.push_back(profile_object.string());
+    link.push_back(profile_writer_object.string());
   }
   link.push_back(builtins_path);
   if (uses_sleef) {
