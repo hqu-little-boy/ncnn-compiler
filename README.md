@@ -90,6 +90,24 @@ build/squeezenet/
 
 `ncnn-mlir-driver --help` 和 `ncnn-compile --help` 可查看当前版本支持的选项。编译器支持受限的动态 shape；这不等于支持任意动态计算图。INT8 模式也要求输入模型具有相应量化权重/边界，并不会自动把浮点模型量化。
 
+### 与 ncnn 的性能对比
+
+`performance_tests` 比较模型专用编译产物与 vendored upstream ncnn 的推理耗时，不是模型编译耗时。请使用 Release 构建；测试复用 `compile_<model>` fixture，首次构建需要相应模型资产。完整测试口径、覆盖范围和注意事项见[数值与性能测试说明](test/Numerical/README.md)。
+
+从本目录构建并运行 16 线程对比：
+
+```bash
+cmake --build build --target performance_tests numerical_tests --parallel 16
+
+PERF_JSON="build/perf-16t-$(date +%Y%m%d-%H%M%S).ndjson"
+NCNN_PERF_THREADS=16 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 NCNN_PERF_MAX_RATIO=0 NCNN_PERF_JSON="$PERF_JSON" ctest --test-dir build -L performance -V
+python3 tools/perf_json_summary.py "$PERF_JSON" --gate 0 --official-only
+```
+
+`NCNN_PERF_MAX_RATIO=0` 关闭逐模型性能门禁，仅输出测量结果。ratio 定义为 compiled/ncnn，**大于 1 表示编译产物更慢**。运行 fixture 的 x86 CPU 需要支持 x86-64-v3（AVX2/FMA）。
+
+2026-09-27 的 Release、16 线程、end-to-end 实测覆盖 44 个正式模型（10 次预热、20 次计时）：ratio 中位数 **1.83×**、p90 **2.49×**；43/44 个模型慢于 ncnn。ncnn 耗时至少 100 ms 的 11 个模型，ratio 中位数为 **1.51×**。各模型平均耗时求和为 ncnn **7.863 s**、编译产物 **9.448 s**。这些结果是特定机器和线程数下的参考，不应与 6 线程的历史基线直接作性能增益对比；汇总默认排除 `resnet18_winograd` 诊断模型。计时边界和测试限制详见上述测试说明。
+
 ### 代码结构
 
 ```text
@@ -196,6 +214,24 @@ The header exposes a model-specific C ABI function and input/output tensor infor
 ```
 
 Run `ncnn-mlir-driver --help` or `ncnn-compile --help` for options available in the current build. Dynamic-shape support is constrained and does not imply support for arbitrary dynamic graphs. INT8 mode also requires appropriate quantized weights/boundaries in the input model; it does not automatically quantize a floating-point model.
+
+### Performance comparison with ncnn
+
+`performance_tests` compares inference latency of the model-specific compiled libraries with vendored upstream ncnn; it does not measure model compilation time. Use a Release build. The tests reuse the `compile_<model>` fixtures, so the required model assets must be available on the first build. See the [numerical and performance test guide](test/Numerical/README.md) for the full methodology, coverage, and caveats.
+
+From this directory, build and run the comparison with 16 threads:
+
+```bash
+cmake --build build --target performance_tests numerical_tests --parallel 16
+
+PERF_JSON="build/perf-16t-$(date +%Y%m%d-%H%M%S).ndjson"
+NCNN_PERF_THREADS=16 NCNN_PERF_WARMUP=10 NCNN_PERF_ITERS=20 NCNN_PERF_MAX_RATIO=0 NCNN_PERF_JSON="$PERF_JSON" ctest --test-dir build -L performance -V
+python3 tools/perf_json_summary.py "$PERF_JSON" --gate 0 --official-only
+```
+
+`NCNN_PERF_MAX_RATIO=0` disables the per-model performance gate and reports measurements only. The ratio is compiled/ncnn; **a value above 1 means the compiled model is slower**. The x86 fixtures require an x86-64-v3 CPU (AVX2/FMA).
+
+A fresh Release run on 2026-09-27 used 16 threads, 10 warmups, and 20 timed iterations on the end-to-end path. Across the 44 official models, the ratio p50 was **1.83×** and p90 was **2.49×**; 43/44 models were slower than ncnn. For the 11 models where ncnn took at least 100 ms, the ratio p50 was **1.51×**. Summed per-model mean latency was **7.863 s** for ncnn and **9.448 s** for the compiled models. These are machine- and thread-count-specific results; do not treat them as a direct performance delta against the historical six-thread baseline. The official summary excludes the `resnet18_winograd` diagnostic model. See the test guide for timing-boundary details and limitations.
 
 ### Source layout
 
