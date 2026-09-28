@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/usr/bin/mlir-opt-21",
+    "/mnt/ncnn-compiler/compiler/test/Vulkan/gpu_func_add_probe.mlir",
+    "--spirv-attach-target=module=v0_add ver=v1.1 caps=Shader client_api=Vulkan",
+    "--convert-gpu-to-spirv",
+    "--verify-each",
+    "-o",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/llvmpipe/gpu-func-add-probe.mlir"
+  ],
+  "returncode": 1,
+  "stdout": "",
+  "stderr": "/mnt/ncnn-compiler/compiler/test/Vulkan/gpu_func_add_probe.mlir:13:14: error: failed to legalize operation 'memref.load'\n        %a = memref.load %lhs[%index] : memref<257xf32>\n             ^\n/mnt/ncnn-compiler/compiler/test/Vulkan/gpu_func_add_probe.mlir:13:14: note: see current operation: %8 = \"memref.load\"(<<UNKNOWN SSA VALUE>>, %3) : (memref<257xf32, #spirv.storage_class<StorageBuffer>>, index) -> f32\n"
+}

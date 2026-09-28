@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "/usr/bin/mlir-opt-21",
+    "--no-implicit-module",
+    "/mnt/ncnn-compiler/compiler/test/Vulkan/add.mlir",
+    "--verify-each",
+    "--spirv-lower-abi-attrs",
+    "-o",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/nvidia/add.lowered.mlir"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": ""
+}

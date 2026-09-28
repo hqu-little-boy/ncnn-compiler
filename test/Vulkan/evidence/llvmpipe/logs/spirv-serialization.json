@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "/usr/bin/mlir-translate-21",
+    "--no-implicit-module",
+    "--serialize-spirv",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/llvmpipe/add.lowered.mlir",
+    "-o",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/llvmpipe/add.spv"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": ""
+}

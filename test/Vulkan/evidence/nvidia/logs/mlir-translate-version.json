@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "/usr/bin/mlir-translate-21",
+    "--version"
+  ],
+  "returncode": 0,
+  "stdout": "Debian LLVM version 21.1.8\n  Optimized build.\n",
+  "stderr": ""
+}

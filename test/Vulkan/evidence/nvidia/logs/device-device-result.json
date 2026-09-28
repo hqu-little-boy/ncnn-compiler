@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "/tmp/ncnn-v0-build/test/Vulkan/vulkan_add_runner",
+    "--shader",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/nvidia/add.spv",
+    "--cpu-library",
+    "/tmp/ncnn-v0-build/test/Vulkan/cpu-add/libv0_add.so",
+    "--cpu-symbol",
+    "v0_add",
+    "--device-match",
+    "NVIDIA",
+    "--evidence",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/nvidia/device-result.json",
+    "--validation"
+  ],
+  "returncode": 0,
+  "stdout": "device=NVIDIA GeForce RTX 4060 Ti elements=257 groups=5 cpu_abs=0 gpu_abs=0 cpu_gpu_abs=0 validation_errors=0\n",
+  "stderr": ""
+}
