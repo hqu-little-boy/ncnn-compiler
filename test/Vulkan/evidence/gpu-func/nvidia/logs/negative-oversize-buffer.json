@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "/tmp/ncnn-v0-build/test/Vulkan/vulkan_add_runner",
+    "--shader",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/nvidia/add.spv",
+    "--cpu-library",
+    "/tmp/ncnn-v0-build/test/Vulkan/cpu-add/libv0_add.so",
+    "--cpu-symbol",
+    "v0_add",
+    "--device-match",
+    "NVIDIA",
+    "--evidence",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/nvidia/negative-oversize.json",
+    "--probe-buffer-bytes",
+    "4294967296",
+    "--validation"
+  ],
+  "returncode": 1,
+  "stdout": "",
+  "stderr": "vulkan_add_runner: requested storage buffer exceeds maxStorageBufferRange\n"
+}

@@ -1,0 +1,56 @@
+{
+  "fixture_id": "v0-f32-add-257-gpu-func-v1",
+  "kernel_ir": "gpu.func Add lowered by MLIR test-vulkan-runner-pipeline",
+  "conversion_pipeline": "--test-vulkan-runner-pipeline",
+  "target_environment": "Vulkan 1.1 / SPIR-V 1.0 + SPV_KHR_storage_buffer_storage_class",
+  "cpu_reference_library_sha256": "4fc6ebb5503f8b4a0ad0028e6dc5b158a91320aabbc05a05fe15985620231620",
+  "model_param_sha256": "321501412dcb15b8df2f1cb7f680d67875c6cf91a7d693896ebe2d6bbc46f6f8",
+  "gpu_func_source_sha256": "c9bdc011950842feef36c4dea0f628a0a428a1433e14098ff7259a8b04a9d117",
+  "gpu_binary_ir_sha256": "26cb9392d88701fda4dfe5e33fc6839232666527572fe545fcea4c25950b1f79",
+  "spirv_sha256": "8387a45b8805ccf2ae2261a4eaaf8b8ad8d7640d4fe66b2318877fc6efa27691",
+  "spirv_disassembly_sha256": "4a42fb30e365fe406f524abe2d279f3d865d1a9bbcdea6783e14aea7895f6c6f",
+  "descriptor_bindings": [
+    0,
+    1,
+    2
+  ],
+  "inputs_sha256": "039be14836136199e0fb9ae5626f77cf1d55208cec4cc7258f840de6d69cc6f4",
+  "outputs_sha256": "8ee89874e11ed58b374cd38831773f5e4f5da9f920ac61a6ad45225eeaf8d53c",
+  "device_evidence": {
+    "device": "NVIDIA GeForce RTX 4060 Ti",
+    "device_match": "NVIDIA",
+    "api_version": "1.4.351",
+    "driver_version": 2580660800,
+    "vendor_id": 4318,
+    "device_id": 10243,
+    "max_storage_buffer_range": 4294967295,
+    "max_compute_workgroup_invocations": 1024,
+    "max_compute_workgroup_size_x": 1024,
+    "elements": 257,
+    "local_size": 64,
+    "dispatch_groups_x": 5,
+    "validation_enabled": true,
+    "validation_errors": 0,
+    "tolerance": {
+      "atol": 1e-06,
+      "rtol": 1e-06
+    },
+    "cpu_vs_golden": {
+      "passed": true,
+      "max_abs": 0,
+      "max_rel": 0
+    },
+    "gpu_vs_golden": {
+      "passed": true,
+      "max_abs": 0,
+      "max_rel": 0
+    },
+    "gpu_vs_cpu": {
+      "passed": true,
+      "max_abs": 0,
+      "max_rel": 0
+    }
+  },
+  "vulkaninfo_summary": "==========\nVULKANINFO\n==========\n\nVulkan Instance Version: 1.4.309\n\n\nInstance Extensions: count = 25\n-------------------------------\nVK_EXT_acquire_drm_display             : extension revision 1\nVK_EXT_acquire_xlib_display            : extension revision 1\nVK_EXT_debug_report                    : extension revision 10\nVK_EXT_debug_utils                     : extension revision 2\nVK_EXT_direct_mode_display             : extension revision 1\nVK_EXT_display_surface_counter         : extension revision 1\nVK_EXT_headless_surface                : extension revision 1\nVK_EXT_surface_maintenance1            : extension revision 1\nVK_EXT_swapchain_colorspace            : extension revision 5\nVK_KHR_device_group_creation           : extension revision 1\nVK_KHR_display                         : extension revision 23\nVK_KHR_external_fence_capabilities     : extension revision 1\nVK_KHR_external_memory_capabilities    : extension revision 1\nVK_KHR_external_semaphore_capabilities : extension revision 1\nVK_KHR_get_display_properties2         : extension revision 1\nVK_KHR_get_physical_device_properties2 : extension revision 2\nVK_KHR_get_surface_capabilities2       : extension revision 1\nVK_KHR_portability_enumeration         : extension revision 1\nVK_KHR_surface                         : extension revision 25\nVK_KHR_surface_protected_capabilities  : extension revision 1\nVK_KHR_wayland_surface                 : extension revision 6\nVK_KHR_xcb_surface                     : extension revision 6\nVK_KHR_xlib_surface                    : extension revision 6\nVK_LUNARG_direct_driver_loading        : extension revision 1\nVK_NV_display_stereo                   : extension revision 1\n\nInstance Layers: count = 6\n--------------------------\nVK_LAYER_INTEL_nullhw       INTEL NULL HW                1.1.73   version 1\nVK_LAYER_KHRONOS_validation Khronos Validation Layer     1.4.309  version 1\nVK_LAYER_MESA_device_select Linux device selection layer 1.4.303  version 1\nVK_LAYER_MESA_overlay       Mesa Overlay layer           1.4.303  version 1\nVK_LAYER_NV_optimus         NVIDIA Optimus layer         1.4.351  version 1\nVK_LAYER_NV_present         NVIDIA Presentation Layer    1.4.351  version 1\n\nDevices:\n========\nGPU0:\n\tapiVersion         = 1.4.351\n\tdriverVersion      = 615.71.9.0\n\tvendorID           = 0x10de\n\tdeviceID           = 0x2803\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n\tdeviceName         = NVIDIA GeForce RTX 4060 Ti\n\tdriverID           = DRIVER_ID_NVIDIA_PROPRIETARY\n\tdriverName         = NVIDIA\n\tdriverInfo         = 615.71.09\n\tconformanceVersion = 1.4.3.3\n\tdeviceUUID         = c273c3ba-c58a-db10-c492-e6a4086592ef\n\tdriverUUID         = e960882b-0170-5057-bf3e-c686505f8776\nGPU1:\n\tapiVersion         = 1.4.305\n\tdriverVersion      = 0.0.1\n\tvendorID           = 0x10005\n\tdeviceID           = 0x0000\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_CPU\n\tdeviceName         = llvmpipe (LLVM 19.1.7, 256 bits)\n\tdriverID           = DRIVER_ID_MESA_LLVMPIPE\n\tdriverName         = llvmpipe\n\tdriverInfo         = Mesa 25.0.7-2+deb13u1 (LLVM 19.1.7)\n\tconformanceVersion = 1.3.1.1\n\tdeviceUUID         = 6d657361-3235-2e30-2e37-2d322b646500\n\tdriverUUID         = 6c6c766d-7069-7065-5555-494400000000\n",
+  "icd_override": null
+}

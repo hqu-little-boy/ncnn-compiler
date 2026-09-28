@@ -1,0 +1,20 @@
+{
+  "device": "NVIDIA GeForce RTX 4060 Ti",
+  "device_match": "NVIDIA",
+  "api_version": "1.4.351",
+  "driver_version": 2580660800,
+  "vendor_id": 4318,
+  "device_id": 10243,
+  "max_storage_buffer_range": 4294967295,
+  "max_compute_workgroup_invocations": 1024,
+  "max_compute_workgroup_size_x": 1024,
+  "elements": 257,
+  "local_size": 64,
+  "dispatch_groups_x": 5,
+  "validation_enabled": true,
+  "validation_errors": 0,
+  "tolerance": {"atol": 1e-06, "rtol": 1e-06},
+  "cpu_vs_golden": {"passed": true, "max_abs": 0, "max_rel": 0},
+  "gpu_vs_golden": {"passed": true, "max_abs": 0, "max_rel": 0},
+  "gpu_vs_cpu": {"passed": true, "max_abs": 0, "max_rel": 0}
+}

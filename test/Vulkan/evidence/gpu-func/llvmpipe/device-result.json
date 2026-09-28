@@ -1,0 +1,20 @@
+{
+  "device": "llvmpipe (LLVM 19.1.7, 256 bits)",
+  "device_match": "llvmpipe",
+  "api_version": "1.4.305",
+  "driver_version": 1,
+  "vendor_id": 65541,
+  "device_id": 0,
+  "max_storage_buffer_range": 134217728,
+  "max_compute_workgroup_invocations": 1024,
+  "max_compute_workgroup_size_x": 1024,
+  "elements": 257,
+  "local_size": 64,
+  "dispatch_groups_x": 5,
+  "validation_enabled": true,
+  "validation_errors": 0,
+  "tolerance": {"atol": 1e-06, "rtol": 1e-06},
+  "cpu_vs_golden": {"passed": true, "max_abs": 0, "max_rel": 0},
+  "gpu_vs_golden": {"passed": true, "max_abs": 0, "max_rel": 0},
+  "gpu_vs_cpu": {"passed": true, "max_abs": 0, "max_rel": 0}
+}

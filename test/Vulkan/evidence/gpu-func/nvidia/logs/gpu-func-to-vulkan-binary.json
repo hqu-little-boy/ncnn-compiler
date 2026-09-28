@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "/usr/bin/mlir-opt-21",
+    "/mnt/ncnn-compiler/compiler/test/Vulkan/gpu_func_add_probe.mlir",
+    "--test-vulkan-runner-pipeline",
+    "--verify-each",
+    "-o",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/nvidia/gpu-binary.mlir"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": ""
+}

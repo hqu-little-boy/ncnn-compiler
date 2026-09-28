@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "/tmp/ncnn-v0-build/test/Vulkan/vulkan_add_runner",
+    "--shader",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/nvidia/add.spv",
+    "--cpu-library",
+    "/tmp/ncnn-v0-build/test/Vulkan/cpu-add/libv0_add.so",
+    "--cpu-symbol",
+    "v0_add",
+    "--device-match",
+    "NCNN_V0_NO_SUCH_DEVICE_9D62",
+    "--evidence",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/nvidia/negative-no-device.json"
+  ],
+  "returncode": 1,
+  "stdout": "",
+  "stderr": "vulkan_add_runner: no compute device matched 'NCNN_V0_NO_SUCH_DEVICE_9D62'\n"
+}

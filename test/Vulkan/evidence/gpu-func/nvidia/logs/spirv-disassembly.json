@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "/usr/bin/spirv-dis",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/nvidia/add.spv",
+    "-o",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/nvidia/add.spvasm"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": ""
+}

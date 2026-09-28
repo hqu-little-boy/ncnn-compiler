@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "/usr/bin/spirv-dis",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/llvmpipe/add.spv",
+    "-o",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/llvmpipe/add.spvasm"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": ""
+}

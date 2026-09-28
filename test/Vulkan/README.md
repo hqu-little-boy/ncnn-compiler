@@ -1,6 +1,6 @@
 # Vulkan V0 device spike
 
-This is an opt-in feasibility test, not a product backend. The compiler's default CPU pipeline and C ABI do not depend on Vulkan. The test creates a fixed FP32 `Add` CPU AOT artifact with `ncnn-compile`, lowers an explicit SPIR-V dialect MLIR module to SPIR-V, validates it, then dispatches it through the Vulkan loader and compares every output against both the CPU AOT result and an independent scalar golden.
+This is an opt-in feasibility test, not a product backend. The compiler's default CPU pipeline and C ABI do not depend on Vulkan. The test creates a fixed FP32 `Add` CPU AOT artifact with `ncnn-compile`, lowers the `gpu.func` fixture with MLIR's Vulkan runner pipeline to a serialized SPIR-V object, extracts and validates that object, then dispatches it through the Vulkan loader and compares every output against both the CPU AOT result and an independent scalar golden.
 
 ## Enable and run
 
@@ -20,12 +20,14 @@ ctest --test-dir /tmp/ncnn-v0-build \
 
 The NVIDIA test is the real-device gate and runs negative cases; the llvmpipe test forces the software ICD and is only functional/numerical coverage. The host runner has no CPU fallback. If a required tool or device is absent, the opt-in test fails with a diagnostic rather than silently skipping.
 
-## Kernel and current lowering boundary
+## GPU-dialect kernel and lowering
 
-`add.mlir` defines 257 FP32 inputs per operand, three storage-buffer bindings, a 64-invocation workgroup, and an explicit bounds check for the five dispatched workgroups. It targets SPIR-V 1.3 / Vulkan 1.1 and uses only core Shader, StorageBuffer, and FP32 functionality.
+`gpu_func_add_probe.mlir` is the positive V0 kernel source: a static 257-element FP32 Add with three `StorageBuffer` memrefs, 64×1×1 workgroup, and explicit tail bounds check. Its module target environment is Vulkan 1.1 with SPIR-V 1.0 plus `SPV_KHR_storage_buffer_storage_class`.
 
-The executable kernel is currently authored in the SPIR-V dialect. `gpu_func_add_probe.mlir` separately reproduces the MLIR 21 GPU-dialect lowering attempt: `mlir-opt-21 gpu_func_add_probe.mlir '--spirv-attach-target=module=v0_add ver=v1.1 caps=Shader client_api=Vulkan' --convert-gpu-to-spirv --verify-each` currently fails with `failed to legalize operation 'memref.load'`. The opt-in CTest records this probe's result and diagnostic with each evidence run. Therefore this spike proves the MLIR SPIR-V serialization and Vulkan host/device execution path, **not** that the project's Linalg or a resource-using `gpu.func` can already be lowered. That remains a V0/V1 boundary to resolve before claiming an ncnn Vulkan backend.
+The opt-in harness runs MLIR 21 `--test-vulkan-runner-pipeline`, which lowers the `gpu.func` and emits a `gpu.binary` object. `vulkan_v0_spirv_extract` writes the embedded SPIR-V bytes for `spirv-val`, checks/disassembly, and the existing Vulkan host runner. The test requires the converted IR to contain `gpu.binary @v0_add` and no `gpu.func`, `memref.load/store`, or unrealized conversion casts; SPIR-V must expose the `add` GLCompute entry point, local size `[64,1,1]`, and set 0 bindings 0–2. Lowering or extraction failure is a hard test failure—there is no fallback to the older hand-authored shader.
+
+`add.mlir` is retained only as the first direct-SPIR-V-dialect experiment and historical comparison. It is not used to satisfy the current GPU-dialect provenance gate.
 
 ## Evidence
 
-CTest writes generated artifacts to `<build>/test/Vulkan/evidence/<device>/`: lowered MLIR, `.spv`, validator and tool logs, fixed input/output bytes, CPU library identity, device properties, tolerance and per-element comparison summaries. The `evidence/nvidia/` and `evidence/llvmpipe/` directories in this source tree are the archived 2026-09-28 run. The input has 257 elements; both devices reported zero validation errors and zero CPU/GPU/golden difference under `atol=1e-6, rtol=1e-6`.
+CTest writes generated artifacts to `<build>/test/Vulkan/evidence/gpu-func/<device>/`: GPU-binary MLIR, extracted `.spv`, disassembly, validator and tool logs, fixed input/output bytes, CPU library identity, device properties, tolerance and per-element comparison summaries. The earlier `evidence/nvidia/` and `evidence/llvmpipe/` snapshots are the 2026-09-28 direct-SPIR-V-dialect run; preserve them as historical evidence. The new GPU-dialect provenance run is archived separately under `evidence/gpu-func/{nvidia,llvmpipe}/`. It uses the same 257-element input contract; the device runs reported zero validation errors and zero CPU/GPU/golden difference under `atol=1e-6, rtol=1e-6`.

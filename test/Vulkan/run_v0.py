@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -61,11 +62,11 @@ def run_device(runner, shader, cpu_library, symbol, device_match, evidence,
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mlir-opt", required=True)
-    parser.add_argument("--mlir-translate", required=True)
     parser.add_argument("--spirv-val", required=True)
+    parser.add_argument("--spirv-dis", required=True)
+    parser.add_argument("--spirv-extract", required=True)
     parser.add_argument("--vulkaninfo", required=True)
     parser.add_argument("--kernel", required=True)
-    parser.add_argument("--gpu-probe", required=True)
     parser.add_argument("--runner", required=True)
     parser.add_argument("--cpu-library", required=True)
     parser.add_argument("--cpu-symbol", default="v0_add")
@@ -86,69 +87,38 @@ def main():
 
     source = Path(args.kernel).resolve()
     cpu_library = Path(args.cpu_library).resolve()
-    lowered = output_dir / "add.lowered.mlir"
+    gpu_binary_ir = output_dir / "gpu-binary.mlir"
     shader = output_dir / "add.spv"
+    disassembly = output_dir / "add.spvasm"
     evidence = output_dir / "device-result.json"
 
-    run_logged(
-        "mlir-opt-version", [args.mlir_opt, "--version"], logs, env=env
-    )
-    run_logged(
-        "mlir-translate-version", [args.mlir_translate, "--version"], logs, env=env
-    )
+    run_logged("mlir-opt-version", [args.mlir_opt, "--version"], logs, env=env)
     run_logged("spirv-val-version", [args.spirv_val, "--version"], logs, env=env)
     vulkan_info = run_logged(
         "vulkaninfo-summary", [args.vulkaninfo, "--summary"], logs, env=env
     )
-    gpu_probe_command = [
-        args.mlir_opt,
-        str(args.gpu_probe),
-        "--spirv-attach-target=module=v0_add ver=v1.1 caps=Shader client_api=Vulkan",
-        "--convert-gpu-to-spirv",
-        "--verify-each",
-        "-o", str(output_dir / "gpu-func-add-probe.mlir"),
-    ]
-    gpu_probe = subprocess.run(
-        gpu_probe_command, text=True, capture_output=True, env=env
-    )
-    gpu_probe_record = {
-        "argv": [str(item) for item in gpu_probe_command],
-        "returncode": gpu_probe.returncode,
-        "stdout": gpu_probe.stdout,
-        "stderr": gpu_probe.stderr,
-    }
-    (logs / "gpu-func-add-lowering-probe.json").write_text(
-        json.dumps(gpu_probe_record, indent=2) + "\n", encoding="utf-8"
-    )
-    if gpu_probe.returncode != 0 and (
-        "failed to legalize operation 'memref.load'" not in gpu_probe.stderr
-    ):
-        raise RuntimeError(
-            "GPU dialect probe failed for an unexpected reason; see "
-            f"{logs / 'gpu-func-add-lowering-probe.json'}"
-        )
     run_logged(
-        "mlir-lowering",
+        "gpu-func-to-vulkan-binary",
         [
             args.mlir_opt,
-            "--no-implicit-module",
             str(source),
+            "--test-vulkan-runner-pipeline",
             "--verify-each",
-            "--spirv-lower-abi-attrs",
-            "-o", str(lowered),
+            "-o", str(gpu_binary_ir),
         ],
         logs,
         env=env,
     )
+    converted_ir = gpu_binary_ir.read_text(encoding="utf-8")
+    if "gpu.binary @v0_add" not in converted_ir:
+        raise RuntimeError("Vulkan lowering did not emit gpu.binary @v0_add")
+    for residual in ("gpu.func", "memref.load", "memref.store", "unrealized_conversion_cast"):
+        if residual in converted_ir:
+            raise RuntimeError(f"lowered GPU binary contains residual {residual}")
+
     run_logged(
-        "spirv-serialization",
-        [
-            args.mlir_translate,
-            "--no-implicit-module",
-            "--serialize-spirv",
-            str(lowered),
-            "-o", str(shader),
-        ],
+        "spirv-extraction",
+        [args.spirv_extract, str(gpu_binary_ir), "-o", str(shader)],
         logs,
         env=env,
     )
@@ -158,6 +128,25 @@ def main():
         logs,
         env=env,
     )
+    run_logged(
+        "spirv-disassembly",
+        [args.spirv_dis, str(shader), "-o", str(disassembly)],
+        logs,
+        env=env,
+    )
+    disassembly_text = disassembly.read_text(encoding="utf-8")
+    if "; Version: 1.0" not in disassembly_text or (
+        'OpExtension "SPV_KHR_storage_buffer_storage_class"' not in disassembly_text
+    ):
+        raise RuntimeError("serialized shader does not match the frozen SPIR-V 1.0 target")
+    if not re.search(r'OpEntryPoint\s+GLCompute\s+%\S+\s+"add"', disassembly_text):
+        raise RuntimeError("serialized shader is missing the add GLCompute entry point")
+    if not re.search(r"OpExecutionMode\s+%\S+\s+LocalSize\s+64\s+1\s+1", disassembly_text):
+        raise RuntimeError("serialized shader has the wrong workgroup size")
+    bindings = {int(value) for value in re.findall(r"OpDecorate %\S+ Binding (\d+)", disassembly_text)}
+    descriptor_sets = re.findall(r"OpDecorate %\S+ DescriptorSet (\d+)", disassembly_text)
+    if not {0, 1, 2}.issubset(bindings) or descriptor_sets.count("0") < 3:
+        raise RuntimeError("serialized shader does not expose descriptor set 0 bindings 0-2")
 
     run_device(
         args.runner, shader, cpu_library, args.cpu_symbol, args.device_match,
@@ -165,18 +154,17 @@ def main():
     )
 
     metadata = {
-        "fixture_id": "v0-f32-add-257-v1",
-        "kernel_ir": "SPIR-V dialect MLIR (explicit storage-buffer ABI)",
-        "gpu_func_memref_lowering": {
-            "status": "passed" if gpu_probe.returncode == 0 else "blocked",
-            "returncode": gpu_probe.returncode,
-            "diagnostic": gpu_probe.stderr,
-        },
-        "target_environment": "Vulkan 1.1 / SPIR-V 1.3",
+        "fixture_id": "v0-f32-add-257-gpu-func-v1",
+        "kernel_ir": "gpu.func Add lowered by MLIR test-vulkan-runner-pipeline",
+        "conversion_pipeline": "--test-vulkan-runner-pipeline",
+        "target_environment": "Vulkan 1.1 / SPIR-V 1.0 + SPV_KHR_storage_buffer_storage_class",
         "cpu_reference_library_sha256": sha256(cpu_library),
         "model_param_sha256": sha256(source.parent / "add.param"),
-        "mlir_kernel_sha256": sha256(source),
+        "gpu_func_source_sha256": sha256(source),
+        "gpu_binary_ir_sha256": sha256(gpu_binary_ir),
         "spirv_sha256": sha256(shader),
+        "spirv_disassembly_sha256": sha256(disassembly),
+        "descriptor_bindings": sorted(bindings),
         "inputs_sha256": sha256(str(evidence) + ".inputs.bin"),
         "outputs_sha256": sha256(str(evidence) + ".outputs.bin"),
         "device_evidence": json.loads(evidence.read_text(encoding="utf-8")),

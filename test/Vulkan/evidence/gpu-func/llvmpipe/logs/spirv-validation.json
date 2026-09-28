@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "/usr/bin/spirv-val",
+    "--target-env",
+    "vulkan1.1",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/llvmpipe/add.spv"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": ""
+}

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "/usr/bin/spirv-val",
+    "--target-env",
+    "vulkan1.1",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/nvidia/invalid.spv"
+  ],
+  "returncode": 1,
+  "stdout": "",
+  "stderr": "error: line 0: Invalid SPIR-V magic number.\n"
+}

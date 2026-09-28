@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "/usr/bin/spirv-val",
+    "--version"
+  ],
+  "returncode": 0,
+  "stdout": "SPIRV-Tools v2025.1 unknown hash, 2025-03-18T14:15:19+00:00\nTargets:\n  SPIR-V 1.0\n  SPIR-V 1.1\n  SPIR-V 1.2\n  SPIR-V 1.3\n  SPIR-V 1.4\n  SPIR-V 1.5\n  SPIR-V 1.6\n  SPIR-V 1.2 (under OpenCL 2.2 Full Profile semantics)\n  SPIR-V 1.0 (under Vulkan 1.0 semantics)\n  SPIR-V 1.3 (under Vulkan 1.1 semantics)\n  SPIR-V 1.4 (under Vulkan 1.1 semantics)\n  SPIR-V 1.5 (under Vulkan 1.2 semantics)\n  SPIR-V 1.6 (under Vulkan 1.3 semantics) SPIR-V 1.6 (under Vulkan 1.4 semantics)\n",
+  "stderr": ""
+}

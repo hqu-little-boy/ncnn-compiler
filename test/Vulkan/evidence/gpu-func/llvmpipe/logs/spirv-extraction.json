@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "/tmp/ncnn-v0-build/test/Vulkan/vulkan_v0_spirv_extract",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/llvmpipe/gpu-binary.mlir",
+    "-o",
+    "/tmp/ncnn-v0-build/test/Vulkan/evidence/gpu-func/llvmpipe/add.spv"
+  ],
+  "returncode": 0,
+  "stdout": "extracted 956 SPIR-V bytes from gpu.binary @v0_add\n",
+  "stderr": ""
+}

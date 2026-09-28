@@ -1,6 +1,7 @@
 find_package(Vulkan REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_program(SPIRV_VAL NAMES spirv-val REQUIRED)
+find_program(SPIRV_DIS NAMES spirv-dis REQUIRED)
 find_program(VULKANINFO NAMES vulkaninfo REQUIRED)
 find_file(V0_LLVMPIPE_ICD
     NAMES lvp_icd.json
@@ -11,6 +12,15 @@ add_executable(vulkan_add_runner vulkan_add_runner.cpp)
 target_link_libraries(vulkan_add_runner PRIVATE Vulkan::Vulkan ${CMAKE_DL_LIBS})
 target_compile_options(vulkan_add_runner PRIVATE
     -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
+
+add_executable(vulkan_v0_spirv_extract extract_vulkan_spirv.cpp)
+target_include_directories(vulkan_v0_spirv_extract PRIVATE
+    ${LLVM_INCLUDE_DIRS}
+    ${MLIR_INCLUDE_DIRS})
+target_compile_options(vulkan_v0_spirv_extract PRIVATE -fno-rtti)
+target_link_libraries(vulkan_v0_spirv_extract PRIVATE MLIR LLVM)
+set_target_properties(vulkan_v0_spirv_extract PROPERTIES
+    BUILD_RPATH "${LLVM_LIBRARY_DIR}")
 
 set(V0_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-add)
 set(V0_CPU_LIBRARY ${V0_CPU_DIR}/libv0_add.so)
@@ -46,21 +56,21 @@ add_custom_command(
 add_custom_target(v0_cpu_add_fixture
     DEPENDS ${V0_CPU_LIBRARY} ${V0_CPU_HEADER} ${V0_CPU_MANIFEST})
 add_custom_target(vulkan-v0-build
-    DEPENDS vulkan_add_runner v0_cpu_add_fixture)
+    DEPENDS vulkan_add_runner vulkan_v0_spirv_extract v0_cpu_add_fixture)
 
 function(ncnn_add_vulkan_v0_test test_name device_match output_name)
     set(test_args
         --mlir-opt ${MLIR_OPT}
-        --mlir-translate ${MLIR_TRANSLATE}
         --spirv-val ${SPIRV_VAL}
+        --spirv-dis ${SPIRV_DIS}
         --vulkaninfo ${VULKANINFO}
-        --kernel ${CMAKE_CURRENT_SOURCE_DIR}/add.mlir
-        --gpu-probe ${CMAKE_CURRENT_SOURCE_DIR}/gpu_func_add_probe.mlir
+        --kernel ${CMAKE_CURRENT_SOURCE_DIR}/gpu_func_add_probe.mlir
+        --spirv-extract $<TARGET_FILE:vulkan_v0_spirv_extract>
         --runner $<TARGET_FILE:vulkan_add_runner>
         --cpu-library ${V0_CPU_LIBRARY}
         --cpu-symbol v0_add
         --device-match ${device_match}
-        --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/${output_name}
+        --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/gpu-func/${output_name}
         --validation)
     if(ARGC GREATER 3)
         list(APPEND test_args ${ARGN})
