@@ -144,6 +144,11 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
              --linker-arg=-fsanitize=address,undefined
              --linker-arg=-lasan
              --linker-arg=-lubsan)
+        if(NCNN_SANITIZER_OPENMP_LIBRARY_DIR)
+            list(APPEND sanitizer_args
+                 --linker-arg=-L${NCNN_SANITIZER_OPENMP_LIBRARY_DIR}
+                 --linker-arg=-Wl,-rpath,${NCNN_SANITIZER_OPENMP_LIBRARY_DIR})
+        endif()
     endif()
     add_custom_command(
         OUTPUT ${generated_outputs}
@@ -1862,6 +1867,17 @@ add_library(numerical_test_support STATIC
 target_include_directories(numerical_test_support PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(numerical_test_support PUBLIC ncnn GTest::gtest)
+if(CMAKE_CXX_FLAGS MATCHES "fsanitize" AND
+   NCNN_SANITIZER_OPENMP_LIBRARY_DIR)
+    unset(NCNN_SANITIZER_OPENMP_LIBRARY CACHE)
+    find_library(NCNN_SANITIZER_OPENMP_LIBRARY
+        NAMES omp
+        PATHS "${NCNN_SANITIZER_OPENMP_LIBRARY_DIR}"
+        NO_DEFAULT_PATH
+        REQUIRED)
+    target_link_libraries(numerical_test_support PUBLIC
+        "${NCNN_SANITIZER_OPENMP_LIBRARY}")
+endif()
 
 add_executable(numerical_tests
     operators/vectorized_ops_test.cpp

@@ -38,3 +38,12 @@ target_include_directories(NCNNDiagnosticsSupport SYSTEM PUBLIC
 target_compile_definitions(NCNNDiagnosticsSupport PUBLIC ${LLVM_DEFINITIONS})
 target_compile_options(NCNNDiagnosticsSupport PRIVATE -fno-rtti)
 target_link_libraries(NCNNDiagnosticsSupport PUBLIC MLIRIR MLIRSupport)
+
+add_library(NCNNVulkanPlanSupport VulkanExecutionPlan.cpp)
+target_include_directories(NCNNVulkanPlanSupport PUBLIC
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_BINARY_DIR}/include
+    ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(NCNNVulkanPlanSupport PUBLIC ${LLVM_DEFINITIONS})
+target_compile_options(NCNNVulkanPlanSupport PRIVATE -fno-rtti)
+target_link_libraries(NCNNVulkanPlanSupport PUBLIC LLVMSupport)

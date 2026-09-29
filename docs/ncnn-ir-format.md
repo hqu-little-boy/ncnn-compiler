@@ -4,7 +4,8 @@
 > `lib/Dialect/NCNN/IR/`（NCNNDialect.cpp、NCNNOps.cpp）。
 > 生成工具：`ncnn-mlir-driver --emit=mlir`（默认阶段）。
 > 相关文档：[parsed-graph-format.md](parsed-graph-format.md)、[ncnn-mlir-driver-usage.md](ncnn-mlir-driver-usage.md)、
-> [operator-numerical-validation-guide.md](operator-numerical-validation-guide.md)。
+> [operator-numerical-validation-guide.md](operator-numerical-validation-guide.md)、
+> [ncnn-vulkan-backend-contract.md](ncnn-vulkan-backend-contract.md)。
 
 `ncnn` 方言 IR 是编译器**类型化前端 IR**，是一个标准的 **MLIR 模块**（`builtin.module`
 里一个 `ncnn.model`）。它由 `ncnn_importer::import_graph()` 从原始
@@ -29,11 +30,16 @@
   ──normalize-ncnn──▶  func.func + normalized ncnn 计算 op
   ──convert-ncnn-to-tosa──▶  func.func + tosa + 未分配路径的 ncnn op
   ──ncnn-to-tosa-pipeline/verify-no-ncnn-ops──▶  无 ncnn op 的目标 IR
-  ──ncnn-tosa-to-linalg-pipeline──▶  tensor + Linalg/Arith/Math IR
+  ──ncnn-tosa-to-linalg-pipeline──▶  tensor + Linalg/Arith/Math IR (CPU fusion/strategy)
   ──ncnn-linalg-to-memref-pipeline──▶  caller-owned output memref + void return
   ──generate-ncnn-c-api──▶  private model + prepared bare-pointer ABI metadata
   ──ncnn-memref-to-llvm-pipeline──▶  纯 LLVM dialect IR
 ```
+
+A second, `ncnn-mlir-opt`-only branch starts from the strict NCNN-to-TOSA boundary:
+`ncnn-vulkan-semantic-pipeline` runs the shared TOSA-to-Linalg lowering followed by the
+Vulkan V1 legality verifier. Its supported IR, failure boundary, ABI declaration, and plan
+schema are documented in [ncnn-vulkan-backend-contract.md](ncnn-vulkan-backend-contract.md).
 
 `convert-ncnn-model-to-func` 是 normalize 和所有目标 conversion 的固定前置 pass，而不是
 后端 ABI 收尾步骤。

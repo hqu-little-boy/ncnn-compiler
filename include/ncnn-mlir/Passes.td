@@ -358,6 +358,20 @@ def VerifyNoTosaOpsPass : Pass<"verify-no-tosa-ops", "mlir::ModuleOp"> {
   let summary = "Fail if any TOSA dialect operation remains";
 }
 
+def VerifyVulkanSupportedModelPass
+    : Pass<"verify-vulkan-supported-model", "mlir::ModuleOp"> {
+  let summary = "Verify the static FP32 Vulkan model subset";
+  let description = [{
+    Fail closed unless the common TOSA-to-Linalg output uses only the V1
+    static FP32 copy/identity, ReLU, and same-shape Add subset. Diagnostics
+    retain the originating ncnn layer provenance.
+  }];
+  let dependentDialects = [
+    "arith::ArithDialect", "func::FuncDialect", "linalg::LinalgDialect",
+    "tensor::TensorDialect"
+  ];
+}
+
 def VerifyNoSCFForallPass : Pass<"verify-no-scf-forall", "mlir::ModuleOp"> {
   let summary =
     "Fail if any SCF forall or parallel loop remains after parallel lowering";

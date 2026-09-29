@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 
+#include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -171,7 +172,7 @@ bool isIdentityCopyBody(linalg::GenericOp generic) {
   if (generic.getNumDpsInputs() != 1 || generic.getNumDpsInits() != 1) {
     return false;
   }
-  ArrayRef<AffineMap> maps = generic.getIndexingMapsArray();
+  SmallVector<AffineMap> maps = generic.getIndexingMapsArray();
   if (maps.size() != 2 || !maps[0].isIdentity() || !maps[1].isIdentity()) {
     return false;
   }

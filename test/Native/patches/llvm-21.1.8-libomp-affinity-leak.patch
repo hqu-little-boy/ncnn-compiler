@@ -1,0 +1,12 @@
+diff --git a/openmp/runtime/src/kmp_affinity.cpp b/openmp/runtime/src/kmp_affinity.cpp
+--- a/openmp/runtime/src/kmp_affinity.cpp
++++ b/openmp/runtime/src/kmp_affinity.cpp
+@@ -3048,6 +3048,7 @@ static bool __kmp_affinity_create_x2apicid_map(kmp_i18n_id_t *const msg_id) {
+         ids[i] = info.mask & proc_info[original_idx].apic_id;
+       }
+       __kmp_topology->insert_layer(cache_type, ids);
+     }
++    __kmp_free(ids);
+   }
+
+   if (!__kmp_topology->check_ids()) {

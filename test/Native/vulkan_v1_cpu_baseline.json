@@ -1,0 +1,16 @@
+{
+  "baseline_revision": "06237ed",
+  "fixture": "test/Numerical/fixtures/relu.param",
+  "model": "relu_v1_baseline",
+  "input_shape": [3, 4, 5],
+  "input_sha256": "bed8a689a299a2f5295a2f899f585ef5d84f5101fd518de0daf3922284474f52",
+  "expected_output_sha256": "4bb43afa412dec07ea22db6c27fea831d2e02a776101a7ba01843605b1594f15",
+  "atol": 1e-6,
+  "artifact_sha256": {
+    "header": "c7ff4b1d13ca9c92609960aa5d6ccf12baf37cf26d896cd52065b378bd50b86b",
+    "manifest": "a676a20446896e556d4b9eecac459999c7522c6d5918f946d3a3f82c8b74b169",
+    "execution_plan": "81c628b75c46f06c5505d0e8b3d6331663c400e8940d8e542ecaf90b82011c3b",
+    "linalg_ir": "1de18bd975181ec71758fd93378f18444ec1e23eda9ac68ef7fc00bda25f0fe4"
+  },
+  "cpu_plan_hash": "5385543286120402161"
+}

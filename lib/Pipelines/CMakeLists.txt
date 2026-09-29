@@ -31,6 +31,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     VerifyModelShapeContracts
     VerifyNoNCNNOps
     VerifyNoTosaOps
+    VerifyVulkanSupportedModel
     VerifyNoSCFForall
     VerifyNoNestedOpenMP
     MLIRFuncDialect

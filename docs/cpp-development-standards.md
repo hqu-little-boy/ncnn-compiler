@@ -469,24 +469,44 @@ cmake --build build --target tidy
 ### 12.2 Sanitizer
 
 涉及解析、shape、索引、字节游标或内存布局的修改，必须运行 ASan 与 UBSan。
-独立 sanitizer 构建示例：
+项目代码、LLVM 和 MLIR 都必须启用 sanitizer，且 LLVM 与 MLIR 必须来自匹配版本；
+LLVM/MLIR 必须以静态组件库构建。不能把 sanitizer 编译的项目代码与预编译的
+LLVM/MLIR shared libraries 混链，因为 sanitizer 无法覆盖这些库的内存操作，且会造成
+重复运行时状态。
+独立 sanitizer 构建示例（将路径替换为匹配版本的静态 sanitizer toolchain）：
 
 ```bash
 cmake -S compiler -B compiler/build-sanitize \
   -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
-  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+  -DLLVM_DIR=/path/to/asan-llvm/lib/cmake/llvm \
+  -DMLIR_DIR=/path/to/asan-llvm/lib/cmake/mlir \
+  '-DCOMPILER_SANITIZERS=address;undefined' \
+  -DNCNN_SANITIZER_OPENMP_LIBRARY_DIR=/path/to/isolated-libomp
 cmake --build compiler/build-sanitize --parallel
 ctest --test-dir compiler/build-sanitize --output-on-failure
 ```
 
+若所用 OpenMP runtime 不会在进程退出时泄漏，`NCNN_SANITIZER_OPENMP_LIBRARY_DIR`
+可省略；若需使用修复过的 `libomp.so`，该隔离目录只放该库，不要包含指向
+`libomp.so` 的 `libgomp.so` 别名。
+
 sanitizer 构建的 numerical fixture 由 CMake build 阶段调用 `ncnn-compile` 生成，不是由
 CTest 生成。运行 CTest 前必须先构建对应 numerical 测试 target。fixture 检测到
 `CMAKE_CXX_FLAGS` 中的任意 `fsanitize` 后，会固定通过 `--clang-arg` 和 `--linker-arg` 为生成模型
-传递 `-fsanitize=address,undefined` 及对应 runtime。因此当前支持的配置是 ASan+UBSan 组合，
-harness、reference、动态库边界和模型 `.so` 均受覆盖。直接
-手工调用 `ncnn-compile` 时仍须显式传递这些参数；driver 只放行对应 sanitizer 符号族和 runtime
-`DT_NEEDED`，并拒绝缺少所需 runtime 依赖的 `.so`。
+传递 `-fsanitize=address,undefined` 及对应 runtime；额外的 linker search path 也用于
+OpenMP 探测，避免探测失败后静默降为单线程。设置
+`NCNN_SANITIZER_OPENMP_LIBRARY_DIR` 时，numerical harness 与动态模型会共用并保持加载同一个
+`libomp.so`。因此当前支持的配置是 ASan+UBSan 组合，harness、reference、动态库边界和模型
+`.so` 均受覆盖。直接手工调用 `ncnn-compile` 时仍须显式传递这些参数；driver 只放行对应
+sanitizer 符号族和 runtime `DT_NEEDED`，并拒绝缺少所需 runtime 依赖的 `.so`。
+
+若所用 LLVM OpenMP runtime 在退出时被 LeakSanitizer 报告初始化泄漏，不得通过 suppression
+或关闭 leak 检查规避。对 LLVM 21.1.8，可在独立源码树应用
+`test/Native/patches/llvm-21.1.8-libomp-affinity-leak.patch` 构建修复后的 runtime，并配置
+`-DNCNN_SANITIZER_OPENMP_LIBRARY_DIR=<仅含 libomp.so 的目录>`。该目录同时用于生成模型和
+sanitizer numerical harness，使动态加载模型与 harness 共用同一个、进程生命周期内保持加载的
+OpenMP runtime；隔离目录可避免其 `libgomp.so` 兼容别名替换 reference ncnn 使用的 GCC runtime。
+该依赖补丁只用于 sanitizer 测试环境，不修改系统 LLVM/MLIR 安装。
 
 Sanitizer 报告、崩溃、未定义行为或测试失败均为阻断问题，不能只根据最终进程返回值
 忽略诊断。

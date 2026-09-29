@@ -19,8 +19,12 @@ add_subdirectory(Numerical)
 if(NCNN_ENABLE_VULKAN_V0_TESTS)
     add_subdirectory(Vulkan)
 endif()
-# LLVM 的 lit 运行器（Debian 安装在 <prefix>/build/utils/lit）。
-set(NCNN_LIT_PY "${LLVM_DIR}/../../../build/utils/lit/lit.py")
+# LLVM 的 lit 运行器（Debian 安装在 <prefix>/build/utils/lit）。可在
+# 独立 LLVM/MLIR build 或 sanitizer toolchain 中显式指定其源码路径。
+set(NCNN_LIT_PY "" CACHE FILEPATH "Path to the LLVM lit.py test runner")
+if(NOT NCNN_LIT_PY)
+    set(NCNN_LIT_PY "${LLVM_DIR}/../../../build/utils/lit/lit.py")
+endif()
 get_filename_component(NCNN_LIT_PY "${NCNN_LIT_PY}" ABSOLUTE)
 
 if(FILECHECK AND EXISTS "${NCNN_LIT_PY}")
@@ -34,6 +38,38 @@ if(FILECHECK AND EXISTS "${NCNN_LIT_PY}")
 else()
     message(STATUS "lit 或 FileCheck 未找到，跳过 .mlir lit 测试")
 endif()
+
+add_executable(vulkan_abi_contract_test Native/vulkan_abi_contract.c)
+target_compile_features(vulkan_abi_contract_test PRIVATE c_std_11)
+target_include_directories(vulkan_abi_contract_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_BINARY_DIR}/Numerical/generated/relu_scalar)
+add_dependencies(vulkan_abi_contract_test compile_relu_scalar)
+add_test(NAME vulkan-abi-c-contract
+    COMMAND $<TARGET_FILE:vulkan_abi_contract_test>)
+set_tests_properties(vulkan-abi-c-contract PROPERTIES
+    LABELS "abi;tooling"
+    TIMEOUT 30)
+
+add_test(NAME vulkan-v1-cpu-baseline
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_vulkan_v1_cpu_baseline.py
+        --compiler $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/relu.param
+        --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
+        --baseline ${CMAKE_CURRENT_SOURCE_DIR}/Native/vulkan_v1_cpu_baseline.json
+        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-v1-cpu-baseline
+        --result ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-v1-cpu-baseline/evidence.json)
+set_tests_properties(vulkan-v1-cpu-baseline PROPERTIES
+    LABELS "abi;integration;cpu-baseline"
+    RUN_SERIAL TRUE
+    TIMEOUT 180)
 
 add_test(NAME perf-json-summary
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_perf_json_summary.py)

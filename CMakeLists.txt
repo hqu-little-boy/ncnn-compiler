@@ -25,6 +25,8 @@ option(COMPILER_ENABLE_WARNINGS
 option(COMPILER_WARNINGS_AS_ERRORS "Treat compiler warnings as errors (-Werror)" OFF)
 set(COMPILER_SANITIZERS "" CACHE STRING
     "Sanitizers for all targets, semicolon-separated subset of: address, undefined")
+set(NCNN_SANITIZER_OPENMP_LIBRARY_DIR "" CACHE PATH
+    "Optional isolated libomp directory for sanitizer models and numerical tests")
 option(COMPILER_ENABLE_FORMAT_TARGETS
     "Add clang-format/clang-tidy helper targets (requires the tools at configure time)" ON)
 set(COMPILER_TIDY_JOBS "" CACHE STRING

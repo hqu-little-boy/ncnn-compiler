@@ -60,6 +60,7 @@
 #include "ncnn-mlir/Transforms/VerifyNoNCNNOps/VerifyNoNCNNOps.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoNestedOpenMP/VerifyNoNestedOpenMP.hpp"
 #include "ncnn-mlir/Transforms/VerifyNoTosaOps/VerifyNoTosaOps.hpp"
+#include "ncnn-mlir/Transforms/VerifyVulkanSupportedModel/VerifyVulkanSupportedModel.hpp"
 
 namespace mlir::ncnn {
 
@@ -226,14 +227,10 @@ void buildNCNNToTosaPipeline(OpPassManager& passManager) {
   passManager.addPass(createVerifyNoNCNNOpsPass());
 }
 
-void buildNCNNTosaToLinalgPipeline(OpPassManager& passManager) {
-  buildNCNNTosaToLinalgPipeline(passManager, NCNNTosaToLinalgPipelineOptions());
-}
-
-void buildNCNNTosaToLinalgPipeline(
-  OpPassManager& passManager, const NCNNTosaToLinalgPipelineOptions& options) {
+void buildNCNNCommonTosaToLinalgPipeline(OpPassManager& passManager,
+                                         bool preferConv2DKernelLayoutHWCF) {
   TosaToLinalgNamedOptions namedOptions;
-  namedOptions.preferConv2DKernelLayoutHWCF = true;
+  namedOptions.preferConv2DKernelLayoutHWCF = preferConv2DKernelLayoutHWCF;
   tosa::addTosaToLinalgPasses(
     passManager, TosaToLinalgOptions(), namedOptions, std::nullopt);
   passManager.addPass(createFoldLinalgConstantTransposePass());
@@ -241,6 +238,22 @@ void buildNCNNTosaToLinalgPipeline(
   passManager.addNestedPass<func::FuncOp>(createTosaToArithPass());
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());
+}
+
+void buildNCNNVulkanSemanticPipeline(OpPassManager& passManager) {
+  passManager.addPass(createVerifyNoNCNNOpsPass());
+  buildNCNNCommonTosaToLinalgPipeline(passManager, true);
+  passManager.addPass(createVerifyNoTosaOpsPass());
+  passManager.addPass(createVerifyVulkanSupportedModelPass());
+}
+
+void buildNCNNTosaToLinalgPipeline(OpPassManager& passManager) {
+  buildNCNNTosaToLinalgPipeline(passManager, NCNNTosaToLinalgPipelineOptions());
+}
+
+void buildNCNNTosaToLinalgPipeline(
+  OpPassManager& passManager, const NCNNTosaToLinalgPipelineOptions& options) {
+  buildNCNNCommonTosaToLinalgPipeline(passManager, true);
   // int8 requant/dequant 尾部收拢：sitofp→scale mul→bias→[act]→quantize
   // 链融合为单一 generic（P4）。放在 strategy 之前，使量化卷积的
   // requant 尾部与激活一样成为卷积结果之后的单个可折叠逐元素 consumer；
@@ -504,6 +517,10 @@ void registerNCNNPipelines() {
     "ncnn-to-tosa-pipeline",
     "Strict ncnn model-to-TOSA pipeline",
     buildNCNNToTosaPipeline);
+  static PassPipelineRegistration<> ncnnVulkanSemanticRegistration(
+    "ncnn-vulkan-semantic-pipeline",
+    "Lower common ncnn semantics and verify the Vulkan model subset",
+    buildNCNNVulkanSemanticPipeline);
   static PassPipelineRegistration<NCNNTosaToLinalgPipelineOptions>
     tosaToLinalgRegistration(
       "ncnn-tosa-to-linalg-pipeline",

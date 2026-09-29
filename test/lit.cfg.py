@@ -5,8 +5,8 @@ import lit.formats
 config.name = "ncnn-mlir"
 config.test_format = lit.formats.ShTest(False)
 config.suffixes = [".mlir"]
-# bench/ 下是 cmake 构建输入（matmul bench 的内核源），不是 lit 用例。
-config.excludes = ["Runtime", "bench"]
+# bench/ is build input, while Vulkan/ uses its own device-harness tests.
+config.excludes = ["Runtime", "Vulkan", "bench"]
 
 # 路径变量由 lit.site.cfg.py（CMake 生成）注入。
 config.substitutions.append(("%FileCheck", config.filecheck))

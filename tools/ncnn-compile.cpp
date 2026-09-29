@@ -9,7 +9,6 @@
 #include <limits>
 #include <map>
 #include <optional>
-#include <ranges>
 #include <regex>
 #include <set>
 #include <string>
@@ -27,7 +26,6 @@
 #include "llvm/Support/FileSystem/UniqueID.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
@@ -635,7 +633,9 @@ int run(const std::vector<std::string>& command,
                     .outputs = {},
                     .input_dimension_relations = {},
                     .precision_policy = std::nullopt,
-                    .target = std::nullopt};
+                    .target = std::nullopt,
+                    .openmp = std::nullopt,
+                    .vector_math = std::nullopt};
   if (auto* policy = object->getObject("precision_policy")) {
     auto storage = policy->getString("storage");
     auto complex_math = policy->getString("complex_math");
@@ -1874,7 +1874,7 @@ ClangTargetArguments build_clang_target_arguments(
         macro_command.end(), target_args.begin(), target_args.end());
       macro_command.insert(
         macro_command.end(), isa_args.begin(), isa_args.end());
-      if (int status = run(macro_command, macro_capture)) {
+      if (run(macro_command, macro_capture) != 0) {
         return std::unexpected("INT8 target capability probe failed");
       }
       auto macro_text = read_text(macro_capture);
@@ -2223,10 +2223,12 @@ int CompileSession::resolveTarget() {
                                              "-fPIC",
                                              probe_source.string(),
                                              "-o",
-                                             probe_library.string(),
-                                             "-lomp"};
+                                             probe_library.string()};
       probe_command.insert(
         probe_command.end(), target_args.begin(), target_args.end());
+      probe_command.insert(
+        probe_command.end(), g_linker_args.begin(), g_linker_args.end());
+      probe_command.emplace_back("-lomp");
       omp_available =
         ::run(probe_command) == 0 && fs::is_regular_file(probe_library);
     }
