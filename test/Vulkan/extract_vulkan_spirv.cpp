@@ -19,6 +19,10 @@ llvm::cl::opt<std::string> input_path(llvm::cl::Positional,
 llvm::cl::opt<std::string> output_path("o",
                                        llvm::cl::desc("Output SPIR-V file"),
                                        llvm::cl::Required);
+llvm::cl::opt<std::string> binary_symbol(
+  "binary-symbol",
+  llvm::cl::desc("gpu.binary symbol to extract"),
+  llvm::cl::init("v0_add"));
 
 constexpr unsigned char kSpirvMagic[] = {0x03, 0x02, 0x23, 0x07};
 
@@ -27,7 +31,7 @@ constexpr unsigned char kSpirvMagic[] = {0x03, 0x02, 0x23, 0x07};
 int main(int argc, char** argv) {
   llvm::InitLLVM init_llvm(argc, argv);
   llvm::cl::ParseCommandLineOptions(
-    argc, argv, "Extract the V0 Vulkan shader\n");
+    argc, argv, "Extract a Vulkan SPIR-V shader\n");
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::gpu::GPUDialect, mlir::spirv::SPIRVDialect>();
@@ -45,7 +49,7 @@ int main(int argc, char** argv) {
   unsigned binary_count = 0;
   bool ambiguous = false;
   module->walk([&](mlir::gpu::BinaryOp binary) {
-    if (binary.getSymName() != "v0_add") {
+    if (binary.getSymName() != binary_symbol) {
       return;
     }
     ++binary_count;
@@ -67,8 +71,9 @@ int main(int argc, char** argv) {
     }
   });
   if (binary_count != 1 || shader.empty() || ambiguous) {
-    llvm::errs() << "vulkan-v0-spirv-extract: expected exactly one v0_add GPU "
-                    "binary containing a SPIR-V object; found "
+    llvm::errs() << "vulkan-spirv-extract: expected exactly one "
+                 << binary_symbol
+                 << " GPU binary containing a SPIR-V object; found "
                  << binary_count << '\n';
     return 1;
   }
@@ -81,6 +86,6 @@ int main(int argc, char** argv) {
     return 1;
   }
   llvm::outs() << "extracted " << shader.size()
-               << " SPIR-V bytes from gpu.binary @v0_add\n";
+               << " SPIR-V bytes from gpu.binary @" << binary_symbol << '\n';
   return 0;
 }

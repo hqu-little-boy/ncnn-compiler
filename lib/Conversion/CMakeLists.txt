@@ -1,2 +1,3 @@
 add_subdirectory(NCNNToFunc)
 add_subdirectory(NCNNToTosa)
+add_subdirectory(NCNNToVulkan)

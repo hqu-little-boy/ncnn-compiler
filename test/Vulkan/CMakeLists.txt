@@ -28,6 +28,9 @@ set(V0_CPU_HEADER ${V0_CPU_DIR}/v0_add.h)
 set(V0_CPU_MANIFEST ${V0_CPU_DIR}/v0_add.json)
 set(V0_EMPTY_BIN ${CMAKE_CURRENT_BINARY_DIR}/empty.bin)
 file(WRITE ${V0_EMPTY_BIN} "")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/../Numerical/fixtures/generate_bins.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/generate_conv1x1_bin.py)
 add_custom_command(
     OUTPUT ${V0_CPU_LIBRARY} ${V0_CPU_HEADER} ${V0_CPU_MANIFEST}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${V0_CPU_DIR}
@@ -58,6 +61,281 @@ add_custom_target(v0_cpu_add_fixture
 add_custom_target(vulkan-v0-build
     DEPENDS vulkan_add_runner vulkan_v0_spirv_extract v0_cpu_add_fixture)
 
+set(V2_RELU_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-relu)
+set(V2_RELU_CPU_LIBRARY ${V2_RELU_CPU_DIR}/libv2_relu.so)
+set(V2_RELU_CPU_HEADER ${V2_RELU_CPU_DIR}/v2_relu.h)
+set(V2_RELU_CPU_MANIFEST ${V2_RELU_CPU_DIR}/v2_relu.json)
+add_custom_command(
+    OUTPUT ${V2_RELU_CPU_LIBRARY} ${V2_RELU_CPU_HEADER} ${V2_RELU_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V2_RELU_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/relu.param
+        --bin ${V0_EMPTY_BIN}
+        --model-name v2_relu
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V2_RELU_CPU_DIR}
+    DEPENDS
+        ncnn-compile
+        ncnn-mlir-driver
+        ncnn-mlir-opt
+        ${CMAKE_CURRENT_SOURCE_DIR}/relu.param
+    VERBATIM)
+add_custom_target(v2_cpu_relu_fixture
+    DEPENDS ${V2_RELU_CPU_LIBRARY} ${V2_RELU_CPU_HEADER} ${V2_RELU_CPU_MANIFEST})
+
+set(V2_IDENTITY_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-identity)
+set(V2_IDENTITY_CPU_LIBRARY ${V2_IDENTITY_CPU_DIR}/libv2_identity.so)
+set(V2_IDENTITY_CPU_HEADER ${V2_IDENTITY_CPU_DIR}/v2_identity.h)
+set(V2_IDENTITY_CPU_MANIFEST ${V2_IDENTITY_CPU_DIR}/v2_identity.json)
+add_custom_command(
+    OUTPUT ${V2_IDENTITY_CPU_LIBRARY} ${V2_IDENTITY_CPU_HEADER} ${V2_IDENTITY_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V2_IDENTITY_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/identity.param
+        --bin ${V0_EMPTY_BIN}
+        --model-name v2_identity
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V2_IDENTITY_CPU_DIR}
+    DEPENDS
+        ncnn-compile
+        ncnn-mlir-driver
+        ncnn-mlir-opt
+        ${CMAKE_CURRENT_SOURCE_DIR}/identity.param
+    VERBATIM)
+add_custom_target(v2_cpu_identity_fixture
+    DEPENDS ${V2_IDENTITY_CPU_LIBRARY} ${V2_IDENTITY_CPU_HEADER} ${V2_IDENTITY_CPU_MANIFEST})
+
+set(V2_TRANSPOSE_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-transpose)
+set(V2_TRANSPOSE_CPU_LIBRARY ${V2_TRANSPOSE_CPU_DIR}/libv2_transpose.so)
+set(V2_TRANSPOSE_CPU_HEADER ${V2_TRANSPOSE_CPU_DIR}/v2_transpose.h)
+set(V2_TRANSPOSE_CPU_MANIFEST ${V2_TRANSPOSE_CPU_DIR}/v2_transpose.json)
+add_custom_command(
+    OUTPUT ${V2_TRANSPOSE_CPU_LIBRARY} ${V2_TRANSPOSE_CPU_HEADER} ${V2_TRANSPOSE_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V2_TRANSPOSE_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/transpose.param
+        --bin ${V0_EMPTY_BIN}
+        --model-name v2_transpose
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V2_TRANSPOSE_CPU_DIR}
+    DEPENDS
+        ncnn-compile
+        ncnn-mlir-driver
+        ncnn-mlir-opt
+        ${CMAKE_CURRENT_SOURCE_DIR}/transpose.param
+    VERBATIM)
+add_custom_target(v2_cpu_transpose_fixture
+    DEPENDS ${V2_TRANSPOSE_CPU_LIBRARY} ${V2_TRANSPOSE_CPU_HEADER} ${V2_TRANSPOSE_CPU_MANIFEST})
+
+set(V2_RESHAPE_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-reshape)
+set(V2_RESHAPE_CPU_LIBRARY ${V2_RESHAPE_CPU_DIR}/libv2_reshape.so)
+set(V2_RESHAPE_CPU_HEADER ${V2_RESHAPE_CPU_DIR}/v2_reshape.h)
+set(V2_RESHAPE_CPU_MANIFEST ${V2_RESHAPE_CPU_DIR}/v2_reshape.json)
+add_custom_command(
+    OUTPUT ${V2_RESHAPE_CPU_LIBRARY} ${V2_RESHAPE_CPU_HEADER} ${V2_RESHAPE_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V2_RESHAPE_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/../Numerical/fixtures/reshape.param
+        --bin ${V0_EMPTY_BIN}
+        --model-name v2_reshape
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V2_RESHAPE_CPU_DIR}
+    DEPENDS
+        ncnn-compile
+        ncnn-mlir-driver
+        ncnn-mlir-opt
+        ${CMAKE_CURRENT_SOURCE_DIR}/../Numerical/fixtures/reshape.param
+    VERBATIM)
+add_custom_target(v2_cpu_reshape_fixture
+    DEPENDS ${V2_RESHAPE_CPU_LIBRARY} ${V2_RESHAPE_CPU_HEADER} ${V2_RESHAPE_CPU_MANIFEST})
+
+set(V2_CONV3X3_BIN ${CMAKE_CURRENT_BINARY_DIR}/convolution-3x3.bin)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../Numerical/fixtures/generate_bins.py
+        ${V2_CONV3X3_BIN} convolution
+    COMMAND_ERROR_IS_FATAL ANY)
+set(V2_CONV3X3_PARAM ${CMAKE_CURRENT_SOURCE_DIR}/../Numerical/fixtures/convolution.param)
+set(V2_CONV3X3_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-convolution-3x3)
+set(V2_CONV3X3_CPU_LIBRARY ${V2_CONV3X3_CPU_DIR}/libv2_conv3x3.so)
+set(V2_CONV3X3_CPU_HEADER ${V2_CONV3X3_CPU_DIR}/v2_conv3x3.h)
+set(V2_CONV3X3_CPU_MANIFEST ${V2_CONV3X3_CPU_DIR}/v2_conv3x3.json)
+add_custom_command(
+    OUTPUT ${V2_CONV3X3_CPU_LIBRARY} ${V2_CONV3X3_CPU_HEADER} ${V2_CONV3X3_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V2_CONV3X3_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${V2_CONV3X3_PARAM}
+        --bin ${V2_CONV3X3_BIN}
+        --model-name v2_conv3x3
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V2_CONV3X3_CPU_DIR}
+    DEPENDS ncnn-compile ncnn-mlir-driver ncnn-mlir-opt
+            ${V2_CONV3X3_PARAM} ${V2_CONV3X3_BIN}
+    VERBATIM)
+add_custom_target(v2_cpu_conv3x3_fixture
+    DEPENDS ${V2_CONV3X3_CPU_LIBRARY} ${V2_CONV3X3_CPU_HEADER}
+            ${V2_CONV3X3_CPU_MANIFEST})
+
+set(V2_CONV3X3_NO_BIAS_BIN ${CMAKE_CURRENT_BINARY_DIR}/convolution-3x3-no-bias.bin)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../Numerical/fixtures/generate_bins.py
+        ${V2_CONV3X3_NO_BIAS_BIN} convolution_no_bias
+    COMMAND_ERROR_IS_FATAL ANY)
+set(V2_CONV3X3_NO_BIAS_PARAM ${CMAKE_CURRENT_SOURCE_DIR}/../Numerical/fixtures/convolution_no_bias.param)
+set(V2_CONV3X3_NO_BIAS_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-convolution-3x3-no-bias)
+set(V2_CONV3X3_NO_BIAS_CPU_LIBRARY ${V2_CONV3X3_NO_BIAS_CPU_DIR}/libv2_conv3x3_no_bias.so)
+set(V2_CONV3X3_NO_BIAS_CPU_HEADER ${V2_CONV3X3_NO_BIAS_CPU_DIR}/v2_conv3x3_no_bias.h)
+set(V2_CONV3X3_NO_BIAS_CPU_MANIFEST ${V2_CONV3X3_NO_BIAS_CPU_DIR}/v2_conv3x3_no_bias.json)
+add_custom_command(
+    OUTPUT ${V2_CONV3X3_NO_BIAS_CPU_LIBRARY} ${V2_CONV3X3_NO_BIAS_CPU_HEADER} ${V2_CONV3X3_NO_BIAS_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V2_CONV3X3_NO_BIAS_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${V2_CONV3X3_NO_BIAS_PARAM}
+        --bin ${V2_CONV3X3_NO_BIAS_BIN}
+        --model-name v2_conv3x3_no_bias
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V2_CONV3X3_NO_BIAS_CPU_DIR}
+    DEPENDS ncnn-compile ncnn-mlir-driver ncnn-mlir-opt
+            ${V2_CONV3X3_NO_BIAS_PARAM} ${V2_CONV3X3_NO_BIAS_BIN}
+    VERBATIM)
+add_custom_target(v2_cpu_conv3x3_no_bias_fixture
+    DEPENDS ${V2_CONV3X3_NO_BIAS_CPU_LIBRARY} ${V2_CONV3X3_NO_BIAS_CPU_HEADER}
+            ${V2_CONV3X3_NO_BIAS_CPU_MANIFEST})
+
+set(V2_CONV3X3_STRIDE2_PARAM ${CMAKE_CURRENT_SOURCE_DIR}/convolution_3x3_stride2.param)
+set(V2_CONV3X3_STRIDE2_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-convolution-3x3-stride2)
+set(V2_CONV3X3_STRIDE2_CPU_LIBRARY ${V2_CONV3X3_STRIDE2_CPU_DIR}/libv2_conv3x3_stride2.so)
+set(V2_CONV3X3_STRIDE2_CPU_HEADER ${V2_CONV3X3_STRIDE2_CPU_DIR}/v2_conv3x3_stride2.h)
+set(V2_CONV3X3_STRIDE2_CPU_MANIFEST ${V2_CONV3X3_STRIDE2_CPU_DIR}/v2_conv3x3_stride2.json)
+add_custom_command(
+    OUTPUT ${V2_CONV3X3_STRIDE2_CPU_LIBRARY} ${V2_CONV3X3_STRIDE2_CPU_HEADER} ${V2_CONV3X3_STRIDE2_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V2_CONV3X3_STRIDE2_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${V2_CONV3X3_STRIDE2_PARAM}
+        --bin ${V2_CONV3X3_BIN}
+        --model-name v2_conv3x3_stride2
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V2_CONV3X3_STRIDE2_CPU_DIR}
+    DEPENDS ncnn-compile ncnn-mlir-driver ncnn-mlir-opt
+            ${V2_CONV3X3_STRIDE2_PARAM} ${V2_CONV3X3_BIN}
+    VERBATIM)
+add_custom_target(v2_cpu_conv3x3_stride2_fixture
+    DEPENDS ${V2_CONV3X3_STRIDE2_CPU_LIBRARY} ${V2_CONV3X3_STRIDE2_CPU_HEADER}
+            ${V2_CONV3X3_STRIDE2_CPU_MANIFEST})
+
+set(V2_CONV1X1_BIN ${CMAKE_CURRENT_BINARY_DIR}/convolution-1x1.bin)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate_conv1x1_bin.py
+            ${V2_CONV1X1_BIN}
+    COMMAND_ERROR_IS_FATAL ANY)
+set(V2_CONV1X1_PARAM ${CMAKE_CURRENT_SOURCE_DIR}/convolution_1x1.param)
+set(V2_CONV1X1_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-convolution-1x1)
+set(V2_CONV1X1_CPU_LIBRARY ${V2_CONV1X1_CPU_DIR}/libv2_conv1x1.so)
+set(V2_CONV1X1_CPU_HEADER ${V2_CONV1X1_CPU_DIR}/v2_conv1x1.h)
+set(V2_CONV1X1_CPU_MANIFEST ${V2_CONV1X1_CPU_DIR}/v2_conv1x1.json)
+add_custom_command(
+    OUTPUT ${V2_CONV1X1_CPU_LIBRARY} ${V2_CONV1X1_CPU_HEADER} ${V2_CONV1X1_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V2_CONV1X1_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${V2_CONV1X1_PARAM}
+        --bin ${V2_CONV1X1_BIN}
+        --model-name v2_conv1x1
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V2_CONV1X1_CPU_DIR}
+    DEPENDS ncnn-compile ncnn-mlir-driver ncnn-mlir-opt
+            ${V2_CONV1X1_PARAM} ${V2_CONV1X1_BIN}
+    VERBATIM)
+add_custom_target(v2_cpu_conv1x1_fixture
+    DEPENDS ${V2_CONV1X1_CPU_LIBRARY} ${V2_CONV1X1_CPU_HEADER}
+            ${V2_CONV1X1_CPU_MANIFEST})
+
+add_custom_target(vulkan-v2-build ALL
+    DEPENDS vulkan-v0-build v2_cpu_relu_fixture v2_cpu_identity_fixture
+            v2_cpu_transpose_fixture v2_cpu_reshape_fixture
+            v2_cpu_conv1x1_fixture v2_cpu_conv3x3_fixture
+            v2_cpu_conv3x3_no_bias_fixture v2_cpu_conv3x3_stride2_fixture)
+
 function(ncnn_add_vulkan_v0_test test_name device_match output_name)
     set(test_args
         --mlir-opt ${MLIR_OPT}
@@ -87,4 +365,136 @@ endfunction()
 
 ncnn_add_vulkan_v0_test(vulkan-v0-add-nvidia NVIDIA nvidia --run-negative)
 ncnn_add_vulkan_v0_test(vulkan-v0-add-llvmpipe llvmpipe llvmpipe --icd ${V0_LLVMPIPE_ICD})
+
+function(ncnn_add_vulkan_v2_test test_name device_match output_name operation
+         kernel_file binary_symbol cpu_library cpu_symbol model_param model_bin)
+    set(test_args
+        --ncnn-driver $<TARGET_FILE:ncnn-mlir-driver>
+        --ncnn-mlir-opt $<TARGET_FILE:ncnn-mlir-opt>
+        --mlir-opt ${MLIR_OPT}
+        --spirv-val ${SPIRV_VAL}
+        --spirv-dis ${SPIRV_DIS}
+        --spirv-extract $<TARGET_FILE:vulkan_v0_spirv_extract>
+        --runner $<TARGET_FILE:vulkan_add_runner>
+        --operation ${operation}
+        --elements 257
+        --binary-symbol ${binary_symbol}
+        --cpu-library ${cpu_library}
+        --cpu-symbol ${cpu_symbol}
+        --model-param ${CMAKE_CURRENT_SOURCE_DIR}/${model_param}
+        --model-bin ${model_bin}
+        --device-match ${device_match}
+        --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/v2/${output_name}
+        --validation)
+    if(NOT kernel_file STREQUAL "from-model")
+        list(APPEND test_args
+            --kernel ${CMAKE_CURRENT_SOURCE_DIR}/../Conversion/NCNNToVulkan/${kernel_file})
+    endif()
+    if(ARGC GREATER 10)
+        list(APPEND test_args ${ARGN})
+    endif()
+    add_test(NAME ${test_name}
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_v2.py
+            ${test_args})
+    set_tests_properties(${test_name} PROPERTIES
+        LABELS "vulkan;device;integration;v2"
+        RUN_SERIAL TRUE
+        TIMEOUT 180)
+endfunction()
+
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-add-nvidia NVIDIA add-nvidia add from-model model_vulkan
+    ${V0_CPU_LIBRARY} v0_add add.param ${V0_EMPTY_BIN})
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-add-llvmpipe llvmpipe add-llvmpipe add from-model model_vulkan
+    ${V0_CPU_LIBRARY} v0_add add.param ${V0_EMPTY_BIN} --icd ${V0_LLVMPIPE_ICD})
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-relu-nvidia NVIDIA relu-nvidia relu from-model model_vulkan
+    ${V2_RELU_CPU_LIBRARY} v2_relu relu.param ${V0_EMPTY_BIN})
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-relu-llvmpipe llvmpipe relu-llvmpipe relu from-model model_vulkan
+    ${V2_RELU_CPU_LIBRARY} v2_relu relu.param ${V0_EMPTY_BIN}
+    --icd ${V0_LLVMPIPE_ICD})
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-copy-nvidia NVIDIA copy-nvidia copy lower-copy.mlir copy_vulkan
+    ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN})
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-copy-llvmpipe llvmpipe copy-llvmpipe copy lower-copy.mlir copy_vulkan
+    ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN}
+    --icd ${V0_LLVMPIPE_ICD})
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-identity-nvidia NVIDIA identity-nvidia identity from-model model_vulkan
+    ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN})
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-identity-llvmpipe llvmpipe identity-llvmpipe identity from-model model_vulkan
+    ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN}
+    --icd ${V0_LLVMPIPE_ICD})
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-transpose-nvidia NVIDIA transpose-nvidia transpose from-model model_vulkan
+    ${V2_TRANSPOSE_CPU_LIBRARY} v2_transpose transpose.param ${V0_EMPTY_BIN}
+    --elements 255 --input-shape 51x5x1 --permutation 1,0,2)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-transpose-llvmpipe llvmpipe transpose-llvmpipe transpose from-model model_vulkan
+    ${V2_TRANSPOSE_CPU_LIBRARY} v2_transpose transpose.param ${V0_EMPTY_BIN}
+    --icd ${V0_LLVMPIPE_ICD} --elements 255
+    --input-shape 51x5x1 --permutation 1,0,2)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-reshape-nvidia NVIDIA reshape-nvidia reshape from-model model_vulkan
+    ${V2_RESHAPE_CPU_LIBRARY} v2_reshape ../Numerical/fixtures/reshape.param
+    ${V0_EMPTY_BIN} --elements 8)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-reshape-llvmpipe llvmpipe reshape-llvmpipe reshape from-model model_vulkan
+    ${V2_RESHAPE_CPU_LIBRARY} v2_reshape ../Numerical/fixtures/reshape.param
+    ${V0_EMPTY_BIN} --icd ${V0_LLVMPIPE_ICD} --elements 8)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-conv3x3-nvidia NVIDIA conv3x3-nvidia conv2d from-model model_vulkan
+    ${V2_CONV3X3_CPU_LIBRARY} v2_conv3x3 ../Numerical/fixtures/convolution.param
+    ${V2_CONV3X3_BIN} --elements 32 --input-shape 1x4x4
+    --kernel-size 3x3 --stride 1x1 --padding 1,1,1,1
+    --output-channels 2 --conv-bias)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-conv3x3-llvmpipe llvmpipe conv3x3-llvmpipe conv2d from-model model_vulkan
+    ${V2_CONV3X3_CPU_LIBRARY} v2_conv3x3 ../Numerical/fixtures/convolution.param
+    ${V2_CONV3X3_BIN} --icd ${V0_LLVMPIPE_ICD} --elements 32
+    --input-shape 1x4x4 --kernel-size 3x3 --stride 1x1
+    --padding 1,1,1,1 --output-channels 2 --conv-bias)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-conv3x3-no-bias-nvidia NVIDIA conv3x3-no-bias-nvidia conv2d
+    from-model model_vulkan ${V2_CONV3X3_NO_BIAS_CPU_LIBRARY} v2_conv3x3_no_bias
+    ../Numerical/fixtures/convolution_no_bias.param ${V2_CONV3X3_NO_BIAS_BIN}
+    --elements 32 --input-shape 1x4x4 --kernel-size 3x3 --stride 1x1
+    --padding 1,1,1,1 --output-channels 2)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-conv3x3-no-bias-llvmpipe llvmpipe conv3x3-no-bias-llvmpipe
+    conv2d from-model model_vulkan ${V2_CONV3X3_NO_BIAS_CPU_LIBRARY}
+    v2_conv3x3_no_bias ../Numerical/fixtures/convolution_no_bias.param
+    ${V2_CONV3X3_NO_BIAS_BIN} --icd ${V0_LLVMPIPE_ICD} --elements 32
+    --input-shape 1x4x4 --kernel-size 3x3 --stride 1x1
+    --padding 1,1,1,1 --output-channels 2)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-conv3x3-stride2-nvidia NVIDIA conv3x3-stride2-nvidia conv2d
+    from-model model_vulkan ${V2_CONV3X3_STRIDE2_CPU_LIBRARY} v2_conv3x3_stride2
+    convolution_3x3_stride2.param ${V2_CONV3X3_BIN} --elements 8
+    --input-shape 1x4x4 --kernel-size 3x3 --stride 2x2
+    --padding 1,1,1,1 --output-channels 2 --conv-bias)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-conv3x3-stride2-llvmpipe llvmpipe conv3x3-stride2-llvmpipe
+    conv2d from-model model_vulkan ${V2_CONV3X3_STRIDE2_CPU_LIBRARY}
+    v2_conv3x3_stride2 convolution_3x3_stride2.param ${V2_CONV3X3_BIN}
+    --icd ${V0_LLVMPIPE_ICD} --elements 8 --input-shape 1x4x4
+    --kernel-size 3x3 --stride 2x2 --padding 1,1,1,1
+    --output-channels 2 --conv-bias)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-conv1x1-nvidia NVIDIA conv1x1-nvidia conv2d from-model model_vulkan
+    ${V2_CONV1X1_CPU_LIBRARY} v2_conv1x1 convolution_1x1.param
+    ${V2_CONV1X1_BIN} --elements 18 --input-shape 2x3x5
+    --kernel-size 1x1 --stride 2x2 --padding 0,0,0,0
+    --output-channels 3 --conv-bias)
+ncnn_add_vulkan_v2_test(
+    vulkan-v2-conv1x1-llvmpipe llvmpipe conv1x1-llvmpipe conv2d from-model model_vulkan
+    ${V2_CONV1X1_CPU_LIBRARY} v2_conv1x1 convolution_1x1.param
+    ${V2_CONV1X1_BIN} --icd ${V0_LLVMPIPE_ICD} --elements 18
+    --input-shape 2x3x5 --kernel-size 1x1 --stride 2x2
+    --padding 0,0,0,0 --output-channels 3 --conv-bias)
 

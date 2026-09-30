@@ -226,6 +226,8 @@ void buildNCNNToTosaPipeline(OpPassManager& passManager);
 void buildNCNNCommonTosaToLinalgPipeline(OpPassManager& passManager,
                                          bool preferConv2DKernelLayoutHWCF);
 void buildNCNNVulkanSemanticPipeline(OpPassManager& passManager);
+void buildNCNNVulkanV2PreparePipeline(OpPassManager& passManager);
+void buildNCNNVulkanV2Pipeline(OpPassManager& passManager);
 void buildNCNNTosaToLinalgPipeline(OpPassManager& passManager);
 void buildNCNNTosaToLinalgPipeline(
   OpPassManager& passManager, const NCNNTosaToLinalgPipelineOptions& options);

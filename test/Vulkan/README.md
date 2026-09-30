@@ -31,3 +31,9 @@ The opt-in harness runs MLIR 21 `--test-vulkan-runner-pipeline`, which lowers th
 ## Evidence
 
 CTest writes generated artifacts to `<build>/test/Vulkan/evidence/gpu-func/<device>/`: GPU-binary MLIR, extracted `.spv`, disassembly, validator and tool logs, fixed input/output bytes, CPU library identity, device properties, tolerance and per-element comparison summaries. The earlier `evidence/nvidia/` and `evidence/llvmpipe/` snapshots are the 2026-09-28 direct-SPIR-V-dialect run; preserve them as historical evidence. The new GPU-dialect provenance run is archived separately under `evidence/gpu-func/{nvidia,llvmpipe}/`. It uses the same 257-element input contract; the device runs reported zero validation errors and zero CPU/GPU/golden difference under `atol=1e-6, rtol=1e-6`.
+
+## V2 isolated operation tests
+
+With `NCNN_ENABLE_VULKAN_V0_TESTS=ON`, the default build also creates the V2 CPU AOT fixtures and registers `vulkan-v2-*` tests. `run_v2.py` imports the `.param/.bin` fixture with `ncnn-mlir-driver`, runs the Vulkan preparation/lowering pipeline, writes and verifies the execution plan, lowers the resulting GPU module to `gpu.binary`, extracts SPIR-V, runs `spirv-val --target-env vulkan1.1`, and dispatches each operation on NVIDIA and llvmpipe. Each device case runs fixed edge values plus seeds `0,1,42`, comparing GPU results against the matching CPU AOT artifact and an independent scalar golden; evidence is written under `evidence/v2/<case>/`.
+
+The test matrix covers static FP32 Add, ReLU, copy, identity, transpose, reshape, and restricted 1x1/3x3 Conv2D with stride/padding/bias variants. Conv tests hash-check the schema-v1 plan’s HWCF weights and bias against the ncnn binary stream; the runner converts source OIHW weights to the device buffer order and checks CHW outputs against CPU AOT/golden. This is test-only code generation and dispatch: the current product compiler still does not emit a Vulkan model library or runtime wrapper.

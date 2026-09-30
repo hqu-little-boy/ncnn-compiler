@@ -21,6 +21,7 @@ target_link_libraries(NCNNPipelines PUBLIC
     PackStaticMatmulNCNN
     NCNNToFunc
     NCNNToTosa
+    NCNNToVulkan
     NormalizeNCNN
     ForallizeDisjointTileLoops
     StrategyNCNN

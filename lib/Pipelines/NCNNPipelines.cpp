@@ -36,6 +36,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 #include "ncnn-mlir/Conversion/NCNNToTosa/NCNNToTosa.hpp"
+#include "ncnn-mlir/Conversion/NCNNToVulkan/NCNNToVulkan.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 #include "ncnn-mlir/Transforms/BufferizeNCNN/BufferizeNCNN.hpp"
 #include "ncnn-mlir/Transforms/EmitModelPlan/EmitModelPlan.hpp"
@@ -245,6 +246,17 @@ void buildNCNNVulkanSemanticPipeline(OpPassManager& passManager) {
   buildNCNNCommonTosaToLinalgPipeline(passManager, true);
   passManager.addPass(createVerifyNoTosaOpsPass());
   passManager.addPass(createVerifyVulkanSupportedModelPass());
+}
+
+void buildNCNNVulkanV2PreparePipeline(OpPassManager& passManager) {
+  buildNCNNToTosaPipeline(passManager);
+  buildNCNNCommonTosaToLinalgPipeline(passManager, true);
+  passManager.addPass(createVerifyNoTosaOpsPass());
+}
+
+void buildNCNNVulkanV2Pipeline(OpPassManager& passManager) {
+  buildNCNNVulkanV2PreparePipeline(passManager);
+  passManager.addPass(createLowerNCNNVulkanModelPass());
 }
 
 void buildNCNNTosaToLinalgPipeline(OpPassManager& passManager) {
@@ -521,6 +533,14 @@ void registerNCNNPipelines() {
     "ncnn-vulkan-semantic-pipeline",
     "Lower common ncnn semantics and verify the Vulkan model subset",
     buildNCNNVulkanSemanticPipeline);
+  static PassPipelineRegistration<> ncnnVulkanV2PrepareRegistration(
+    "ncnn-vulkan-v2-prepare-pipeline",
+    "Lower ncnn semantics to V2 Vulkan Linalg IR without V1 legality",
+    buildNCNNVulkanV2PreparePipeline);
+  static PassPipelineRegistration<> ncnnVulkanV2Registration(
+    "ncnn-vulkan-v2-pipeline",
+    "Lower V2 Vulkan fixtures to GPU IR",
+    buildNCNNVulkanV2Pipeline);
   static PassPipelineRegistration<NCNNTosaToLinalgPipelineOptions>
     tosaToLinalgRegistration(
       "ncnn-tosa-to-linalg-pipeline",

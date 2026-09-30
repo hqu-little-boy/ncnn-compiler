@@ -7,12 +7,16 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -21,6 +25,9 @@ namespace {
 
 constexpr uint32_t kElementCount = 257;
 constexpr uint32_t kLocalSize = 64;
+constexpr uint64_t kMaximumStorageBufferBytes = 128ULL * 1024ULL * 1024ULL;
+constexpr uint64_t kMaximumStorageBufferElements =
+  kMaximumStorageBufferBytes / sizeof(float);
 constexpr float kAbsTolerance = 1.0e-6F;
 constexpr float kRelTolerance = 1.0e-6F;
 std::atomic<uint32_t> g_validation_errors = 0;
@@ -30,6 +37,24 @@ void check(VkResult result, std::string_view operation) {
     throw std::runtime_error(std::string(operation) + " failed with VkResult " +
                              std::to_string(result));
   }
+}
+
+uint64_t checked_product(std::initializer_list<uint64_t> factors,
+                         std::string_view description) {
+  uint64_t product = 1;
+  for (uint64_t factor : factors) {
+    if (factor == 0 || product > UINT64_MAX / factor) {
+      throw std::runtime_error(std::string(description) +
+                               " is zero or overflows uint64");
+    }
+    product *= factor;
+  }
+  if (product > kMaximumStorageBufferElements) {
+    throw std::runtime_error(
+      std::string(description) +
+      " exceeds the minimum Vulkan storage-buffer range");
+  }
+  return product;
 }
 
 VKAPI_ATTR VkBool32 VKAPI_CALL
@@ -50,11 +75,52 @@ struct Options {
   std::string shader_path;
   std::string cpu_library;
   std::string cpu_symbol = "v0_add";
+  std::string operation = "add";
+  std::string weight_file;
   std::string device_match;
   std::string evidence_path;
+  uint32_t elements = kElementCount;
+  uint32_t seed = 0;
+  std::vector<uint32_t> input_shape;
+  std::vector<uint32_t> permutation;
+  std::vector<uint32_t> kernel_size;
+  std::vector<uint32_t> stride;
+  std::vector<uint32_t> padding;
+  uint32_t output_channels = 0;
   VkDeviceSize probe_buffer_bytes = 0;
+  bool convolution_has_bias = false;
   bool validation = false;
 };
+
+uint32_t parse_u32(std::string_view text, std::string_view field) {
+  if (text.empty()) {
+    throw std::runtime_error(std::string(field) + " must not be empty");
+  }
+  std::size_t parsed_chars = 0;
+  const unsigned long long parsed =
+    std::stoull(std::string(text), &parsed_chars, 10);
+  if (parsed_chars != text.size() ||
+      parsed > std::numeric_limits<uint32_t>::max()) {
+    throw std::runtime_error(std::string(field) + " exceeds uint32 range");
+  }
+  return static_cast<uint32_t>(parsed);
+}
+
+std::vector<uint32_t> parse_u32_list(const std::string& text, char separator) {
+  std::vector<uint32_t> values;
+  std::stringstream stream(text);
+  std::string value;
+  while (std::getline(stream, value, separator)) {
+    if (value.empty()) {
+      throw std::runtime_error("list arguments must not contain empty values");
+    }
+    values.push_back(parse_u32(value, "list argument"));
+  }
+  if (values.empty()) {
+    throw std::runtime_error("list argument must contain at least one value");
+  }
+  return values;
+}
 
 Options parse_options(int argc, char** argv) {
   Options options;
@@ -72,6 +138,28 @@ Options parse_options(int argc, char** argv) {
       options.cpu_library = value(arg);
     } else if (arg == "--cpu-symbol") {
       options.cpu_symbol = value(arg);
+    } else if (arg == "--operation") {
+      options.operation = value(arg);
+    } else if (arg == "--weight-file") {
+      options.weight_file = value(arg);
+    } else if (arg == "--elements") {
+      options.elements = parse_u32(value(arg), "elements");
+    } else if (arg == "--seed") {
+      options.seed = parse_u32(value(arg), "seed");
+    } else if (arg == "--input-shape") {
+      options.input_shape = parse_u32_list(value(arg), 'x');
+    } else if (arg == "--permutation") {
+      options.permutation = parse_u32_list(value(arg), ',');
+    } else if (arg == "--kernel-size") {
+      options.kernel_size = parse_u32_list(value(arg), 'x');
+    } else if (arg == "--stride") {
+      options.stride = parse_u32_list(value(arg), 'x');
+    } else if (arg == "--padding") {
+      options.padding = parse_u32_list(value(arg), ',');
+    } else if (arg == "--output-channels") {
+      options.output_channels = parse_u32(value(arg), "output-channels");
+    } else if (arg == "--conv-bias") {
+      options.convolution_has_bias = true;
     } else if (arg == "--device-match") {
       options.device_match = value(arg);
     } else if (arg == "--evidence") {
@@ -85,10 +173,100 @@ Options parse_options(int argc, char** argv) {
     }
   }
   if (options.shader_path.empty() || options.cpu_library.empty() ||
-      options.device_match.empty() || options.evidence_path.empty()) {
+      options.device_match.empty() || options.evidence_path.empty() ||
+      options.elements == 0 ||
+      options.elements > kMaximumStorageBufferElements ||
+      (options.operation != "add" && options.operation != "relu" &&
+       options.operation != "copy" && options.operation != "identity" &&
+       options.operation != "reshape" && options.operation != "transpose" &&
+       options.operation != "conv2d")) {
     throw std::runtime_error(
       "usage: vulkan_add_runner --shader FILE --cpu-library FILE "
-      "--device-match NAME --evidence FILE [--cpu-symbol NAME] [--validation]");
+      "--device-match NAME --evidence FILE [--cpu-symbol NAME] "
+      "[--operation add|relu|copy|identity|reshape|transpose|conv2d] "
+      "[--elements N] [--input-shape CxHxW --permutation AXES] "
+      "[--kernel-size HxW --stride HxW --padding T,L,B,R "
+      "--output-channels N --weight-file FILE] [--validation]");
+  }
+  if (options.operation == "transpose") {
+    if (options.input_shape.empty() ||
+        options.input_shape.size() != options.permutation.size()) {
+      throw std::runtime_error(
+        "transpose requires matching input-shape and permutation ranks");
+    }
+    uint64_t input_elements = 1;
+    std::vector<bool> seen(options.permutation.size(), false);
+    for (size_t axis = 0; axis < options.input_shape.size(); ++axis) {
+      const uint32_t extent = options.input_shape[axis];
+      const uint32_t source_axis = options.permutation[axis];
+      if (extent == 0 || input_elements > UINT64_MAX / extent ||
+          input_elements > kMaximumStorageBufferElements / extent ||
+          source_axis >= seen.size() || seen[source_axis]) {
+        throw std::runtime_error("invalid static transpose shape/permutation");
+      }
+      input_elements *= extent;
+      seen[source_axis] = true;
+    }
+    if (input_elements != options.elements) {
+      throw std::runtime_error("transpose shape does not match element count");
+    }
+  } else if (options.operation == "conv2d") {
+    if (options.input_shape.size() != 3 || options.kernel_size.size() != 2 ||
+        options.stride.size() != 2 || options.padding.size() != 4 ||
+        options.output_channels == 0 || options.weight_file.empty()) {
+      throw std::runtime_error(
+        "Conv2D requires static shape, kernel, stride, padding, channels, and "
+        "weights");
+    }
+    if (!((options.kernel_size[0] == 1 && options.kernel_size[1] == 1) ||
+          (options.kernel_size[0] == 3 && options.kernel_size[1] == 3)) ||
+        (options.stride[0] != 1 && options.stride[0] != 2) ||
+        (options.stride[1] != 1 && options.stride[1] != 2) ||
+        std::ranges::any_of(options.padding,
+                            [](uint32_t pad) { return pad > 1; }) ||
+        (options.kernel_size[0] == 1 &&
+         std::ranges::any_of(options.padding,
+                             [](uint32_t pad) { return pad != 0; }))) {
+      throw std::runtime_error(
+        "unsupported Conv2D kernel/stride/padding parameters");
+    }
+    const uint64_t input_channels = options.input_shape[0];
+    const uint64_t height = options.input_shape[1];
+    const uint64_t width = options.input_shape[2];
+    const uint64_t input_elements =
+      checked_product({input_channels, height, width}, "Conv2D input buffer");
+    const uint64_t weight_elements = checked_product({options.output_channels,
+                                                      input_channels,
+                                                      options.kernel_size[0],
+                                                      options.kernel_size[1]},
+                                                     "Conv2D weight buffer");
+    (void)input_elements;
+    (void)weight_elements;
+    const uint64_t padded_height =
+      height + options.padding[0] + options.padding[2];
+    const uint64_t padded_width =
+      width + options.padding[1] + options.padding[3];
+    if (padded_height < options.kernel_size[0] ||
+        padded_width < options.kernel_size[1]) {
+      throw std::runtime_error("Conv2D kernel exceeds padded input dimensions");
+    }
+    const uint64_t output_height =
+      ((padded_height - options.kernel_size[0]) / options.stride[0]) + 1;
+    const uint64_t output_width =
+      ((padded_width - options.kernel_size[1]) / options.stride[1]) + 1;
+    const uint64_t output_elements =
+      checked_product({options.output_channels, output_height, output_width},
+                      "Conv2D output buffer");
+    if (output_elements != options.elements) {
+      throw std::runtime_error(
+        "Conv2D output shape does not match element count");
+    }
+  } else if (!options.input_shape.empty() || !options.permutation.empty() ||
+             !options.kernel_size.empty() || !options.stride.empty() ||
+             !options.padding.empty() || options.output_channels != 0 ||
+             !options.weight_file.empty() || options.convolution_has_bias) {
+    throw std::runtime_error(
+      "shape, permutation, and Conv2D options are operation-specific");
   }
   return options;
 }
@@ -117,20 +295,41 @@ std::vector<uint32_t> read_spirv(const std::string& path) {
 class VulkanAddRunner {
  public:
   explicit VulkanAddRunner(const Options& options)
-    : options_(options), shader_(read_spirv(options.shader_path)) {}
+    : options_(options),
+      shader_(read_spirv(options.shader_path)),
+      buffers_(options.operation == "conv2d" ? 4
+               : options.operation == "add"  ? 3
+                                             : 2) {}
 
   ~VulkanAddRunner() { destroy(); }
 
   VulkanAddRunner(const VulkanAddRunner&) = delete;
   VulkanAddRunner& operator=(const VulkanAddRunner&) = delete;
 
-  std::string run(const std::array<std::vector<float>, 2>& inputs,
+  std::string run(const std::vector<std::vector<float>>& inputs,
                   std::vector<float>& output) {
+    if (inputs.size() + 1 != buffers_.size() ||
+        output.size() != options_.elements) {
+      throw std::runtime_error(
+        "input/output counts do not match the operation");
+    }
+    buffer_sizes_.clear();
+    for (const std::vector<float>& input : inputs) {
+      buffer_sizes_.push_back(input.size() * sizeof(float));
+    }
+    buffer_sizes_.push_back(output.size() * sizeof(float));
+    for (VkDeviceSize size : buffer_sizes_) {
+      if (size == 0 || size > kMaximumStorageBufferBytes) {
+        throw std::runtime_error(
+          "input/output storage buffer violates the static size contract");
+      }
+    }
     create_instance();
     select_device();
     create_buffers();
-    write_buffer(0, inputs[0].data());
-    write_buffer(1, inputs[1].data());
+    for (size_t index = 0; index < inputs.size(); ++index) {
+      write_buffer(index, inputs[index].data());
+    }
     create_descriptors();
     create_pipeline();
     dispatch();
@@ -268,14 +467,16 @@ class VulkanAddRunner {
       throw std::runtime_error("no compute device matched '" +
                                options_.device_match + "'");
     }
-    if (properties_.limits.maxStorageBufferRange <
-        kElementCount * sizeof(float)) {
-      throw std::runtime_error("device maxStorageBufferRange is too small");
+    for (VkDeviceSize buffer_size : buffer_sizes_) {
+      if (buffer_size > properties_.limits.maxStorageBufferRange) {
+        throw std::runtime_error("device maxStorageBufferRange is too small");
+      }
     }
+    const VkDeviceSize input_bytes = buffer_sizes_.front();
     const VkDeviceSize requested_bytes = options_.probe_buffer_bytes == 0
-                                           ? kElementCount * sizeof(float)
+                                           ? input_bytes
                                            : options_.probe_buffer_bytes;
-    if (requested_bytes < kElementCount * sizeof(float)) {
+    if (requested_bytes < input_bytes) {
       throw std::runtime_error(
         "requested storage buffer is smaller than the fixture");
     }
@@ -286,6 +487,12 @@ class VulkanAddRunner {
     if (properties_.limits.maxComputeWorkGroupInvocations < kLocalSize ||
         properties_.limits.maxComputeWorkGroupSize[0] < kLocalSize) {
       throw std::runtime_error("device workgroup limits are too small");
+    }
+    const uint64_t group_count =
+      (static_cast<uint64_t>(options_.elements) + kLocalSize - 1) / kLocalSize;
+    if (group_count > properties_.limits.maxComputeWorkGroupCount[0]) {
+      throw std::runtime_error(
+        "device dispatch exceeds maxComputeWorkGroupCount");
     }
 
     constexpr float priority = 1.0F;
@@ -327,9 +534,10 @@ class VulkanAddRunner {
   }
 
   void create_buffers() {
-    for (Buffer& buffer : buffers_) {
+    for (size_t index = 0; index < buffers_.size(); ++index) {
+      Buffer& buffer = buffers_[index];
       VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-      buffer_info.size = kElementCount * sizeof(float);
+      buffer_info.size = buffer_sizes_[index];
       buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
       buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
       check(vkCreateBuffer(device_, &buffer_info, nullptr, &buffer.handle),
@@ -356,7 +564,7 @@ class VulkanAddRunner {
 
   void write_buffer(size_t index, const float* values) {
     Buffer& buffer = buffers_[index];
-    std::memcpy(buffer.mapped, values, kElementCount * sizeof(float));
+    std::memcpy(buffer.mapped, values, buffer_sizes_[index]);
     if (!buffer.coherent) {
       VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
       range.memory = buffer.memory;
@@ -368,8 +576,9 @@ class VulkanAddRunner {
   }
 
   void create_descriptors() {
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
-    for (uint32_t i = 0; i < bindings.size(); ++i) {
+    const auto buffer_count = static_cast<uint32_t>(buffers_.size());
+    std::vector<VkDescriptorSetLayoutBinding> bindings(buffer_count);
+    for (uint32_t i = 0; i < buffer_count; ++i) {
       bindings[i].binding = i;
       bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       bindings[i].descriptorCount = 1;
@@ -377,13 +586,14 @@ class VulkanAddRunner {
     }
     VkDescriptorSetLayoutCreateInfo layout_info{
       VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.bindingCount = static_cast<uint32_t>(bindings.size());
+    layout_info.bindingCount = buffer_count;
     layout_info.pBindings = bindings.data();
     check(vkCreateDescriptorSetLayout(
             device_, &layout_info, nullptr, &descriptor_layout_),
           "vkCreateDescriptorSetLayout");
 
-    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3};
+    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                   buffer_count};
     VkDescriptorPoolCreateInfo pool_info{
       VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pool_info.maxSets = 1;
@@ -401,21 +611,20 @@ class VulkanAddRunner {
     check(vkAllocateDescriptorSets(device_, &set_info, &descriptor_set_),
           "vkAllocateDescriptorSets");
 
-    std::array<VkDescriptorBufferInfo, 3> buffer_infos{};
-    std::array<VkWriteDescriptorSet, 3> writes{};
-    for (uint32_t i = 0; i < buffer_infos.size(); ++i) {
+    std::vector<VkDescriptorBufferInfo> buffer_infos(buffer_count);
+    std::vector<VkWriteDescriptorSet> writes(buffer_count);
+    for (uint32_t i = 0; i < buffer_count; ++i) {
       buffer_infos[i].buffer = buffers_[i].handle;
       buffer_infos[i].offset = 0;
-      buffer_infos[i].range = kElementCount * sizeof(float);
-      writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      buffer_infos[i].range = buffer_sizes_[i];
+      writes[i] = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
       writes[i].dstSet = descriptor_set_;
       writes[i].dstBinding = i;
       writes[i].descriptorCount = 1;
       writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       writes[i].pBufferInfo = &buffer_infos[i];
     }
-    vkUpdateDescriptorSets(
-      device_, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device_, buffer_count, writes.data(), 0, nullptr);
   }
 
   void create_pipeline() {
@@ -438,7 +647,7 @@ class VulkanAddRunner {
       VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
     stage_info.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     stage_info.module = shader_module_;
-    stage_info.pName = "add";
+    stage_info.pName = options_.operation.c_str();
     VkComputePipelineCreateInfo pipeline_info{
       VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     pipeline_info.stage = stage_info;
@@ -468,12 +677,13 @@ class VulkanAddRunner {
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     check(vkBeginCommandBuffer(command_buffer, &begin_info),
           "vkBeginCommandBuffer");
-    std::array<VkBufferMemoryBarrier, 3> before{};
+    std::vector<VkBufferMemoryBarrier> before(buffers_.size());
+    const size_t output_index = buffers_.size() - 1;
     for (size_t i = 0; i < before.size(); ++i) {
-      before[i] = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+      before[i] = {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
       before[i].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-      before[i].dstAccessMask =
-        i < 2 ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_SHADER_WRITE_BIT;
+      before[i].dstAccessMask = i < output_index ? VK_ACCESS_SHADER_READ_BIT
+                                                 : VK_ACCESS_SHADER_WRITE_BIT;
       before[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
       before[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
       before[i].buffer = buffers_[i].handle;
@@ -501,13 +711,13 @@ class VulkanAddRunner {
                             0,
                             nullptr);
     vkCmdDispatch(
-      command_buffer, (kElementCount + kLocalSize - 1) / kLocalSize, 1, 1);
+      command_buffer, (options_.elements + kLocalSize - 1) / kLocalSize, 1, 1);
     VkBufferMemoryBarrier after{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
     after.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     after.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     after.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     after.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    after.buffer = buffers_[2].handle;
+    after.buffer = buffers_[output_index].handle;
     after.offset = 0;
     after.size = VK_WHOLE_SIZE;
     vkCmdPipelineBarrier(command_buffer,
@@ -536,7 +746,7 @@ class VulkanAddRunner {
   }
 
   void read_buffer(float* output) {
-    Buffer& buffer = buffers_[2];
+    Buffer& buffer = buffers_.back();
     if (!buffer.coherent) {
       VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
       range.memory = buffer.memory;
@@ -545,7 +755,7 @@ class VulkanAddRunner {
       check(vkInvalidateMappedMemoryRanges(device_, 1, &range),
             "vkInvalidateMappedMemoryRanges");
     }
-    std::memcpy(output, buffer.mapped, kElementCount * sizeof(float));
+    std::memcpy(output, buffer.mapped, options_.elements * sizeof(float));
   }
 
   void destroy() noexcept {
@@ -605,7 +815,8 @@ class VulkanAddRunner {
   VkDevice device_ = VK_NULL_HANDLE;
   VkQueue queue_ = VK_NULL_HANDLE;
   std::string device_name_;
-  std::array<Buffer, 3> buffers_{};
+  std::vector<Buffer> buffers_;
+  std::vector<VkDeviceSize> buffer_sizes_;
   VkDescriptorSetLayout descriptor_layout_ = VK_NULL_HANDLE;
   VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
   VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
@@ -615,8 +826,83 @@ class VulkanAddRunner {
   VkCommandPool command_pool_ = VK_NULL_HANDLE;
 };
 
+struct ConvWeightData {
+  std::vector<float> hwcf_weights;
+  std::vector<float> bias;
+};
+
+ConvWeightData load_conv_weights(const Options& options) {
+  std::ifstream source(options.weight_file, std::ios::binary | std::ios::ate);
+  if (!source) {
+    throw std::runtime_error("cannot open Conv2D weight file: " +
+                             options.weight_file);
+  }
+  const std::streamsize file_size = source.tellg();
+  if (file_size < 0 ||
+      static_cast<std::uint64_t>(file_size) < sizeof(std::uint32_t)) {
+    throw std::runtime_error("Conv2D weight file is truncated");
+  }
+  source.seekg(0);
+  std::vector<char> bytes(static_cast<size_t>(file_size));
+  if (!source.read(bytes.data(), file_size)) {
+    throw std::runtime_error("cannot read Conv2D weight file");
+  }
+  std::uint32_t flag = 0;
+  std::memcpy(&flag, bytes.data(), sizeof(flag));
+  if (flag != 0) {
+    throw std::runtime_error(
+      "Conv2D test runner accepts FP32 weight streams only");
+  }
+
+  const std::uint64_t input_channels = options.input_shape[0];
+  const std::uint64_t kernel_height = options.kernel_size[0];
+  const std::uint64_t kernel_width = options.kernel_size[1];
+  const std::uint64_t output_channels = options.output_channels;
+  const std::uint64_t weight_count =
+    output_channels * input_channels * kernel_height * kernel_width;
+  const std::uint64_t bias_count =
+    options.convolution_has_bias ? output_channels : 0;
+  const std::uint64_t expected_bytes =
+    sizeof(flag) + ((weight_count + bias_count) * sizeof(float));
+  if (bytes.size() != expected_bytes) {
+    throw std::runtime_error(
+      "Conv2D weight file size does not match parameters");
+  }
+
+  std::vector<float> source_weights(weight_count);
+  std::memcpy(source_weights.data(),
+              bytes.data() + sizeof(flag),
+              weight_count * sizeof(float));
+  ConvWeightData result;
+  result.hwcf_weights.resize(weight_count);
+  result.bias.assign(output_channels, 0.0F);
+  if (bias_count != 0) {
+    std::memcpy(result.bias.data(),
+                bytes.data() + sizeof(flag) + (weight_count * sizeof(float)),
+                bias_count * sizeof(float));
+  }
+  for (std::uint64_t output = 0; output < output_channels; ++output) {
+    for (std::uint64_t input = 0; input < input_channels; ++input) {
+      for (std::uint64_t y = 0; y < kernel_height; ++y) {
+        for (std::uint64_t x = 0; x < kernel_width; ++x) {
+          const std::uint64_t source_index =
+            (((output * input_channels + input) * kernel_height + y) *
+             kernel_width) +
+            x;
+          const std::uint64_t device_index =
+            (((y * kernel_width + x) * input_channels + input) *
+             output_channels) +
+            output;
+          result.hwcf_weights[device_index] = source_weights[source_index];
+        }
+      }
+    }
+  }
+  return result;
+}
+
 void write_inputs(const std::string& path,
-                  const std::array<std::vector<float>, 2>& inputs) {
+                  const std::vector<std::vector<float>>& inputs) {
   std::ofstream output(path, std::ios::binary);
   if (!output) {
     throw std::runtime_error("cannot create input evidence file: " + path);
@@ -662,7 +948,7 @@ Difference compare(const std::vector<float>& actual,
     difference.max_abs = std::max(difference.max_abs, absolute);
     difference.max_rel = std::max(difference.max_rel, relative);
     difference.passed &=
-      absolute <= kAbsTolerance + kRelTolerance * std::abs(expected[i]);
+      absolute <= kAbsTolerance + (kRelTolerance * std::abs(expected[i]));
   }
   return difference;
 }
@@ -679,9 +965,11 @@ void write_evidence(const std::string& path,
     throw std::runtime_error("cannot write evidence JSON: " + path);
   }
   output << "{\n"
-         << "  \"device\": \"" << device_name << "\",\n"
-         << "  \"device_match\": \"" << options.device_match << "\",\n"
-         << "  \"api_version\": \"" << VK_VERSION_MAJOR(properties.apiVersion)
+         << R"(  "operation": ")" << options.operation << "\",\n"
+         << "  \"seed\": " << options.seed << ",\n"
+         << R"(  "device": ")" << device_name << "\",\n"
+         << R"(  "device_match": ")" << options.device_match << "\",\n"
+         << R"(  "api_version": ")" << VK_VERSION_MAJOR(properties.apiVersion)
          << '.' << VK_VERSION_MINOR(properties.apiVersion) << '.'
          << VK_VERSION_PATCH(properties.apiVersion) << "\",\n"
          << "  \"driver_version\": " << properties.driverVersion << ",\n"
@@ -693,24 +981,24 @@ void write_evidence(const std::string& path,
          << properties.limits.maxComputeWorkGroupInvocations << ",\n"
          << "  \"max_compute_workgroup_size_x\": "
          << properties.limits.maxComputeWorkGroupSize[0] << ",\n"
-         << "  \"elements\": " << kElementCount << ",\n"
+         << "  \"elements\": " << options.elements << ",\n"
          << "  \"local_size\": " << kLocalSize << ",\n"
          << "  \"dispatch_groups_x\": "
-         << (kElementCount + kLocalSize - 1) / kLocalSize << ",\n"
+         << (options.elements + kLocalSize - 1) / kLocalSize << ",\n"
          << "  \"validation_enabled\": "
          << (options.validation ? "true" : "false") << ",\n"
          << "  \"validation_errors\": " << g_validation_errors.load() << ",\n"
-         << "  \"tolerance\": {\"atol\": " << kAbsTolerance
+         << R"(  "tolerance": {"atol": )" << kAbsTolerance
          << ", \"rtol\": " << kRelTolerance << "},\n"
-         << "  \"cpu_vs_golden\": {\"passed\": "
+         << R"(  "cpu_vs_golden": {"passed": )"
          << (cpu_diff.passed ? "true" : "false")
          << ", \"max_abs\": " << cpu_diff.max_abs
          << ", \"max_rel\": " << cpu_diff.max_rel << "},\n"
-         << "  \"gpu_vs_golden\": {\"passed\": "
+         << R"(  "gpu_vs_golden": {"passed": )"
          << (gpu_diff.passed ? "true" : "false")
          << ", \"max_abs\": " << gpu_diff.max_abs
          << ", \"max_rel\": " << gpu_diff.max_rel << "},\n"
-         << "  \"gpu_vs_cpu\": {\"passed\": "
+         << R"(  "gpu_vs_cpu": {"passed": )"
          << (cross_diff.passed ? "true" : "false")
          << ", \"max_abs\": " << cross_diff.max_abs
          << ", \"max_rel\": " << cross_diff.max_rel << "}\n"
@@ -722,16 +1010,140 @@ void write_evidence(const std::string& path,
 int main(int argc, char** argv) {
   try {
     const Options options = parse_options(argc, argv);
-    std::array<std::vector<float>, 2> inputs;
-    std::vector<float> golden(kElementCount);
-    std::vector<float> cpu_output(kElementCount,
+    const size_t input_count = options.operation == "add"      ? 2
+                               : options.operation == "conv2d" ? 3
+                                                               : 1;
+    std::vector<std::vector<float>> inputs(input_count);
+    if (options.operation == "conv2d") {
+      const size_t input_elements =
+        static_cast<size_t>(options.input_shape[0]) * options.input_shape[1] *
+        options.input_shape[2];
+      inputs[0].resize(input_elements);
+      ConvWeightData weights = load_conv_weights(options);
+      inputs[1] = std::move(weights.hwcf_weights);
+      inputs[2] = std::move(weights.bias);
+    } else {
+      for (std::vector<float>& input : inputs) {
+        input.resize(options.elements);
+      }
+    }
+    std::vector<float> golden(options.elements);
+    std::vector<float> cpu_output(options.elements,
                                   std::numeric_limits<float>::quiet_NaN());
-    std::vector<float> gpu_output(kElementCount,
+    std::vector<float> gpu_output(options.elements,
                                   std::numeric_limits<float>::quiet_NaN());
-    for (uint32_t i = 0; i < kElementCount; ++i) {
-      inputs[0].push_back((static_cast<int>(i % 17) - 8) * 0.25F);
-      inputs[1].push_back((static_cast<int>(i % 13) - 6) * 0.125F);
-      golden[i] = inputs[0][i] + inputs[1][i];
+    std::mt19937 generator(options.seed);
+    std::uniform_real_distribution<float> distribution(-2.0F, 2.0F);
+    auto input_value = [&](uint32_t index, size_t operand) {
+      if (index == 0) {
+        return operand == 0 ? -1.0F : 1.0F;
+      }
+      if (index == 1) {
+        return 0.0F;
+      }
+      if (index == 2) {
+        return operand == 0 ? 1.0F : -1.0F;
+      }
+      return distribution(generator);
+    };
+    if (options.operation == "conv2d") {
+      for (uint32_t i = 0; i < inputs[0].size(); ++i) {
+        inputs[0][i] = input_value(i, 0);
+      }
+      const std::int64_t inputChannels = options.input_shape[0];
+      const std::int64_t inputHeight = options.input_shape[1];
+      const std::int64_t inputWidth = options.input_shape[2];
+      const std::int64_t outputHeight =
+        ((inputHeight + options.padding[0] + options.padding[2] -
+          options.kernel_size[0]) /
+         options.stride[0]) +
+        1;
+      const std::int64_t outputWidth =
+        ((inputWidth + options.padding[1] + options.padding[3] -
+          options.kernel_size[1]) /
+         options.stride[1]) +
+        1;
+      for (std::int64_t outputChannel = 0;
+           std::cmp_less(outputChannel, options.output_channels);
+           ++outputChannel) {
+        for (std::int64_t outputY = 0; outputY < outputHeight; ++outputY) {
+          for (std::int64_t outputX = 0; outputX < outputWidth; ++outputX) {
+            float sum = inputs[2][outputChannel];
+            for (std::int64_t kernelY = 0;
+                 std::cmp_less(kernelY, options.kernel_size[0]);
+                 ++kernelY) {
+              for (std::int64_t kernelX = 0;
+                   std::cmp_less(kernelX, options.kernel_size[1]);
+                   ++kernelX) {
+                const std::int64_t inputY =
+                  (outputY * options.stride[0]) + kernelY - options.padding[0];
+                const std::int64_t inputX =
+                  (outputX * options.stride[1]) + kernelX - options.padding[1];
+                if (inputY < 0 || inputY >= inputHeight || inputX < 0 ||
+                    inputX >= inputWidth) {
+                  continue;
+                }
+                for (std::int64_t inputChannel = 0;
+                     inputChannel < inputChannels;
+                     ++inputChannel) {
+                  const auto inputIndex = static_cast<std::size_t>(
+                    ((inputChannel * inputHeight + inputY) * inputWidth) +
+                    inputX);
+                  const auto weightIndex = static_cast<std::size_t>(
+                    (((kernelY * options.kernel_size[1] + kernelX) *
+                        inputChannels +
+                      inputChannel) *
+                     options.output_channels) +
+                    outputChannel);
+                  sum += inputs[0][inputIndex] * inputs[1][weightIndex];
+                }
+              }
+            }
+            const auto outputIndex = static_cast<std::size_t>(
+              ((outputChannel * outputHeight + outputY) * outputWidth) +
+              outputX);
+            golden[outputIndex] = sum;
+          }
+        }
+      }
+    } else {
+      for (uint32_t i = 0; i < options.elements; ++i) {
+        inputs[0][i] = input_value(i, 0);
+        if (options.operation == "add") {
+          inputs[1][i] = input_value(i, 1);
+          golden[i] = inputs[0][i] + inputs[1][i];
+        } else if (options.operation == "relu") {
+          golden[i] = std::max(inputs[0][i], 0.0F);
+        } else if (options.operation != "transpose") {
+          golden[i] = inputs[0][i];
+        }
+      }
+    }
+    if (options.operation == "transpose") {
+      std::vector<uint32_t> output_shape(options.input_shape.size());
+      for (size_t axis = 0; axis < options.permutation.size(); ++axis) {
+        output_shape[axis] = options.input_shape[options.permutation[axis]];
+      }
+      for (uint32_t output_index = 0; output_index < options.elements;
+           ++output_index) {
+        uint32_t quotient = output_index;
+        std::vector<uint32_t> output_coordinates(output_shape.size());
+        for (size_t axis = output_shape.size(); axis-- > 0;) {
+          output_coordinates[axis] = quotient % output_shape[axis];
+          quotient /= output_shape[axis];
+        }
+        std::vector<uint32_t> input_coordinates(options.input_shape.size());
+        for (size_t axis = 0; axis < output_shape.size(); ++axis) {
+          input_coordinates[options.permutation[axis]] =
+            output_coordinates[axis];
+        }
+        uint32_t input_index = 0;
+        for (size_t axis = 0; axis < options.input_shape.size(); ++axis) {
+          input_index =
+            (input_index * options.input_shape[axis]) + input_coordinates[axis];
+        }
+        golden[output_index] = inputs[0][input_index];
+      }
     }
     write_inputs(options.evidence_path + ".inputs.bin", inputs);
 
@@ -741,19 +1153,25 @@ int main(int argc, char** argv) {
       throw std::runtime_error("dlopen CPU AOT library failed: " +
                                std::string(dlerror()));
     }
-    using CpuModel = int (*)(const float*, const float*, float*);
     dlerror();
-    auto cpu_model = reinterpret_cast<CpuModel>(
-      dlsym(cpu_library, options.cpu_symbol.c_str()));
+    void* cpu_symbol = dlsym(cpu_library, options.cpu_symbol.c_str());
     const char* symbol_error = dlerror();
-    if (symbol_error != nullptr || cpu_model == nullptr) {
+    if (symbol_error != nullptr || cpu_symbol == nullptr) {
       dlclose(cpu_library);
       throw std::runtime_error(
         "CPU AOT symbol lookup failed: " +
         std::string(symbol_error ? symbol_error : "null"));
     }
-    const int cpu_status =
-      cpu_model(inputs[0].data(), inputs[1].data(), cpu_output.data());
+    int cpu_status = 0;
+    if (options.operation == "add") {
+      using CpuBinaryModel = int (*)(const float*, const float*, float*);
+      cpu_status = reinterpret_cast<CpuBinaryModel>(cpu_symbol)(
+        inputs[0].data(), inputs[1].data(), cpu_output.data());
+    } else {
+      using CpuUnaryModel = int (*)(const float*, float*);
+      cpu_status = reinterpret_cast<CpuUnaryModel>(cpu_symbol)(
+        inputs[0].data(), cpu_output.data());
+    }
     dlclose(cpu_library);
     if (cpu_status != 0) {
       throw std::runtime_error("CPU AOT returned status " +
@@ -779,8 +1197,9 @@ int main(int argc, char** argv) {
                    cross_diff);
     write_outputs(
       options.evidence_path + ".outputs.bin", cpu_output, gpu_output, golden);
-    std::cout << "device=" << device_name << " elements=" << kElementCount
-              << " groups=" << (kElementCount + kLocalSize - 1) / kLocalSize
+    std::cout << "device=" << device_name << " operation=" << options.operation
+              << " elements=" << options.elements
+              << " groups=" << (options.elements + kLocalSize - 1) / kLocalSize
               << " cpu_abs=" << cpu_diff.max_abs
               << " gpu_abs=" << gpu_diff.max_abs
               << " cpu_gpu_abs=" << cross_diff.max_abs

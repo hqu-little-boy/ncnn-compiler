@@ -372,6 +372,26 @@ def VerifyVulkanSupportedModelPass
   ];
 }
 
+def LowerNCNNVulkanModelPass
+    : Pass<"lower-ncnn-vulkan-model", "mlir::ModuleOp"> {
+  let summary = "Lower a supported Vulkan tensor operation to GPU IR";
+  let description = [{
+    Emit a Vulkan compute kernel and a schema-v1 execution plan for one static
+    FP32 identity, copy, ReLU, Add, transpose, reshape, or restricted Conv2D
+    fixture. Remove the source tensor function so the output contains only the
+    device module.
+  }];
+  let dependentDialects = [
+    "arith::ArithDialect", "func::FuncDialect", "gpu::GPUDialect",
+    "linalg::LinalgDialect", "memref::MemRefDialect", "scf::SCFDialect",
+    "spirv::SPIRVDialect", "tensor::TensorDialect"
+  ];
+  let options = [
+    Option<"planPath", "plan-path", "std::string", "",
+           "Optional schema-v1 execution plan JSON output path">
+  ];
+}
+
 def VerifyNoSCFForallPass : Pass<"verify-no-scf-forall", "mlir::ModuleOp"> {
   let summary =
     "Fail if any SCF forall or parallel loop remains after parallel lowering";

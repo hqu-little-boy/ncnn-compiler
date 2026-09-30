@@ -336,6 +336,47 @@ LogicalResult verifyReshape(Operation& operation) {
   return success();
 }
 
+LogicalResult verifyTensorReshape(tensor::ReshapeOp operation) {
+  auto input = dyn_cast<RankedTensorType>(operation.getSource().getType());
+  auto output = dyn_cast<RankedTensorType>(operation.getResult().getType());
+  if (!input || !output) {
+    return reject(*operation, "reshape requires ranked tensors");
+  }
+  auto inputBytes = checkedTensorBytes(input);
+  auto outputBytes = checkedTensorBytes(output);
+  if (!inputBytes || !outputBytes) {
+    return reject(*operation,
+                  !inputBytes ? StringRef(inputBytes.error())
+                              : StringRef(outputBytes.error()));
+  }
+  if (*inputBytes != *outputBytes) {
+    return reject(*operation, "layout reshape must preserve static byte size");
+  }
+
+  auto shapeType = operation.getShape().getType();
+  auto shapeConstant = operation.getShape().getDefiningOp<arith::ConstantOp>();
+  auto shapeValues =
+    shapeConstant ? dyn_cast<DenseIntElementsAttr>(shapeConstant.getValue())
+                  : DenseIntElementsAttr();
+  if (!shapeType.getElementType().isIndex() || shapeType.getRank() != 1 ||
+      shapeType.getDimSize(0) != output.getRank() || !shapeValues ||
+      shapeValues.getNumElements() !=
+        static_cast<std::int64_t>(output.getRank())) {
+    return reject(
+      *operation,
+      "reshape requires a constant index shape matching the result rank");
+  }
+  std::size_t axis = 0;
+  for (const APInt& extent : shapeValues.getValues<APInt>()) {
+    if (extent.getSExtValue() != output.getDimSize(axis++)) {
+      return reject(
+        *operation,
+        "reshape constant dimensions must match the static result type");
+    }
+  }
+  return success();
+}
+
 LogicalResult verifyEmpty(tensor::EmptyOp operation) {
   for (OpOperand& use : operation.getResult().getUses()) {
     auto destination = dyn_cast<DestinationStyleOpInterface>(use.getOwner());
@@ -348,6 +389,17 @@ LogicalResult verifyEmpty(tensor::EmptyOp operation) {
 }
 
 LogicalResult verifyOperation(Operation& operation) {
+  if (auto reshape = dyn_cast<tensor::ReshapeOp>(operation)) {
+    return verifyTensorReshape(reshape);
+  }
+  if (auto constant = dyn_cast<arith::ConstantOp>(operation)) {
+    auto shapeType = dyn_cast<RankedTensorType>(constant.getType());
+    if (shapeType && shapeType.getElementType().isIndex() &&
+        shapeType.getRank() == 1 &&
+        isa<DenseIntElementsAttr>(constant.getValue())) {
+      return success();
+    }
+  }
   if (failed(verifyTypes(operation))) {
     return failure();
   }
