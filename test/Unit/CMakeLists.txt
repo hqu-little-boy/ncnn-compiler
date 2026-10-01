@@ -30,4 +30,9 @@ target_compile_definitions(unit_tests PRIVATE
     NCNN_GRAPH_SOURCE_ROOT="${CMAKE_SOURCE_DIR}/test/third_party"
     NCNN_GRAPH_TEST_TEMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-fixtures")
 
+if(NCNN_ENABLE_VULKAN_V0_TESTS)
+    target_sources(unit_tests PRIVATE vulkan_runtime_test.cpp)
+    target_link_libraries(unit_tests PRIVATE NCNNVulkanRuntime)
+endif()
+
 gtest_discover_tests(unit_tests)

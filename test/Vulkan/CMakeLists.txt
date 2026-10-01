@@ -1,10 +1,15 @@
 find_package(Vulkan REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(Threads REQUIRED)
 find_program(SPIRV_VAL NAMES spirv-val REQUIRED)
 find_program(SPIRV_DIS NAMES spirv-dis REQUIRED)
 find_program(VULKANINFO NAMES vulkaninfo REQUIRED)
 find_file(V0_LLVMPIPE_ICD
     NAMES lvp_icd.json
+    PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
+    REQUIRED)
+find_file(V0_NVIDIA_ICD
+    NAMES nvidia_icd.json
     PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
     REQUIRED)
 
@@ -13,12 +18,27 @@ target_link_libraries(vulkan_add_runner PRIVATE Vulkan::Vulkan ${CMAKE_DL_LIBS})
 target_compile_options(vulkan_add_runner PRIVATE
     -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
 
+add_executable(vulkan_runtime_runner
+    vulkan_runtime_runner.cpp
+    vulkan_runtime_abi_fixture.cpp)
+target_link_libraries(vulkan_runtime_runner PRIVATE
+    NCNNVulkanRuntime ${CMAKE_DL_LIBS} Threads::Threads)
+target_compile_options(vulkan_runtime_runner PRIVATE
+    -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
+
+add_executable(vulkan_runtime_weight_runner vulkan_runtime_weight_runner.cpp)
+target_link_libraries(vulkan_runtime_weight_runner PRIVATE
+    NCNNVulkanRuntime ${CMAKE_DL_LIBS})
+target_compile_options(vulkan_runtime_weight_runner PRIVATE
+    -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
+
 add_executable(vulkan_v0_spirv_extract extract_vulkan_spirv.cpp)
 target_include_directories(vulkan_v0_spirv_extract PRIVATE
     ${LLVM_INCLUDE_DIRS}
     ${MLIR_INCLUDE_DIRS})
 target_compile_options(vulkan_v0_spirv_extract PRIVATE -fno-rtti)
-target_link_libraries(vulkan_v0_spirv_extract PRIVATE MLIR LLVM)
+target_link_libraries(vulkan_v0_spirv_extract PRIVATE
+    MLIRGPUDialect MLIRSPIRVDialect MLIRParser MLIRIR MLIRSupport LLVMSupport)
 set_target_properties(vulkan_v0_spirv_extract PROPERTIES
     BUILD_RPATH "${LLVM_LIBRARY_DIR}")
 
@@ -336,6 +356,38 @@ add_custom_target(vulkan-v2-build ALL
             v2_cpu_conv1x1_fixture v2_cpu_conv3x3_fixture
             v2_cpu_conv3x3_no_bias_fixture v2_cpu_conv3x3_stride2_fixture)
 
+set(V3_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-add-relu)
+set(V3_CPU_LIBRARY ${V3_CPU_DIR}/libv3_add_relu.so)
+set(V3_CPU_HEADER ${V3_CPU_DIR}/v3_add_relu.h)
+set(V3_CPU_MANIFEST ${V3_CPU_DIR}/v3_add_relu.json)
+add_custom_command(
+    OUTPUT ${V3_CPU_LIBRARY} ${V3_CPU_HEADER} ${V3_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V3_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/add_relu.param
+        --bin ${V0_EMPTY_BIN}
+        --model-name v3_add_relu
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V3_CPU_DIR}
+    DEPENDS ncnn-compile ncnn-mlir-driver ncnn-mlir-opt
+            ${CMAKE_CURRENT_SOURCE_DIR}/add_relu.param ${V0_EMPTY_BIN}
+    VERBATIM)
+add_custom_target(v3_cpu_add_relu_fixture
+    DEPENDS ${V3_CPU_LIBRARY} ${V3_CPU_HEADER} ${V3_CPU_MANIFEST})
+add_custom_target(vulkan-v3-build ALL
+    DEPENDS vulkan-v2-build vulkan_runtime_runner
+            vulkan_runtime_weight_runner v3_cpu_add_relu_fixture)
+
 function(ncnn_add_vulkan_v0_test test_name device_match output_name)
     set(test_args
         --mlir-opt ${MLIR_OPT}
@@ -402,6 +454,48 @@ function(ncnn_add_vulkan_v2_test test_name device_match output_name operation
         RUN_SERIAL TRUE
         TIMEOUT 180)
 endfunction()
+
+function(ncnn_add_vulkan_v3_runtime_test test_name device_match output_name)
+    set(test_args
+        --ncnn-driver $<TARGET_FILE:ncnn-mlir-driver>
+        --ncnn-mlir-opt $<TARGET_FILE:ncnn-mlir-opt>
+        --mlir-opt ${MLIR_OPT}
+        --spirv-val ${SPIRV_VAL}
+        --spirv-dis ${SPIRV_DIS}
+        --spirv-extract $<TARGET_FILE:vulkan_v0_spirv_extract>
+        --v2-runner $<TARGET_FILE:vulkan_add_runner>
+        --runtime-runner $<TARGET_FILE:vulkan_runtime_runner>
+        --weight-runner $<TARGET_FILE:vulkan_runtime_weight_runner>
+        --conv-cpu-library ${V2_CONV3X3_CPU_LIBRARY}
+        --conv-model-param ${V2_CONV3X3_PARAM}
+        --conv-model-bin ${V2_CONV3X3_BIN}
+        --cpu-library ${V3_CPU_LIBRARY}
+        --cpu-symbol v3_add_relu
+        --add-cpu-library ${V0_CPU_LIBRARY}
+        --add-cpu-symbol v0_add
+        --relu-cpu-library ${V2_RELU_CPU_LIBRARY}
+        --relu-cpu-symbol v2_relu
+        --empty-bin ${V0_EMPTY_BIN}
+        --device-match ${device_match}
+        --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/v3/${output_name}
+        --validation)
+    if(ARGC GREATER 3)
+        list(APPEND test_args ${ARGN})
+    endif()
+    add_test(NAME ${test_name}
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_v3.py
+            ${test_args})
+    set_tests_properties(${test_name} PROPERTIES
+        LABELS "vulkan;device;integration;v3"
+        RUN_SERIAL TRUE
+        TIMEOUT 300)
+endfunction()
+
+ncnn_add_vulkan_v3_runtime_test(
+    vulkan-v3-runtime-nvidia NVIDIA nvidia --icd ${V0_NVIDIA_ICD})
+ncnn_add_vulkan_v3_runtime_test(
+    vulkan-v3-runtime-llvmpipe llvmpipe llvmpipe --icd ${V0_LLVMPIPE_ICD})
 
 ncnn_add_vulkan_v2_test(
     vulkan-v2-add-nvidia NVIDIA add-nvidia add from-model model_vulkan

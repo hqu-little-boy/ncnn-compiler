@@ -17,7 +17,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ── 可配置选项 ───────────────────────────────────────────────
 option(BUILD_TESTING "Build tests (pulls in GTest, lit and vendored ncnn)" ON)
 option(NCNN_ENABLE_VULKAN_V0_TESTS
-    "Enable the opt-in Vulkan V0 device spike (requires Vulkan and SPIR-V tools)" OFF)
+    "Enable opt-in Vulkan V0-V3 runtime tests (requires Vulkan and SPIR-V tools)" OFF)
 option(BUILD_SHARED_LIBS
     "Build first-party libraries as shared instead of static (needs PIC-capable LLVM archives)" OFF)
 option(COMPILER_ENABLE_WARNINGS

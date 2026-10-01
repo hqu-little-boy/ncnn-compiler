@@ -43,7 +43,9 @@ add_library(NCNNVulkanPlanSupport VulkanExecutionPlan.cpp)
 target_include_directories(NCNNVulkanPlanSupport PUBLIC
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_BINARY_DIR}/include
-    ${LLVM_INCLUDE_DIRS})
+    ${LLVM_INCLUDE_DIRS}
+    ${MLIR_INCLUDE_DIRS})
 target_compile_definitions(NCNNVulkanPlanSupport PUBLIC ${LLVM_DEFINITIONS})
 target_compile_options(NCNNVulkanPlanSupport PRIVATE -fno-rtti)
-target_link_libraries(NCNNVulkanPlanSupport PUBLIC LLVMSupport)
+target_link_libraries(NCNNVulkanPlanSupport PUBLIC
+    MLIRIR MLIRSupport LLVMSupport)

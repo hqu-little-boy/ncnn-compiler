@@ -64,6 +64,7 @@ def main():
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--seeds", default="0,1,42")
     parser.add_argument("--validation", action="store_true")
+    parser.add_argument("--prepare-only", action="store_true")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir).resolve()
@@ -339,6 +340,9 @@ def main():
         raise RuntimeError(
             "execution-plan buffer sizes do not match the Vulkan runner buffers"
         )
+    if args.prepare_only:
+        print(f"Prepared and validated V2 shader package: {output_dir}")
+        return 0
 
     try:
         seeds = [int(value, 0) for value in args.seeds.split(",")]

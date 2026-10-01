@@ -1,0 +1,6 @@
+7767517
+4 4
+Input first 0 1 first 0=257 1=1 2=1
+Input second 0 1 second 0=257 1=1 2=1
+BinaryOp binary_add 2 1 first second sum 0=0
+ReLU relu 1 1 sum output
