@@ -224,7 +224,52 @@ Importer 还会为可追溯到模型输入的动态 `Slice` 轴自动推导 mini
 `multiple_of` 默认为 1。追溯可穿过受支持的 BinaryOp 广播和 Squeeze 轴映射；同一维同时有
 显式约束时取更严格的 minimum，并保留显式 `multiple_of`。
 
-### 2.7 当前 LiteOCR 动态输入配置
+### 2.7 `--backend=cpu|vulkan`
+
+默认 `--backend=cpu`，省略选项时仍走原 CPU 编译流水线，产物名、CPU C ABI 和默认输出目录不变。
+Vulkan 是单独 opt-in 路径，需要配置时开启 `NCNN_ENABLE_VULKAN_PRODUCT=ON`；构建需 Vulkan
+loader/headers、MLIR 21 的 `mlir-opt-21` 和 `spirv-val`/`spirv-dis`。未启用 product support
+的 `ncnn-compile --backend=vulkan` 会在读取模型前报错。
+
+Vulkan 当前只接受 Linux x86-64 host ELF，device target 固定为 Vulkan 1.1 / SPIR-V 1.0。产品
+输入契约是静态 FP32、rank 1–4、正 extent、单一输入/单一输出、元素数不超过 128 MiB storage
+buffer 限制的完整单 ReLU 图；identity、Add、Conv、多计算算子图、动态 shape、FP16/BF16/INT8
+不属于当前 `ncnn-compile` Vulkan product 范围。所有 Vulkan 请求 fail closed，不会回退到 CPU。
+
+示例：
+
+```bash
+./build/tools/ncnn-compile relu.param --backend=vulkan --precision=f32 \
+  --verify-execution
+```
+
+默认发布目录为 `ncnn-vulkan-<model-name>/`，使用固定的 `ncnn-vulkan-` 前缀避免与任意
+CPU C 标识符模型名的默认目录发生碰撞。目录固定包含独立的 Vulkan 头文件、manifest、execution
+plan 和 model DSO：
+
+```text
+ncnn-vulkan-relu/
+├── relu_vulkan.h
+├── relu_vulkan.json
+├── relu_vulkan.plan.json
+└── librelu_vulkan.so
+```
+
+头文件声明 `<model>_vk_create/run/destroy` 实例 C ABI；`run` 收到的每个连续 FP32 输入/输出
+buffer 必须与头文件中的静态 `*_ELEMENTS` 数量完全一致。`--verify-execution` 会在发布前
+`dlopen` 临时 DSO 并执行 create/run/destroy，必须有兼容 Vulkan ICD 和设备；不指定该选项时，
+编译仍会离线执行 SPIR-V validator，但不会创建 Vulkan device。manifest 记录 plan/shader/模型
+输入的哈希和 ELF `DT_NEEDED` 依赖。调用者部署时须提供 manifest 列出的 LLVM 21 shared runtime、
+Vulkan loader 及系统 C/C++ runtime，且系统必须有兼容 Vulkan 设备/ICD。shader、plan 数据嵌入
+DSO，不依赖编译临时目录或旁置 `.spv` 文件。
+
+Vulkan 模式不接受 CPU 专用的线程、SIMD/target-ISA、INT8、tuning、动态输入 shape、CPU 中间
+阶段、debug-info、CPU profile、定制 clang/linker 和 undefined-symbol expectation 参数；
+`--precision` 只允许默认 `auto` 或显式 `f32`。
+Vulkan 默认输出目录与 CPU 分离；若自定义 `--output-dir` 指向已含另一后端产物的目录，driver
+会拒绝覆盖。
+
+### 2.8 当前 LiteOCR 动态输入配置
 
 下表对应默认数值回归中的产品实例。它描述已经由源码和测试证明的 fixed-rank 动态范围，
 不是对同族任意模型的自动承诺：

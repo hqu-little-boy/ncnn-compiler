@@ -268,6 +268,8 @@ inline constexpr llvm::StringLiteral kModelPerformanceAttributionKind =
   "ncnn.model_performance_attribution";
 inline constexpr llvm::StringLiteral kVulkanExecutionPlanKind =
   "ncnn.vulkan_execution_plan";
+inline constexpr llvm::StringLiteral kVulkanModelManifestKind =
+  "ncnn.vulkan_model_manifest";
 
 // ── Model-level policy flags ────────────────────────────────────────────
 inline constexpr llvm::StringLiteral kPackedConvDepthwise =

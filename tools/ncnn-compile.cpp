@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <expected>
 #include <filesystem>
 #include <format>
@@ -28,11 +30,15 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/SHA256.h"
 #include "llvm/Support/raw_ostream.h"
 #include "ncnn-mlir/Support/Int8Target.hpp"
 #include "ncnn-mlir/Support/Precision.hpp"
 #include "ncnn-mlir/Support/ShapeProgram.hpp"
 #include "ncnn-mlir/Support/TargetVectorInfo.hpp"
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+#include "VulkanProduct.hpp"
+#endif
 
 namespace {
 
@@ -49,6 +55,12 @@ using ncnn_compile::TuningSettings;
 int g_executable_anchor;
 
 llvm::cl::OptionCategory g_category("ncnn-compile options");
+
+llvm::cl::opt<std::string> g_backend(
+  "backend",
+  llvm::cl::desc("Compilation backend: cpu or vulkan"),
+  llvm::cl::init("cpu"),
+  llvm::cl::cat(g_category));
 
 llvm::cl::opt<std::string> g_input(llvm::cl::Positional,
                                    llvm::cl::desc("<input .param file>"),
@@ -337,6 +349,26 @@ llvm::cl::opt<std::string> g_llvm_as("llvm-as",
                                      llvm::cl::init(""),
                                      llvm::cl::Hidden,
                                      llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_vulkan_mlir_opt("vulkan-mlir-opt",
+                                             llvm::cl::init(""),
+                                             llvm::cl::Hidden,
+                                             llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_vulkan_spirv_val("vulkan-spirv-val",
+                                              llvm::cl::init(""),
+                                              llvm::cl::Hidden,
+                                              llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_vulkan_spirv_dis("vulkan-spirv-dis",
+                                              llvm::cl::init(""),
+                                              llvm::cl::Hidden,
+                                              llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_vulkan_spirv_extract("vulkan-spirv-extract",
+                                                  llvm::cl::init(""),
+                                                  llvm::cl::Hidden,
+                                                  llvm::cl::cat(g_category));
+llvm::cl::opt<std::string> g_vulkan_host_cxx("vulkan-host-cxx",
+                                             llvm::cl::init(""),
+                                             llvm::cl::Hidden,
+                                             llvm::cl::cat(g_category));
 llvm::cl::opt<std::string> g_expected_undefined("expected-undefined",
                                                 llvm::cl::init(""),
                                                 llvm::cl::Hidden,
@@ -1406,22 +1438,155 @@ std::set<std::string> symbols(std::string_view output) {
   return (*buffer)->getBuffer().str();
 }
 
-bool is_generated_output(const fs::path& path, std::string_view model_name) {
+bool is_vulkan_output(const fs::path& path, std::string_view model_name) {
   const std::string name = path.filename().string();
-  const std::set<std::string> fixed = {"model.ncnn.mlir",
-                                       "model.tosa.mlir",
-                                       "model.linalg.mlir",
-                                       "model.memref.mlir",
-                                       "model.capi.mlir",
-                                       "model.llvm.mlir",
-                                       "model.ll",
-                                       "model.o",
-                                       "model.s"};
-  return fixed.contains(name) ||
-         name == "lib" + std::string(model_name) + ".so" ||
-         name == std::string(model_name) + ".h" ||
-         name == std::string(model_name) + ".json" ||
-         name == std::string(model_name) + ".plan.json";
+  const std::string vulkan_model(model_name);
+  return name == "lib" + vulkan_model + "_vulkan.so" ||
+         name == vulkan_model + "_vulkan.h" ||
+         name == vulkan_model + "_vulkan.json" ||
+         name == vulkan_model + "_vulkan.plan.json";
+}
+
+bool is_cpu_output(const fs::path& path, std::string_view model_name) {
+  const std::string name = path.filename().string();
+  static const std::set<std::string> stages = {"model.ncnn.mlir",
+                                               "model.tosa.mlir",
+                                               "model.linalg.mlir",
+                                               "model.memref.mlir",
+                                               "model.capi.mlir",
+                                               "model.llvm.mlir",
+                                               "model.ll",
+                                               "model.o",
+                                               "model.s"};
+  const std::string cpu_model(model_name);
+  return stages.contains(name) || name == "lib" + cpu_model + ".so" ||
+         name == cpu_model + ".h" || name == cpu_model + ".json" ||
+         name == cpu_model + ".plan.json";
+}
+
+bool is_generated_output(const fs::path& path, std::string_view model_name) {
+  return is_cpu_output(path, model_name) || is_vulkan_output(path, model_name);
+}
+
+[[nodiscard]] std::expected<void, std::string> validate_backend_output_owner(
+  const fs::path& output_dir,
+  std::string_view model_name,
+  bool vulkan_backend) {
+  std::error_code error;
+  fs::directory_iterator iterator(output_dir, error);
+  if (error) {
+    return std::unexpected(
+      std::format("cannot inspect output directory '{}': {}",
+                  output_dir.string(),
+                  error.message()));
+  }
+  std::optional<std::pair<bool, std::string>> owner;
+  bool has_cpu_names = false;
+  bool has_vulkan_names = false;
+  const auto recordOwner =
+    [&](bool is_vulkan,
+        std::string artifact_model) -> std::expected<void, std::string> {
+    if (owner &&
+        (owner->first != is_vulkan || owner->second != artifact_model)) {
+      return std::unexpected(
+        "output directory contains mixed backend/model "
+        "artifacts");
+    }
+    owner = std::pair{is_vulkan, std::move(artifact_model)};
+    return {};
+  };
+  static const std::regex vulkan_header_symbol(
+    R"(ncnn_vk_status\s+([A-Za-z_][A-Za-z0-9_]*)_vk_create\s*\()");
+  static const std::regex cpu_header_symbol(
+    R"(\bint\s+([A-Za-z_][A-Za-z0-9_]*)\s*\()");
+  const fs::directory_iterator end;
+  while (iterator != end) {
+    const fs::path entry_path = iterator->path();
+    has_cpu_names |= is_cpu_output(entry_path, model_name);
+    has_vulkan_names |= is_vulkan_output(entry_path, model_name);
+    if (entry_path.extension() == ".h") {
+      auto contents = read_text(entry_path);
+      if (!contents) {
+        return std::unexpected(contents.error());
+      }
+      std::smatch match;
+      if (std::regex_search(*contents, match, vulkan_header_symbol)) {
+        if (auto result = recordOwner(true, match[1].str()); !result) {
+          return result;
+        }
+      } else if (std::regex_search(*contents, match, cpu_header_symbol)) {
+        if (auto result = recordOwner(false, match[1].str()); !result) {
+          return result;
+        }
+      } else {
+        return std::unexpected(std::format(
+          "cannot identify backend owner from header '{}', refusing replace",
+          entry_path.filename().string()));
+      }
+    } else if (entry_path.extension() == ".json") {
+      auto contents = read_text(entry_path);
+      if (!contents) {
+        return std::unexpected(contents.error());
+      }
+      auto document = llvm::json::parse(*contents);
+      if (!document) {
+        return std::unexpected(std::format(
+          "cannot identify backend owner from JSON '{}', refusing replace",
+          entry_path.filename().string()));
+      }
+      const llvm::json::Object* object = document->getAsObject();
+      if (object != nullptr) {
+        const auto backend = object->getString("backend");
+        const auto vulkan_model = object->getString("model");
+        const auto cpu_model = object->getString("function");
+        if (backend && *backend == "vulkan" && vulkan_model) {
+          if (auto result = recordOwner(true, vulkan_model->str()); !result) {
+            return result;
+          }
+        } else if (cpu_model) {
+          if (auto result = recordOwner(false, cpu_model->str()); !result) {
+            return result;
+          }
+        }
+      }
+    }
+    iterator.increment(error);
+    if (error) {
+      return std::unexpected(
+        std::format("cannot inspect output directory '{}': {}",
+                    output_dir.string(),
+                    error.message()));
+    }
+  }
+  if (owner) {
+    if (owner->first != vulkan_backend || owner->second != model_name) {
+      return std::unexpected(std::format(
+        "output directory belongs to {} model '{}'; use a separate output "
+        "directory",
+        owner->first ? "Vulkan" : "CPU",
+        owner->second));
+    }
+    return {};
+  }
+  const bool ambiguous_vulkan_suffix =
+    !vulkan_backend && model_name.ends_with("_vulkan") && has_cpu_names;
+  if ((vulkan_backend && has_vulkan_names) || ambiguous_vulkan_suffix ||
+      (has_cpu_names && has_vulkan_names)) {
+    return std::unexpected(
+      "output directory has incomplete or ambiguous backend ownership; "
+      "use a separate output directory");
+  }
+  if (vulkan_backend && has_cpu_names) {
+    return std::unexpected(
+      "output directory contains CPU-owned artifacts; "
+      "use a separate output directory");
+  }
+  if (!vulkan_backend && has_vulkan_names) {
+    return std::unexpected(
+      "output directory contains Vulkan-owned artifacts; "
+      "use a separate output directory");
+  }
+  return {};
 }
 
 [[nodiscard]] std::expected<OutputDirectoryState, std::string>
@@ -2033,6 +2198,90 @@ int CompileSession::parseArguments(int argc, char** argv) {
     normalized_argv.data(),
     "Compile an ncnn .param/.bin model into a C header and shared library\n");
 
+  if (!llvm::StringSwitch<bool>(g_backend.getValue())
+         .Cases("cpu", "vulkan", true)
+         .Default(false)) {
+    return fail("--backend must be either cpu or vulkan");
+  }
+  use_vulkan_backend = g_backend == "vulkan";
+#ifndef NCNN_HAS_VULKAN_PRODUCT
+  if (use_vulkan_backend) {
+    return fail(
+      "Vulkan backend is unavailable in this build; configure with "
+      "-DNCNN_ENABLE_VULKAN_PRODUCT=ON");
+  }
+#endif
+  if (use_vulkan_backend) {
+    // Vulkan v1 accepts a static FP32 graph and does not use CPU tuning,
+    // vectorization, threading, or target-ISA controls. Reject explicit uses,
+    // including values equal to current CPU defaults, rather than ignoring
+    // them.
+    if (g_input_shapes.getNumOccurrences() != 0 ||
+        g_input_dim_constraints.getNumOccurrences() != 0) {
+      return fail(
+        "dynamic/input-shape overrides are not supported by "
+        "--backend=vulkan");
+    }
+    if (g_precision != "auto" && g_precision != "f32") {
+      return fail("--backend=vulkan currently supports only FP32");
+    }
+    if (g_fp16_accumulator.getNumOccurrences() != 0 ||
+        g_allow_fallback.getNumOccurrences() != 0 ||
+        g_optimization.getNumOccurrences() != 0 ||
+        g_threads.getNumOccurrences() != 0 ||
+        g_vector_width.getNumOccurrences() != 0 ||
+        g_vector_mode.getNumOccurrences() != 0 ||
+        g_int8_kernel.getNumOccurrences() != 0 ||
+        g_int8_depthwise.getNumOccurrences() != 0 ||
+        g_packed_conv_depthwise.getNumOccurrences() != 0 ||
+        g_int8_cast_chain.getNumOccurrences() != 0 ||
+        g_selective_fusion.getNumOccurrences() != 0 ||
+        g_layout_aware_fusion.getNumOccurrences() != 0 ||
+        g_selective_fusion_broadcast.getNumOccurrences() != 0 ||
+        g_selective_fusion_cast_chain.getNumOccurrences() != 0 ||
+        g_selective_fusion_max_chain.getNumOccurrences() != 0 ||
+        g_tuning_profile.getNumOccurrences() != 0 ||
+        g_matmul_m_rows.getNumOccurrences() != 0 ||
+        g_matmul_acc_columns.getNumOccurrences() != 0 ||
+        g_matmul_packing.getNumOccurrences() != 0 ||
+        g_row_chunk_lanes.getNumOccurrences() != 0 ||
+        g_matmul_i8_rows.getNumOccurrences() != 0 ||
+        g_matmul_i8_acc_columns.getNumOccurrences() != 0 ||
+        g_conv_strategy.getNumOccurrences() != 0 ||
+        g_vector_math.getNumOccurrences() != 0 ||
+        g_sleef_path.getNumOccurrences() != 0 ||
+        g_conv_gemm_l2_bytes.getNumOccurrences() != 0 ||
+        g_debug.getNumOccurrences() != 0 ||
+        g_expected_undefined.getNumOccurrences() != 0) {
+      return fail(
+        "CPU-only tuning, precision, debug, and undefined-symbol expectation "
+        "options are not supported by --backend=vulkan");
+    }
+    if (g_target_triple.getNumOccurrences() != 0 ||
+        g_march.getNumOccurrences() != 0 || g_mcpu.getNumOccurrences() != 0 ||
+        g_mtune.getNumOccurrences() != 0 ||
+        g_target_features.getNumOccurrences() != 0 ||
+        g_sysroot.getNumOccurrences() != 0) {
+      return fail(
+        "CPU target options are not supported by --backend=vulkan; "
+        "the host target is selected from the active toolchain");
+    }
+    if (g_clang_args.getNumOccurrences() != 0 ||
+        g_linker_args.getNumOccurrences() != 0) {
+      return fail(
+        "custom clang/linker arguments are not supported by "
+        "--backend=vulkan");
+    }
+    if (g_emit.getNumOccurrences() != 0 ||
+        g_emit_manifest.getNumOccurrences() != 0 ||
+        g_emit_execution_plan.getNumOccurrences() != 0 ||
+        g_profile.getNumOccurrences() != 0) {
+      return fail(
+        "CPU intermediate, manifest, execution-plan, and profiling "
+        "options are not supported by --backend=vulkan");
+    }
+  }
+
   if (!g_input.empty() && !g_param.empty()) {
     return fail("use either positional input or --param, not both");
   }
@@ -2094,7 +2343,13 @@ int CompileSession::parseArguments(int argc, char** argv) {
 
   model_name = c_identifier(
     g_model_name.empty() ? fs::path(param_path).stem().string() : g_model_name);
-  output_dir = (g_output_dir.empty() ? fs::path(model_name)
+  fs::path default_output_name(model_name);
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+  if (use_vulkan_backend) {
+    default_output_name = fs::path("ncnn-vulkan-" + model_name);
+  }
+#endif
+  output_dir = (g_output_dir.empty() ? default_output_name
                                      : fs::path(g_output_dir.getValue()))
                  .lexically_normal();
   while (output_dir.filename().empty() &&
@@ -2108,6 +2363,13 @@ int CompileSession::parseArguments(int argc, char** argv) {
   output_exists = validate_output_directory(output_dir, model_name);
   if (!output_exists) {
     return fail(output_exists.error());
+  }
+  if (output_exists->exists) {
+    auto owner =
+      validate_backend_output_owner(output_dir, model_name, use_vulkan_backend);
+    if (!owner) {
+      return fail(owner.error());
+    }
   }
 
   const std::set<std::string> valid_stages = {"ncnn",
@@ -2148,29 +2410,136 @@ int CompileSession::resolveTools(char** argv) {
   driver = find_tool(
     executable_dir, g_driver, {"ncnn-mlir-driver"}, {"ncnn-mlir-driver"});
   opt = find_tool(executable_dir, g_opt, {"ncnn-mlir-opt"}, {"ncnn-mlir-opt"});
-  translate = find_tool(executable_dir, g_translate, {}, {"mlir-translate-21"});
-  clang = find_tool(executable_dir, g_clang, {}, {"clang-21"});
   nm = find_tool(executable_dir, g_nm, {}, {"llvm-nm-21"});
   readelf = find_tool(executable_dir, g_readelf, {}, {"llvm-readelf-21"});
-  llvm_as = find_tool(executable_dir, g_llvm_as, {}, {"llvm-as-21"});
-  for (const ToolResult* tool :
-       {&driver, &opt, &translate, &clang, &nm, &readelf, &llvm_as}) {
+  if (!use_vulkan_backend) {
+    translate =
+      find_tool(executable_dir, g_translate, {}, {"mlir-translate-21"});
+    clang = find_tool(executable_dir, g_clang, {}, {"clang-21"});
+    llvm_as = find_tool(executable_dir, g_llvm_as, {}, {"llvm-as-21"});
+    for (const ToolResult* tool : {&translate, &clang, &llvm_as}) {
+      if (!*tool) {
+        return fail(tool->error());
+      }
+    }
+    if (!*translate || !*clang || !*llvm_as) {
+      return fail(
+        "required CPU compiler tool not found; verify PATH or the installed "
+        "toolchain");
+    }
+    translate_path = **translate;
+    clang_path = **clang;
+  }
+  for (const ToolResult* tool : {&driver, &opt, &nm, &readelf}) {
     if (!*tool) {
       return fail(tool->error());
     }
   }
-  if (!*driver || !*opt || !*translate || !*clang || !*nm || !*readelf ||
-      !*llvm_as) {
+  if (!*driver || !*opt || !*nm || !*readelf) {
     return fail(
       "required compiler tool not found; use -v and verify PATH or "
       "the installed toolchain");
   }
   driver_path = **driver;
   opt_path = **opt;
-  translate_path = **translate;
-  clang_path = **clang;
   nm_path = **nm;
   readelf_path = **readelf;
+
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+  if (use_vulkan_backend) {
+    auto findVulkanTool = [&](std::string_view requested,
+                              std::string_view configured,
+                              std::initializer_list<std::string_view> nearby,
+                              std::initializer_list<std::string_view> names) {
+      if (!requested.empty()) {
+        return find_tool(executable_dir, requested, {}, {});
+      }
+      if (!configured.empty() && fs::is_regular_file(configured)) {
+        return find_tool(executable_dir, configured, {}, {});
+      }
+      return find_tool(executable_dir, {}, nearby, names);
+    };
+    vulkan_mlir_opt = findVulkanTool(
+      g_vulkan_mlir_opt, NCNN_VULKAN_MLIR_OPT, {}, {"mlir-opt-21"});
+    vulkan_spirv_val = findVulkanTool(
+      g_vulkan_spirv_val, NCNN_VULKAN_SPIRV_VAL, {}, {"spirv-val"});
+    vulkan_spirv_dis = findVulkanTool(
+      g_vulkan_spirv_dis, NCNN_VULKAN_SPIRV_DIS, {}, {"spirv-dis"});
+    vulkan_spirv_extract = findVulkanTool(g_vulkan_spirv_extract,
+                                          NCNN_VULKAN_SPIRV_EXTRACTOR,
+                                          {"ncnn-vulkan-spirv-extract"},
+                                          {"ncnn-vulkan-spirv-extract"});
+    vulkan_host_cxx = findVulkanTool(g_vulkan_host_cxx,
+                                     NCNN_VULKAN_HOST_CXX,
+                                     {},
+                                     {"clang++-21", "clang++", "c++"});
+    for (const ToolResult* tool : {&vulkan_mlir_opt,
+                                   &vulkan_spirv_val,
+                                   &vulkan_spirv_dis,
+                                   &vulkan_spirv_extract,
+                                   &vulkan_host_cxx}) {
+      if (!*tool) {
+        return fail(tool->error());
+      }
+    }
+    if (!*vulkan_mlir_opt || !*vulkan_spirv_val || !*vulkan_spirv_dis ||
+        !*vulkan_spirv_extract || !*vulkan_host_cxx) {
+      return fail(
+        "Vulkan backend tools are missing; install MLIR 21 and "
+        "SPIR-V Tools, including spirv-val and spirv-dis");
+    }
+    vulkan_mlir_opt_path = **vulkan_mlir_opt;
+    vulkan_spirv_val_path = **vulkan_spirv_val;
+    vulkan_spirv_dis_path = **vulkan_spirv_dis;
+    vulkan_spirv_extract_path = **vulkan_spirv_extract;
+    vulkan_host_cxx_path = **vulkan_host_cxx;
+    auto locateVulkanArchive =
+      [&](
+        std::string_view configured,
+        std::string_view relative,
+        std::string_view description) -> std::expected<fs::path, std::string> {
+      if (!configured.empty() && fs::is_regular_file(configured)) {
+        return fs::weakly_canonical(configured);
+      }
+      const fs::path installed = executable_dir / relative;
+      if (fs::is_regular_file(installed)) {
+        return fs::weakly_canonical(installed);
+      }
+      return std::unexpected(std::format(
+        "Vulkan {} archive is missing; use the matching Vulkan-enabled "
+        "compiler installation",
+        description));
+    };
+    auto runtime_archive =
+      locateVulkanArchive(NCNN_VULKAN_RUNTIME_ARCHIVE,
+                          NCNN_VULKAN_RUNTIME_RELATIVE_PATH,
+                          "runtime");
+    if (!runtime_archive) {
+      return fail(runtime_archive.error());
+    }
+    vulkan_runtime_archive = *runtime_archive;
+    auto plan_archive = locateVulkanArchive(NCNN_VULKAN_PLAN_ARCHIVE,
+                                            NCNN_VULKAN_PLAN_RELATIVE_PATH,
+                                            "execution-plan");
+    if (!plan_archive) {
+      return fail(plan_archive.error());
+    }
+    vulkan_plan_archive = *plan_archive;
+    vulkan_include_dir = NCNN_VULKAN_INCLUDE_DIR;
+    if (!fs::is_directory(vulkan_include_dir)) {
+      vulkan_include_dir =
+        (executable_dir / NCNN_VULKAN_INCLUDE_RELATIVE_PATH).lexically_normal();
+    }
+    if (!fs::is_regular_file(vulkan_include_dir /
+                             "ncnn-mlir/Vulkan/ModelABI.h")) {
+      return fail(
+        "Vulkan public headers are missing from the compiler "
+        "installation");
+    }
+    vulkan_llvm_library_dir = NCNN_VULKAN_LLVM_LIBRARY_DIR;
+    vulkan_llvm_library_name = NCNN_VULKAN_LLVM_LIBRARY_NAME;
+  }
+#endif
 
   staging_storage.clear();
   if (llvm::sys::fs::createUniqueDirectory("ncnn-compile", staging_storage)) {
@@ -2184,7 +2553,9 @@ int CompileSession::resolveTarget() {
   effective_target_triple = g_target_triple;
   if (effective_target_triple.empty()) {
     const fs::path target_capture = staging.path() / "target-triple.txt";
-    if (int status = ::run({clang_path, "-dumpmachine"}, target_capture)) {
+    const std::string& target_tool =
+      use_vulkan_backend ? vulkan_host_cxx_path : clang_path;
+    if (int status = ::run({target_tool, "-dumpmachine"}, target_capture)) {
       return status;
     }
     auto target_text = read_text(target_capture);
@@ -2195,6 +2566,25 @@ int CompileSession::resolveTarget() {
     if (effective_target_triple.empty()) {
       return fail("clang returned an empty native target triple");
     }
+  }
+
+  if (use_vulkan_backend) {
+    const std::string architecture =
+      effective_target_triple.substr(0, effective_target_triple.find('-'));
+    if (!effective_target_triple.contains("linux") ||
+        architecture != "x86_64") {
+      return fail(
+        "--backend=vulkan currently requires an x86-64 Linux host "
+        "toolchain");
+    }
+    clang_target = build_clang_target_arguments(effective_target_triple);
+    target_args = clang_target.target;
+    isa_args = clang_target.isa;
+    effective_threads = 1;
+    vector_lanes = 0;
+    vector_scalable = false;
+    vector_active = false;
+    return 0;
   }
 
   // The probe and final backend share one ordered target/ISA argument list.
@@ -2629,6 +3019,25 @@ int CompileSession::resolveTarget() {
 }
 
 int CompileSession::declareArtifacts() {
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+  if (use_vulkan_backend) {
+    ncnn_ir = staging.path() / "model.ncnn.mlir";
+    vulkan_prepared_ir = staging.path() / "model.vulkan-prepared.mlir";
+    vulkan_legal_ir = staging.path() / "model.vulkan-legal.mlir";
+    vulkan_device_ir = staging.path() / "model.vulkan-device.mlir";
+    vulkan_binary_ir = staging.path() / "model.vulkan-binary.mlir";
+    vulkan_shader = staging.path() / "model.spv";
+    vulkan_disassembly = staging.path() / "model.spvasm";
+    vulkan_wrapper_source = staging.path() / "vulkan_model_wrapper.cpp";
+    manifest_path = staging.path() / (model_name + "_vulkan.json");
+    execution_plan_path = staging.path() / (model_name + "_vulkan.plan.json");
+    header = staging.path() / (model_name + "_vulkan.h");
+    exports = staging.path() / "vulkan-exports.map";
+    library = staging.path() / ("lib" + model_name + "_vulkan.so");
+    emit_execution_plan = true;
+    return 0;
+  }
+#endif
   ncnn_ir = staging.path() / "model.ncnn.mlir";
   tosa_ir = staging.path() / "model.tosa.mlir";
   linalg_ir = staging.path() / "model.linalg.mlir";
@@ -2687,6 +3096,119 @@ int CompileSession::declareArtifacts() {
 }
 
 int CompileSession::runPipeline() {
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+  if (use_vulkan_backend) {
+    if (g_warnings_as_errors) {
+      ::setenv("NCNN_WARNINGS_AS_ERRORS", "1", /*overwrite=*/1);
+    }
+    const std::vector<std::string> import_command{driver_path,
+                                                  "--bin",
+                                                  bin_path,
+                                                  "--precision=f32",
+                                                  "--emit=mlir",
+                                                  param_path,
+                                                  "-o",
+                                                  ncnn_ir.string()};
+    if (int status = ::run(import_command)) {
+      return status;
+    }
+    if (int status = ::run({opt_path,
+                            ncnn_ir.string(),
+                            "--ncnn-vulkan-v2-prepare-pipeline",
+                            "--verify-each",
+                            "-o",
+                            vulkan_prepared_ir.string()})) {
+      return status;
+    }
+    if (int status = ::run({opt_path,
+                            vulkan_prepared_ir.string(),
+                            "--verify-vulkan-supported-model",
+                            "--verify-each",
+                            "-o",
+                            vulkan_legal_ir.string()})) {
+      return status;
+    }
+    if (int status = ::run({opt_path,
+                            vulkan_legal_ir.string(),
+                            "--lower-ncnn-vulkan-model=plan-path=" +
+                              execution_plan_path.string(),
+                            "--verify-each",
+                            "-o",
+                            vulkan_device_ir.string()})) {
+      return status;
+    }
+    auto device_ir = read_text(vulkan_device_ir);
+    if (!device_ir) {
+      return fail(device_ir.error());
+    }
+    for (std::string_view residual : {"ncnn.",
+                                      "tosa.",
+                                      "func.func",
+                                      "linalg.",
+                                      "tensor.",
+                                      "unrealized_conversion_cast"}) {
+      if (device_ir->contains(residual)) {
+        return fail(llvm::Twine("Vulkan lowering retained forbidden IR: ") +
+                    std::string(residual));
+      }
+    }
+    if (device_ir->find("gpu.module @") == std::string::npos ||
+        device_ir->find("gpu.func @") == std::string::npos) {
+      return fail("Vulkan lowering did not emit a GPU module and kernel");
+    }
+    auto plan_text = read_text(execution_plan_path);
+    if (!plan_text) {
+      return fail(plan_text.error());
+    }
+    auto plan = ncnn_mlir::vulkan::deserializeExecutionPlan(*plan_text);
+    if (!plan) {
+      return fail("invalid Vulkan execution plan: " + plan.error());
+    }
+    if (int status = ::run({vulkan_mlir_opt_path,
+                            vulkan_device_ir.string(),
+                            "--test-vulkan-runner-pipeline",
+                            "--verify-each",
+                            "-o",
+                            vulkan_binary_ir.string()})) {
+      return status;
+    }
+    auto binary_ir = read_text(vulkan_binary_ir);
+    if (!binary_ir) {
+      return fail(binary_ir.error());
+    }
+    const std::string binary_symbol = plan->model + "_vulkan";
+    if (int status = ::run({vulkan_spirv_extract_path,
+                            "--binary-symbol",
+                            binary_symbol,
+                            vulkan_binary_ir.string(),
+                            "-o",
+                            vulkan_shader.string()})) {
+      return status;
+    }
+    if (int status = ::run({vulkan_spirv_val_path,
+                            "--target-env",
+                            "vulkan1.1",
+                            vulkan_shader.string()})) {
+      return status;
+    }
+    if (int status = ::run({vulkan_spirv_dis_path,
+                            vulkan_shader.string(),
+                            "-o",
+                            vulkan_disassembly.string()})) {
+      return status;
+    }
+    auto disassembly = read_text(vulkan_disassembly);
+    if (!disassembly) {
+      return fail(disassembly.error());
+    }
+    auto interface_result = ncnn_compile::validateVulkanSpirvInterface(
+      *plan, *binary_ir, *disassembly);
+    if (!interface_result) {
+      return fail(interface_result.error());
+    }
+    return 0;
+  }
+#endif
   // 诊断策略下沉到 ncnn-mlir-opt 子进程：ExecuteAndWait 的 env 传 nullopt，
   // 子进程继承本进程环境。不进 identity 串——产物与 plan_hash 均不变。
   if (g_warnings_as_errors) {
@@ -2968,6 +3490,56 @@ int CompileSession::runPipeline() {
 }
 
 int CompileSession::emitABI() {
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+  if (use_vulkan_backend) {
+    auto plan_json = read_text(execution_plan_path);
+    auto shader_bytes = read_text(vulkan_shader);
+    auto param_bytes = read_text(param_path);
+    auto bin_bytes = read_text(bin_path);
+    for (const auto* contents :
+         {&plan_json, &shader_bytes, &param_bytes, &bin_bytes}) {
+      if (!*contents) {
+        return fail(contents->error());
+      }
+    }
+    auto package = ncnn_compile::makeVulkanModelPackage(model_name,
+                                                        effective_target_triple,
+                                                        *plan_json,
+                                                        *shader_bytes,
+                                                        *param_bytes,
+                                                        *bin_bytes);
+    if (!package) {
+      return fail(package.error());
+    }
+    if (auto result = write_file(execution_plan_path, package->plan_json);
+        !result) {
+      return fail(result.error());
+    }
+    if (auto result = write_file(header, package->header); !result) {
+      return fail(result.error());
+    }
+    if (auto result =
+          write_file(vulkan_wrapper_source, package->wrapper_source);
+        !result) {
+      return fail(result.error());
+    }
+    if (auto result = write_file(manifest_path, package->manifest_json);
+        !result) {
+      return fail(result.error());
+    }
+    const std::string exports_map = std::format(
+      "{{\n  global: {}_vk_create; {}_vk_run; {}_vk_destroy;\n"
+      "  local: *;\n}};\n",
+      model_name,
+      model_name,
+      model_name);
+    if (auto result = write_file(exports, exports_map); !result) {
+      return fail(result.error());
+    }
+    execution_plan_hash = package->plan.plan_hash;
+    return 0;
+  }
+#endif
   manifest = read_manifest(manifest_path);
   if (!manifest) {
     return fail(manifest.error());
@@ -3027,6 +3599,138 @@ int CompileSession::emitABI() {
 }
 
 int CompileSession::linkAndAudit() {
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+  if (use_vulkan_backend) {
+    std::vector<std::string> link{vulkan_host_cxx_path,
+                                  "-std=c++23",
+                                  "-shared",
+                                  "-fPIC",
+                                  "-O2",
+                                  "-I",
+                                  staging.path().string(),
+                                  "-I",
+                                  vulkan_include_dir.string(),
+                                  vulkan_wrapper_source.string(),
+                                  vulkan_runtime_archive.string(),
+                                  vulkan_plan_archive.string(),
+                                  "-L" + vulkan_llvm_library_dir.string(),
+                                  "-Wl,-z,defs",
+                                  "-Wl,--no-undefined",
+                                  "-Wl,--exclude-libs,ALL",
+                                  "-Wl,--version-script=" + exports.string(),
+                                  "-Wl,--build-id=none",
+                                  "-l" + vulkan_llvm_library_name,
+                                  "-lvulkan",
+                                  "-pthread",
+                                  "-o",
+                                  library.string()};
+    if (int status = ::run(link)) {
+      return status;
+    }
+    if (!fs::is_regular_file(library)) {
+      return fail(
+        "Vulkan linker succeeded without producing the model library");
+    }
+    capture_path = staging.path() / "vulkan-exports.txt";
+    if (int status = ::run({nm_path, "-D", "--defined-only", library.string()},
+                           capture_path)) {
+      return status;
+    }
+    text = read_text(capture_path);
+    if (!text) {
+      return fail(text.error());
+    }
+    const std::set<std::string> expected_exports = {model_name + "_vk_create",
+                                                    model_name + "_vk_run",
+                                                    model_name + "_vk_destroy"};
+    if (symbols(*text) != expected_exports) {
+      return fail("Vulkan model library exports differ from the lifecycle ABI");
+    }
+    capture_path = staging.path() / "vulkan-dynamic-table.txt";
+    if (int status =
+          ::run({readelf_path, "-d", library.string()}, capture_path)) {
+      return status;
+    }
+    text = read_text(capture_path);
+    if (!text) {
+      return fail(text.error());
+    }
+    if (text->contains("RPATH") || text->contains("RUNPATH")) {
+      return fail("Vulkan model library must not contain an RPATH or RUNPATH");
+    }
+    capture_path = staging.path() / "vulkan-needed-libs.txt";
+    if (int status = ::run({readelf_path, "--needed-libs", library.string()},
+                           capture_path)) {
+      return status;
+    }
+    text = read_text(capture_path);
+    if (!text) {
+      return fail(text.error());
+    }
+    static const std::regex needed_pattern(
+      R"(^\s*(lib[^\s]+\.so(?:\.\d+)*)\s*$)",
+      std::regex_constants::ECMAScript | std::regex_constants::multiline);
+    std::set<std::string> needed_libraries;
+    for (auto match =
+           std::sregex_iterator(text->begin(), text->end(), needed_pattern);
+         match != std::sregex_iterator();
+         ++match) {
+      needed_libraries.insert((*match)[1].str());
+    }
+    const std::set<std::string> allowed_libraries = {"libvulkan.so.1",
+                                                     "libstdc++.so.6",
+                                                     "libstdc++.so.6.0.33",
+                                                     "libgcc_s.so.1",
+                                                     "libm.so.6",
+                                                     "libc.so.6",
+                                                     "libc++.so.1",
+                                                     "libc++abi.so.1",
+                                                     "libunwind.so.1",
+                                                     "libatomic.so.1"};
+    const std::size_t llvm_version_separator =
+      vulkan_llvm_library_name.rfind('-');
+    if (llvm_version_separator == std::string::npos) {
+      return fail(
+        "could not determine the configured LLVM runtime major version");
+    }
+    const std::string llvm_major =
+      vulkan_llvm_library_name.substr(llvm_version_separator + 1);
+    const auto isLLVMRuntime = [&llvm_major](const std::string& name) {
+      const std::string shared_name = "libLLVM.so." + llvm_major;
+      const std::string versioned_name = "libLLVM-" + llvm_major + ".so.";
+      return name == shared_name || name.starts_with(shared_name + ".") ||
+             name.starts_with(versioned_name);
+    };
+    if (!needed_libraries.contains("libvulkan.so.1") ||
+        !std::ranges::any_of(needed_libraries, isLLVMRuntime)) {
+      return fail(
+        "Vulkan model library is missing its loader or configured LLVM runtime "
+        "dependency");
+    }
+    for (const std::string& dependency : needed_libraries) {
+      if (!allowed_libraries.contains(dependency) &&
+          !isLLVMRuntime(dependency)) {
+        return fail(std::format(
+          "Vulkan model library has an unexpected dependency: {}", dependency));
+      }
+    }
+    auto manifest_json = read_text(manifest_path);
+    if (!manifest_json) {
+      return fail(manifest_json.error());
+    }
+    std::vector<std::string> dependency_list(needed_libraries.begin(),
+                                             needed_libraries.end());
+    auto updated_manifest = ncnn_compile::updateVulkanManifestDependencies(
+      *manifest_json, std::move(dependency_list));
+    if (!updated_manifest) {
+      return fail(updated_manifest.error());
+    }
+    if (auto result = write_file(manifest_path, *updated_manifest); !result) {
+      return fail(result.error());
+    }
+    return 0;
+  }
+#endif
   uses_address_sanitizer = false;
   uses_undefined_sanitizer = false;
   for (const std::string& argument : g_linker_args) {
@@ -3255,6 +3959,154 @@ int CompileSession::linkAndAudit() {
 }
 
 int CompileSession::verifyExecution() {
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+  if (use_vulkan_backend && g_verify_execution) {
+    const fs::path harness_source = staging.path() / "vulkan-harness.cpp";
+    const fs::path harness = staging.path() / "vulkan-harness";
+    std::string source = std::format(
+      "#include <array>\n"
+      "#include <cmath>\n"
+      "#include <cstdio>\n"
+      "#include <dlfcn.h>\n"
+      "#include <string>\n"
+      "#include \"{}\"\n"
+      "#define NCNN_VK_CREATE {}_vk_create\n"
+      "#define NCNN_VK_RUN {}_vk_run\n"
+      "#define NCNN_VK_DESTROY {}_vk_destroy\n",
+      header.filename().string(),
+      model_name,
+      model_name,
+      model_name);
+    // clang-format off
+    source += R"cpp(
+      using CreateFunction = decltype(&NCNN_VK_CREATE);
+      using RunFunction = decltype(&NCNN_VK_RUN);
+      using DestroyFunction = decltype(&NCNN_VK_DESTROY);
+
+      int main(int argc, char** argv) {
+        if (argc != 2) {
+          return 1;
+        }
+        void* library = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+        if (library == nullptr) {
+          std::fprintf(stderr, "dlopen failed: %s\n", dlerror());
+          return 2;
+        }
+        auto create = reinterpret_cast<CreateFunction>(dlsym(library, "@CREATE@"));
+        auto run = reinterpret_cast<RunFunction>(dlsym(library, "@RUN@"));
+        auto destroy = reinterpret_cast<DestroyFunction>(dlsym(library, "@DESTROY@"));
+        if (create == nullptr || run == nullptr || destroy == nullptr) {
+          std::fprintf(stderr, "Vulkan lifecycle symbol lookup failed\n");
+          dlclose(library);
+          return 3;
+        }
+        std::array<float, @ELEMENTS@> input{};
+        std::array<float, @ELEMENTS@> output{};
+        for (std::size_t index = 0; index < input.size(); ++index) {
+          switch (index % 3) {
+            case 0:
+              input[index] = -1.0f - static_cast<float>(index);
+              break;
+            case 1:
+              input[index] = 0.0f;
+              break;
+            default:
+              input[index] = static_cast<float>(index);
+              break;
+          }
+        }
+        ncnn_vk_options options;
+        ncnn_vk_options_init(&options);
+        @CONTEXT@* context = nullptr;
+        char diagnostic[512]{};
+        ncnn_vk_status status =
+          create(&options, &context, diagnostic, sizeof(diagnostic));
+        if (status != NCNN_VK_STATUS_SUCCESS || context == nullptr) {
+          std::fprintf(stderr, "Vulkan create failed (%u): %s\n", status, diagnostic);
+          dlclose(library);
+          return 4;
+        }
+        status = run(context,
+                     input.data(),
+                     input.size(),
+                     output.data(),
+                     output.size(),
+                     diagnostic,
+                     sizeof(diagnostic));
+        const ncnn_vk_status destroy_status = destroy(context);
+        if (status != NCNN_VK_STATUS_SUCCESS ||
+            destroy_status != NCNN_VK_STATUS_SUCCESS) {
+          std::fprintf(stderr,
+                       "Vulkan run/destroy failed (%u/%u): %s\n",
+                       status,
+                       destroy_status,
+                       diagnostic);
+          dlclose(library);
+          return 5;
+        }
+        for (std::size_t index = 0; index < input.size(); ++index) {
+          const float expected = input[index] > 0.0f ? input[index] : 0.0f;
+          if (std::fabs(output[index] - expected) > 1.0e-6f) {
+            std::fprintf(stderr, "Vulkan ReLU mismatch at element %zu\n", index);
+            dlclose(library);
+            return 6;
+          }
+        }
+        return dlclose(library) == 0 ? 0 : 7;
+      }
+    )cpp";
+    // clang-format on
+    const std::string context_name = model_name + "_vk_context";
+    std::string model_macro = model_name;
+    std::ranges::transform(
+      model_macro, model_macro.begin(), [](unsigned char character) {
+        return static_cast<char>(std::toupper(character));
+      });
+    auto replaceToken = [&source](std::string_view token,
+                                  std::string_view replacement) {
+      std::size_t position = 0;
+      while ((position = source.find(token, position)) != std::string::npos) {
+        source.replace(position, token.size(), replacement);
+        position += replacement.size();
+      }
+    };
+    replaceToken("@CREATE@", model_name + "_vk_create");
+    replaceToken("@RUN@", model_name + "_vk_run");
+    replaceToken("@DESTROY@", model_name + "_vk_destroy");
+    replaceToken("@CONTEXT@", context_name);
+    replaceToken("@ELEMENTS@", model_macro + "_VULKAN_INPUT1_ELEMENTS");
+    auto source_result = write_file(harness_source, source);
+    if (!source_result) {
+      return fail(source_result.error());
+    }
+    if (int status = ::run({vulkan_host_cxx_path,
+                            "-std=c++23",
+                            harness_source.string(),
+                            "-I",
+                            staging.path().string(),
+                            "-I",
+                            vulkan_include_dir.string(),
+                            "-ldl",
+                            "-o",
+                            harness.string()})) {
+      return status;
+    }
+    const char* inherited_path = std::getenv("LD_LIBRARY_PATH");
+    std::string library_path = vulkan_llvm_library_dir.string();
+    if (inherited_path != nullptr && *inherited_path != '\0') {
+      library_path += ":";
+      library_path += inherited_path;
+    }
+    ::setenv("LD_LIBRARY_PATH", library_path.c_str(), /*overwrite=*/1);
+    if (int status = ::run({harness.string(), library.string()})) {
+      return fail(llvm::Twine("Vulkan ABI execution verification failed with "
+                              "harness exit code ") +
+                  std::to_string(status));
+    }
+    llvm::errs() << "ncnn-compile: Vulkan ABI execution verification passed\n";
+    return 0;
+  }
+#endif
   if (g_verify_execution) {
     const fs::path harness_source = staging.path() / "harness.c";
     const fs::path harness = staging.path() / "harness";
@@ -3331,14 +4183,26 @@ int CompileSession::publishOutputs() {
   if (auto result = publish(library); !result) {
     return fail(result.error());
   }
-  if (g_emit_manifest) {
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+  if (use_vulkan_backend) {
     if (auto result = publish(manifest_path); !result) {
       return fail(result.error());
     }
-  }
-  if (emit_execution_plan) {
     if (auto result = publish(execution_plan_path); !result) {
       return fail(result.error());
+    }
+  } else
+#endif
+  {
+    if (g_emit_manifest) {
+      if (auto result = publish(manifest_path); !result) {
+        return fail(result.error());
+      }
+    }
+    if (emit_execution_plan) {
+      if (auto result = publish(execution_plan_path); !result) {
+        return fail(result.error());
+      }
     }
   }
   const std::vector<std::pair<std::string, fs::path>> stages = {
@@ -3363,6 +4227,13 @@ int CompileSession::publishOutputs() {
     validate_output_directory(output_dir, model_name);
   if (!current_output_exists) {
     return fail(current_output_exists.error());
+  }
+  if (current_output_exists->exists) {
+    auto owner =
+      validate_backend_output_owner(output_dir, model_name, use_vulkan_backend);
+    if (!owner) {
+      return fail(owner.error());
+    }
   }
   if (current_output_exists->exists != output_exists->exists ||
       current_output_exists->identity != output_exists->identity) {

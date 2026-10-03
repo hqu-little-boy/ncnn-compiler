@@ -226,6 +226,36 @@ set_tests_properties(int8-target-cli PROPERTIES
     RUN_SERIAL TRUE
     TIMEOUT 180)
 
+if(NCNN_ENABLE_VULKAN_PRODUCT AND NCNN_ENABLE_VULKAN_V0_TESTS)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME ncnn-compile-vulkan-product
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_ncnn_compile_vulkan.py
+            --compiler $<TARGET_FILE:ncnn-compile>
+            --driver $<TARGET_FILE:ncnn-mlir-driver>
+            --opt $<TARGET_FILE:ncnn-mlir-opt>
+            --mlir-opt ${NCNN_MLIR_OPT_EXECUTABLE}
+            --spirv-val ${NCNN_SPIRV_VAL_EXECUTABLE}
+            --spirv-dis ${NCNN_SPIRV_DIS_EXECUTABLE}
+            --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
+            --clang ${CLANG}
+            --nm ${LLVM_NM}
+            --readelf ${LLVM_READELF}
+            --host-cxx ${CMAKE_CXX_COMPILER}
+            --llvm-major ${LLVM_VERSION_MAJOR}
+            --llvm-lib-dir ${LLVM_LIBRARY_DIR}
+            --param ${CMAKE_CURRENT_SOURCE_DIR}/Vulkan/relu.param
+            --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
+            --unsupported-param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/convolution.param
+            --unsupported-bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/convolution.bin
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-product-cli)
+    set_tests_properties(ncnn-compile-vulkan-product PROPERTIES
+        LABELS "native;integration;cli;vulkan;product"
+        RUN_SERIAL TRUE
+        TIMEOUT 900
+        ENVIRONMENT "LD_LIBRARY_PATH=${LLVM_LIBRARY_DIR}:$ENV{LD_LIBRARY_PATH}")
+endif()
+
 # Unsupported hosts still cross-compile; the script explicitly skips execution.
 foreach(INT8_KIND IN ITEMS matmul depthwise)
     add_test(NAME int8-${INT8_KIND}-native

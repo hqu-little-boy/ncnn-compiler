@@ -39,7 +39,8 @@ target_compile_definitions(NCNNDiagnosticsSupport PUBLIC ${LLVM_DEFINITIONS})
 target_compile_options(NCNNDiagnosticsSupport PRIVATE -fno-rtti)
 target_link_libraries(NCNNDiagnosticsSupport PUBLIC MLIRIR MLIRSupport)
 
-add_library(NCNNVulkanPlanSupport VulkanExecutionPlan.cpp)
+# The product host DSO embeds the plan implementation with its runtime.
+add_library(NCNNVulkanPlanSupport STATIC VulkanExecutionPlan.cpp)
 target_include_directories(NCNNVulkanPlanSupport PUBLIC
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_BINARY_DIR}/include
@@ -47,5 +48,11 @@ target_include_directories(NCNNVulkanPlanSupport PUBLIC
     ${MLIR_INCLUDE_DIRS})
 target_compile_definitions(NCNNVulkanPlanSupport PUBLIC ${LLVM_DEFINITIONS})
 target_compile_options(NCNNVulkanPlanSupport PRIVATE -fno-rtti)
+set_target_properties(NCNNVulkanPlanSupport PROPERTIES
+    POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(NCNNVulkanPlanSupport PUBLIC
     MLIRIR MLIRSupport LLVMSupport)
+if(NCNN_ENABLE_VULKAN_PRODUCT)
+    install(TARGETS NCNNVulkanPlanSupport
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/ncnn-mlir)
+endif()
