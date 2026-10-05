@@ -399,12 +399,14 @@ def LowerNCNNVulkanGraphPass
     Analyze the strict NCNN-to-TOSA boundary, build a deterministic SSA resource
     schedule, and emit one bounded GPU kernel per supported operation. Public
     outputs have distinct buffers; weights and shaders are associated by IDs.
-    Unsupported operations fail before any plan or payload artifact is written.
+    The static FP32 subset includes restricted pooling and the unfused TOSA
+    primitives used for stable Softmax. Unsupported operations fail before any
+    plan or payload artifact is written.
   }];
   let dependentDialects = [
     "arith::ArithDialect", "func::FuncDialect", "gpu::GPUDialect",
-    "memref::MemRefDialect", "scf::SCFDialect", "spirv::SPIRVDialect",
-    "tosa::TosaDialect"
+    "math::MathDialect", "memref::MemRefDialect", "scf::SCFDialect",
+    "spirv::SPIRVDialect", "tosa::TosaDialect"
   ];
   let options = [
     Option<"planPath", "plan-path", "std::string", "",

@@ -3,12 +3,15 @@
 #include <algorithm>
 #include <cstdint>
 #include <format>
+#include <limits>
 #include <vector>
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "mlir/AsmParser/AsmParser.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SPIRV/IR/SPIRVAttributes.h"
@@ -199,6 +202,193 @@ Value concatValue(OpBuilder& builder,
   return value;
 }
 
+Value broadcastLoad(OpBuilder& builder,
+                    Location location,
+                    Value buffer,
+                    ArrayRef<Value> outputCoordinates,
+                    RankedTensorType inputType) {
+  SmallVector<Value> inputCoordinates(outputCoordinates);
+  for (auto [dimension, extent] : llvm::enumerate(inputType.getShape())) {
+    if (extent == 1) {
+      inputCoordinates[dimension] = indexConstant(builder, location, 0);
+    }
+  }
+  return load(builder,
+              location,
+              buffer,
+              linearOffset(builder, location, inputCoordinates, inputType));
+}
+
+Value maxPoolValue(OpBuilder& builder,
+                   Location location,
+                   const GraphKernel& kernel,
+                   const MaxPoolKernel& pooling,
+                   ArrayRef<Value> buffers,
+                   Value outputIndex) {
+  const auto inputType = kernel.input_types.front();
+  const auto outputCoordinates =
+    coordinates(builder, location, outputIndex, kernel.output_type);
+  const Value outputY = outputCoordinates[1];
+  const Value outputX = outputCoordinates[2];
+  const Value channel = outputCoordinates[3];
+  const Value zero = indexConstant(builder, location, 0);
+  const Value strideY = indexConstant(builder, location, pooling.strides[0]);
+  const Value strideX = indexConstant(builder, location, pooling.strides[1]);
+  const Value top = indexConstant(builder, location, pooling.padding[0]);
+  const Value left = indexConstant(builder, location, pooling.padding[2]);
+  const Value paddedHeight = indexConstant(
+    builder, location, inputType.getDimSize(1) + pooling.padding[0]);
+  const Value paddedWidth = indexConstant(
+    builder, location, inputType.getDimSize(2) + pooling.padding[2]);
+  Value maximum = builder.create<arith::ConstantOp>(
+    location, builder.getF32FloatAttr(-std::numeric_limits<float>::infinity()));
+
+  for (std::int64_t kernelY = 0; kernelY < pooling.kernel[0]; ++kernelY) {
+    for (std::int64_t kernelX = 0; kernelX < pooling.kernel[1]; ++kernelX) {
+      const Value paddedY = builder.create<arith::AddIOp>(
+        location,
+        builder.create<arith::MulIOp>(location, outputY, strideY),
+        indexConstant(builder, location, kernelY));
+      const Value paddedX = builder.create<arith::AddIOp>(
+        location,
+        builder.create<arith::MulIOp>(location, outputX, strideX),
+        indexConstant(builder, location, kernelX));
+      const Value validY = builder.create<arith::AndIOp>(
+        location,
+        builder.create<arith::CmpIOp>(
+          location, arith::CmpIPredicate::uge, paddedY, top),
+        builder.create<arith::CmpIOp>(
+          location, arith::CmpIPredicate::ult, paddedY, paddedHeight));
+      const Value validX = builder.create<arith::AndIOp>(
+        location,
+        builder.create<arith::CmpIOp>(
+          location, arith::CmpIPredicate::uge, paddedX, left),
+        builder.create<arith::CmpIOp>(
+          location, arith::CmpIPredicate::ult, paddedX, paddedWidth));
+      const Value valid =
+        builder.create<arith::AndIOp>(location, validY, validX);
+      auto conditional = builder.create<scf::IfOp>(
+        location, TypeRange{builder.getF32Type()}, valid, true, true);
+      OpBuilder thenBuilder = conditional.getThenBodyBuilder();
+      const Value inputY =
+        thenBuilder.create<arith::SubIOp>(location, paddedY, top);
+      const Value inputX =
+        thenBuilder.create<arith::SubIOp>(location, paddedX, left);
+      const SmallVector<Value> inputCoordinates{zero, inputY, inputX, channel};
+      const Value input =
+        load(thenBuilder,
+             location,
+             buffers.front(),
+             linearOffset(thenBuilder, location, inputCoordinates, inputType));
+      const Value updated =
+        thenBuilder.create<arith::MaximumFOp>(location, maximum, input);
+      thenBuilder.create<scf::YieldOp>(location, updated);
+      OpBuilder elseBuilder = conditional.getElseBodyBuilder();
+      elseBuilder.create<scf::YieldOp>(location, maximum);
+      maximum = conditional.getResult(0);
+    }
+  }
+  return maximum;
+}
+
+Value globalAveragePoolValue(OpBuilder& builder,
+                             Location location,
+                             const GraphKernel& kernel,
+                             ArrayRef<Value> buffers,
+                             Value outputIndex) {
+  const auto inputType = kernel.input_types.front();
+  const Value channel = outputIndex;
+  const Value zero = indexConstant(builder, location, 0);
+  const Value one = indexConstant(builder, location, 1);
+  const Value height =
+    indexConstant(builder, location, inputType.getDimSize(1));
+  const Value width = indexConstant(builder, location, inputType.getDimSize(2));
+  Value sum =
+    builder.create<arith::ConstantOp>(location, builder.getF32FloatAttr(0.0F));
+  auto rows = builder.create<scf::ForOp>(
+    location,
+    zero,
+    height,
+    one,
+    ValueRange{sum},
+    [&](OpBuilder& rowBuilder,
+        Location rowLocation,
+        Value row,
+        ValueRange rowSum) {
+      auto columns = rowBuilder.create<scf::ForOp>(
+        rowLocation,
+        zero,
+        width,
+        one,
+        rowSum,
+        [&](OpBuilder& columnBuilder,
+            Location columnLocation,
+            Value column,
+            ValueRange columnSum) {
+          const SmallVector<Value> coordinates{zero, row, column, channel};
+          const Value input =
+            load(columnBuilder,
+                 columnLocation,
+                 buffers.front(),
+                 linearOffset(
+                   columnBuilder, columnLocation, coordinates, inputType));
+          const Value accumulated = columnBuilder.create<arith::AddFOp>(
+            columnLocation, columnSum.front(), input);
+          columnBuilder.create<scf::YieldOp>(columnLocation, accumulated);
+        });
+      rowBuilder.create<scf::YieldOp>(rowLocation, columns.getResult(0));
+    });
+  const auto divisorValue = static_cast<float>(inputType.getDimSize(1)) *
+                            static_cast<float>(inputType.getDimSize(2));
+  const Value divisor = builder.create<arith::ConstantOp>(
+    location, builder.getF32FloatAttr(divisorValue));
+  return builder.create<arith::DivFOp>(location, rows.getResult(0), divisor);
+}
+
+Value reduceValue(OpBuilder& builder,
+                  Location location,
+                  const GraphKernel& kernel,
+                  ArrayRef<Value> buffers,
+                  Value outputIndex,
+                  std::uint32_t axis,
+                  bool maximumReduction) {
+  const auto inputType = kernel.input_types.front();
+  SmallVector<Value> inputCoordinates =
+    coordinates(builder, location, outputIndex, kernel.output_type);
+  const Value zero = indexConstant(builder, location, 0);
+  const Value one = indexConstant(builder, location, 1);
+  const Value extent =
+    indexConstant(builder, location, inputType.getDimSize(axis));
+  const float initialValue =
+    maximumReduction ? -std::numeric_limits<float>::infinity() : 0.0F;
+  Value initial = builder.create<arith::ConstantOp>(
+    location, builder.getF32FloatAttr(initialValue));
+  auto reduction = builder.create<scf::ForOp>(
+    location,
+    zero,
+    extent,
+    one,
+    ValueRange{initial},
+    [&](OpBuilder& body,
+        Location bodyLocation,
+        Value reducedIndex,
+        ValueRange accumulated) {
+      inputCoordinates[axis] = reducedIndex;
+      const Value input =
+        load(body,
+             bodyLocation,
+             buffers.front(),
+             linearOffset(body, bodyLocation, inputCoordinates, inputType));
+      const Value next = maximumReduction
+                           ? Value(body.create<arith::MaximumFOp>(
+                               bodyLocation, accumulated.front(), input))
+                           : Value(body.create<arith::AddFOp>(
+                               bodyLocation, accumulated.front(), input));
+      body.create<scf::YieldOp>(bodyLocation, next);
+    });
+  return reduction.getResult(0);
+}
+
 Value outputValue(OpBuilder& builder,
                   Location location,
                   const GraphKernel& kernel,
@@ -250,12 +440,50 @@ Value outputValue(OpBuilder& builder,
     return convValue(
       builder, location, kernel, *convolution, buffers, outputIndex);
   }
-  return concatValue(builder,
-                     location,
-                     kernel,
-                     std::get<ConcatKernel>(kernel.body),
-                     buffers,
-                     outputIndex);
+  if (const auto* pooling = std::get_if<MaxPoolKernel>(&kernel.body)) {
+    return maxPoolValue(
+      builder, location, kernel, *pooling, buffers, outputIndex);
+  }
+  if (std::holds_alternative<GlobalAveragePoolKernel>(kernel.body)) {
+    return globalAveragePoolValue(
+      builder, location, kernel, buffers, outputIndex);
+  }
+  if (const auto* reduction = std::get_if<ReduceMaxKernel>(&kernel.body)) {
+    return reduceValue(
+      builder, location, kernel, buffers, outputIndex, reduction->axis, true);
+  }
+  if (const auto* reduction = std::get_if<ReduceSumKernel>(&kernel.body)) {
+    return reduceValue(
+      builder, location, kernel, buffers, outputIndex, reduction->axis, false);
+  }
+  if (std::holds_alternative<SubKernel>(kernel.body) ||
+      std::holds_alternative<MulKernel>(kernel.body)) {
+    const auto outputCoordinates =
+      coordinates(builder, location, outputIndex, kernel.output_type);
+    const Value lhs = broadcastLoad(
+      builder, location, buffers[0], outputCoordinates, kernel.input_types[0]);
+    const Value rhs = broadcastLoad(
+      builder, location, buffers[1], outputCoordinates, kernel.input_types[1]);
+    if (std::holds_alternative<SubKernel>(kernel.body)) {
+      return builder.create<arith::SubFOp>(location, lhs, rhs);
+    }
+    return builder.create<arith::MulFOp>(location, lhs, rhs);
+  }
+  if (std::holds_alternative<ExpKernel>(kernel.body)) {
+    return builder.create<math::ExpOp>(
+      location, load(builder, location, buffers[0], outputIndex));
+  }
+  if (std::holds_alternative<ReciprocalKernel>(kernel.body)) {
+    const Value one = builder.create<arith::ConstantOp>(
+      location, builder.getF32FloatAttr(1.0F));
+    return builder.create<arith::DivFOp>(
+      location, one, load(builder, location, buffers[0], outputIndex));
+  }
+  if (const auto* concatenation = std::get_if<ConcatKernel>(&kernel.body)) {
+    return concatValue(
+      builder, location, kernel, *concatenation, buffers, outputIndex);
+  }
+  llvm_unreachable("all checked Vulkan graph kernel variants must be emitted");
 }
 
 }  // namespace

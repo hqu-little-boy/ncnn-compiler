@@ -19,6 +19,7 @@ target_link_libraries(NCNNToVulkan PUBLIC
     MLIRGPUDialect
     MLIRIR
     MLIRLinalgDialect
+    MLIRMathDialect
     MLIRMemRefDialect
     MLIRPass
     MLIRSCFDialect

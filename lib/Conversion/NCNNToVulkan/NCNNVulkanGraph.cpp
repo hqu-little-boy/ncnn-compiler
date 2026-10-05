@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -10,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -20,6 +22,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
@@ -49,10 +52,18 @@ using vulkan_graph::AddKernel;
 using vulkan_graph::ConcatKernel;
 using vulkan_graph::ConvKernel;
 using vulkan_graph::CopyKernel;
+using vulkan_graph::ExpKernel;
+using vulkan_graph::GlobalAveragePoolKernel;
 using vulkan_graph::GraphKernel;
 using vulkan_graph::KernelBody;
+using vulkan_graph::MaxPoolKernel;
+using vulkan_graph::MulKernel;
+using vulkan_graph::ReciprocalKernel;
+using vulkan_graph::ReduceMaxKernel;
+using vulkan_graph::ReduceSumKernel;
 using vulkan_graph::ReluKernel;
 using vulkan_graph::SliceKernel;
+using vulkan_graph::SubKernel;
 using vulkan_graph::TransposeKernel;
 
 LogicalResult reject(Operation& operation, StringRef reason) {
@@ -382,7 +393,14 @@ class GraphPlanner final {
                     "non-FP32 constants must be scalar zero metadata");
     }
     for (OpOperand& use : operation.getResult(0).getUses()) {
-      if (!isa<tosa::Conv2DOp>(use.getOwner()) || use.getOperandNumber() < 3) {
+      const bool convolutionZeroPoint =
+        isa<tosa::Conv2DOp>(use.getOwner()) && use.getOperandNumber() >= 3;
+      const bool averagePoolZeroPoint =
+        isa<tosa::AvgPool2dOp>(use.getOwner()) &&
+        (use.getOperandNumber() == 1 || use.getOperandNumber() == 2);
+      const bool multiplyShift =
+        isa<tosa::MulOp>(use.getOwner()) && use.getOperandNumber() == 2;
+      if (!convolutionZeroPoint && !averagePoolZeroPoint && !multiplyShift) {
         return reject(operation,
                       "integer metadata cannot be used as tensor data");
       }
@@ -503,10 +521,12 @@ class GraphPlanner final {
       }
       const auto low = parameters.padding[dimension * 2];
       const auto high = parameters.padding[(dimension * 2) + 1];
-      const std::int64_t maximumPadding = kernelHeight == 1 ? 0 : 1;
-      // NCNN-to-TOSA may append up to stride-1 elements and a subsequent crop.
+      constexpr std::int64_t maximumPadding = 1;
+      // Static tail padding can add up to stride-1 elements for 3x3 kernels.
+      const std::int64_t maximumHighPadding =
+        kernelHeight == 1 ? maximumPadding : maximumPadding + stride - 1;
       if (low < 0 || high < 0 || low > maximumPadding ||
-          high > maximumPadding + stride - 1) {
+          high > maximumHighPadding) {
         return reject(*convolution,
                       "conv2d padding is outside the supported 1x1/3x3 subset");
       }
@@ -557,6 +577,199 @@ class GraphPlanner final {
     return compute(*concat, ConcatKernel{axis}, concat.getInput1(), "concat");
   }
 
+  LogicalResult analyzeBroadcastBinary(Operation& operation,
+                                       Value lhs,
+                                       Value rhs,
+                                       RankedTensorType output,
+                                       KernelBody body,
+                                       StringRef name) {
+    const auto lhsType = dyn_cast<RankedTensorType>(lhs.getType());
+    const auto rhsType = dyn_cast<RankedTensorType>(rhs.getType());
+    if (!lhsType || !rhsType || lhsType.getRank() != output.getRank() ||
+        rhsType.getRank() != output.getRank() ||
+        !lhsType.getElementType().isF32() ||
+        !rhsType.getElementType().isF32() || !output.getElementType().isF32()) {
+      return reject(operation,
+                    "broadcast binary requires equal-rank FP32 tensors");
+    }
+    std::size_t broadcastDimensions = 0;
+    for (std::int64_t dimension = 0; dimension < output.getRank();
+         ++dimension) {
+      const auto outExtent = output.getDimSize(dimension);
+      const auto lhsExtent = lhsType.getDimSize(dimension);
+      const auto rhsExtent = rhsType.getDimSize(dimension);
+      if ((lhsExtent != outExtent && lhsExtent != 1) ||
+          (rhsExtent != outExtent && rhsExtent != 1) ||
+          outExtent != std::max(lhsExtent, rhsExtent)) {
+        return reject(
+          operation, "broadcast dimensions must be exact equal-or-one extents");
+      }
+      if (lhsExtent != rhsExtent && ++broadcastDimensions > 1) {
+        return reject(operation,
+                      "broadcast may expand at most one tensor axis");
+      }
+    }
+    return compute(operation, std::move(body), {lhs, rhs}, name);
+  }
+
+  LogicalResult analyzeMaxPool(tosa::MaxPool2dOp pooling) {
+    const auto input = cast<RankedTensorType>(pooling.getInput().getType());
+    const auto output = cast<RankedTensorType>(pooling.getOutput().getType());
+    const auto kernel = pooling.getKernel();
+    const auto stride = pooling.getStride();
+    const auto padding = pooling.getPad();
+    if (input.getRank() != 4 || output.getRank() != 4) {
+      return reject(*pooling, "max_pool2d requires rank-four NHWC tensors");
+    }
+    if (input.getDimSize(0) != 1 || output.getDimSize(0) != 1) {
+      return reject(*pooling, "max_pool2d requires batch size one");
+    }
+    if (input.getDimSize(3) != output.getDimSize(3)) {
+      return reject(*pooling, "max_pool2d must preserve the channel extent");
+    }
+    if (kernel.size() != 2 || stride.size() != 2 || padding.size() != 4) {
+      return reject(*pooling,
+                    "max_pool2d requires two kernel/stride and four padding "
+                    "values");
+    }
+    if (pooling.getNanMode() != "PROPAGATE") {
+      return reject(*pooling, "max_pool2d requires propagating NaN semantics");
+    }
+    MaxPoolKernel parameters{};
+    std::ranges::copy(kernel, parameters.kernel.begin());
+    std::ranges::copy(stride, parameters.strides.begin());
+    std::ranges::copy(padding, parameters.padding.begin());
+    if (parameters.kernel != std::array<std::int64_t, 2>{3, 3}) {
+      return reject(*pooling, "max_pool2d supports only a 3x3 kernel");
+    }
+    if (parameters.strides != std::array<std::int64_t, 2>{2, 2}) {
+      return reject(*pooling, "max_pool2d supports only stride 2x2");
+    }
+    if (parameters.padding[0] != 0 || parameters.padding[2] != 0) {
+      return reject(*pooling, "max_pool2d requires zero top and left padding");
+    }
+    if (parameters.padding[1] < 0 || parameters.padding[1] > 1 ||
+        parameters.padding[3] < 0 || parameters.padding[3] > 1) {
+      return reject(*pooling,
+                    "max_pool2d bottom/right tail padding must be zero or one");
+    }
+    for (std::int64_t dimension = 0; dimension < 2; ++dimension) {
+      const auto inputExtent = input.getDimSize(dimension + 1);
+      const auto paddedExtent =
+        inputExtent + parameters.padding[(dimension * 2) + 1];
+      const auto kernelExtent = parameters.kernel[dimension];
+      const auto strideExtent = parameters.strides[dimension];
+      const auto outputExtent = output.getDimSize(dimension + 1);
+      if (paddedExtent < kernelExtent ||
+          outputExtent != ((paddedExtent - kernelExtent) / strideExtent) + 1) {
+        return reject(
+          *pooling,
+          "max_pool2d output shape must match kernel, stride and padding");
+      }
+    }
+    return compute(*pooling, parameters, {pooling.getInput()}, "max_pool2d");
+  }
+
+  LogicalResult analyzeGlobalAveragePool(tosa::AvgPool2dOp pooling) {
+    const auto input = cast<RankedTensorType>(pooling.getInput().getType());
+    const auto output = cast<RankedTensorType>(pooling.getOutput().getType());
+    const auto kernel = pooling.getKernel();
+    const auto stride = pooling.getStride();
+    const auto padding = pooling.getPad();
+    if (input.getRank() != 4 || output.getRank() != 4) {
+      return reject(*pooling, "avg_pool2d requires rank-four NHWC tensors");
+    }
+    if (input.getDimSize(0) != 1 || output.getDimSize(0) != 1) {
+      return reject(*pooling, "avg_pool2d requires batch size one");
+    }
+    if (input.getDimSize(3) != output.getDimSize(3)) {
+      return reject(*pooling, "avg_pool2d must preserve the channel extent");
+    }
+    if (kernel.size() != 2 || stride.size() != 2 || padding.size() != 4) {
+      return reject(*pooling,
+                    "avg_pool2d requires two kernel/stride and four padding "
+                    "values");
+    }
+    if (kernel[0] != input.getDimSize(1) || kernel[1] != input.getDimSize(2) ||
+        output.getDimSize(1) != 1 || output.getDimSize(2) != 1) {
+      return reject(*pooling,
+                    "avg_pool2d requires a full-spatial kernel and 1x1 output");
+    }
+    if (stride[0] != 1 || stride[1] != 1) {
+      return reject(*pooling, "avg_pool2d requires unit spatial strides");
+    }
+    if (std::ranges::any_of(padding,
+                            [](std::int64_t value) { return value != 0; })) {
+      return reject(*pooling, "avg_pool2d requires zero padding");
+    }
+    if (!pooling.getAccType().isF32()) {
+      return reject(*pooling, "avg_pool2d requires FP32 accumulation");
+    }
+    if (!isZeroMetadata(pooling.getInputZp()) ||
+        !isZeroMetadata(pooling.getOutputZp())) {
+      return reject(*pooling,
+                    "avg_pool2d requires zero input/output zero-points");
+    }
+    return compute(*pooling,
+                   GlobalAveragePoolKernel{},
+                   {pooling.getInput()},
+                   "global_avg_pool2d");
+  }
+
+  template <typename ReduceOp, typename Kernel>
+  LogicalResult analyzeReduce(ReduceOp reduction,
+                              Kernel kernel,
+                              StringRef name) {
+    const auto input = cast<RankedTensorType>(reduction.getInput().getType());
+    const auto output = cast<RankedTensorType>(reduction.getOutput().getType());
+    const std::uint32_t axis = reduction.getAxis();
+    if (!input.getElementType().isF32() || !output.getElementType().isF32() ||
+        input.getRank() != output.getRank() || axis >= input.getRank()) {
+      return reject(
+        *reduction,
+        "reduction requires same-rank static FP32 and a valid axis");
+    }
+    if constexpr (std::is_same_v<ReduceOp, tosa::ReduceMaxOp>) {
+      if (reduction.getNanMode() != "PROPAGATE") {
+        return reject(*reduction,
+                      "reduce_max requires propagating NaN semantics");
+      }
+    }
+    for (std::int64_t dimension = 0; dimension < input.getRank(); ++dimension) {
+      const auto expected =
+        std::cmp_equal(dimension, axis) ? 1 : input.getDimSize(dimension);
+      if (output.getDimSize(dimension) != expected) {
+        return reject(*reduction,
+                      "reduction output must preserve every non-axis extent "
+                      "and set the reduced extent to one");
+      }
+    }
+    return compute(*reduction, kernel, {reduction.getInput()}, name);
+  }
+
+  LogicalResult analyzeExp(tosa::ExpOp exponential) {
+    const auto input =
+      cast<RankedTensorType>(exponential.getInput1().getType());
+    const auto output =
+      cast<RankedTensorType>(exponential.getOutput().getType());
+    if (input != output || !input.getElementType().isF32()) {
+      return reject(*exponential, "exp requires an identical FP32 tensor type");
+    }
+    return compute(*exponential, ExpKernel{}, {exponential.getInput1()}, "exp");
+  }
+
+  LogicalResult analyzeReciprocal(tosa::ReciprocalOp reciprocal) {
+    const auto input = cast<RankedTensorType>(reciprocal.getInput1().getType());
+    const auto output =
+      cast<RankedTensorType>(reciprocal.getOutput().getType());
+    if (input != output || !input.getElementType().isF32()) {
+      return reject(*reciprocal,
+                    "reciprocal requires an identical FP32 tensor type");
+    }
+    return compute(
+      *reciprocal, ReciprocalKernel{}, {reciprocal.getInput1()}, "reciprocal");
+  }
+
   LogicalResult analyzeOperation(Operation& operation) {
     if (isa<arith::ConstantOp, tosa::ConstOp>(operation)) {
       return analyzeConstant(operation);
@@ -572,13 +785,21 @@ class GraphPlanner final {
         return reject(operation, bytes.error());
       }
     }
-    for (Type type : operation.getOperandTypes()) {
+    for (auto [index, operand] : llvm::enumerate(operation.getOperands())) {
+      Type type = operand.getType();
       if (isa<tosa::shapeType>(type)) {
         continue;
       }
-      if (auto bytes = vulkan::checkedTensorBytes(type);
-          !bytes && !isa<tosa::Conv2DOp>(operation)) {
-        return reject(operation, bytes.error());
+      if (auto bytes = vulkan::checkedTensorBytes(type); !bytes) {
+        const bool zeroMetadata =
+          (isa<tosa::AvgPool2dOp>(operation) && index > 0) ||
+          (isa<tosa::MulOp>(operation) && index == 2);
+        if (zeroMetadata && isZeroMetadata(operand)) {
+          continue;
+        }
+        if (!isa<tosa::Conv2DOp>(operation)) {
+          return reject(operation, bytes.error());
+        }
       }
     }
     if (auto reshape = dyn_cast<tosa::ReshapeOp>(operation)) {
@@ -628,6 +849,47 @@ class GraphPlanner final {
     }
     if (auto concat = dyn_cast<tosa::ConcatOp>(operation)) {
       return analyzeConcat(concat);
+    }
+    if (auto maxPool = dyn_cast<tosa::MaxPool2dOp>(operation)) {
+      return analyzeMaxPool(maxPool);
+    }
+    if (auto averagePool = dyn_cast<tosa::AvgPool2dOp>(operation)) {
+      return analyzeGlobalAveragePool(averagePool);
+    }
+    if (auto reduceMax = dyn_cast<tosa::ReduceMaxOp>(operation)) {
+      return analyzeReduce(
+        reduceMax, ReduceMaxKernel{reduceMax.getAxis()}, "reduce_max");
+    }
+    if (auto reduceSum = dyn_cast<tosa::ReduceSumOp>(operation)) {
+      return analyzeReduce(
+        reduceSum, ReduceSumKernel{reduceSum.getAxis()}, "reduce_sum");
+    }
+    if (auto sub = dyn_cast<tosa::SubOp>(operation)) {
+      return analyzeBroadcastBinary(
+        *sub,
+        sub.getInput1(),
+        sub.getInput2(),
+        cast<RankedTensorType>(sub.getOutput().getType()),
+        SubKernel{},
+        "sub");
+    }
+    if (auto exponential = dyn_cast<tosa::ExpOp>(operation)) {
+      return analyzeExp(exponential);
+    }
+    if (auto reciprocal = dyn_cast<tosa::ReciprocalOp>(operation)) {
+      return analyzeReciprocal(reciprocal);
+    }
+    if (auto multiply = dyn_cast<tosa::MulOp>(operation)) {
+      if (!isZeroMetadata(multiply.getShift())) {
+        return reject(*multiply, "mul requires scalar zero shift");
+      }
+      return analyzeBroadcastBinary(
+        *multiply,
+        multiply.getInput1(),
+        multiply.getInput2(),
+        cast<RankedTensorType>(multiply.getOutput().getType()),
+        MulKernel{},
+        "mul");
     }
     return reject(operation,
                   "unsupported operation in the static FP32 graph subset");

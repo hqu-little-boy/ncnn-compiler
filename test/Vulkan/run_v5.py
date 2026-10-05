@@ -17,7 +17,8 @@ import subprocess
 import sys
 
 
-TOLERANCE = 1.0e-6
+ATOL = 1.0e-6
+RTOL = 1.0e-6
 SANITIZER_DIAGNOSTIC = re.compile(
     r"AddressSanitizer|LeakSanitizer|UndefinedBehaviorSanitizer|runtime error:",
     re.IGNORECASE,
@@ -80,8 +81,129 @@ def make_input(case, shape, seed):
     if case == "boundary":
         values = [-2.0, -1.0, -0.5, -0.0, 0.0, 0.5, 1.0, 2.0]
         return [values[index % len(values)] for index in range(size)]
+    if case == "extreme":
+        values = [-1000.0, 1000.0, 0.0, 999.0, -999.0]
+        return [values[index % len(values)] for index in range(size)]
     generator = random.Random(seed)
     return [generator.randint(-16, 16) / 8.0 for _ in range(size)]
+
+
+def independent_golden(fixture, input_values):
+    oracle = fixture["oracle"]
+    kind = oracle["kind"]
+    output_shape = fixture["outputs"][0][1]
+    if kind == "max_pool":
+        channels, height, width = fixture["inputs"][0][1]
+        output_channels, output_height, output_width = output_shape
+        kernel_h, kernel_w = oracle["kernel"]
+        stride_h, stride_w = oracle["strides"]
+        pad_top, _, pad_left, _ = oracle["padding"]
+        source = input_values[0]
+        output = []
+        for channel in range(output_channels):
+            for out_y in range(output_height):
+                for out_x in range(output_width):
+                    values = [
+                        source[channel * height * width + y * width + x]
+                        for kernel_y in range(kernel_h)
+                        for kernel_x in range(kernel_w)
+                        if 0 <= (y := out_y * stride_h - pad_top + kernel_y) < height
+                        and 0 <= (x := out_x * stride_w - pad_left + kernel_x) < width
+                    ]
+                    if not values:
+                        raise RuntimeError("max-pool golden encountered an empty window")
+                    output.append(max(values))
+        return [output]
+    if kind == "global_avg":
+        channels, height, width = fixture["inputs"][0][1]
+        source = input_values[0]
+        plane_size = height * width
+        return [[
+            sum(source[channel * plane_size:(channel + 1) * plane_size]) / plane_size
+            for channel in range(channels)
+        ]]
+    if kind == "conv1x1":
+        input_channels, height, width = fixture["inputs"][0][1]
+        output_channels, output_height, output_width = output_shape
+        pad_top, _, pad_left, _ = oracle["padding"]
+        weights = oracle["weights"]
+        biases = oracle["biases"]
+        source = input_values[0]
+        output = []
+        for output_channel in range(output_channels):
+            for out_y in range(output_height):
+                for out_x in range(output_width):
+                    value = biases[output_channel]
+                    input_y = out_y - pad_top
+                    input_x = out_x - pad_left
+                    if 0 <= input_y < height and 0 <= input_x < width:
+                        for input_channel in range(input_channels):
+                            source_index = (
+                                input_channel * height * width + input_y * width + input_x
+                            )
+                            weight_index = output_channel * input_channels + input_channel
+                            value += source[source_index] * weights[weight_index]
+                    output.append(value)
+        return [output]
+    if kind == "softmax":
+        axis = oracle["axis"]
+        source_shape = fixture["inputs"][0][1]
+        source = input_values[0]
+        if (len(source_shape) == 1 or source_shape[1:] == (1, 1)) and axis == 0:
+            maximum = max(source)
+            exponentials = [math.exp(value - maximum) for value in source]
+            total = sum(exponentials)
+            return [[value / total for value in exponentials]]
+        if len(source_shape) == 2 and axis == 1:
+            height, width = source_shape
+            output = []
+            for row in range(height):
+                values = source[row * width:(row + 1) * width]
+                maximum = max(values)
+                exponentials = [math.exp(value - maximum) for value in values]
+                total = sum(exponentials)
+                output.extend(value / total for value in exponentials)
+            return [output]
+        if len(source_shape) == 3 and source_shape[1] == 1 and axis == 2:
+            channels, _, width = source_shape
+            output = []
+            for channel in range(channels):
+                values = source[channel * width:(channel + 1) * width]
+                maximum = max(values)
+                exponentials = [math.exp(value - maximum) for value in values]
+                total = sum(exponentials)
+                output.extend(value / total for value in exponentials)
+            return [output]
+        raise RuntimeError("softmax golden does not cover this rank/axis")
+    if kind == "concat":
+        axis = oracle["axis"]
+        shapes = [shape for _, shape in fixture["inputs"]]
+        if any(len(shape) != 3 for shape in shapes):
+            raise RuntimeError("concat golden expects rank-three CHW inputs")
+        output = []
+        channels, height, width = output_shape
+        for channel in range(channels):
+            for row in range(height):
+                for column in range(width):
+                    coordinates = [channel, row, column]
+                    axis_coordinate = coordinates[axis]
+                    begin = 0
+                    for shape, values in zip(shapes, input_values):
+                        end = begin + shape[axis]
+                        if axis_coordinate < end:
+                            coordinates[axis] -= begin
+                            input_index = (
+                                coordinates[0] * shape[1] * shape[2]
+                                + coordinates[1] * shape[2]
+                                + coordinates[2]
+                            )
+                            output.append(values[input_index])
+                            break
+                        begin = end
+                    else:
+                        raise RuntimeError("concat golden could not locate its source")
+        return [output]
+    raise RuntimeError(f"unknown independent golden kind: {kind}")
 
 
 def convolution_bin(weights, biases):
@@ -127,10 +249,17 @@ def layer_counts(layers):
 def make_param(inputs, layers):
     full_layers = []
     for name, shape in inputs:
-        channels, height, width = shape
-        full_layers.append(
-            f"Input input_{name} 0 1 {name} 0={width} 1={height} 2={channels}"
-        )
+        if len(shape) == 1:
+            parameters = f"0={shape[0]}"
+        elif len(shape) == 2:
+            height, width = shape
+            parameters = f"0={width} 1={height}"
+        elif len(shape) == 3:
+            channels, height, width = shape
+            parameters = f"0={width} 1={height} 2={channels}"
+        else:
+            raise ValueError("generated NCNN Input fixtures support ranks one through three")
+        full_layers.append(f"Input input_{name} 0 1 {name} {parameters}")
     full_layers.extend(layer["line"] for layer in layers)
     _, blob_count = layer_counts(
         [{"tops": [name]} for name, _ in inputs]
@@ -141,7 +270,7 @@ def make_param(inputs, layers):
     )
 
 
-def fixture_definitions(directory):
+def fixture_definitions(directory, suite):
     directory.mkdir(parents=True, exist_ok=True)
     empty_bin = directory / "empty.bin"
     empty_bin.write_bytes(b"")
@@ -164,6 +293,12 @@ def fixture_definitions(directory):
     branch_bin.write_bytes(
         convolution_bin([1.0, 0.0], [0.0])
         + convolution_bin([0.0, 1.0], [0.0])
+    )
+    padded_conv_weights = [0.5, -0.25]
+    padded_conv_bias = [0.125]
+    padded_conv_bin = directory / "conv1x1_pad1_weights.bin"
+    padded_conv_bin.write_bytes(
+        convolution_bin(padded_conv_weights, padded_conv_bias)
     )
 
     conv_layers = [
@@ -230,6 +365,39 @@ def fixture_definitions(directory):
         },
     ]
     copy_layers = [{"line": "Dropout identity 1 1 data output 0=1.0", "tops": ["output"]}]
+    max_pool_layers = [
+        {
+            "line": "Pooling max_tail 1 1 data output "
+            "0=0 1=3 2=2 4=0 5=0",
+            "tops": ["output"],
+        }
+    ]
+    global_avg_pool_layers = [
+        {
+            "line": "Pooling global_average 1 1 data output "
+            "0=1 1=1 2=1 4=1 5=0 6=0",
+            "tops": ["output"],
+        }
+    ]
+    padded_conv_layers = [
+        {
+            "line": "Convolution conv1x1_pad1 1 1 data output "
+            "0=1 1=1 2=1 3=1 4=1 5=1 6=2 14=1 15=1 16=1",
+            "tops": ["output"],
+        }
+    ]
+    softmax_rank1_layers = [
+        {"line": "Softmax softmax 1 1 data prob 0=0 1=1", "tops": ["prob"]}
+    ]
+    softmax_rank3_layers = [
+        {"line": "Softmax softmax 1 1 data prob 0=2 1=1", "tops": ["prob"]}
+    ]
+    concat_height_layers = [
+        {"line": "Concat join 2 1 top bottom output 0=1", "tops": ["output"]}
+    ]
+    concat_width_layers = [
+        {"line": "Concat join 2 1 left right output 0=2", "tops": ["output"]}
+    ]
 
     fixtures = {
         "conv_relu": {
@@ -288,6 +456,101 @@ def fixture_definitions(directory):
             "bin": empty_bin,
             "copy_exact": True,
         },
+        "max_pool_tail": {
+            "inputs": [("data", (1, 56, 56))],
+            "outputs": [("output", (1, 28, 28))],
+            "layers": max_pool_layers,
+            "bin": empty_bin,
+            "copy_exact": False,
+            "suite": "v5.2",
+            "oracle": {
+                "kind": "max_pool",
+                "kernel": (3, 3),
+                "strides": (2, 2),
+                "padding": (0, 1, 0, 1),
+            },
+        },
+        "global_avg_pool": {
+            "inputs": [("data", (2, 14, 14))],
+            "outputs": [("output", (2,))],
+            "layers": global_avg_pool_layers,
+            "bin": empty_bin,
+            "copy_exact": False,
+            "suite": "v5.2",
+            "oracle": {"kind": "global_avg"},
+        },
+        "conv1x1_pad1": {
+            "inputs": [("data", (2, 3, 3))],
+            "outputs": [("output", (1, 5, 5))],
+            "layers": padded_conv_layers,
+            "bin": padded_conv_bin,
+            "copy_exact": False,
+            "suite": "v5.2",
+            "weight_oracles": [
+                convolution_weight_oracle(
+                    "conv1x1_pad1", 1, 2, padded_conv_weights, padded_conv_bias
+                )
+            ],
+            "oracle": {
+                "kind": "conv1x1",
+                "weights": padded_conv_weights,
+                "biases": padded_conv_bias,
+                "padding": (1, 1, 1, 1),
+            },
+        },
+        "softmax_rank1": {
+            "inputs": [("data", (1000, 1, 1))],
+            "outputs": [("prob", (1000,))],
+            "layers": [
+                {
+                    "line": "Pooling global_vector 1 1 data vector "
+                    "0=1 1=0 2=1 3=0 4=1",
+                    "tops": ["vector"],
+                },
+                {
+                    "line": "Softmax softmax 1 1 vector prob 0=0 1=1",
+                    "tops": ["prob"],
+                },
+            ],
+            "bin": empty_bin,
+            "copy_exact": False,
+            "suite": "v5.2",
+            "oracle": {"kind": "softmax", "axis": 0},
+        },
+        "softmax_rank3_axis2": {
+            "inputs": [("data", (7, 1, 11))],
+            "outputs": [("prob", (7, 1, 11))],
+            "layers": softmax_rank3_layers,
+            "bin": empty_bin,
+            "copy_exact": False,
+            "suite": "v5.2",
+            "oracle": {"kind": "softmax", "axis": 2},
+        },
+        "concat_height_axis": {
+            "inputs": [("top", (1, 2, 2)), ("bottom", (1, 3, 2))],
+            "outputs": [("output", (1, 5, 2))],
+            "layers": concat_height_layers,
+            "bin": empty_bin,
+            "copy_exact": False,
+            "suite": "v5.2",
+            "oracle": {"kind": "concat", "axis": 1},
+        },
+        "concat_width_axis": {
+            "inputs": [("left", (1, 2, 2)), ("right", (1, 2, 3))],
+            "outputs": [("output", (1, 2, 5))],
+            "layers": concat_width_layers,
+            "bin": empty_bin,
+            "copy_exact": False,
+            "suite": "v5.2",
+            "oracle": {"kind": "concat", "axis": 2},
+        },
+    }
+    if suite not in {"v5.1", "v5.2"}:
+        raise ValueError(f"unsupported V5 product suite: {suite}")
+    fixtures = {
+        name: fixture
+        for name, fixture in fixtures.items()
+        if fixture.get("suite", "v5.1") == suite
     }
 
     for name, fixture in fixtures.items():
@@ -1078,7 +1341,7 @@ def compare_outputs(fixture, reference, actual, label):
             if not equal:
                 raise RuntimeError(f"{label} copy output {output_index} is not exact")
         elif any(
-            error > TOLERANCE + TOLERANCE * abs(float(lhs))
+            error > ATOL + RTOL * abs(float(lhs))
             for error, lhs in zip(errors, expected)
         ):
             raise RuntimeError(
@@ -1091,9 +1354,13 @@ def compare_outputs(fixture, reference, actual, label):
 def run_reference(args, fixture, input_paths, output_paths, env=None):
     command = [args.runner, "--param", str(fixture["param"]), "--bin", str(fixture["bin"])]
     for (name, shape), path in zip(fixture["inputs"], input_paths):
-        command.extend(["--input", name, str(path), *(str(dim) for dim in shape)])
+        command.extend(
+            ["--input", name, str(path), str(len(shape)), *(str(dim) for dim in shape)]
+        )
     for (name, shape), path in zip(fixture["outputs"], output_paths):
-        command.extend(["--output", name, str(path), *(str(dim) for dim in shape)])
+        command.extend(
+            ["--output", name, str(path), str(len(shape)), *(str(dim) for dim in shape)]
+        )
     invoke(
         command,
         env=env,
@@ -1152,6 +1419,8 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
     trial_specs = [("zeros", None), ("negative", None), ("boundary", None)] + [
         (f"seed-{seed}", seed) for seed in (0, 1, 42)
     ]
+    if fixture.get("oracle", {}).get("kind") == "softmax":
+        trial_specs.append(("extreme", None))
     prepared = []
 
     def prepare_trial(name, seed, context_index, *, recreate=False):
@@ -1173,6 +1442,13 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
         ncnn_paths = [trial_dir / f"ncnn-{index}.f32"
                       for index in range(len(fixture["outputs"]))]
         reference = run_reference(args, fixture, input_paths, ncnn_paths, env)
+        golden = None
+        golden_vs_ncnn = None
+        if "oracle" in fixture:
+            golden = independent_golden(fixture, input_values)
+            golden_vs_ncnn = compare_outputs(
+                fixture, golden, reference, "independent golden/ncnn"
+            )
         cpu_paths = [trial_dir / f"cpu-{index}.f32"
                      for index in range(len(fixture["outputs"]))]
         vk_paths = [trial_dir / f"vulkan-{index}.f32"
@@ -1187,6 +1463,8 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
                 "input_paths": input_paths,
                 "ncnn_paths": ncnn_paths,
                 "reference": reference,
+                "golden": golden,
+                "golden_vs_ncnn": golden_vs_ncnn,
                 "cpu_paths": cpu_paths,
                 "vk_paths": vk_paths,
                 "directory": trial_dir,
@@ -1259,6 +1537,15 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
         ) != struct.pack(f"<{len(gpu_outputs[0])}f", *gpu_outputs[0]):
             raise RuntimeError("Vulkan copy fixture differs from its raw input")
         cpu_vs_vk = compare_outputs(fixture, cpu_outputs, gpu_outputs, "CPU/Vulkan")
+        golden_vs_cpu = None
+        golden_vs_vulkan = None
+        if trial["golden"] is not None:
+            golden_vs_cpu = compare_outputs(
+                fixture, trial["golden"], cpu_outputs, "independent golden/CPU"
+            )
+            golden_vs_vulkan = compare_outputs(
+                fixture, trial["golden"], gpu_outputs, "independent golden/Vulkan"
+            )
         runtime_call = runtime_calls.get(name)
         expected_context = 0 if trial["recreate"] else trial["context_index"]
         if runtime_call is None or runtime_call.get("context_index") != expected_context:
@@ -1284,6 +1571,9 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
                 "ncnn_output_sha256": [sha256_file(path) for path in trial["ncnn_paths"]],
                 "cpu_output_sha256": [sha256_file(path) for path in trial["cpu_paths"]],
                 "vulkan_output_sha256": [sha256_file(path) for path in trial["vk_paths"]],
+                "independent_golden_vs_ncnn": trial["golden_vs_ncnn"],
+                "independent_golden_vs_cpu": golden_vs_cpu,
+                "independent_golden_vs_vulkan": golden_vs_vulkan,
                 "cpu_vs_ncnn": cpu_vs_ncnn,
                 "vulkan_vs_ncnn": vk_vs_ncnn,
                 "cpu_vs_vulkan": cpu_vs_vk,
@@ -1304,6 +1594,8 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
         "schema_version": 1,
         "fixture": fixture["name"],
         "model": fixture["model"],
+        "suite": args.suite,
+        "independent_golden": fixture.get("oracle"),
         "device": device_name,
         "validation": {
             "layer": "VK_LAYER_KHRONOS_validation",
@@ -1318,14 +1610,14 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
             "enabled": bool(args.sanitizer_dependency),
         },
         "inputs": [
-            {"blob": name, "shape_chw": shape}
+            {"blob": name, "shape": shape}
             for name, shape in fixture["inputs"]
         ],
         "outputs": [
-            {"blob": name, "shape_chw": shape}
+            {"blob": name, "shape": shape}
             for name, shape in fixture["outputs"]
         ],
-        "tolerance": {"atol": TOLERANCE, "rtol": TOLERANCE,
+        "tolerance": {"atol": ATOL, "rtol": RTOL,
                       "copy_exact": fixture["copy_exact"]},
         "lifecycle": {
             "contexts_created": runtime_result["contexts_created"],
@@ -1367,6 +1659,7 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", choices=("v5.1", "v5.2"), default="v5.1")
     for name in (
         "compiler", "driver", "opt", "mlir-opt", "translate", "clang", "nm", "readelf",
         "llvm-as", "spirv-val", "spirv-dis", "spirv-extract", "host-cxx",
@@ -1399,7 +1692,7 @@ def main():
         library_paths.append(old_library_path)
     env["LD_LIBRARY_PATH"] = ":".join(library_paths)
     device_name = check_device(args, env)
-    fixtures = fixture_definitions(args.output_dir / "fixtures")
+    fixtures = fixture_definitions(args.output_dir / "fixtures", args.suite)
     results = []
     for fixture in fixtures.values():
         results.append(run_fixture(args, fixture, device_name, env, args.output_dir / "models"))
@@ -1419,7 +1712,7 @@ def main():
     (args.output_dir / "evidence.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    print(f"V5.1 Vulkan product evidence: {args.output_dir}")
+    print(f"{args.suite} Vulkan product evidence: {args.output_dir}")
 
 
 if __name__ == "__main__":

@@ -613,12 +613,30 @@ ncnn_add_vulkan_v2_test(
     --padding 0,0,0,0 --output-channels 3 --conv-bias)
 
 if(NCNN_ENABLE_VULKAN_PRODUCT)
+    add_test(NAME vulkan-math-exp-runner-pipeline
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_math_exp_pipeline.py
+            --mlir-opt ${MLIR_OPT}
+            --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
+            --spirv-val ${SPIRV_VAL}
+            --spirv-dis ${SPIRV_DIS}
+            --probe ${CMAKE_CURRENT_SOURCE_DIR}/math_exp_probe.mlir
+            --evidence ${CMAKE_CURRENT_BINARY_DIR}/evidence/math-exp)
+    set_tests_properties(vulkan-math-exp-runner-pipeline PROPERTIES
+        LABELS "vulkan;tooling;v5"
+        TIMEOUT 60)
+
     # V5.1 product multi-I/O fixtures use the vendored CPU-only ncnn reference
     # target directly; they deliberately do not link numerical_test_support.
     add_executable(vulkan_model_runner vulkan_model_runner.cpp)
     target_link_libraries(vulkan_model_runner PRIVATE ncnn)
     target_compile_options(vulkan_model_runner PRIVATE
         -Wall -Wextra -Wpedantic)
+    add_test(NAME vulkan-v5-reference-rank-roundtrip
+        COMMAND $<TARGET_FILE:vulkan_model_runner> --self-test-ranks)
+    set_tests_properties(vulkan-v5-reference-rank-roundtrip PROPERTIES
+        LABELS "vulkan;unit;v5"
+        TIMEOUT 30)
     set_source_files_properties(vulkan_model_runner.cpp PROPERTIES
         COMPILE_OPTIONS "-fexceptions")
 
@@ -673,7 +691,7 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     endif()
     string(APPEND V5_TEST_LIBRARY_PATH ":$ENV{LD_LIBRARY_PATH}")
 
-    function(ncnn_add_vulkan_v5_test test_name device_match output_name icd)
+    function(ncnn_add_vulkan_v5_test test_name device_match output_name icd suite)
         set(sanitizer_runtime_args)
         if(V5_SANITIZER_RUNTIME_DIR)
             list(APPEND sanitizer_runtime_args
@@ -705,6 +723,7 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
                 ${V5_CXX_SANITIZER_ARGS}
                 ${sanitizer_runtime_args}
                 ${V5_CONFIGURED_DEPENDENCY_ARGS}
+                --suite ${suite}
                 --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/v5/${output_name})
         set_tests_properties(${test_name} PROPERTIES
             LABELS "vulkan;device;integration;v5;product"
@@ -714,8 +733,14 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     endfunction()
 
 ncnn_add_vulkan_v5_test(
-    vulkan-v5-multiop-nvidia NVIDIA nvidia ${V0_NVIDIA_ICD})
+    vulkan-v5-multiop-nvidia NVIDIA nvidia ${V0_NVIDIA_ICD} v5.1)
 ncnn_add_vulkan_v5_test(
-    vulkan-v5-multiop-llvmpipe llvmpipe llvmpipe ${V0_LLVMPIPE_ICD})
+    vulkan-v5-multiop-llvmpipe llvmpipe llvmpipe ${V0_LLVMPIPE_ICD} v5.1)
+ncnn_add_vulkan_v5_test(
+    vulkan-v5-pooling-softmax-nvidia NVIDIA pooling-softmax-nvidia
+    ${V0_NVIDIA_ICD} v5.2)
+ncnn_add_vulkan_v5_test(
+    vulkan-v5-pooling-softmax-llvmpipe llvmpipe pooling-softmax-llvmpipe
+    ${V0_LLVMPIPE_ICD} v5.2)
 endif()
 

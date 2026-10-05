@@ -3169,6 +3169,7 @@ int CompileSession::runPipeline() {
     }
     if (int status = ::run({vulkan_mlir_opt_path,
                             vulkan_device_ir.string(),
+                            "--convert-math-to-spirv",
                             "--test-vulkan-runner-pipeline",
                             "--verify-each",
                             "-o",

@@ -233,10 +233,13 @@ loader/headers、MLIR 21 的 `mlir-opt-21` 和 `spirv-val`/`spirv-dis`。未启�
 
 Vulkan 当前只接受 Linux x86-64 host ELF，device target 固定为 Vulkan 1.1 / SPIR-V 1.0。产品
 输入契约是静态 FP32、rank 1–4、正 extent、每张量不超过 128 MiB storage-buffer 限制的完整图；
-支持多个静态输入/输出、ReLU、同形 Add、受限常量卷积、Split/Concat、推理态 scale=1 Dropout
-及必要的静态布局变换。卷积参数、轴与布局的精确支持范围见
+支持多个静态输入/输出、ReLU、同形 Add、受限常量卷积、固定 3x3 stride-2 MaxPool（含 bottom/right
+尾窗口）、完整空间全局 AveragePool、Concat、稳定 Softmax 原语，以及 Split/推理态 scale=1
+Dropout 和必要的静态布局变换。1x1 卷积允许每边至多一格语义 padding；3x3 卷积支持 0/1 显式
+padding 与共享 lowering 推导的末端 padding。Regular/adaptive AveragePool、其他 MaxPool 参数、
+动态 shape、FP16/BF16/INT8 和未列入集合的算子组合不支持；所有 Vulkan 请求 fail closed，不回退
+CPU。轴、归约顺序、布局与参数的精确支持范围见
 [`Vulkan 后端契约`](ncnn-vulkan-backend-contract.md#static-graph-lowering-and-product-package)。
-动态 shape、FP16/BF16/INT8 和未列入集合的算子组合不支持；所有 Vulkan 请求 fail closed，不回退 CPU。
 
 示例：
 

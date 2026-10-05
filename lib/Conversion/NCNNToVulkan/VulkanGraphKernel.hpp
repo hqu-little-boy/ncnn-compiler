@@ -29,6 +29,22 @@ struct ConvKernel final {
 struct ConcatKernel final {
   std::int64_t axis;
 };
+struct MaxPoolKernel final {
+  std::array<std::int64_t, 2> kernel;
+  std::array<std::int64_t, 2> strides;
+  std::array<std::int64_t, 4> padding;
+};
+struct GlobalAveragePoolKernel final {};
+struct ReduceMaxKernel final {
+  std::uint32_t axis;
+};
+struct ReduceSumKernel final {
+  std::uint32_t axis;
+};
+struct SubKernel final {};
+struct ExpKernel final {};
+struct ReciprocalKernel final {};
+struct MulKernel final {};
 
 using KernelBody = std::variant<CopyKernel,
                                 ReluKernel,
@@ -36,7 +52,15 @@ using KernelBody = std::variant<CopyKernel,
                                 TransposeKernel,
                                 SliceKernel,
                                 ConvKernel,
-                                ConcatKernel>;
+                                ConcatKernel,
+                                MaxPoolKernel,
+                                GlobalAveragePoolKernel,
+                                ReduceMaxKernel,
+                                ReduceSumKernel,
+                                SubKernel,
+                                ExpKernel,
+                                ReciprocalKernel,
+                                MulKernel>;
 
 // A fully checked, owning description shared by legality, planning and
 // emission. Operand IDs preserve SSA operand order; execution.reads

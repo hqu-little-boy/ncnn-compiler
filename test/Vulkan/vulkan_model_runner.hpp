@@ -6,9 +6,7 @@
 struct VulkanModelTensorFile {
   std::string name;
   std::string path;
-  int channels = 1;
-  int height = 1;
-  int width = 1;
+  std::vector<int> shape;
 };
 
 struct VulkanModelRunnerOptions {
