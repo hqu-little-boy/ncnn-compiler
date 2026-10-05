@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Guard the ncnn.* attribute schema's single source of truth.
 
-KernelContract.hpp is the only place allowed to spell an "ncnn.*" key as a
-literal.  Passes, conversions, the importer and tools must reference the named
-constants; otherwise the schema silently grows a second definition with a
-different answer -- which is how the audit found 282 bare literals against the
-56 constants that were supposed to be authoritative.
+KernelContract.hpp and the dedicated VulkanDocumentKinds.hpp contain the
+canonical "ncnn.*" key definitions. Passes, conversions, the importer and tools
+must reference those named constants; otherwise the schema silently grows a
+second definition with a different answer -- which is how the audit found 282
+bare literals against the 56 constants that were supposed to be authoritative.
 
 The whitelist below pins the exact residual literal set, per file and per key.
 An allowed file may not grow a new key: adding one is a violation until it is
-either folded into KernelContract.hpp or explicitly recorded with a reason.
+either folded into a contract header or explicitly recorded with a reason.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ import sys
 import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-HEADER = REPO / "include/ncnn-mlir/Support/KernelContract.hpp"
 SCAN_DIRS = ("lib", "include", "tools")
 SOURCE_SUFFIXES = {".cpp", ".hpp", ".h", ".c", ".py"}
 
@@ -57,22 +56,31 @@ CONST_RE = re.compile(
 )
 
 
-def schema_keys(header: pathlib.Path) -> dict[str, str]:
-    """key -> constant name, from the one defining header."""
+def contract_keys(root: pathlib.Path) -> dict[str, str]:
+    """Collect keys from the canonical contract headers."""
     mapping: dict[str, str] = {}
-    for name, key in CONST_RE.findall(header.read_text()):
-        if key in mapping:
-            raise AssertionError(
-                f"KernelContract.hpp defines {key} twice: "
-                f"{mapping[key]} and {name}"
-            )
-        mapping[key] = name
+    headers = (
+        root / "include/ncnn-mlir/Support/KernelContract.hpp",
+        root / "include/ncnn-mlir/Support/VulkanDocumentKinds.hpp",
+    )
+    for header in headers:
+        if not header.exists():
+            continue
+        for name, key in CONST_RE.findall(header.read_text()):
+            if key in mapping:
+                raise AssertionError(
+                    f"contract headers define {key} twice: {mapping[key]} and {name}"
+                )
+            mapping[key] = name
     return mapping
 
 
 def find_bare_literals(root: pathlib.Path) -> list[tuple[str, int, str]]:
-    """Every "ncnn.*" literal outside the defining header."""
-    header = root / "include/ncnn-mlir/Support/KernelContract.hpp"
+    """Every "ncnn.*" literal outside the contract headers."""
+    headers = {
+        root / "include/ncnn-mlir/Support/KernelContract.hpp",
+        root / "include/ncnn-mlir/Support/VulkanDocumentKinds.hpp",
+    }
     offences: list[tuple[str, int, str]] = []
     for directory in SCAN_DIRS:
         base = root / directory
@@ -81,7 +89,7 @@ def find_bare_literals(root: pathlib.Path) -> list[tuple[str, int, str]]:
         for path in sorted(base.rglob("*")):
             if path.suffix not in SOURCE_SUFFIXES or not path.is_file():
                 continue
-            if path == header:
+            if path in headers:
                 continue
             rel = path.relative_to(root).as_posix()
             for line_number, line in enumerate(path.read_text().splitlines(), 1):
@@ -91,14 +99,13 @@ def find_bare_literals(root: pathlib.Path) -> list[tuple[str, int, str]]:
 
 
 def check(root: pathlib.Path) -> list[str]:
-    header = root / "include/ncnn-mlir/Support/KernelContract.hpp"
     errors: list[str] = []
     try:
-        keys = schema_keys(header)
+        keys = contract_keys(root)
     except OSError as failure:
-        return [f"cannot read schema header {header}: {failure}"]
+        return [f"cannot read contract headers under {root}: {failure}"]
     if not keys:
-        errors.append("KernelContract.hpp defined no ncnn.* keys; parser broke?")
+        errors.append("contract headers defined no ncnn.* keys; parser broke?")
 
     for rel, line_number, key in find_bare_literals(root):
         allowed = ALLOWED_SITES.get(rel, {})
@@ -108,7 +115,7 @@ def check(root: pathlib.Path) -> list[str]:
         name = keys.get(key)
         if name is None:
             errors.append(
-                f"{where}: {key!r} is not in KernelContract.hpp at all -- add "
+                f"{where}: {key!r} is not in a contract header -- add "
                 f"a constant, or record the site in ALLOWED_SITES with a reason"
             )
         else:
@@ -160,11 +167,11 @@ def main() -> int:
         print(f"total: {len(errors)}", file=sys.stderr)
         return 1
 
-    keys = schema_keys(HEADER)
+    keys = contract_keys(REPO)
     allowed_literals = sum(len(v) for v in ALLOWED_SITES.values())
     print(
-        f"attribute whitelist ok: {len(keys)} keys defined in "
-        f"KernelContract.hpp, 0 bare literals outside it, "
+        f"attribute whitelist ok: {len(keys)} keys defined in the contract "
+        f"headers, 0 bare literals outside them, "
         f"{allowed_literals} recorded literals in "
         f"{len(ALLOWED_SITES)} allow-listed files"
     )

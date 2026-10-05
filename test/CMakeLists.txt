@@ -36,7 +36,8 @@ if(FILECHECK AND EXISTS "${NCNN_LIT_PY}")
         COMMAND python3 ${NCNN_LIT_PY} -v ${CMAKE_CURRENT_BINARY_DIR}
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 else()
-    message(STATUS "lit 或 FileCheck 未找到，跳过 .mlir lit 测试")
+    message(FATAL_ERROR
+        "lit runner is required when BUILD_TESTING=ON; set NCNN_LIT_PY to a matching LLVM lit.py")
 endif()
 
 add_executable(vulkan_abi_contract_test Native/vulkan_abi_contract.c)
@@ -228,32 +229,71 @@ set_tests_properties(int8-target-cli PROPERTIES
 
 if(NCNN_ENABLE_VULKAN_PRODUCT AND NCNN_ENABLE_VULKAN_V0_TESTS)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(_ncnn_vulkan_product_test_args
+        --compiler $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --mlir-opt ${NCNN_MLIR_OPT_EXECUTABLE}
+        --spirv-val ${NCNN_SPIRV_VAL_EXECUTABLE}
+        --spirv-dis ${NCNN_SPIRV_DIS_EXECUTABLE}
+        --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --host-cxx ${CMAKE_CXX_COMPILER}
+        --loader-source ${CMAKE_CURRENT_SOURCE_DIR}/Native/vulkan_product_loader.cpp
+        --vulkan-include-dir ${PROJECT_SOURCE_DIR}/include
+        --llvm-major ${LLVM_VERSION_MAJOR}
+        --llvm-lib-dir ${LLVM_LIBRARY_DIR}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/Vulkan/relu.param
+        --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
+        --unsupported-param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/convolution.param
+        --unsupported-bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/convolution.bin
+        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-product-cli)
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND _ncnn_vulkan_product_test_args --llvm-shared)
+    endif()
+    foreach(_dependency IN LISTS
+            NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES
+            NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
+        list(APPEND _ncnn_vulkan_product_test_args
+            --allowed-dependency=${_dependency})
+    endforeach()
+    foreach(_dependency IN LISTS NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
+        list(APPEND _ncnn_vulkan_product_test_args
+            --sanitizer-dependency=${_dependency})
+    endforeach()
+    set(_ncnn_vulkan_library_dirs)
+    if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+        foreach(_cxx_arg IN LISTS NCNN_VULKAN_HOST_SANITIZER_ARGS)
+            list(APPEND _ncnn_vulkan_product_test_args --cxx-arg=${_cxx_arg})
+        endforeach()
+        list(APPEND _ncnn_vulkan_product_test_args
+            --sanitizer-runtime-dir ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+        list(APPEND _ncnn_vulkan_library_dirs
+            ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+    endif()
+    list(APPEND _ncnn_vulkan_library_dirs ${LLVM_LIBRARY_DIR})
+    list(JOIN _ncnn_vulkan_library_dirs ":" _ncnn_vulkan_library_path)
+    set(_ncnn_vulkan_product_environment
+        "LD_LIBRARY_PATH=${_ncnn_vulkan_library_path}:$ENV{LD_LIBRARY_PATH}")
+    if(COMPILER_SANITIZERS MATCHES "(^|;)(address|undefined)(;|$)")
+        find_file(_ncnn_sanitizer_vulkan_icd
+            NAMES lvp_icd.json
+            PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
+            REQUIRED)
+        list(APPEND _ncnn_vulkan_product_environment
+            "VK_ICD_FILENAMES=${_ncnn_sanitizer_vulkan_icd}")
+    endif()
     add_test(NAME ncnn-compile-vulkan-product
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_ncnn_compile_vulkan.py
-            --compiler $<TARGET_FILE:ncnn-compile>
-            --driver $<TARGET_FILE:ncnn-mlir-driver>
-            --opt $<TARGET_FILE:ncnn-mlir-opt>
-            --mlir-opt ${NCNN_MLIR_OPT_EXECUTABLE}
-            --spirv-val ${NCNN_SPIRV_VAL_EXECUTABLE}
-            --spirv-dis ${NCNN_SPIRV_DIS_EXECUTABLE}
-            --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
-            --clang ${CLANG}
-            --nm ${LLVM_NM}
-            --readelf ${LLVM_READELF}
-            --host-cxx ${CMAKE_CXX_COMPILER}
-            --llvm-major ${LLVM_VERSION_MAJOR}
-            --llvm-lib-dir ${LLVM_LIBRARY_DIR}
-            --param ${CMAKE_CURRENT_SOURCE_DIR}/Vulkan/relu.param
-            --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
-            --unsupported-param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/convolution.param
-            --unsupported-bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/convolution.bin
-            --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-product-cli)
+            ${_ncnn_vulkan_product_test_args})
     set_tests_properties(ncnn-compile-vulkan-product PROPERTIES
         LABELS "native;integration;cli;vulkan;product"
         RUN_SERIAL TRUE
         TIMEOUT 900
-        ENVIRONMENT "LD_LIBRARY_PATH=${LLVM_LIBRARY_DIR}:$ENV{LD_LIBRARY_PATH}")
+        ENVIRONMENT "${_ncnn_vulkan_product_environment}")
 endif()
 
 # Unsupported hosts still cross-compile; the script explicitly skips execution.

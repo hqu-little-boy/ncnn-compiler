@@ -259,6 +259,11 @@ void buildNCNNVulkanV2Pipeline(OpPassManager& passManager) {
   passManager.addPass(createLowerNCNNVulkanModelPass());
 }
 
+void buildNCNNVulkanGraphPipeline(OpPassManager& passManager) {
+  buildNCNNToTosaPipeline(passManager);
+  passManager.addPass(createLowerNCNNVulkanGraphPass());
+}
+
 void buildNCNNTosaToLinalgPipeline(OpPassManager& passManager) {
   buildNCNNTosaToLinalgPipeline(passManager, NCNNTosaToLinalgPipelineOptions());
 }
@@ -541,6 +546,10 @@ void registerNCNNPipelines() {
     "ncnn-vulkan-v2-pipeline",
     "Lower V2 Vulkan fixtures to GPU IR",
     buildNCNNVulkanV2Pipeline);
+  static PassPipelineRegistration<> ncnnVulkanGraphRegistration(
+    "ncnn-vulkan-graph-pipeline",
+    "Lower a checked static FP32 ncnn graph directly from TOSA to GPU IR",
+    buildNCNNVulkanGraphPipeline);
   static PassPipelineRegistration<NCNNTosaToLinalgPipelineOptions>
     tosaToLinalgRegistration(
       "ncnn-tosa-to-linalg-pipeline",

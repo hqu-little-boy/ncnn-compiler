@@ -38,13 +38,30 @@ if(NOT NCNN_MATMUL_PACKING STREQUAL "off" AND
 endif()
 set(NCNN_DISABLE_EXCEPTION ON CACHE BOOL "" FORCE)
 
+if(CMAKE_CXX_FLAGS MATCHES "fsanitize" AND NCNN_SANITIZER_OPENMP_LIBRARY_DIR)
+    find_library(NCNN_SANITIZER_OPENMP_LIBRARY
+        NAMES omp
+        PATHS "${NCNN_SANITIZER_OPENMP_LIBRARY_DIR}"
+        NO_DEFAULT_PATH
+        REQUIRED)
+    set(OpenMP_omp_LIBRARY "${NCNN_SANITIZER_OPENMP_LIBRARY}" CACHE FILEPATH
+        "OpenMP library used by sanitizer tests" FORCE)
+endif()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/support/prepare_ncnn_reference.cmake)
+ncnn_prepare_reference_source(NCNN_REFERENCE_SOURCE_DIR)
 add_subdirectory(
-    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ncnn
+    ${NCNN_REFERENCE_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/ncnn
     EXCLUDE_FROM_ALL)
 if(NOT MSVC)
     target_compile_options(ncnn PRIVATE -fno-fast-math)
 endif()
+add_executable(ncnn_reference_scratch_tests
+    support/ncnn_reference_scratch_test.cpp)
+target_link_libraries(ncnn_reference_scratch_tests PRIVATE ncnn GTest::gtest_main)
+gtest_discover_tests(ncnn_reference_scratch_tests
+    PROPERTIES LABELS "numerical-static-baseline;reference" TIMEOUT 180)
 
 function(ncnn_add_compiled_fixture name param_file bin_file)
     set(input_shape "${ARGV3}")
@@ -138,12 +155,37 @@ function(ncnn_add_compiled_fixture name param_file bin_file)
     endforeach()
     set(sanitizer_args)
     if(CMAKE_CXX_FLAGS MATCHES "fsanitize")
+        execute_process(
+            COMMAND ${CLANG} -dumpmachine
+            RESULT_VARIABLE sanitizer_target_status
+            OUTPUT_VARIABLE sanitizer_target_triple
+            ERROR_QUIET)
+        if(NOT sanitizer_target_status EQUAL 0)
+            message(FATAL_ERROR "Cannot determine the sanitizer target triple")
+        endif()
+        string(REGEX MATCH "^[^-]+" sanitizer_arch "${sanitizer_target_triple}")
+        execute_process(
+            COMMAND ${CLANG}
+                --print-file-name=libclang_rt.ubsan_standalone-${sanitizer_arch}.a
+            RESULT_VARIABLE sanitizer_runtime_status
+            OUTPUT_VARIABLE sanitizer_ubsan_runtime
+            ERROR_QUIET)
+        string(STRIP "${sanitizer_ubsan_runtime}" sanitizer_ubsan_runtime)
+        if(NOT sanitizer_runtime_status EQUAL 0 OR
+           NOT EXISTS "${sanitizer_ubsan_runtime}")
+            message(FATAL_ERROR
+                "Cannot resolve the matching Clang UBSan runtime archive")
+        endif()
+        get_filename_component(sanitizer_runtime_dir
+            "${sanitizer_ubsan_runtime}" DIRECTORY)
         list(APPEND sanitizer_args
              --clang-arg=-fsanitize=address,undefined
+             --clang-arg=-fno-sanitize-recover=all
              --clang-arg=-fno-omit-frame-pointer
              --linker-arg=-fsanitize=address,undefined
-             --linker-arg=-lasan
-             --linker-arg=-lubsan)
+             --linker-arg=-shared-libasan
+             --linker-arg=${sanitizer_ubsan_runtime}
+             --linker-arg=-Wl,-rpath,${sanitizer_runtime_dir})
         if(NCNN_SANITIZER_OPENMP_LIBRARY_DIR)
             list(APPEND sanitizer_args
                  --linker-arg=-L${NCNN_SANITIZER_OPENMP_LIBRARY_DIR}
@@ -1867,14 +1909,7 @@ add_library(numerical_test_support STATIC
 target_include_directories(numerical_test_support PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(numerical_test_support PUBLIC ncnn GTest::gtest)
-if(CMAKE_CXX_FLAGS MATCHES "fsanitize" AND
-   NCNN_SANITIZER_OPENMP_LIBRARY_DIR)
-    unset(NCNN_SANITIZER_OPENMP_LIBRARY CACHE)
-    find_library(NCNN_SANITIZER_OPENMP_LIBRARY
-        NAMES omp
-        PATHS "${NCNN_SANITIZER_OPENMP_LIBRARY_DIR}"
-        NO_DEFAULT_PATH
-        REQUIRED)
+if(NCNN_SANITIZER_OPENMP_LIBRARY)
     target_link_libraries(numerical_test_support PUBLIC
         "${NCNN_SANITIZER_OPENMP_LIBRARY}")
 endif()

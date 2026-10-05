@@ -42,11 +42,42 @@ option(COMPILER_USE_CCACHE "Use ccache as the compiler launcher" OFF)
 # 透传给生成的测试代码，因此必须走 CMAKE_*_FLAGS 而非 per-target 属性。
 if(COMPILER_SANITIZERS)
     list(JOIN COMPILER_SANITIZERS "," _compiler_sanitize_list)
-    set(_compiler_sanitize_flags "-fsanitize=${_compiler_sanitize_list} -fno-omit-frame-pointer")
+    set(_compiler_sanitize_flags
+        "-fsanitize=${_compiler_sanitize_list} -fno-sanitize-recover=all -fno-omit-frame-pointer")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${_compiler_sanitize_flags}")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${_compiler_sanitize_flags}")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=${_compiler_sanitize_list}")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fsanitize=${_compiler_sanitize_list}")
+    if(address IN_LIST COMPILER_SANITIZERS)
+        if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang" OR
+           NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            message(FATAL_ERROR
+                "ASan shared-runtime mode requires Clang C and C++ compilers")
+        endif()
+        execute_process(
+            COMMAND "${CMAKE_CXX_COMPILER}" --print-resource-dir
+            RESULT_VARIABLE _compiler_rt_status
+            OUTPUT_VARIABLE _compiler_rt_dir
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(NOT _compiler_rt_status EQUAL 0 OR NOT _compiler_rt_dir)
+            message(FATAL_ERROR
+                "Cannot locate Clang compiler-rt for the shared ASan runtime")
+        endif()
+        set(_compiler_rt_lib_dir "${_compiler_rt_dir}/lib/linux")
+        file(GLOB _compiler_asan_runtimes
+            "${_compiler_rt_lib_dir}/libclang_rt.asan-*.so")
+        if(NOT _compiler_asan_runtimes)
+            message(FATAL_ERROR
+                "Clang shared ASan runtime is missing from ${_compiler_rt_lib_dir}")
+        endif()
+        set(_compiler_shared_asan_link_flags
+            " -shared-libasan -Wl,-rpath,${_compiler_rt_lib_dir}")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS
+            "${_compiler_shared_asan_link_flags}")
+        string(APPEND CMAKE_SHARED_LINKER_FLAGS
+            "${_compiler_shared_asan_link_flags}")
+    endif()
 endif()
 
 if(COMPILER_USE_CCACHE)

@@ -1,0 +1,2 @@
+# Unified-diff patches encode empty context lines as one trailing space.
+test/Native/patches/ncnn-x86-*-null-scratch.patch whitespace=-blank-at-eol

@@ -134,6 +134,53 @@ TEST(VulkanExecutionPlanTest, SerializesDeterministicallyAndRoundTrips) {
   EXPECT_EQ(*first, *roundTrip);
 }
 
+TEST(VulkanExecutionPlanTest, PreservesUnusedPublicInputLifetimeSentinel) {
+  VulkanExecutionPlan plan = makePlan();
+  TensorResource unused = plan.resources.front();
+  unused.id = 5;
+  unused.name = "unused_input";
+  unused.first_kernel = UINT32_MAX;
+  unused.last_kernel = UINT32_MAX;
+  plan.resources.push_back(unused);
+  plan.inputs.push_back(unused.id);
+
+  auto encoded = serializeExecutionPlan(plan);
+  ASSERT_TRUE(encoded) << encoded.error();
+  auto decoded = deserializeExecutionPlan(*encoded);
+  ASSERT_TRUE(decoded) << decoded.error();
+  EXPECT_EQ(decoded->inputs, plan.inputs);
+  EXPECT_EQ(decoded->resources.back().first_kernel, UINT32_MAX);
+  EXPECT_EQ(decoded->resources.back().last_kernel, UINT32_MAX);
+  auto roundTrip = serializeExecutionPlan(*decoded);
+  ASSERT_TRUE(roundTrip) << roundTrip.error();
+  EXPECT_EQ(*encoded, *roundTrip);
+
+  plan.resources.back().first_kernel = 0;
+  plan.resources.back().last_kernel = 0;
+  auto ordinaryLifetime = verifyExecutionPlan(plan);
+  ASSERT_FALSE(ordinaryLifetime);
+  EXPECT_NE(ordinaryLifetime.error().find("must be used"), std::string::npos);
+}
+
+TEST(VulkanExecutionPlanTest,
+     RejectsUnusedSentinelForAccessedOrNonInputResource) {
+  VulkanExecutionPlan accessed = makePlan();
+  accessed.resources.front().first_kernel = UINT32_MAX;
+  accessed.resources.front().last_kernel = UINT32_MAX;
+  auto usedInput = verifyExecutionPlan(accessed);
+  ASSERT_FALSE(usedInput);
+  EXPECT_NE(usedInput.error().find("lifetime"), std::string::npos);
+
+  for (unsigned index : {1U, 2U, 3U}) {
+    VulkanExecutionPlan nonInput = makePlan();
+    nonInput.resources[index].first_kernel = UINT32_MAX;
+    nonInput.resources[index].last_kernel = UINT32_MAX;
+    auto invalid = verifyExecutionPlan(nonInput);
+    ASSERT_FALSE(invalid);
+    EXPECT_NE(invalid.error().find("lifetime"), std::string::npos);
+  }
+}
+
 TEST(VulkanExecutionPlanTest, RejectsDuplicateDescriptorBindings) {
   VulkanExecutionPlan plan = makePlan();
   plan.kernels[0].bindings.push_back(plan.kernels[0].bindings.front());

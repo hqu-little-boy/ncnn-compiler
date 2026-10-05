@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -283,7 +284,16 @@ LogicalResult verifyFunction(func::FuncOp function) {
     }
     auto maskAttr = function.getArgAttrOfType<IntegerAttr>(
       outputIndex, contract::kDataDependentDimMask);
-    const uint64_t mask = maskAttr ? maskAttr.getUInt() : 0;
+    uint64_t mask = 0;
+    if (maskAttr) {
+      const APInt maskValue = maskAttr.getValue();
+      if (maskValue.getActiveBits() > 64U) {
+        return function.emitOpError()
+               << "output " << outputIndex
+               << " has an oversized data-dependent shape mask";
+      }
+      mask = maskValue.zextOrTrunc(64).getZExtValue();
+    }
     if (mask != 0) {
       if (failed(verifyDataDependentOutput(
             function, outputIndex, outputType, mask))) {

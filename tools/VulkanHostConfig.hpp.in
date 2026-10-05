@@ -1,0 +1,29 @@
+#pragma once
+
+#include <array>
+#include <string_view>
+
+namespace ncnn_compile::vulkan_host_config {
+
+inline constexpr bool kUsesSharedLLVM = @NCNN_VULKAN_USES_SHARED_LLVM@;
+inline constexpr bool kHostCxxCompilerIsClang =
+  @NCNN_VULKAN_HOST_CXX_COMPILER_IS_CLANG@;
+inline constexpr std::string_view kLLVMVersionMajor = "@LLVM_VERSION_MAJOR@";
+inline constexpr std::string_view kSanitizerRuntimeDir = @NCNN_VULKAN_SANITIZER_RUNTIME_DIR_CPP@;
+inline constexpr std::string_view kAddressSanitizerRuntime = @NCNN_VULKAN_ASAN_RUNTIME_CPP@;
+inline constexpr std::array<std::string_view, @NCNN_VULKAN_HOST_SANITIZER_ARGS_COUNT@>
+  kHostSanitizerArgs{@NCNN_VULKAN_HOST_SANITIZER_ARGS_CPP@};
+inline constexpr std::array<std::string_view, @NCNN_VULKAN_HOST_CXX_FLAGS_COUNT@>
+  kHostCxxFlags{@NCNN_VULKAN_HOST_CXX_FLAGS_CPP@};
+inline constexpr std::array<std::string_view, @NCNN_VULKAN_HOST_CXX_RUNTIME_ARGS_COUNT@>
+  kHostCxxRuntimeArgs{@NCNN_VULKAN_HOST_CXX_RUNTIME_ARGS_CPP@};
+inline constexpr std::array<std::string_view, @NCNN_VULKAN_STATIC_LLVM_LINK_ARGS_COUNT@>
+  kStaticLLVMLinkArgs{@NCNN_VULKAN_STATIC_LLVM_LINK_ARGS_CPP@};
+inline constexpr std::array<std::string_view, @NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES_COUNT@>
+  kStaticLLVMNeededLibraries{@NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES_CPP@};
+inline constexpr std::array<std::string_view, @NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES_COUNT@>
+  kSanitizerNeededLibraries{@NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES_CPP@};
+inline constexpr std::array<std::string_view, @NCNN_VULKAN_SANITIZER_RUNTIME_LIBRARIES_COUNT@>
+  kSanitizerRuntimeLibraries{@NCNN_VULKAN_SANITIZER_RUNTIME_LIBRARIES_CPP@};
+
+}  // namespace ncnn_compile::vulkan_host_config

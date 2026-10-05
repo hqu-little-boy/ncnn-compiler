@@ -16,8 +16,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
-#include "ncnn-mlir/Support/KernelContract.hpp"
 #include "ncnn-mlir/Support/StableHash.hpp"
+#include "ncnn-mlir/Support/VulkanDocumentKinds.hpp"
 
 namespace ncnn_mlir::vulkan {
 namespace {
@@ -637,8 +637,12 @@ std::expected<void, std::string> verifyExecutionPlan(
     if (resource.byte_size != *expectedBytes) {
       return std::unexpected("resource byte_size does not match f32 shape");
     }
-    if (resource.first_kernel > resource.last_kernel ||
-        resource.last_kernel >= plan.kernels.size()) {
+    const bool unusedInput =
+      resource.kind == ResourceKind::Input &&
+      resource.first_kernel == std::numeric_limits<std::uint32_t>::max() &&
+      resource.last_kernel == std::numeric_limits<std::uint32_t>::max();
+    if (!unusedInput && (resource.first_kernel > resource.last_kernel ||
+                         resource.last_kernel >= plan.kernels.size())) {
       return std::unexpected(
         "resource lifetime is outside the ordered kernel list");
     }
@@ -858,6 +862,13 @@ std::expected<void, std::string> verifyExecutionPlan(
     auto first = resourceFirstTouch.find(resource.id);
     auto last = resourceLastTouch.find(resource.id);
     if (first == resourceFirstTouch.end() || last == resourceLastTouch.end()) {
+      const bool unusedInput =
+        resource.kind == ResourceKind::Input &&
+        resource.first_kernel == std::numeric_limits<std::uint32_t>::max() &&
+        resource.last_kernel == std::numeric_limits<std::uint32_t>::max();
+      if (unusedInput) {
+        continue;
+      }
       return std::unexpected(
         "every resource must be used by at least one kernel");
     }

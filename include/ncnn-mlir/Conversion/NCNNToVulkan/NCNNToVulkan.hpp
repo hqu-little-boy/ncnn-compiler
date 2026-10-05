@@ -7,6 +7,7 @@ namespace mlir::ncnn {
 
 inline void registerNCNNToVulkanPasses() {
   registerLowerNCNNVulkanModelPass();
+  registerLowerNCNNVulkanGraphPass();
 }
 
 }  // namespace mlir::ncnn

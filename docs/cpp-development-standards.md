@@ -481,7 +481,8 @@ cmake -S compiler -B compiler/build-sanitize \
   -DLLVM_DIR=/path/to/asan-llvm/lib/cmake/llvm \
   -DMLIR_DIR=/path/to/asan-llvm/lib/cmake/mlir \
   '-DCOMPILER_SANITIZERS=address;undefined' \
-  -DNCNN_SANITIZER_OPENMP_LIBRARY_DIR=/path/to/isolated-libomp
+  -DNCNN_SANITIZER_OPENMP_LIBRARY_DIR=/path/to/isolated-libomp \
+  -DNCNN_LIT_PY=/path/to/llvm-source/llvm/utils/lit/lit.py
 cmake --build compiler/build-sanitize --parallel
 ctest --test-dir compiler/build-sanitize --output-on-failure
 ```
@@ -493,20 +494,44 @@ ctest --test-dir compiler/build-sanitize --output-on-failure
 sanitizer 构建的 numerical fixture 由 CMake build 阶段调用 `ncnn-compile` 生成，不是由
 CTest 生成。运行 CTest 前必须先构建对应 numerical 测试 target。fixture 检测到
 `CMAKE_CXX_FLAGS` 中的任意 `fsanitize` 后，会固定通过 `--clang-arg` 和 `--linker-arg` 为生成模型
-传递 `-fsanitize=address,undefined` 及对应 runtime；额外的 linker search path 也用于
+传递 `-fsanitize=address,undefined`、Clang 的共享 ASan runtime、目标匹配的 UBSan archive
+及其 runtime search path；不会混用 GCC 的 `-lasan`/`-lubsan`。Clang sanitizer 构建的
+CTest executable/shared library 也共用该 shared ASan runtime。额外的 linker search path 用于
 OpenMP 探测，避免探测失败后静默降为单线程。设置
-`NCNN_SANITIZER_OPENMP_LIBRARY_DIR` 时，numerical harness 与动态模型会共用并保持加载同一个
-`libomp.so`。因此当前支持的配置是 ASan+UBSan 组合，harness、reference、动态库边界和模型
+`NCNN_SANITIZER_OPENMP_LIBRARY_DIR` 时，CMake 的 OpenMP target、numerical harness 与动态模型会共用
+并保持加载同一个 `libomp.so`。因此当前支持的配置是 ASan+UBSan 组合，harness、reference、动态库边界和模型
 `.so` 均受覆盖。直接手工调用 `ncnn-compile` 时仍须显式传递这些参数；driver 只放行对应
 sanitizer 符号族和 runtime `DT_NEEDED`，并拒绝缺少所需 runtime 依赖的 `.so`。
 
 若所用 LLVM OpenMP runtime 在退出时被 LeakSanitizer 报告初始化泄漏，不得通过 suppression
 或关闭 leak 检查规避。对 LLVM 21.1.8，可在独立源码树应用
 `test/Native/patches/llvm-21.1.8-libomp-affinity-leak.patch` 构建修复后的 runtime，并配置
-`-DNCNN_SANITIZER_OPENMP_LIBRARY_DIR=<仅含 libomp.so 的目录>`。该目录同时用于生成模型和
-sanitizer numerical harness，使动态加载模型与 harness 共用同一个、进程生命周期内保持加载的
-OpenMP runtime；隔离目录可避免其 `libgomp.so` 兼容别名替换 reference ncnn 使用的 GCC runtime。
-该依赖补丁只用于 sanitizer 测试环境，不修改系统 LLVM/MLIR 安装。
+`-DNCNN_SANITIZER_OPENMP_LIBRARY_DIR=<仅含 libomp.so 的目录>`。该补丁释放 affinity map 缓冲区，并让 ASan 构建
+在 LeakSanitizer 检查前执行 OpenMP affinity cleanup。隔离目录同时用于生成模型和 sanitizer numerical harness，
+使动态加载模型与 harness 共用同一个、进程生命周期内保持加载的 OpenMP runtime；也避免其 `libgomp.so`
+兼容别名替换 reference ncnn 使用的 GCC runtime。该依赖补丁只用于 sanitizer 测试环境，不修改系统 LLVM/MLIR 安装。
+
+ncnn reference 在构建目录复制 vendored snapshot，并应用
+`test/Native/patches/ncnn-x86-im2col-null-scratch.patch`；Release 和 sanitizer 使用同一修复。
+该补丁仅在 scratch 指针非空时推进 FP32/BF16 x86 GEMM scratch cursor，不改变乘加或
+最终 K tile 对已有 partial sums 的读取；原 `test/third_party/ncnn` 不修改。配置阶段检查
+原 header SHA-256 并拒绝 snapshot 漂移；重配置先恢复原 header，再无 fuzz 应用补丁。
+`NcnnReferenceScratchTest` 覆盖无 scratch 的小 K 及多 K tile/尾块，并与同源 naive layer
+对照；不能通过禁用 reference sanitizer 或修改 fixture 来规避依赖缺陷。
+
+NVIDIA Vulkan 设备测试使用构建目录内的 EGL ICD manifest；`libEGL_nvidia.so.0` 是 NVIDIA
+官方支持的 headless Vulkan ICD frontend，仍执行同一 NVIDIA 设备的全套测试。driver
+615.71.09 的 GLX frontend 在卸载时泄漏 libdrm device；已验证 EGL frontend 在正常
+`vkDestroyInstance` 和动态库卸载后不泄漏。测试不改系统 manifest，不设置
+`VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING`，也不使用 `RTLD_NODELETE` 保留 driver
+roots；这两种做法只能作定位诊断，不能作为 cleanup 通过证据。
+
+Sanitizer 构建及其 generated numerical/Vulkan fixture 使用
+`-fno-sanitize-recover=all`；UBSan 诊断必须使执行失败，不能在打印诊断后继续并以数值
+比较通过冒充验收。即便 CTest 返回 0，也须检查 `Testing/Temporary/LastTest.log` 中的
+原始输出；保存副本后再执行 `ctest -N` / `--show-only`，这些枚举操作会重写该日志。
+`BUILD_TESTING=ON` 时 lit runner 必需；静态工具链须显式设置 `NCNN_LIT_PY`，路径缺失
+会使配置失败，而不是静默删除 `.mlir` 全量门禁。
 
 Sanitizer 报告、崩溃、未定义行为或测试失败均为阻断问题，不能只根据最终进程返回值
 忽略诊断。

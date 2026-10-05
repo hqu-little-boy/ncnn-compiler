@@ -1,0 +1,263 @@
+--- a/src/layer/x86/gemm_x86.cpp
++++ b/src/layer/x86/gemm_x86.cpp
+@@ -3197,7 +3197,7 @@
+                 _mm512_store_ps(outptr + 16 * 15, _sumf);
+             }
+ 
+-            outptr += 256;
++            if (outptr) outptr += 256;
+         }
+         for (; jj + 7 < max_jj; jj += 8)
+         {
+@@ -3406,7 +3406,7 @@
+                 _mm512_store_ps(outptr + 16 * 7, _sum7);
+             }
+ 
+-            outptr += 128;
++            if (outptr) outptr += 128;
+         }
+         for (; jj + 3 < max_jj; jj += 4)
+         {
+@@ -3575,7 +3575,7 @@
+                 _mm512_store_ps(outptr + 16 * 3, _sum3);
+             }
+ 
+-            outptr += 64;
++            if (outptr) outptr += 64;
+         }
+         for (; jj + 1 < max_jj; jj += 2)
+         {
+@@ -3720,7 +3720,7 @@
+                 _mm512_store_ps(outptr + 16, _sum1);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -3824,7 +3824,7 @@
+                 _mm512_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+ 
+         pAT += max_kk * 16;
+@@ -4061,7 +4061,7 @@
+                 _mm512_store_ps(outptr + 16 * 7, _sum7);
+             }
+ 
+-            outptr += 128;
++            if (outptr) outptr += 128;
+         }
+ #else  // __AVX512F__
+         for (; jj + 11 < max_jj; jj += 12)
+@@ -4301,7 +4301,7 @@
+                 _mm256_store_ps(outptr + 8 * 11, _sumb);
+             }
+ 
+-            outptr += 96;
++            if (outptr) outptr += 96;
+         }
+ #endif // __AVX512F__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -4472,7 +4472,7 @@
+                 _mm256_store_ps(outptr + 8 * 7, _sum7);
+             }
+ 
+-            outptr += 64;
++            if (outptr) outptr += 64;
+         }
+         for (; jj + 3 < max_jj; jj += 4)
+         {
+@@ -4604,7 +4604,7 @@
+                 _mm256_store_ps(outptr + 8 * 3, _sum3);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+         for (; jj + 1 < max_jj; jj += 2)
+         {
+@@ -4717,7 +4717,7 @@
+                 _mm256_store_ps(outptr + 8, _sum1);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -4805,7 +4805,7 @@
+                 _mm256_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+ 
+         pAT += max_kk * 8;
+@@ -4958,7 +4958,7 @@
+                 _mm512_storeu_ps(outptr + 48, _sum3);
+             }
+ 
+-            outptr += 64;
++            if (outptr) outptr += 64;
+         }
+ #else  // __AVX512F__
+         for (; jj + 11 < max_jj; jj += 12)
+@@ -5151,7 +5151,7 @@
+                 _mm_store_ps(outptr + 4 * 11, _sumb);
+             }
+ 
+-            outptr += 48;
++            if (outptr) outptr += 48;
+         }
+ #endif // __AVX512F__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -5299,7 +5299,7 @@
+                 _mm_store_ps(outptr + 4 * 7, _sum7);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+         for (; jj + 3 < max_jj; jj += 4)
+         {
+@@ -5401,7 +5401,7 @@
+                 _mm_store_ps(outptr + 4 * 3, _sum3);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+         for (; jj + 1 < max_jj; jj += 2)
+         {
+@@ -5496,7 +5496,7 @@
+                 _mm_store_ps(outptr + 4, _sum1);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -5574,7 +5574,7 @@
+                 _mm_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 4;
++            if (outptr) outptr += 4;
+         }
+ 
+         pAT += max_kk * 4;
+@@ -5679,7 +5679,7 @@
+                 _mm512_storeu_ps(outptr + 16, _sum1);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+ #else  // __AVX512F__
+         for (; jj + 11 < max_jj; jj += 12)
+@@ -5814,7 +5814,7 @@
+                 _mm_store_ps(outptr + 20, _tmp5);
+             }
+ 
+-            outptr += 24;
++            if (outptr) outptr += 24;
+         }
+ #endif // __AVX512F__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -5922,7 +5922,7 @@
+                 _mm_store_ps(outptr + 12, _tmp3);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+         for (; jj + 3 < max_jj; jj += 4)
+         {
+@@ -5999,7 +5999,7 @@
+                 _mm_storeu_ps(outptr + 4, _tmp1);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+ #endif // __SSE2__
+         for (; jj + 1 < max_jj; jj += 2)
+@@ -6090,7 +6090,7 @@
+                 outptr[3] = sum11;
+             }
+ 
+-            outptr += 4;
++            if (outptr) outptr += 4;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -6159,7 +6159,7 @@
+                 outptr[1] = sum1;
+             }
+ 
+-            outptr += 2;
++            if (outptr) outptr += 2;
+         }
+ 
+         pAT += max_kk * 2;
+@@ -6257,7 +6257,7 @@
+                 _mm512_storeu_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+ #else  // __AVX512F__
+         for (; jj + 11 < max_jj; jj += 12)
+@@ -6392,7 +6392,7 @@
+                 _mm_storeu_ps(outptr + 8, _sum2);
+             }
+ 
+-            outptr += 12;
++            if (outptr) outptr += 12;
+         }
+ #endif // __AVX512F__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -6502,7 +6502,7 @@
+                 _mm_storeu_ps(outptr + 4, _sum1);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+         for (; jj + 3 < max_jj; jj += 4)
+         {
+@@ -6576,7 +6576,7 @@
+                 _mm_storeu_ps(outptr, _sum);
+             }
+ 
+-            outptr += 4;
++            if (outptr) outptr += 4;
+         }
+ #endif // __SSE2__
+         for (; jj + 1 < max_jj; jj += 2)
+@@ -6664,7 +6664,7 @@
+                 outptr[1] = sum1;
+             }
+ 
+-            outptr += 2;
++            if (outptr) outptr += 2;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -6731,7 +6731,7 @@
+                 outptr[0] = sum;
+             }
+ 
+-            outptr += 1;
++            if (outptr) outptr += 1;
+         }
+ 
+         pAT += max_kk;

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
 import hashlib
 import json
 import os
@@ -13,6 +12,7 @@ import random
 import re
 import shutil
 import shlex
+import struct
 import subprocess
 import sys
 
@@ -29,11 +29,24 @@ def invoke(command, *, env=None, expect_success=True, cwd=None):
     return result
 
 
-def assert_no_published_library(path):
+def assert_no_published_artifacts(path):
     if path.exists():
-        libraries = list(path.glob("*.so"))
-        if libraries:
-            raise RuntimeError(f"failed compile published a library: {libraries}")
+        artifacts = list(path.iterdir())
+        if artifacts:
+            raise RuntimeError(f"failed compile published artifacts: {artifacts}")
+
+
+def make_unsupported_sigmoid_fixture(directory):
+    param = directory / "unsupported-sigmoid.param"
+    weights = directory / "unsupported-sigmoid.bin"
+    param.write_text(
+        "7767517\n"
+        "2 2\n"
+        "Input input 0 1 data 0=4 1=4 2=1\n"
+        "Sigmoid unsupported_sigmoid 1 1 data output\n"
+    )
+    weights.write_bytes(b"")
+    return param, weights
 
 
 def output_snapshot(path):
@@ -90,20 +103,44 @@ def check_exports_and_dependencies(args, library_path, manifest):
         "libgcc_s.so.1",
         "libm.so.6",
         "libc.so.6",
+        *args.allowed_dependency,
     }
     llvm_prefix = "libLLVM.so." + args.llvm_major
     llvm_versioned_prefix = "libLLVM-" + args.llvm_major + ".so."
-    def is_allowed_llvm(name):
+
+    def is_llvm(name):
+        return name.startswith("libLLVM")
+
+    def is_expected_llvm(name):
         return (
             name == llvm_prefix
             or name.startswith(llvm_prefix + ".")
             or name.startswith(llvm_versioned_prefix)
         )
 
-    if not any(is_allowed_llvm(name) for name in dependencies) or any(
-        name not in allowed and not is_allowed_llvm(name) for name in dependencies
+    llvm_dependencies = [name for name in dependencies if is_llvm(name)]
+    if args.llvm_shared:
+        if not any(is_expected_llvm(name) for name in llvm_dependencies):
+            raise RuntimeError(
+                f"shared LLVM dependency is missing or has the wrong version: "
+                f"{dependencies}"
+            )
+    elif llvm_dependencies:
+        raise RuntimeError(
+            f"static LLVM product unexpectedly needs libLLVM: {dependencies}"
+        )
+
+    if any(
+        name not in allowed and not (args.llvm_shared and is_expected_llvm(name))
+        for name in dependencies
     ):
         raise RuntimeError(f"unexpected Vulkan DSO dependencies: {dependencies}")
+    missing_sanitizers = set(args.sanitizer_dependency) - set(dependencies)
+    if missing_sanitizers:
+        raise RuntimeError(
+            "Vulkan DSO is missing configured sanitizer dependencies: "
+            f"{sorted(missing_sanitizers)}; actual={dependencies}"
+        )
     dynamic = invoke([args.readelf, "-d", str(library_path)]).stdout
     if "RPATH" in dynamic or "RUNPATH" in dynamic:
         raise RuntimeError("Vulkan DSO embeds an RPATH/RUNPATH build path")
@@ -115,31 +152,43 @@ def make_input(elements):
     values[0] = -1.0
     values[1] = 0.0
     values[2] = 1.5
-    return (ctypes.c_float * elements)(*values)
+    packed = struct.pack(f"<{elements}f", *values)
+    return list(struct.unpack(f"<{elements}f", packed))
 
 
-def check_cpu_artifact(args, directory, input_data, expected):
+def check_cpu_artifact(args, directory):
     required_files(directory, {"paired_relu.h", "libpaired_relu.so"})
     needed = invoke(
         [args.readelf, "--needed-libs", str(directory / "libpaired_relu.so")]
     ).stdout
-    if "libvulkan" in needed or "libLLVM" in needed:
-        raise RuntimeError("default CPU artifact acquired a Vulkan/LLVM runtime dependency")
+    dependencies = set(
+        re.findall(r"^\s*(lib[^\s]+\.so(?:\.\d+)*)\s*$", needed, re.MULTILINE)
+    )
+    if any("libvulkan" in name or "libLLVM" in name for name in dependencies):
+        raise RuntimeError(
+            "default CPU artifact acquired a Vulkan/LLVM runtime dependency"
+        )
 
-    library = ctypes.CDLL(str(directory / "libpaired_relu.so"))
-    function = library.paired_relu
-    function.argtypes = [ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float)]
-    function.restype = ctypes.c_int
-    output = (ctypes.c_float * len(input_data))()
-    if function(input_data, output) != 0:
-        raise RuntimeError("paired CPU ReLU C ABI call failed")
-    for index, reference in enumerate(expected):
-        if abs(output[index] - reference) > 1.0e-6:
-            raise RuntimeError(f"CPU ReLU differs from scalar golden at element {index}")
-    return list(output)
+    sanitizer_flags = [flag for flag in args.cxx_arg if "-fsanitize=" in flag]
+    sanitizer_dependencies = set(args.sanitizer_dependency)
+    if sanitizer_flags or sanitizer_dependencies:
+        if not args.sanitizer_runtime_dir:
+            raise RuntimeError(
+                "sanitized CPU artifact has no configured sanitizer runtime dir"
+            )
+        if not sanitizer_dependencies:
+            raise RuntimeError(
+                "sanitized CPU artifact has no configured sanitizer SONAMEs"
+            )
+        missing_sanitizers = sanitizer_dependencies - dependencies
+        if missing_sanitizers:
+            raise RuntimeError(
+                "CPU DSO is missing configured sanitizer dependencies: "
+                f"{sorted(missing_sanitizers)}; actual={sorted(dependencies)}"
+            )
 
 
-def check_vulkan_artifact(args, directory, input_data, expected):
+def check_vulkan_artifact(args, directory, elements):
     header_name = "paired_relu_vulkan.h"
     library_path = directory / "libpaired_relu_vulkan.so"
     required_files(
@@ -170,85 +219,135 @@ def check_vulkan_artifact(args, directory, input_data, expected):
         (args.work_dir / "model.bin").read_bytes()
     ).hexdigest():
         raise RuntimeError("Vulkan manifest .bin identity is incorrect")
-    if manifest["inputs"][0]["shape"] != [1, 1, len(input_data)]:
+    if len(manifest["inputs"]) != 1 or len(manifest["outputs"]) != 1:
+        raise RuntimeError("Vulkan fixture must expose exactly one input and output")
+    if any(
+        port.get("element_type") != "f32"
+        for port in (*manifest["inputs"], *manifest["outputs"])
+    ):
+        raise RuntimeError("Vulkan fixture ports must use FP32 elements")
+    if manifest["inputs"][0]["shape"] != [1, 1, elements]:
         raise RuntimeError("Vulkan manifest input shape differs from the fixture")
-    if manifest["outputs"][0]["shape"] != [1, 1, len(input_data)]:
+    if manifest["outputs"][0]["shape"] != [1, 1, elements]:
         raise RuntimeError("Vulkan manifest output shape differs from the fixture")
     check_exports_and_dependencies(args, library_path, manifest)
+    return manifest
 
-    options_type = type(
-        "NcnnVulkanOptions",
-        (ctypes.Structure,),
-        {"_fields_": [("struct_size", ctypes.c_uint32),
-                       ("abi_version", ctypes.c_uint32),
-                       ("device_index", ctypes.c_uint32),
-                       ("flags", ctypes.c_uint32)]},
-    )
-    library = ctypes.CDLL(str(library_path))
-    create = library.paired_relu_vk_create
-    create.argtypes = [
-        ctypes.POINTER(options_type),
-        ctypes.POINTER(ctypes.c_void_p),
-        ctypes.c_char_p,
-        ctypes.c_size_t,
-    ]
-    create.restype = ctypes.c_uint32
-    run = library.paired_relu_vk_run
-    run.argtypes = [
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_float),
-        ctypes.c_size_t,
-        ctypes.POINTER(ctypes.c_float),
-        ctypes.c_size_t,
-        ctypes.c_char_p,
-        ctypes.c_size_t,
-    ]
-    run.restype = ctypes.c_uint32
-    destroy = library.paired_relu_vk_destroy
-    destroy.argtypes = [ctypes.c_void_p]
-    destroy.restype = ctypes.c_uint32
 
-    options = options_type(
-        ctypes.sizeof(options_type), 1, 0xFFFFFFFF, 0
-    )
-    context = ctypes.c_void_p()
-    diagnostic = ctypes.create_string_buffer(512)
-    if create(ctypes.byref(options), ctypes.byref(context), diagnostic, 512) != 0:
-        raise RuntimeError(f"Vulkan create failed: {diagnostic.value.decode()}")
-    output = (ctypes.c_float * len(input_data))()
-    status = run(
-        context,
-        input_data,
-        len(input_data),
+def sanitizer_diagnostics(output):
+    return re.search(
+        r"AddressSanitizer|LeakSanitizer|UndefinedBehaviorSanitizer|runtime error:",
         output,
-        len(output),
-        diagnostic,
-        512,
+        re.IGNORECASE,
     )
-    destroy_status = destroy(context)
-    if status != 0 or destroy_status != 0:
+
+
+def run_product_loader(args, cpu_dir, vulkan_dir, model_name, input_data):
+    loader = args.work_dir / "vulkan-product-loader"
+    cpu_output_path = args.work_dir / "cpu-output.f32"
+    vulkan_output_path = args.work_dir / "vulkan-output.f32"
+    input_path = args.work_dir / "input.f32"
+    result_path = args.work_dir / "loader-result.json"
+    elements = len(input_data)
+    input_path.write_bytes(struct.pack(f"<{elements}f", *input_data))
+
+    compile_command = [
+        args.host_cxx,
+        "-std=c++20",
+        *args.cxx_arg,
+        f"-DNCNN_PRODUCT_TEST_MODEL={model_name}",
+        "-I",
+        str(cpu_dir),
+        "-I",
+        str(vulkan_dir),
+        "-I",
+        str(args.vulkan_include_dir),
+        str(args.loader_source),
+        "-ldl",
+        "-o",
+        str(loader),
+    ]
+    invoke(compile_command, env=runtime_env(args))
+    command = [
+        str(loader),
+        model_name,
+        str(cpu_dir / f"lib{model_name}.so"),
+        str(vulkan_dir / f"lib{model_name}_vulkan.so"),
+        str(elements),
+        str(input_path),
+        str(cpu_output_path),
+        str(vulkan_output_path),
+        str(result_path),
+    ]
+    child = subprocess.run(
+        command, capture_output=True, text=True, env=runtime_env(args)
+    )
+    result = None
+    if result_path.is_file():
+        try:
+            result = json.loads(result_path.read_text())
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"product loader wrote invalid JSON: {error}\n"
+                f"stdout:\n{child.stdout}\nstderr:\n{child.stderr}"
+            ) from error
+    logs = f"stdout:\n{child.stdout}\nstderr:\n{child.stderr}"
+    if any("-fsanitize=" in flag for flag in args.cxx_arg):
+        diagnostic = sanitizer_diagnostics(child.stdout + "\n" + child.stderr)
+        if diagnostic:
+            raise RuntimeError(
+                "sanitizer diagnostic from product loader despite its exit status "
+                f"{child.returncode}: {diagnostic.group(0)}\n{logs}\n"
+                f"result: {result}"
+            )
+    if child.returncode != 0:
         raise RuntimeError(
-            f"Vulkan run/destroy failed ({status}/{destroy_status}): "
-            f"{diagnostic.value.decode()}"
+            f"product loader failed ({child.returncode}); result={result}\n{logs}"
         )
-    for index, reference in enumerate(expected):
-        if abs(output[index] - reference) > 1.0e-6:
-            raise RuntimeError(f"Vulkan ReLU differs from scalar golden at element {index}")
-    if destroy(None) != 0:
-        raise RuntimeError("destroy(NULL) did not return SUCCESS")
-    return manifest, list(output)
+    if not isinstance(result, dict) or result.get("status") != "success":
+        raise RuntimeError(f"product loader reported failure: {result}\n{logs}")
+
+    outputs = []
+    for output_path, label in (
+        (cpu_output_path, "CPU"),
+        (vulkan_output_path, "Vulkan"),
+    ):
+        if not output_path.is_file():
+            raise RuntimeError(
+                f"product loader did not write {label} output; {result}\n{logs}"
+            )
+        output_bytes = output_path.read_bytes()
+        if len(output_bytes) != elements * 4:
+            raise RuntimeError(
+                f"product loader wrote {len(output_bytes)} bytes for {label} output, "
+                f"expected {elements * 4}"
+            )
+        outputs.append(list(struct.unpack(f"<{elements}f", output_bytes)))
+    return outputs
 
 
-def reconstruct_shader(args, directory):
+def runtime_env(args):
+    env = os.environ.copy()
+    library_dirs = []
+    if args.sanitizer_runtime_dir:
+        library_dirs.append(str(args.sanitizer_runtime_dir))
+    library_dirs.append(str(args.llvm_lib_dir))
+    inherited = env.get("LD_LIBRARY_PATH", "")
+    if inherited:
+        library_dirs.append(inherited)
+    env["LD_LIBRARY_PATH"] = ":".join(library_dirs)
+    return env
+
+
+def reconstruct_shaders(args, directory):
     output = directory / "shader-reconstruction"
     output.mkdir()
     imported = output / "imported.mlir"
-    prepared = output / "prepared.mlir"
-    legal = output / "legal.mlir"
+    tosa = output / "strict-tosa.mlir"
     device_ir = output / "device.mlir"
     binary_ir = output / "binary.mlir"
-    plan = output / "plan.json"
-    shader = output / "kernel.spv"
+    plan_path = output / "plan.json"
+    weights_path = output / "weights.json"
     invoke(
         [
             args.driver,
@@ -264,32 +363,52 @@ def reconstruct_shader(args, directory):
     invoke(
         [
             args.opt,
+            "--ncnn-to-tosa-pipeline",
+            "--mlir-print-debuginfo",
             str(imported),
-            "--ncnn-vulkan-v2-prepare-pipeline",
-            "--verify-each",
             "-o",
-            str(prepared),
+            str(tosa),
         ]
     )
     invoke(
         [
             args.opt,
-            str(prepared),
-            "--verify-vulkan-supported-model",
-            "--verify-each",
-            "-o",
-            str(legal),
-        ]
-    )
-    invoke(
-        [
-            args.opt,
-            str(legal),
-            f"--lower-ncnn-vulkan-model=plan-path={plan}",
+            str(tosa),
+            f"--lower-ncnn-vulkan-graph=plan-path={plan_path} weights-path={weights_path}",
             "--verify-each",
             "-o",
             str(device_ir),
         ]
+    )
+    plan = json.loads(plan_path.read_text())
+    weights = json.loads(weights_path.read_text())
+    if (
+        weights.get("kind") != "ncnn.vulkan_weight_payloads"
+        or weights.get("schema_version") != 1
+    ):
+        raise RuntimeError(f"unexpected Vulkan weight payload schema: {weights}")
+    expected_weight_ids = {
+        resource["id"] for resource in plan["resources"]
+        if resource.get("kind") == "weight"
+    }
+    actual_weight_ids = set()
+    for weight in weights.get("weights", []):
+        payload = weight.get("bytes")
+        if (
+            not isinstance(payload, str)
+            or not payload
+            or len(payload) % 2 != 0
+            or re.fullmatch(r"[0-9a-f]*", payload) is None
+        ):
+            raise RuntimeError(f"weight payload is not lower-case hex: {weight}")
+        actual_weight_ids.add(weight["resource_id"])
+    if actual_weight_ids != expected_weight_ids:
+        raise RuntimeError(
+            f"weight payload resource IDs differ from plan: actual={actual_weight_ids} "
+            f"expected={expected_weight_ids}"
+        )
+    expected_symbols = sorted(
+        f"model_vulkan_k{kernel['id']}" for kernel in plan["kernels"]
     )
     invoke(
         [
@@ -301,18 +420,33 @@ def reconstruct_shader(args, directory):
             str(binary_ir),
         ]
     )
-    invoke(
-        [
-            args.spirv_extract,
-            "--binary-symbol",
-            "model_vulkan",
-            str(binary_ir),
-            "-o",
-            str(shader),
-        ]
+    binary_text = binary_ir.read_text()
+    actual_symbols = sorted(
+        re.findall(r"gpu\.binary\s+@([A-Za-z_][A-Za-z0-9_.$-]*)", binary_text)
     )
-    invoke([args.spirv_val, "--target-env", "vulkan1.1", str(shader)])
-    return hashlib.sha256(shader.read_bytes()).hexdigest()
+    if actual_symbols != expected_symbols:
+        raise RuntimeError(
+            f"GPU binary symbols differ from the plan: actual={actual_symbols} "
+            f"expected={expected_symbols}"
+        )
+
+    shader_hashes = {}
+    for kernel in plan["kernels"]:
+        symbol = f"model_vulkan_k{kernel['id']}"
+        shader = output / f"kernel-{kernel['id']}.spv"
+        invoke(
+            [
+                args.spirv_extract,
+                "--binary-symbol",
+                symbol,
+                str(binary_ir),
+                "-o",
+                str(shader),
+            ]
+        )
+        invoke([args.spirv_val, "--target-env", "vulkan1.1", str(shader)])
+        shader_hashes[kernel["id"]] = hashlib.sha256(shader.read_bytes()).hexdigest()
+    return shader_hashes
 
 
 def compile_args(args, model_name, output_dir, param, binary, backend=True):
@@ -344,6 +478,13 @@ def main():
     parser.add_argument("--nm", required=True)
     parser.add_argument("--readelf", required=True)
     parser.add_argument("--host-cxx", required=True)
+    parser.add_argument("--vulkan-include-dir", type=Path, required=True)
+    parser.add_argument("--loader-source", type=Path, required=True)
+    parser.add_argument("--cxx-arg", action="append", default=[])
+    parser.add_argument("--sanitizer-runtime-dir", type=Path)
+    parser.add_argument("--llvm-shared", action="store_true")
+    parser.add_argument("--allowed-dependency", action="append", default=[])
+    parser.add_argument("--sanitizer-dependency", action="append", default=[])
     parser.add_argument("--llvm-major", required=True)
     parser.add_argument("--llvm-lib-dir", type=Path, required=True)
     parser.add_argument("--param", type=Path, required=True)
@@ -358,37 +499,31 @@ def main():
     args.work_dir.mkdir(parents=True)
     shutil.copy2(args.param, args.work_dir / "model.param")
     shutil.copy2(args.bin, args.work_dir / "model.bin")
-    base_env = os.environ.copy()
-    old_library_path = base_env.get("LD_LIBRARY_PATH", "")
-    base_env["LD_LIBRARY_PATH"] = (
-        str(args.llvm_lib_dir) + (":" + old_library_path if old_library_path else "")
-    )
+    base_env = runtime_env(args)
 
     elements = 257
     input_data = make_input(elements)
     expected = [value if value > 0.0 else 0.0 for value in input_data]
     cpu_dir = args.work_dir / "cpu"
-    invoke(
-        [
-            args.compiler,
-            str(args.work_dir / "model.param"),
-            "--bin",
-            str(args.work_dir / "model.bin"),
-            "--model-name",
-            "paired_relu",
-            "--output-dir",
-            str(cpu_dir),
-            "--precision=f32",
-            "--threads=1",
-            "--vector-width=0",
-            "-O0",
-            "--verify-execution",
-        ],
-        env=base_env,
-    )
-    cpu_output = check_cpu_artifact(args, cpu_dir, input_data, expected)
-    if cpu_output != expected:
-        raise RuntimeError("CPU fixture does not match the scalar golden")
+    cpu_command = [
+        args.compiler,
+        str(args.work_dir / "model.param"),
+        "--bin",
+        str(args.work_dir / "model.bin"),
+        "--model-name",
+        "paired_relu",
+        "--output-dir",
+        str(cpu_dir),
+        "--precision=f32",
+        "--threads=1",
+        "--vector-width=0",
+        "-O0",
+        "--verify-execution",
+    ]
+    for flag in args.cxx_arg:
+        cpu_command.extend([f"--clang-arg={flag}", f"--linker-arg={flag}"])
+    invoke(cpu_command, env=base_env)
+    check_cpu_artifact(args, cpu_dir)
 
     vulkan_dir = args.work_dir / "vulkan"
     invoke(
@@ -401,16 +536,33 @@ def main():
         ),
         env=base_env,
     )
-    manifest, vulkan_output = check_vulkan_artifact(
-        args, vulkan_dir, input_data, expected
+    manifest = check_vulkan_artifact(args, vulkan_dir, elements)
+    cpu_output, vulkan_output = run_product_loader(
+        args, cpu_dir, vulkan_dir, "paired_relu", input_data
     )
+    for label, output in (("CPU", cpu_output), ("Vulkan", vulkan_output)):
+        for index, reference in enumerate(expected):
+            if abs(output[index] - reference) > 1.0e-6:
+                raise RuntimeError(
+                    f"{label} ReLU differs from scalar golden at element {index}"
+                )
     cpu_vulkan = [abs(lhs - rhs) for lhs, rhs in zip(cpu_output, vulkan_output)]
     if any(error > 1.0e-6 for error in cpu_vulkan):
         raise RuntimeError("CPU and Vulkan product outputs differ")
 
-    reconstructed_shader_sha256 = reconstruct_shader(args, args.work_dir)
-    if reconstructed_shader_sha256 != manifest["shader_sha256"]:
-        raise RuntimeError("manifest shader hash differs from regenerated SPIR-V")
+    reconstructed_shader_hashes = reconstruct_shaders(args, args.work_dir)
+    manifest_shader_hashes = {
+        int(shader["kernel_id"]): shader["sha256"]
+        for shader in manifest.get("shaders", [])
+    }
+    if reconstructed_shader_hashes != manifest_shader_hashes:
+        raise RuntimeError(
+            "manifest per-kernel shader hashes differ from regenerated SPIR-V"
+        )
+    if len(reconstructed_shader_hashes) == 1 and next(
+        iter(reconstructed_shader_hashes.values())
+    ) != manifest["shader_sha256"]:
+        raise RuntimeError("manifest primary shader hash differs from regenerated SPIR-V")
 
     repeat_dir = args.work_dir / "vulkan-repeat"
     invoke(
@@ -541,28 +693,73 @@ def main():
 
     previous = output_snapshot(vulkan_dir)
     unsupported = args.work_dir / "unsupported"
+    unsupported_param, unsupported_bin = make_unsupported_sigmoid_fixture(args.work_dir)
     result = invoke(
         compile_args(
             args,
             "unsupported",
             unsupported,
-            args.unsupported_param,
-            args.unsupported_bin,
+            unsupported_param,
+            unsupported_bin,
         ),
         env=base_env,
         expect_success=False,
     )
-    if "verify-vulkan-supported-model" not in result.stderr and "outside" not in result.stderr:
-        raise RuntimeError(f"unsupported op diagnostic is not actionable: {result.stderr}")
-    assert_no_published_library(unsupported)
+    diagnostic = result.stderr.lower()
+    if (
+        "unsupported_sigmoid" not in diagnostic
+        or not any(message in diagnostic for message in ("unsupported", "not supported"))
+    ):
+        raise RuntimeError(
+            f"unsupported source-layer diagnostic is missing: {result.stderr}"
+        )
+    assert_no_published_artifacts(unsupported)
 
     for test_name, extra in (
         ("invalid-backend", ["--backend=unknown"]),
-        ("cpu-option", ["--backend=vulkan", "--threads=1"]),
+        ("cpu-threads", ["--backend=vulkan", "--threads=1"]),
         ("debug-info", ["--backend=vulkan", "--debug-info"]),
         ("low-precision", ["--backend=vulkan", "--precision=fp16"]),
+        ("fp16-accumulator", ["--backend=vulkan", "--fp16-accumulator=f32"]),
+        ("allow-fallback", ["--backend=vulkan", "--allow-fallback"]),
+        ("optimization", ["--backend=vulkan", "-O0"]),
+        ("vector-width", ["--backend=vulkan", "--vector-width=0"]),
+        ("vector-mode", ["--backend=vulkan", "--vector-mode=off"]),
+        ("int8-kernel", ["--backend=vulkan", "--int8-kernel=portable"]),
+        ("int8-depthwise", ["--backend=vulkan", "--int8-depthwise"]),
+        ("packed-conv-depthwise", ["--backend=vulkan", "--packed-conv-depthwise"]),
+        ("int8-cast-chain", ["--backend=vulkan", "--int8-cast-chain"]),
+        ("selective-fusion", ["--backend=vulkan", "--selective-fusion=true"]),
+        ("layout-aware-fusion", ["--backend=vulkan", "--layout-aware-fusion=true"]),
+        ("fusion-broadcast", ["--backend=vulkan", "--selective-fusion-broadcast=true"]),
+        ("fusion-cast-chain", ["--backend=vulkan", "--selective-fusion-cast-chain=true"]),
+        ("fusion-max-chain", ["--backend=vulkan", "--selective-fusion-max-chain=4"]),
+        ("tuning-profile", ["--backend=vulkan", "--tuning-profile=stable"]),
+        ("matmul-m-rows", ["--backend=vulkan", "--matmul-m-rows=2"]),
+        ("matmul-acc-columns", ["--backend=vulkan", "--matmul-acc-columns=2"]),
+        ("matmul-packing", ["--backend=vulkan", "--matmul-packing=off"]),
+        ("row-chunk-lanes", ["--backend=vulkan", "--row-chunk-lanes=4"]),
+        ("matmul-i8-rows", ["--backend=vulkan", "--matmul-i8-rows=1"]),
+        ("matmul-i8-acc-columns", ["--backend=vulkan", "--matmul-i8-acc-columns=2"]),
+        ("conv-strategy", ["--backend=vulkan", "--conv-strategy=conv"]),
+        ("vector-math", ["--backend=vulkan", "--vector-math=none"]),
+        ("sleef-path", ["--backend=vulkan", "--sleef-path=/tmp"]),
+        ("conv-gemm-l2", ["--backend=vulkan", "--conv-gemm-l2-bytes=1024"]),
         ("dynamic-shape", ["--backend=vulkan", "--input-shape=1x?x?"]),
+        ("dynamic-constraint", ["--backend=vulkan", "--input-dim-constraint=0:0:min=1,multiple=1"]),
         ("cpu-target", ["--backend=vulkan", "--target-triple=x86_64-pc-linux-gnu"]),
+        ("cpu-march", ["--backend=vulkan", "--march=x86-64"]),
+        ("cpu-mcpu", ["--backend=vulkan", "--mcpu=x86-64"]),
+        ("cpu-mtune", ["--backend=vulkan", "--mtune=generic"]),
+        ("cpu-target-feature", ["--backend=vulkan", "--target-feature=+sse2"]),
+        ("cpu-sysroot", ["--backend=vulkan", "--sysroot=/tmp"]),
+        ("clang-arg", ["--backend=vulkan", "--clang-arg=-ffast-math"]),
+        ("linker-arg", ["--backend=vulkan", "--linker-arg=-lm"]),
+        ("emit-stage", ["--backend=vulkan", "--emit=ncnn"]),
+        ("emit-manifest", ["--backend=vulkan", "--emit-manifest"]),
+        ("emit-plan", ["--backend=vulkan", "--emit-execution-plan"]),
+        ("profile", ["--backend=vulkan", "--profile"]),
+        ("expected-undefined", ["--backend=vulkan", "--expected-undefined=malloc"]),
     ):
         output_dir = args.work_dir / test_name
         result = invoke(
@@ -582,7 +779,7 @@ def main():
         )
         if not result.stderr:
             raise RuntimeError(f"{test_name} failure did not provide a diagnostic")
-        assert_no_published_library(output_dir)
+        assert_no_published_artifacts(output_dir)
 
     user_data_dir = args.work_dir / "user-data"
     user_data_dir.mkdir()
@@ -638,17 +835,16 @@ def main():
         env=base_env,
         expect_success=False,
     )
-    assert_no_published_library(missing_tool_output)
+    assert_no_published_artifacts(missing_tool_output)
 
     bad_validator = args.work_dir / "reject-spirv-val"
     bad_validator.write_text("#!/bin/sh\nexit 23\n")
     bad_validator.chmod(0o755)
-    invalid_shader_output = args.work_dir / "invalid-shader"
     invoke(
         compile_args(
             args,
-            "invalid_shader",
-            invalid_shader_output,
+            "paired_relu",
+            vulkan_dir,
             args.work_dir / "model.param",
             args.work_dir / "model.bin",
         )
@@ -656,7 +852,8 @@ def main():
         env=base_env,
         expect_success=False,
     )
-    assert_no_published_library(invalid_shader_output)
+    if output_snapshot(vulkan_dir) != previous:
+        raise RuntimeError("SPIR-V validator failure replaced prior successful artifacts")
 
     fake_cxx = args.work_dir / "reject-host-link"
     fake_cxx.write_text(
@@ -716,7 +913,7 @@ def main():
         env=lost_icd_env,
         expect_success=False,
     )
-    assert_no_published_library(lost_device)
+    assert_no_published_artifacts(lost_device)
     invoke(
         compile_args(
             args,

@@ -205,9 +205,9 @@ class TopLevelMatmulTile : public OpRewritePattern<MatmulOpT> {
       return {builder.getIndexAttr(rowChunk),
               builder.getIndexAttr(columnChunk)};
     };
-    scf::SCFTilingOptions tilingOptions;
-    tilingOptions.setLoopType(scf::SCFTilingOptions::LoopType::ForallOp);
-    tilingOptions.setTileSizeComputationFunction(sizes);
+    scf::SCFTilingOptions fuseTilingOptions;
+    fuseTilingOptions.setLoopType(scf::SCFTilingOptions::LoopType::ForallOp);
+    fuseTilingOptions.setTileSizeComputationFunction(sizes);
 
     // 首选：唯一恒等逐元素消费者在场时切消费者并融合 matmul 生产者，
     // 激活随分块一起并行。
@@ -217,7 +217,7 @@ class TopLevelMatmulTile : public OpRewritePattern<MatmulOpT> {
       consumer =
         deduplicateRepeatedInputs(rewriter, consumer, matmul.getResult(0));
       scf::SCFTileAndFuseOptions fuseOptions;
-      fuseOptions.setTilingOptions(tilingOptions);
+      fuseOptions.setTilingOptions(fuseTilingOptions);
       auto fused = scf::tileConsumerAndFuseProducersUsingSCF(
         rewriter, cast<TilingInterface>(consumer.getOperation()), fuseOptions);
       if (succeeded(fused)) {
@@ -232,11 +232,17 @@ class TopLevelMatmulTile : public OpRewritePattern<MatmulOpT> {
       }
     }
 
-    // 回退：无消费者可融合时仅切分 matmul 本身。
-    tilingOptions.setTileSizes(
+    // 回退：无消费者可融合时仅切分 matmul 本身。 Static tile sizes use a
+    // separate options instance because SCFTilingOptions accepts exactly one
+    // of a size function or a fixed size vector.
+    scf::SCFTilingOptions matmulTilingOptions;
+    matmulTilingOptions.setLoopType(scf::SCFTilingOptions::LoopType::ForallOp);
+    matmulTilingOptions.setTileSizes(
       {rewriter.getIndexAttr(rowChunk), rewriter.getIndexAttr(columnChunk)});
-    auto tiling = scf::tileUsingSCF(
-      rewriter, cast<TilingInterface>(matmul.getOperation()), tilingOptions);
+    auto tiling =
+      scf::tileUsingSCF(rewriter,
+                        cast<TilingInterface>(matmul.getOperation()),
+                        matmulTilingOptions);
     if (failed(tiling)) {
       return failure();
     }
@@ -262,8 +268,10 @@ class TileMatmulForallPass final
     // 使 i8 row-dot 内核（matmul-kernel-ncnn）可以接管 forall 内形态。
     patterns.add<TopLevelMatmulTile<linalg::MatmulTransposeBOp>>(
       &getContext(), tileRows.getValue(), tileColumns.getValue());
-    if (failed(
-          applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+    GreedyRewriteConfig rewriteConfig;
+    rewriteConfig.enableFolding();
+    if (failed(applyPatternsGreedily(
+          getOperation(), std::move(patterns), rewriteConfig))) {
       signalPassFailure();
       return;
     }

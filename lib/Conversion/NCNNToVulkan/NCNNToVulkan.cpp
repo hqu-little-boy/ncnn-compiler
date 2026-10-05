@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
-#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -27,6 +26,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
+#include "ncnn-mlir/Conversion/NCNNToVulkan/VulkanTensorUtils.hpp"
 #include "ncnn-mlir/Support/StableHash.hpp"
 #include "ncnn-mlir/Support/VulkanExecutionPlan.hpp"
 
@@ -53,24 +53,14 @@ constexpr llvm::StringLiteral kEntryPointABI =
   "#spirv.entry_point_abi<workgroup_size = [64, 1, 1]>";
 
 FailureOr<std::uint64_t> elementCount(RankedTensorType type) {
-  if (!type || !type.hasStaticShape() || !type.getElementType().isF32() ||
-      type.getRank() < 1 || type.getRank() > 4) {
+  if (!type) {
     return failure();
   }
-  std::uint64_t count = 1;
-  for (std::int64_t extent : type.getShape()) {
-    if (extent <= 0 || count > std::numeric_limits<std::uint64_t>::max() /
-                                 static_cast<std::uint64_t>(extent)) {
-      return failure();
-    }
-    count *= static_cast<std::uint64_t>(extent);
-  }
-  if (count > ncnn_mlir::vulkan::kMinimumStorageBufferRange / sizeof(float) ||
-      count >
-        static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+  auto bytes = vulkan::checkedTensorBytes(type);
+  if (!bytes) {
     return failure();
   }
-  return count;
+  return *bytes / sizeof(float);
 }
 
 Value stripLayoutViews(Value value) {

@@ -1,5 +1,8 @@
 add_library(NCNNToVulkan
     NCNNToVulkan.cpp
+    NCNNVulkanGraph.cpp
+    VulkanGraphKernel.cpp
+    VulkanTensorUtils.cpp
 )
 add_dependencies(NCNNToVulkan NCNNPassesIncGen)
 target_compile_options(NCNNToVulkan PRIVATE -fno-rtti)
@@ -20,4 +23,5 @@ target_link_libraries(NCNNToVulkan PUBLIC
     MLIRPass
     MLIRSCFDialect
     MLIRSPIRVDialect
-    MLIRTensorDialect)
+    MLIRTensorDialect
+    MLIRTosaDialect)

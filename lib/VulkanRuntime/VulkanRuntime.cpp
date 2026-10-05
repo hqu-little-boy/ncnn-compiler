@@ -1,7 +1,6 @@
 #include "ncnn-mlir/Vulkan/VulkanRuntime.hpp"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -22,8 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Support/SHA256.h"
+#include "ncnn-mlir/Support/VulkanModelPayload.hpp"
 #include <vulkan/vulkan.h>
 
 namespace ncnn_mlir::vulkan {
@@ -78,62 +76,6 @@ void checkVk(VkResult result, std::string_view operation) {
          std::string(operation) + " failed with VkResult " +
            std::to_string(result));
   }
-}
-
-std::string hashBytes(std::span<const std::byte> bytes) {
-  llvm::SHA256 hash;
-  hash.update(
-    llvm::StringRef(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
-  const std::array<std::uint8_t, 32> digest = hash.final();
-  constexpr char kHex[] = "0123456789abcdef";
-  std::string result;
-  result.reserve(digest.size() * 2);
-  for (std::uint8_t value : digest) {
-    result.push_back(kHex[value >> 4]);
-    result.push_back(kHex[value & 0x0f]);
-  }
-  return result;
-}
-
-std::string hashLogicalWeight(const TensorResource& resource,
-                              std::span<const std::byte> payload) {
-  if (resource.logical_layout == resource.physical_layout) {
-    return hashBytes(payload);
-  }
-  if (resource.logical_layout != "OIHW" || resource.physical_layout != "HWCF" ||
-      resource.shape.size() != 4) {
-    fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
-         "runtime cannot validate this logical/physical weight layout");
-  }
-  const std::uint64_t output_channels = resource.shape[0];
-  const std::uint64_t input_channels = resource.shape[1];
-  const std::uint64_t kernel_height = resource.shape[2];
-  const std::uint64_t kernel_width = resource.shape[3];
-  if (payload.size() != resource.byte_size) {
-    fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
-         "transformed weight payload has an unexpected size");
-  }
-  std::vector<std::byte> logical(payload.size());
-  for (std::uint64_t output = 0; output < output_channels; ++output) {
-    for (std::uint64_t input = 0; input < input_channels; ++input) {
-      for (std::uint64_t y = 0; y < kernel_height; ++y) {
-        for (std::uint64_t x = 0; x < kernel_width; ++x) {
-          const std::uint64_t logical_index =
-            (((output * input_channels + input) * kernel_height + y) *
-             kernel_width) +
-            x;
-          const std::uint64_t physical_index =
-            (((y * kernel_width + x) * input_channels + input) *
-             output_channels) +
-            output;
-          std::memcpy(logical.data() + (logical_index * sizeof(float)),
-                      payload.data() + (physical_index * sizeof(float)),
-                      sizeof(float));
-        }
-      }
-    }
-  }
-  return hashBytes(logical);
 }
 
 bool checkedAdd(std::uint64_t lhs,
@@ -473,11 +415,18 @@ class VulkanRuntimeContext::Impl final {
       const TensorResource* resource = findResourceSpec(weight.resource_id);
       if (resource == nullptr || resource->kind != ResourceKind::Weight ||
           !found_weights.insert(weight.resource_id).second ||
-          weight.bytes.size() != resource->byte_size ||
-          hashLogicalWeight(*resource, weight.bytes) !=
-            resource->weight_sha256) {
+          weight.bytes.size() != resource->byte_size) {
         fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
              "weight payload does not match the plan resource identity");
+      }
+      const auto* data =
+        reinterpret_cast<const std::uint8_t*>(weight.bytes.data());
+      const auto digest = vulkanWeightSHA256(
+        *resource, std::span<const std::uint8_t>(data, weight.bytes.size()));
+      if (!digest || *digest != resource->weight_sha256) {
+        fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
+             digest ? "weight payload does not match the plan resource identity"
+                    : digest.error());
       }
     }
     for (const TensorResource& resource : plan_.resources) {

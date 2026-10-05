@@ -392,6 +392,28 @@ def LowerNCNNVulkanModelPass
   ];
 }
 
+def LowerNCNNVulkanGraphPass
+    : Pass<"lower-ncnn-vulkan-graph", "mlir::ModuleOp"> {
+  let summary = "Lower a checked static FP32 TOSA graph to Vulkan GPU kernels";
+  let description = [{
+    Analyze the strict NCNN-to-TOSA boundary, build a deterministic SSA resource
+    schedule, and emit one bounded GPU kernel per supported operation. Public
+    outputs have distinct buffers; weights and shaders are associated by IDs.
+    Unsupported operations fail before any plan or payload artifact is written.
+  }];
+  let dependentDialects = [
+    "arith::ArithDialect", "func::FuncDialect", "gpu::GPUDialect",
+    "memref::MemRefDialect", "scf::SCFDialect", "spirv::SPIRVDialect",
+    "tosa::TosaDialect"
+  ];
+  let options = [
+    Option<"planPath", "plan-path", "std::string", "",
+           "Optional schema-v1 Vulkan execution plan JSON output path">,
+    Option<"weightsPath", "weights-path", "std::string", "",
+           "Optional constant resource payload JSON output path">
+  ];
+}
+
 def VerifyNoSCFForallPass : Pass<"verify-no-scf-forall", "mlir::ModuleOp"> {
   let summary =
     "Fail if any SCF forall or parallel loop remains after parallel lowering";

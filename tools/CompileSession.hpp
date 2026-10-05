@@ -13,6 +13,11 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FileSystem/UniqueID.h"
 #include "llvm/Support/raw_ostream.h"
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+#include "VulkanHostConfig.hpp"
+
+#include "ncnn-mlir/Support/VulkanModelPayload.hpp"
+#endif
 
 namespace ncnn_compile {
 
@@ -187,7 +192,6 @@ class CompileSession final {
   fs::path vulkan_plan_archive;
   fs::path vulkan_include_dir;
   fs::path vulkan_llvm_library_dir;
-  std::string vulkan_llvm_library_name;
   llvm::SmallString<256> staging_storage;
   ScopedDirectory staging;
   std::string effective_target_triple;
@@ -221,12 +225,13 @@ class CompileSession final {
   fs::path profile_writer_source;
   fs::path manifest_path;
   fs::path execution_plan_path;
-  fs::path vulkan_prepared_ir;
-  fs::path vulkan_legal_ir;
+  fs::path vulkan_weights_path;
   fs::path vulkan_device_ir;
   fs::path vulkan_binary_ir;
-  fs::path vulkan_shader;
-  fs::path vulkan_disassembly;
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+  std::vector<ncnn_mlir::vulkan::VulkanModelShader> vulkan_shaders;
+  std::vector<ncnn_mlir::vulkan::VulkanModelWeight> vulkan_weights;
+#endif
   fs::path vulkan_wrapper_source;
   fs::path header;
   fs::path exports;

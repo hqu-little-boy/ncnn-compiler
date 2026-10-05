@@ -232,9 +232,11 @@ loader/headers、MLIR 21 的 `mlir-opt-21` 和 `spirv-val`/`spirv-dis`。未启�
 的 `ncnn-compile --backend=vulkan` 会在读取模型前报错。
 
 Vulkan 当前只接受 Linux x86-64 host ELF，device target 固定为 Vulkan 1.1 / SPIR-V 1.0。产品
-输入契约是静态 FP32、rank 1–4、正 extent、单一输入/单一输出、元素数不超过 128 MiB storage
-buffer 限制的完整单 ReLU 图；identity、Add、Conv、多计算算子图、动态 shape、FP16/BF16/INT8
-不属于当前 `ncnn-compile` Vulkan product 范围。所有 Vulkan 请求 fail closed，不会回退到 CPU。
+输入契约是静态 FP32、rank 1–4、正 extent、每张量不超过 128 MiB storage-buffer 限制的完整图；
+支持多个静态输入/输出、ReLU、同形 Add、受限常量卷积、Split/Concat、推理态 scale=1 Dropout
+及必要的静态布局变换。卷积参数、轴与布局的精确支持范围见
+[`Vulkan 后端契约`](ncnn-vulkan-backend-contract.md#static-graph-lowering-and-product-package)。
+动态 shape、FP16/BF16/INT8 和未列入集合的算子组合不支持；所有 Vulkan 请求 fail closed，不回退 CPU。
 
 示例：
 
@@ -257,11 +259,13 @@ ncnn-vulkan-relu/
 
 头文件声明 `<model>_vk_create/run/destroy` 实例 C ABI；`run` 收到的每个连续 FP32 输入/输出
 buffer 必须与头文件中的静态 `*_ELEMENTS` 数量完全一致。`--verify-execution` 会在发布前
-`dlopen` 临时 DSO 并执行 create/run/destroy，必须有兼容 Vulkan ICD 和设备；不指定该选项时，
-编译仍会离线执行 SPIR-V validator，但不会创建 Vulkan device。manifest 记录 plan/shader/模型
+`dlopen` 临时 DSO，对每个静态输入生成确定性数据，执行 create/run/destroy 并检查所有输出有限；
+这是 ABI/生命周期 smoke 检查，不是一般模型数学 golden。必须有兼容 Vulkan ICD 和设备；
+不指定该选项时，编译仍会对每个 shader 离线执行 SPIR-V validator，但不会创建 Vulkan device。
+manifest 记录 plan/全部 shader 与常量 payload/模型
 输入的哈希和 ELF `DT_NEEDED` 依赖。调用者部署时须提供 manifest 列出的 LLVM 21 shared runtime、
-Vulkan loader 及系统 C/C++ runtime，且系统必须有兼容 Vulkan 设备/ICD。shader、plan 数据嵌入
-DSO，不依赖编译临时目录或旁置 `.spv` 文件。
+Vulkan loader 及系统 C/C++ runtime，且系统必须有兼容 Vulkan 设备/ICD。全部 shader、plan 和常量
+数据嵌入 DSO，不依赖编译临时目录或旁置 `.spv`、权重文件。
 
 Vulkan 模式不接受 CPU 专用的线程、SIMD/target-ISA、INT8、tuning、动态输入 shape、CPU 中间
 阶段、debug-info、CPU profile、定制 clang/linker 和 undefined-symbol expectation 参数；

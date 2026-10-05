@@ -307,7 +307,7 @@ class ConvertZeroPointCast final : public OpConversionPattern<ZeroPointCastOp> {
             : Value(
                 nested.create<arith::ExtUIOp>(nestedLocation, wide, source));
         Value offset = nested.create<arith::ConstantOp>(
-          nestedLocation, nested.getI16IntegerAttr(zeroPoint));
+          nestedLocation, nested.getIntegerAttr(wide, zeroPoint));
         Value rebased = toUnsigned ? Value(nested.create<arith::AddIOp>(
                                        nestedLocation, widened, offset))
                                    : Value(nested.create<arith::SubIOp>(
@@ -315,9 +315,9 @@ class ConvertZeroPointCast final : public OpConversionPattern<ZeroPointCastOp> {
         const int64_t minimum = toUnsigned ? 0 : -128;
         const int64_t maximum = toUnsigned ? 255 : 127;
         Value lower = nested.create<arith::ConstantOp>(
-          nestedLocation, nested.getI16IntegerAttr(minimum));
+          nestedLocation, nested.getIntegerAttr(wide, minimum));
         Value upper = nested.create<arith::ConstantOp>(
-          nestedLocation, nested.getI16IntegerAttr(maximum));
+          nestedLocation, nested.getIntegerAttr(wide, maximum));
         Value clamped = nested.create<arith::MaxSIOp>(
           nestedLocation,
           nested.create<arith::MinSIOp>(nestedLocation, rebased, upper),

@@ -1,6 +1,5 @@
 #include "ncnn-mlir/Conversion/NCNNToFunc/NCNNToFunc.hpp"
 
-#include <memory>
 #include <optional>
 #include <set>
 
@@ -11,7 +10,6 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "ncnn-mlir/Dialect/NCNN/IR/NCNNOps.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
@@ -187,7 +185,6 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
       }
       if (auto sdpa = dyn_cast<SDPAOp>(operation)) {
         auto query = shapeTransforms.find(sdpa.getQuery());
-        auto key = shapeTransforms.find(sdpa.getKey());
         auto value = shapeTransforms.find(sdpa.getValue());
         if (query != shapeTransforms.end() && value != shapeTransforms.end()) {
           shapeTransforms[sdpa.getContext()] = {
@@ -196,6 +193,8 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
                            value->second.dimensions[2]}};
         }
         if (sdpa.getKvCache()) {
+          auto keyTransform = shapeTransforms.find(sdpa.getKey());
+          auto valueTransform = shapeTransforms.find(sdpa.getValue());
           const unsigned cacheInput = sdpa.getHasMask() ? 1 : 0;
           auto pastKey =
             shapeTransforms.find(sdpa.getOptionalInputs()[cacheInput]);
@@ -227,26 +226,28 @@ class ConvertModel final : public OpConversionPattern<ModelOp> {
                 ShapeExprOpcode::Add, past.expression, current.expression),
               .v1 = std::nullopt};
           };
-          auto keyHead = dimension(sdpa.getKey(), key, 0);
-          auto keySequence = dimension(sdpa.getKey(), key, 1);
-          auto keyFeature = dimension(sdpa.getKey(), key, 2);
-          auto valueHead = dimension(sdpa.getValue(), value, 0);
-          auto valueSequence = dimension(sdpa.getValue(), value, 1);
-          auto valueFeature = dimension(sdpa.getValue(), value, 2);
+          auto keyHead = dimension(sdpa.getKey(), keyTransform, 0);
+          auto keySequence = dimension(sdpa.getKey(), keyTransform, 1);
+          auto keyFeature = dimension(sdpa.getKey(), keyTransform, 2);
+          auto valueHead = dimension(sdpa.getValue(), valueTransform, 0);
+          auto valueSequence = dimension(sdpa.getValue(), valueTransform, 1);
+          auto valueFeature = dimension(sdpa.getValue(), valueTransform, 2);
           if (!keyHead || !keySequence || !keyFeature || !valueHead ||
               !valueSequence || !valueFeature) {
             continue;
           }
-          shapeTransforms[sdpa.getCacheResults()[0]] = {
+          ShapeTransform keyCache{
             .dimensions = {
               *keyHead,
               sumSequence(pastKey->second.dimensions[1], *keySequence),
               *keyFeature}};
-          shapeTransforms[sdpa.getCacheResults()[1]] = {
+          ShapeTransform valueCache{
             .dimensions = {
               *valueHead,
               sumSequence(pastValue->second.dimensions[1], *valueSequence),
               *valueFeature}};
+          shapeTransforms[sdpa.getCacheResults()[0]] = std::move(keyCache);
+          shapeTransforms[sdpa.getCacheResults()[1]] = std::move(valueCache);
         }
         continue;
       }

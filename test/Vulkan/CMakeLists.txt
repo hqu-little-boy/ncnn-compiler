@@ -4,14 +4,30 @@ find_package(Threads REQUIRED)
 find_program(SPIRV_VAL NAMES spirv-val REQUIRED)
 find_program(SPIRV_DIS NAMES spirv-dis REQUIRED)
 find_program(VULKANINFO NAMES vulkaninfo REQUIRED)
+add_test(NAME vulkan-v5-comparison-validation
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_run_v5.py)
+set_tests_properties(vulkan-v5-comparison-validation PROPERTIES
+    LABELS "vulkan;unit;v5"
+    TIMEOUT 30)
 find_file(V0_LLVMPIPE_ICD
     NAMES lvp_icd.json
     PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
     REQUIRED)
-find_file(V0_NVIDIA_ICD
+find_file(V0_NVIDIA_SYSTEM_ICD
     NAMES nvidia_icd.json
     PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
     REQUIRED)
+find_library(V0_NVIDIA_EGL_LIBRARY
+    NAMES EGL_nvidia libEGL_nvidia.so.0
+    REQUIRED)
+# NVIDIA supports the EGL frontend as a headless Vulkan ICD. The GLX frontend
+# in driver 615.71.09 leaks a libdrm device on unload; EGL cleans up normally.
+# Use the same device and normal library unloading in both test configurations.
+file(READ "${V0_NVIDIA_SYSTEM_ICD}" V0_NVIDIA_ICD_DOCUMENT)
+string(JSON V0_NVIDIA_ICD_DOCUMENT SET "${V0_NVIDIA_ICD_DOCUMENT}"
+    ICD library_path "\"${V0_NVIDIA_EGL_LIBRARY}\"")
+set(V0_NVIDIA_ICD "${CMAKE_CURRENT_BINARY_DIR}/nvidia-egl-icd.json")
+file(WRITE "${V0_NVIDIA_ICD}" "${V0_NVIDIA_ICD_DOCUMENT}\n")
 
 add_executable(vulkan_add_runner vulkan_add_runner.cpp)
 target_link_libraries(vulkan_add_runner PRIVATE Vulkan::Vulkan ${CMAKE_DL_LIBS})
@@ -415,7 +431,8 @@ function(ncnn_add_vulkan_v0_test test_name device_match output_name)
         TIMEOUT 180)
 endfunction()
 
-ncnn_add_vulkan_v0_test(vulkan-v0-add-nvidia NVIDIA nvidia --run-negative)
+ncnn_add_vulkan_v0_test(vulkan-v0-add-nvidia NVIDIA nvidia
+    --icd ${V0_NVIDIA_ICD} --run-negative)
 ncnn_add_vulkan_v0_test(vulkan-v0-add-llvmpipe llvmpipe llvmpipe --icd ${V0_LLVMPIPE_ICD})
 
 function(ncnn_add_vulkan_v2_test test_name device_match output_name operation
@@ -438,6 +455,9 @@ function(ncnn_add_vulkan_v2_test test_name device_match output_name operation
         --device-match ${device_match}
         --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/v2/${output_name}
         --validation)
+    if(device_match STREQUAL "NVIDIA")
+        list(APPEND test_args --icd ${V0_NVIDIA_ICD})
+    endif()
     if(NOT kernel_file STREQUAL "from-model")
         list(APPEND test_args
             --kernel ${CMAKE_CURRENT_SOURCE_DIR}/../Conversion/NCNNToVulkan/${kernel_file})
@@ -591,4 +611,111 @@ ncnn_add_vulkan_v2_test(
     ${V2_CONV1X1_BIN} --icd ${V0_LLVMPIPE_ICD} --elements 18
     --input-shape 2x3x5 --kernel-size 1x1 --stride 2x2
     --padding 0,0,0,0 --output-channels 3 --conv-bias)
+
+if(NCNN_ENABLE_VULKAN_PRODUCT)
+    # V5.1 product multi-I/O fixtures use the vendored CPU-only ncnn reference
+    # target directly; they deliberately do not link numerical_test_support.
+    add_executable(vulkan_model_runner vulkan_model_runner.cpp)
+    target_link_libraries(vulkan_model_runner PRIVATE ncnn)
+    target_compile_options(vulkan_model_runner PRIVATE
+        -Wall -Wextra -Wpedantic)
+    set_source_files_properties(vulkan_model_runner.cpp PROPERTIES
+        COMPILE_OPTIONS "-fexceptions")
+
+    set(V5_CXX_SANITIZER_ARGS)
+    set(V5_SANITIZER_RUNTIME_DIR)
+    if(COMPILER_SANITIZERS MATCHES "(^|;)(address|undefined)(;|$)")
+        list(APPEND V5_CXX_SANITIZER_ARGS
+            --cxx-arg=-fsanitize=address,undefined
+            --cxx-arg=-fno-sanitize-recover=all
+            --cxx-arg=-fno-omit-frame-pointer)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            list(APPEND V5_CXX_SANITIZER_ARGS --cxx-arg=-shared-libasan)
+            execute_process(
+                COMMAND ${CMAKE_CXX_COMPILER} --print-resource-dir
+                OUTPUT_VARIABLE V5_CLANG_RESOURCE_DIR
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                COMMAND_ERROR_IS_FATAL ANY)
+            set(V5_SANITIZER_RUNTIME_DIR
+                "${V5_CLANG_RESOURCE_DIR}/lib/linux")
+        elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            execute_process(
+                COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libasan.so
+                OUTPUT_VARIABLE V5_ASAN_LIBRARY
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                COMMAND_ERROR_IS_FATAL ANY)
+            get_filename_component(V5_SANITIZER_RUNTIME_DIR
+                "${V5_ASAN_LIBRARY}" DIRECTORY)
+        endif()
+        if(V5_SANITIZER_RUNTIME_DIR AND
+           NOT IS_DIRECTORY "${V5_SANITIZER_RUNTIME_DIR}")
+            message(FATAL_ERROR
+                "V5 sanitizer runtime directory is missing: ${V5_SANITIZER_RUNTIME_DIR}")
+        endif()
+    endif()
+    set(V5_CONFIGURED_DEPENDENCY_ARGS)
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND V5_CONFIGURED_DEPENDENCY_ARGS --shared-llvm)
+    endif()
+    foreach(dependency IN LISTS NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES)
+        list(APPEND V5_CONFIGURED_DEPENDENCY_ARGS
+            --allowed-dependency=${dependency})
+    endforeach()
+    foreach(dependency IN LISTS NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
+        list(APPEND V5_CONFIGURED_DEPENDENCY_ARGS
+            --allowed-dependency=${dependency}
+            --sanitizer-dependency=${dependency})
+    endforeach()
+
+    set(V5_TEST_LIBRARY_PATH "${LLVM_LIBRARY_DIR}")
+    if(V5_SANITIZER_RUNTIME_DIR)
+        string(APPEND V5_TEST_LIBRARY_PATH ":${V5_SANITIZER_RUNTIME_DIR}")
+    endif()
+    string(APPEND V5_TEST_LIBRARY_PATH ":$ENV{LD_LIBRARY_PATH}")
+
+    function(ncnn_add_vulkan_v5_test test_name device_match output_name icd)
+        set(sanitizer_runtime_args)
+        if(V5_SANITIZER_RUNTIME_DIR)
+            list(APPEND sanitizer_runtime_args
+                --sanitizer-runtime-dir=${V5_SANITIZER_RUNTIME_DIR})
+        endif()
+        add_test(NAME ${test_name}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/run_v5.py
+                --compiler $<TARGET_FILE:ncnn-compile>
+                --driver $<TARGET_FILE:ncnn-mlir-driver>
+                --opt $<TARGET_FILE:ncnn-mlir-opt>
+                --mlir-opt ${MLIR_OPT}
+                --translate ${MLIR_TRANSLATE}
+                --clang ${CLANG}
+                --nm ${LLVM_NM}
+                --readelf ${LLVM_READELF}
+                --llvm-as ${LLVM_AS}
+                --spirv-val ${SPIRV_VAL}
+                --spirv-dis ${SPIRV_DIS}
+                --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
+                --host-cxx ${CMAKE_CXX_COMPILER}
+                --llvm-major ${LLVM_VERSION_MAJOR}
+                --llvm-lib-dir ${LLVM_LIBRARY_DIR}
+                --runner $<TARGET_FILE:vulkan_model_runner>
+                --vulkaninfo ${VULKANINFO}
+                --project-include ${PROJECT_SOURCE_DIR}/include
+                --device-match ${device_match}
+                --icd ${icd}
+                ${V5_CXX_SANITIZER_ARGS}
+                ${sanitizer_runtime_args}
+                ${V5_CONFIGURED_DEPENDENCY_ARGS}
+                --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/v5/${output_name})
+        set_tests_properties(${test_name} PROPERTIES
+            LABELS "vulkan;device;integration;v5;product"
+            RUN_SERIAL TRUE
+            TIMEOUT 900
+            ENVIRONMENT "LD_LIBRARY_PATH=${V5_TEST_LIBRARY_PATH}")
+    endfunction()
+
+ncnn_add_vulkan_v5_test(
+    vulkan-v5-multiop-nvidia NVIDIA nvidia ${V0_NVIDIA_ICD})
+ncnn_add_vulkan_v5_test(
+    vulkan-v5-multiop-llvmpipe llvmpipe llvmpipe ${V0_LLVMPIPE_ICD})
+endif()
 

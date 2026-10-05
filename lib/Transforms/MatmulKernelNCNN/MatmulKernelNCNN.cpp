@@ -382,22 +382,36 @@ class MatmulKernelNCNNPass final
     // → alloc）成为死代码，逆序删除。tile-and-fuse 的副本对（共享 alloc
     // 的多份 gather/collapse）各自随其 matmul 失活；alloc 在其全部用户
     // 都死后才删。同一 gather 服务多个 tile 时去重后只删一次。
-    llvm::SmallPtrSet<Operation*, 16> deleted;
+    llvm::SmallPtrSet<Operation*, 16> uniqueGathers;
+    llvm::SmallPtrSet<Operation*, 16> uniqueCollapses;
+    llvm::SmallPtrSet<Operation*, 16> uniqueAllocs;
+    SmallVector<Operation*> gathersToErase;
+    SmallVector<Operation*> collapsesToErase;
+    SmallVector<Operation*> allocsToErase;
     for (Im2colGeometry& chain : fusedChains) {
-      if (deleted.contains(chain.gather)) {
-        continue;
+      if (uniqueGathers.insert(chain.gather).second) {
+        gathersToErase.push_back(chain.gather);
       }
-      deleted.insert(chain.gather);
-      if (chain.gather->use_empty()) {
-        rewriter.eraseOp(chain.gather);
+      if (uniqueCollapses.insert(chain.collapse).second) {
+        collapsesToErase.push_back(chain.collapse);
       }
-      if (chain.collapse->use_empty()) {
-        rewriter.eraseOp(chain.collapse);
+      if (uniqueAllocs.insert(chain.alloc).second) {
+        allocsToErase.push_back(chain.alloc);
       }
     }
-    for (Im2colGeometry& chain : fusedChains) {
-      if (chain.alloc->use_empty()) {
-        rewriter.eraseOp(chain.alloc);
+    for (Operation* gather : gathersToErase) {
+      if (gather->use_empty()) {
+        rewriter.eraseOp(gather);
+      }
+    }
+    for (Operation* collapse : collapsesToErase) {
+      if (collapse->use_empty()) {
+        rewriter.eraseOp(collapse);
+      }
+    }
+    for (Operation* alloc : allocsToErase) {
+      if (alloc->use_empty()) {
+        rewriter.eraseOp(alloc);
       }
     }
 
@@ -934,6 +948,7 @@ class MatmulKernelNCNNPass final
     for (Operation* user : users) {
       auto generic = dyn_cast<linalg::GenericOp>(user);
       if (generic && generic.getDpsInits().front() == collapse.getSrc() &&
+          generic->getBlock() == collapse->getBlock() &&
           generic->isBeforeInBlock(collapse)) {
         if (!gather || gather->isBeforeInBlock(generic)) {
           gather = generic;
@@ -978,7 +993,13 @@ class MatmulKernelNCNNPass final
     // and-fuse 复制的 gather 副本链可能指向别的层的 pad 缓冲——IR 位置
     // 在 matmul 之后，直取会违反 SSA 支配）。
     if (Operation* sourceDefiner = input.getDefiningOp()) {
-      if (!sourceDefiner->isBeforeInBlock(matmulAnchor)) {
+      Operation* anchorInSourceBlock = matmulAnchor;
+      while (anchorInSourceBlock != nullptr &&
+             anchorInSourceBlock->getBlock() != sourceDefiner->getBlock()) {
+        anchorInSourceBlock = anchorInSourceBlock->getParentOp();
+      }
+      if (anchorInSourceBlock == nullptr ||
+          !sourceDefiner->isBeforeInBlock(anchorInSourceBlock)) {
         return std::nullopt;
       }
     }
@@ -1469,7 +1490,7 @@ class MatmulKernelNCNNPass final
         if (auto value = offset.dyn_cast<Value>()) {
           columnOffset = builder.create<arith::AddIOp>(columnOffset, value);
         } else if (auto integer =
-                     dyn_cast<IntegerAttr>(offset.get<Attribute>())) {
+                     dyn_cast<IntegerAttr>(cast<Attribute>(offset))) {
           if (integer.getInt() != 0) {
             columnOffset = builder.create<arith::AddIOp>(
               columnOffset,

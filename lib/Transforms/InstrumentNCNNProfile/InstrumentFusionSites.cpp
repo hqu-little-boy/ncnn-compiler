@@ -20,7 +20,6 @@
 //   * 不给融合站点报字节数。
 
 #include "llvm/ADT/SmallVector.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
@@ -35,6 +34,8 @@ namespace {
 class InstrumentNCNNFusionSitesPass final
   : public PassWrapper<InstrumentNCNNFusionSitesPass, OperationPass<ModuleOp>> {
  public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InstrumentNCNNFusionSitesPass)
+
   StringRef getArgument() const final { return "instrument-ncnn-fusion-sites"; }
 
   StringRef getDescription() const final {

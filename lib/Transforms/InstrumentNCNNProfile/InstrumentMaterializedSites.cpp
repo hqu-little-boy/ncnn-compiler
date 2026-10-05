@@ -98,6 +98,9 @@ class InstrumentNCNNMaterializedSitesPass final
   : public PassWrapper<InstrumentNCNNMaterializedSitesPass,
                        OperationPass<ModuleOp>> {
  public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(
+    InstrumentNCNNMaterializedSitesPass)
+
   StringRef getArgument() const final {
     return "instrument-ncnn-materialized-sites";
   }

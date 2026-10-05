@@ -30,8 +30,8 @@
 // CHECK: scf.yield
 // CHECK: return
 module {
-  func.func @fused(%padded: memref<1x7x7x4xf32>, %weight: memref<16x8xf32>,
-                   %out: memref<9x8xf32>) {
+  func.func @fused(%source: memref<1x7x7x4xf32>, %weight: memref<16x8xf32>, %out: memref<9x8xf32>) {
+    %padded = memref.subview %source[0, 0, 0, 0] [1, 7, 7, 4] [1, 1, 1, 1] : memref<1x7x7x4xf32> to memref<1x7x7x4xf32>
     %alloc = memref.alloc() {alignment = 64 : i64} : memref<3x3x2x2x4xf32>
     linalg.generic {
       indexing_maps = [
@@ -89,6 +89,65 @@ module {
       linalg.matmul ins(%collapsed, %weight : memref<9x16xf32>,
                                     memref<16x8xf32>)
                     outs(%out : memref<9x8xf32>)
+    }
+    return
+  }
+}
+
+// -----
+
+// Two fused chains sharing one im2col allocation must delete that allocation
+// only once after all gather and collapse operations are gone.
+// CHECK-LABEL: func.func @shared_alloc
+// CHECK-NOT: linalg.generic
+// CHECK-NOT: memref.collapse_shape
+// CHECK-NOT: memref.alloc
+// CHECK: vector.fma
+// CHECK: vector.fma
+module {
+  func.func @shared_alloc(%source: memref<1x7x7x4xf32>,
+                          %weight: memref<16x8xf32>,
+                          %out0: memref<9x8xf32>,
+                          %out1: memref<9x8xf32>) {
+    %padded = memref.subview %source[0, 0, 0, 0] [1, 7, 7, 4] [1, 1, 1, 1]
+      : memref<1x7x7x4xf32> to memref<1x7x7x4xf32>
+    %alloc = memref.alloc() {alignment = 64 : i64}
+      : memref<3x3x2x2x4xf32>
+    linalg.generic {
+      indexing_maps = [
+        affine_map<(d0,d1,d2,d3,d4) -> (0, d0*2+d2, d1*2+d3, d4)>,
+        affine_map<(d0,d1,d2,d3,d4) -> (d0,d1,d2,d3,d4)>
+      ],
+      iterator_types = ["parallel", "parallel", "parallel", "parallel", "parallel"]
+    } ins(%padded : memref<1x7x7x4xf32>)
+      outs(%alloc : memref<3x3x2x2x4xf32>) {
+    ^bb0(%in: f32, %out_: f32):
+      linalg.yield %in : f32
+    }
+    %collapsed0 = memref.collapse_shape %alloc [[0, 1], [2, 3, 4]]
+      : memref<3x3x2x2x4xf32> into memref<9x16xf32>
+    linalg.generic {
+      indexing_maps = [
+        affine_map<(d0,d1,d2,d3,d4) -> (0, d0*2+d2, d1*2+d3, d4)>,
+        affine_map<(d0,d1,d2,d3,d4) -> (d0,d1,d2,d3,d4)>
+      ],
+      iterator_types = ["parallel", "parallel", "parallel", "parallel", "parallel"]
+    } ins(%padded : memref<1x7x7x4xf32>)
+      outs(%alloc : memref<3x3x2x2x4xf32>) {
+    ^bb0(%in: f32, %out_: f32):
+      linalg.yield %in : f32
+    }
+    %collapsed1 = memref.collapse_shape %alloc [[0, 1], [2, 3, 4]]
+      : memref<3x3x2x2x4xf32> into memref<9x16xf32>
+    scf.forall (%i) = (0) to (9) step (9) {
+      linalg.matmul ins(%collapsed0, %weight : memref<9x16xf32>,
+                                              memref<16x8xf32>)
+                    outs(%out0 : memref<9x8xf32>)
+    }
+    scf.forall (%j) = (0) to (9) step (9) {
+      linalg.matmul ins(%collapsed1, %weight : memref<9x16xf32>,
+                                              memref<16x8xf32>)
+                    outs(%out1 : memref<9x8xf32>)
     }
     return
   }

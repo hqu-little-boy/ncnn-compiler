@@ -10,3 +10,47 @@ diff --git a/openmp/runtime/src/kmp_affinity.cpp b/openmp/runtime/src/kmp_affini
    }
 
    if (!__kmp_topology->check_ids()) {
+
+diff --git a/openmp/runtime/src/kmp_affinity.cpp b/openmp/runtime/src/kmp_affinity.cpp
+--- a/openmp/runtime/src/kmp_affinity.cpp
++++ b/openmp/runtime/src/kmp_affinity.cpp
+@@ -5301,3 +5301,7 @@ void __kmp_affinity_uninitialize(void) {
+     __kmp_affin_origMask = NULL;
+   }
++  if (__kmp_affin_fullMask != NULL) {
++    KMP_CPU_FREE(__kmp_affin_fullMask);
++    __kmp_affin_fullMask = NULL;
++  }
+   __kmp_affinity_num_places = 0;
+
+diff --git a/openmp/runtime/src/kmp_runtime.cpp b/openmp/runtime/src/kmp_runtime.cpp
+--- a/openmp/runtime/src/kmp_runtime.cpp
++++ b/openmp/runtime/src/kmp_runtime.cpp
+@@ -6156,3 +6156,6 @@
+ __attribute__((destructor)) void __kmp_internal_end_dtor(void) {
+   __kmp_internal_end_atexit();
++#if KMP_AFFINITY_SUPPORTED
++  __kmp_affinity_uninitialize();
++#endif
+ }
+
+diff --git a/openmp/runtime/src/kmp_runtime.cpp b/openmp/runtime/src/kmp_runtime.cpp
+--- a/openmp/runtime/src/kmp_runtime.cpp
++++ b/openmp/runtime/src/kmp_runtime.cpp
+@@ -37,3 +37,12 @@
+ #endif
+
++#if defined(__has_feature)
++#if __has_feature(address_sanitizer)
++#define KMP_ASAN_BUILD 1
++#endif
++#endif
++#ifndef KMP_ASAN_BUILD
++#define KMP_ASAN_BUILD 0
++#endif
++
+ #if OMP_PROFILING_SUPPORT
+@@ -7362,2 +7362,2 @@
+ #if !KMP_DYNAMIC_LIB ||                                                        \
+-    ((KMP_COMPILER_ICC || KMP_COMPILER_ICX) && KMP_OS_DARWIN)
++    ((KMP_COMPILER_ICC || KMP_COMPILER_ICX) && KMP_OS_DARWIN) || KMP_ASAN_BUILD

@@ -1,0 +1,472 @@
+--- a/src/layer/x86/convolution_im2col_gemm.h
++++ b/src/layer/x86/convolution_im2col_gemm.h
+@@ -614,7 +614,7 @@
+                 _mm512_store_ps(outptr + 16 * 15, _sumf);
+             }
+ 
+-            outptr += 256;
++            if (outptr) outptr += 256;
+         }
+         for (; jj + 7 < max_jj; jj += 8)
+         {
+@@ -788,7 +788,7 @@
+                 _mm512_store_ps(outptr + 16 * 7, _sum7);
+             }
+ 
+-            outptr += 128;
++            if (outptr) outptr += 128;
+         }
+ #endif // defined(__x86_64__) || defined(_M_X64)
+         for (; jj + 3 < max_jj; jj += 4)
+@@ -935,7 +935,7 @@
+                 _mm512_store_ps(outptr + 16 * 3, _sum3);
+             }
+ 
+-            outptr += 64;
++            if (outptr) outptr += 64;
+         }
+         for (; jj + 1 < max_jj; jj += 2)
+         {
+@@ -1063,7 +1063,7 @@
+                 _mm512_store_ps(outptr + 16, _sum1);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -1153,7 +1153,7 @@
+                 _mm512_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+ 
+         pAT += max_kk * 16;
+@@ -1350,7 +1350,7 @@
+                 _mm512_store_ps(outptr + 16 * 7, _sum7);
+             }
+ 
+-            outptr += 128;
++            if (outptr) outptr += 128;
+         }
+ #else  // __AVX512F__
+         for (; jj + 11 < max_jj; jj += 12)
+@@ -1543,7 +1543,7 @@
+                 _mm256_store_ps(outptr + 8 * 11, _sumb);
+             }
+ 
+-            outptr += 96;
++            if (outptr) outptr += 96;
+         }
+ #endif // __AVX512F__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -1679,7 +1679,7 @@
+                 _mm256_store_ps(outptr + 8 * 7, _sum7);
+             }
+ 
+-            outptr += 64;
++            if (outptr) outptr += 64;
+         }
+ #endif // defined(__x86_64__) || defined(_M_X64)
+         for (; jj + 3 < max_jj; jj += 4)
+@@ -1789,7 +1789,7 @@
+                 _mm256_store_ps(outptr + 8 * 3, _sum3);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+         for (; jj + 1 < max_jj; jj += 2)
+         {
+@@ -1885,7 +1885,7 @@
+                 _mm256_store_ps(outptr + 8, _sum1);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -1959,7 +1959,7 @@
+                 _mm256_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+ 
+         pAT += max_kk * 8;
+@@ -2083,7 +2083,7 @@
+                 _mm512_store_ps(outptr + 48, _sum3);
+             }
+ 
+-            outptr += 64;
++            if (outptr) outptr += 64;
+         }
+ #else  // __AVX512F__
+         for (; jj + 11 < max_jj; jj += 12)
+@@ -2229,7 +2229,7 @@
+                 _mm_store_ps(outptr + 4 * 11, _sumb);
+             }
+ 
+-            outptr += 48;
++            if (outptr) outptr += 48;
+         }
+ #endif // __AVX512F__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -2342,7 +2342,7 @@
+                 _mm_store_ps(outptr + 4 * 7, _sum7);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+ #endif // defined(__x86_64__) || defined(_M_X64)
+         for (; jj + 3 < max_jj; jj += 4)
+@@ -2422,7 +2422,7 @@
+                 _mm_store_ps(outptr + 4 * 3, _sum3);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+         for (; jj + 1 < max_jj; jj += 2)
+         {
+@@ -2500,7 +2500,7 @@
+                 _mm_store_ps(outptr + 4, _sum1);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -2564,7 +2564,7 @@
+                 _mm_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 4;
++            if (outptr) outptr += 4;
+         }
+ 
+         pAT += max_kk * 4;
+@@ -2642,7 +2642,7 @@
+                 _mm512_storeu_ps(outptr + 16, _sum1);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+ #else  // __AVX512F__
+         for (; jj + 11 < max_jj; jj += 12)
+@@ -2741,7 +2741,7 @@
+                 _mm_store_ps(outptr + 20, _tmp5);
+             }
+ 
+-            outptr += 24;
++            if (outptr) outptr += 24;
+         }
+ #endif // __AVX512F__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -2821,7 +2821,7 @@
+                 _mm_store_ps(outptr + 12, _tmp3);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+ #endif // defined(__x86_64__) || defined(_M_X64)
+         for (; jj + 3 < max_jj; jj += 4)
+@@ -2880,7 +2880,7 @@
+                 _mm_storeu_ps(outptr + 4, _tmp1);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+ #endif // __SSE2__
+         for (; jj + 1 < max_jj; jj += 2)
+@@ -2947,7 +2947,7 @@
+                 outptr[3] = sum11;
+             }
+ 
+-            outptr += 4;
++            if (outptr) outptr += 4;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -2998,7 +2998,7 @@
+                 outptr[1] = sum1;
+             }
+ 
+-            outptr += 2;
++            if (outptr) outptr += 2;
+         }
+ 
+         pAT += max_kk * 2;
+@@ -3063,7 +3063,7 @@
+                 _mm512_storeu_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+ #else  // __AVX512F__
+         for (; jj + 11 < max_jj; jj += 12)
+@@ -3128,7 +3128,7 @@
+                 _mm_storeu_ps(outptr + 8, _sum2);
+             }
+ 
+-            outptr += 12;
++            if (outptr) outptr += 12;
+         }
+ #endif // __AVX512F__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -3185,7 +3185,7 @@
+                 _mm_storeu_ps(outptr + 4, _sum1);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+ #endif // defined(__x86_64__) || defined(_M_X64)
+         for (; jj + 3 < max_jj; jj += 4)
+@@ -3233,7 +3233,7 @@
+                 _mm_storeu_ps(outptr, _sum);
+             }
+ 
+-            outptr += 4;
++            if (outptr) outptr += 4;
+         }
+ #endif // __SSE2__
+         for (; jj + 1 < max_jj; jj += 2)
+@@ -3286,7 +3286,7 @@
+                 outptr[1] = sum1;
+             }
+ 
+-            outptr += 2;
++            if (outptr) outptr += 2;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -3330,7 +3330,7 @@
+                 outptr[0] = sum;
+             }
+ 
+-            outptr += 1;
++            if (outptr) outptr += 1;
+         }
+ 
+         pAT += max_kk;
+--- a/src/layer/x86/convolution_im2col_gemm_bf16s.h
++++ b/src/layer/x86/convolution_im2col_gemm_bf16s.h
+@@ -899,7 +899,7 @@
+                 _mm512_store_ps(outptr + 128 + 112, _sumf);
+             }
+ 
+-            outptr += 256;
++            if (outptr) outptr += 256;
+         }
+         for (; jj + 7 < max_jj; jj += 8)
+         {
+@@ -1201,7 +1201,7 @@
+                 _mm512_store_ps(outptr + 112, _sum7);
+             }
+ 
+-            outptr += 128;
++            if (outptr) outptr += 128;
+         }
+ #endif // defined(__x86_64__) || defined(_M_X64)
+ 
+@@ -1386,7 +1386,7 @@
+                 _mm512_store_ps(outptr + 16 * 3, _sum3);
+             }
+ 
+-            outptr += 64;
++            if (outptr) outptr += 64;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -1487,7 +1487,7 @@
+                 _mm512_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+ 
+         pAT += max_kk * 16;
+@@ -1781,7 +1781,7 @@
+                 _mm512_store_ps(outptr + 112, _sum7);
+             }
+ 
+-            outptr += 128;
++            if (outptr) outptr += 128;
+         }
+ #endif // __AVX512F__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -2014,7 +2014,7 @@
+                 _mm256_store_ps(outptr + 56, _sum7);
+             }
+ 
+-            outptr += 64;
++            if (outptr) outptr += 64;
+         }
+ #endif // defined(__x86_64__) || defined(_M_X64)
+ 
+@@ -2163,7 +2163,7 @@
+                 _mm256_store_ps(outptr + 8 * 3, _sum3);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -2247,7 +2247,7 @@
+                 _mm256_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+ 
+         pAT += max_kk * 8;
+@@ -2417,7 +2417,7 @@
+                 _mm512_store_ps(outptr + 48, _sum3);
+             }
+ 
+-            outptr += 64;
++            if (outptr) outptr += 64;
+         }
+ #endif // __AVX512F__
+ #if __AVX__
+@@ -2552,7 +2552,7 @@
+                 _mm256_store_ps(outptr + 24, _sum3);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+ #else  // __AVX__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -2670,7 +2670,7 @@
+                 _mm_store_ps(outptr + 28, _sum7);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+ #endif // __AVX__
+ #endif // defined(__x86_64__) || defined(_M_X64)
+@@ -2788,7 +2788,7 @@
+                 _mm_store_ps(outptr + 4 * 3, _sum3);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+         for (; jj < max_jj; jj += 1)
+         {
+@@ -2860,7 +2860,7 @@
+                 _mm_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 4;
++            if (outptr) outptr += 4;
+         }
+ 
+         pAT += max_kk * 4;
+@@ -2956,7 +2956,7 @@
+                 _mm512_store_ps(outptr + 16, _sum1);
+             }
+ 
+-            outptr += 32;
++            if (outptr) outptr += 32;
+         }
+ #endif // __AVX512F__
+ #if __AVX__
+@@ -3057,7 +3057,7 @@
+                 _mm256_store_ps(outptr + 8, _sum1);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+ #else  // __AVX__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -3128,7 +3128,7 @@
+                 }
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+ #endif // __AVX__
+ #endif // defined(__x86_64__) || defined(_M_X64)
+@@ -3209,7 +3209,7 @@
+                 _mm_store_ps(outptr + 4, _sum1);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+ #endif // __SSE2__
+         for (; jj < max_jj; jj += 1)
+@@ -3279,7 +3279,7 @@
+                 outptr[1] = sum1;
+             }
+ 
+-            outptr += 2;
++            if (outptr) outptr += 2;
+         }
+ 
+         pAT += max_kk * 2;
+@@ -3356,7 +3356,7 @@
+                 _mm512_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 16;
++            if (outptr) outptr += 16;
+         }
+ #endif // __AVX512F__
+ #if __AVX__
+@@ -3433,7 +3433,7 @@
+                 _mm256_store_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+ #else  // __AVX__
+         for (; jj + 7 < max_jj; jj += 8)
+@@ -3496,7 +3496,7 @@
+                 }
+             }
+ 
+-            outptr += 8;
++            if (outptr) outptr += 8;
+         }
+ #endif // __AVX__
+ #endif // defined(__x86_64__) || defined(_M_X64)
+@@ -3574,7 +3574,7 @@
+                 _mm_storeu_ps(outptr, _sum0);
+             }
+ 
+-            outptr += 4;
++            if (outptr) outptr += 4;
+         }
+ #endif // __SSE2__
+         for (; jj < max_jj; jj += 1)
+@@ -3633,7 +3633,7 @@
+                 outptr[0] = sum;
+             }
+ 
+-            outptr += 1;
++            if (outptr) outptr += 1;
+         }
+ 
+         pAT += max_kk;
