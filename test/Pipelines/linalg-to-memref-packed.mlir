@@ -1,4 +1,5 @@
 // RUN: ncnn-mlir-opt '--ncnn-linalg-to-memref-pipeline=vector-tail=true matmul-packing=auto' %s | FileCheck %s
+// RUN: ncnn-mlir-opt '--ncnn-linalg-to-memref-pipeline=vector-tail=false matmul-packing=auto' %s | FileCheck %s --check-prefix=SERIAL
 
 module {
   func.func @packed_matmul(%arg0: tensor<32x256xf32>) -> tensor<32x64xf32> {
@@ -16,3 +17,9 @@ module {
 // CHECK: vector.fma
 // CHECK: ncnn.kernel = "f32_packed_mxn_fma"
 // CHECK: ncnn.pack_runtime = "compile_time_B"
+
+// SERIAL-LABEL: func.func @packed_matmul(
+// SERIAL-NOT: ncnn.packed_weight = true
+// SERIAL-NOT: ncnn.packing = "prepacked_B"
+// SERIAL: ncnn.packing = "unpacked_direct"
+// SERIAL-NOT: ncnn.packing = "prepacked_B"

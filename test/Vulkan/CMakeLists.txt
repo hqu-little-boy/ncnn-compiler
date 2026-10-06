@@ -691,11 +691,21 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     endif()
     string(APPEND V5_TEST_LIBRARY_PATH ":$ENV{LD_LIBRARY_PATH}")
 
+    set(V5_SQUEEZENET_PARAM
+        ${PROJECT_SOURCE_DIR}/test/third_party/ncnn/examples/squeezenet_v1.1.param)
+    set(V5_SQUEEZENET_BIN
+        ${PROJECT_SOURCE_DIR}/test/third_party/ncnn/examples/squeezenet_v1.1.bin)
     function(ncnn_add_vulkan_v5_test test_name device_match output_name icd suite)
         set(sanitizer_runtime_args)
         if(V5_SANITIZER_RUNTIME_DIR)
             list(APPEND sanitizer_runtime_args
                 --sanitizer-runtime-dir=${V5_SANITIZER_RUNTIME_DIR})
+        endif()
+        set(model_resource_args)
+        if(suite STREQUAL "v5.3")
+            list(APPEND model_resource_args
+                --model-param ${V5_SQUEEZENET_PARAM}
+                --model-bin ${V5_SQUEEZENET_BIN})
         endif()
         add_test(NAME ${test_name}
             COMMAND ${Python3_EXECUTABLE}
@@ -723,6 +733,7 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
                 ${V5_CXX_SANITIZER_ARGS}
                 ${sanitizer_runtime_args}
                 ${V5_CONFIGURED_DEPENDENCY_ARGS}
+                ${model_resource_args}
                 --suite ${suite}
                 --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/v5/${output_name})
         set_tests_properties(${test_name} PROPERTIES
@@ -742,5 +753,11 @@ ncnn_add_vulkan_v5_test(
 ncnn_add_vulkan_v5_test(
     vulkan-v5-pooling-softmax-llvmpipe llvmpipe pooling-softmax-llvmpipe
     ${V0_LLVMPIPE_ICD} v5.2)
+ncnn_add_vulkan_v5_test(
+    vulkan-v5-squeezenet-nvidia NVIDIA squeezenet-nvidia
+    ${V0_NVIDIA_ICD} v5.3)
+ncnn_add_vulkan_v5_test(
+    vulkan-v5-squeezenet-llvmpipe llvmpipe squeezenet-llvmpipe
+    ${V0_LLVMPIPE_ICD} v5.3)
 endif()
 

@@ -26,6 +26,137 @@ class CompareOutputsTest(unittest.TestCase):
             )
 
 
+class V53ModelDefinitionTest(unittest.TestCase):
+    def test_uses_vendored_squeezenet_with_verified_topology(self):
+        repository = MODULE_PATH.resolve().parents[2]
+        model_directory = (
+            repository / "test/third_party/ncnn/examples"
+        )
+        param = model_directory / "squeezenet_v1.1.param"
+        binary = model_directory / "squeezenet_v1.1.bin"
+        with tempfile.TemporaryDirectory(prefix="v53-model-definition-") as temp:
+            fixtures = run_v5.fixture_definitions(
+                Path(temp), "v5.3", param, binary
+            )
+        fixture = fixtures["squeezenet_v1_1"]
+        self.assertEqual(fixture["inputs"], [("data", (3, 227, 227))])
+        self.assertEqual(fixture["outputs"], [("prob", (1000,))])
+        self.assertEqual(
+            fixture["layer_counts"],
+            {
+                "Concat": 8,
+                "Convolution": 26,
+                "Dropout": 1,
+                "Input": 1,
+                "Pooling": 4,
+                "ReLU": 26,
+                "Softmax": 1,
+                "Split": 8,
+            },
+        )
+        self.assertEqual(fixture["expected_conv_kernels"], 26)
+        self.assertEqual(fixture["expected_weight_resources"], 52)
+        self.assertEqual(fixture["classification_top_k"], 5)
+        self.assertEqual(fixture["seed_base"], 0x53515545)
+        self.assertAlmostEqual(fixture["atol"], 1.0e-6)
+        self.assertAlmostEqual(fixture["rtol"], 1.0e-4)
+
+
+class WeightResourceDeduplicationTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix="v51-weight-dedup-")
+        cls.fixtures = run_v5.fixture_definitions(
+            Path(cls.temporary.name), "v5.1"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def test_split_concat_fixture_shares_identical_bias_resource(self):
+        oracles = self.fixtures["split_concat"]["weight_oracles"]
+        self.assertEqual(oracles[0]["bias_sha256"], oracles[1]["bias_sha256"])
+        expected = {}
+        roles = {}
+        for oracle in oracles:
+            run_v5.record_expected_weight(
+                expected,
+                roles,
+                9,
+                "bias",
+                oracle["bias_sha256"],
+                oracle["bias_size_bytes"],
+            )
+        self.assertEqual(len(expected), 1)
+        self.assertEqual(roles, {9: "bias"})
+
+    def test_rejects_conflicting_identity_or_role_for_shared_resource(self):
+        expected = {}
+        roles = {}
+        run_v5.record_expected_weight(expected, roles, 9, "bias", "a" * 64, 4)
+        with self.assertRaisesRegex(RuntimeError, "conflicting identities"):
+            run_v5.record_expected_weight(expected, roles, 9, "bias", "b" * 64, 4)
+        with self.assertRaisesRegex(RuntimeError, "incompatible roles"):
+            run_v5.record_expected_weight(expected, roles, 9, "filter", "a" * 64, 4)
+
+
+class ClassificationSummaryTest(unittest.TestCase):
+    def test_top_k_is_stable_for_equal_probabilities(self):
+        result = run_v5.classification_summary([0.25, 0.4, 0.4, 0.1], 3)
+        self.assertEqual(result["top1_index"], 1)
+        self.assertEqual(result["topk_indices"], [1, 2, 0])
+        self.assertAlmostEqual(result["probability_sum"], 1.15)
+
+    def test_rejects_non_finite_classification_probabilities(self):
+        with self.assertRaisesRegex(RuntimeError, "non-finite"):
+            run_v5.classification_summary([0.5, float("nan")], 1)
+
+
+class VulkanDeviceSummaryTest(unittest.TestCase):
+    def test_nvidia_record_is_gpu_not_optimus_layer(self):
+        text = """\
+VK_LAYER_NV_optimus NVIDIA Optimus layer 1.4.351
+GPU0:
+    apiVersion = 1.4.351
+    driverVersion = 615.71.9.0
+    vendorID = 0x10de
+    deviceID = 0x2803
+    deviceName = NVIDIA GeForce RTX 4060 Ti
+    driverID = DRIVER_ID_NVIDIA_PROPRIETARY
+    driverName = NVIDIA
+    driverInfo = 615.71.09
+"""
+        device = run_v5.parse_vulkan_device_summary(text, "NVIDIA", "/icd/nvidia.json")
+        self.assertEqual(device["device_name"], "NVIDIA GeForce RTX 4060 Ti")
+        self.assertEqual(device["driver_name"], "NVIDIA")
+        self.assertEqual(device["driver_info"], "615.71.09")
+        self.assertEqual(device["vendor_id"], "0x10de")
+
+    def test_llvmpipe_record_captures_driver_identity(self):
+        text = """\
+GPU0:
+    apiVersion = 1.4.305
+    driverVersion = 0.0.1
+    vendorID = 0x10005
+    deviceID = 0x0000
+    deviceName = llvmpipe (LLVM 19.1.7, 256 bits)
+    driverID = DRIVER_ID_MESA_LLVMPIPE
+    driverName = llvmpipe
+    driverInfo = Mesa 25.0.7 (LLVM 19.1.7)
+"""
+        device = run_v5.parse_vulkan_device_summary(text, "llvmpipe", "/icd/lvp.json")
+        self.assertEqual(device["device_name"], "llvmpipe (LLVM 19.1.7, 256 bits)")
+        self.assertEqual(device["driver_name"], "llvmpipe")
+        self.assertEqual(device["vendor_id"], "0x10005")
+        self.assertEqual(len(device["vulkaninfo_summary_sha256"]), 64)
+
+    def test_layer_match_cannot_substitute_for_a_physical_device(self):
+        text = "VK_LAYER_NV_optimus NVIDIA Optimus layer\nGPU0:\n    deviceName = llvmpipe\n"
+        with self.assertRaisesRegex(RuntimeError, "enumerated devices"):
+            run_v5.parse_vulkan_device_summary(text, "NVIDIA", "/icd/nvidia.json")
+
+
 class V52IndependentGoldenTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

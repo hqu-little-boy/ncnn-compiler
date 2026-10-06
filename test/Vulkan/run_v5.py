@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import math
@@ -19,6 +20,7 @@ import sys
 
 ATOL = 1.0e-6
 RTOL = 1.0e-6
+DEFAULT_CONTEXT_MEMORY_BUDGET_BYTES = 512 * 1024 * 1024
 SANITIZER_DIAGNOSTIC = re.compile(
     r"AddressSanitizer|LeakSanitizer|UndefinedBehaviorSanitizer|runtime error:",
     re.IGNORECASE,
@@ -270,8 +272,95 @@ def make_param(inputs, layers):
     )
 
 
-def fixture_definitions(directory, suite):
+def fixture_definitions(directory, suite, model_param=None, model_bin=None):
     directory.mkdir(parents=True, exist_ok=True)
+    if suite == "v5.3":
+        if model_param is None or model_bin is None:
+            raise ValueError("v5.3 requires the vendored SqueezeNet .param and .bin")
+        fixture = {
+            "name": "squeezenet_v1_1",
+            "model": "squeezenet_v1_1",
+            "inputs": [("data", (3, 227, 227))],
+            "outputs": [("prob", (1000,))],
+            "param": Path(model_param).resolve(),
+            "bin": Path(model_bin).resolve(),
+            "copy_exact": False,
+            "weight_oracles": [],
+            "expected_conv_kernels": 26,
+            "expected_weight_resources": 52,
+            "classification_top_k": 5,
+            "softmax_sum_tolerance": 1.0e-5,
+            "atol": 1.0e-6,
+            "rtol": 1.0e-4,
+            "seed_base": 0x53515545,
+        }
+        if not fixture["param"].is_file() or not fixture["bin"].is_file():
+            raise RuntimeError("vendored SqueezeNet model files are missing")
+        param_lines = [
+            line.strip()
+            for line in fixture["param"].read_text(encoding="ascii").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        if len(param_lines) < 2 or param_lines[1] != "75 83":
+            raise RuntimeError("vendored SqueezeNet layer/blob count changed")
+        layer_counts_by_type = Counter(line.split()[0] for line in param_lines[2:])
+        expected_layers = {
+            "Input": 1,
+            "Convolution": 26,
+            "ReLU": 26,
+            "Pooling": 4,
+            "Split": 8,
+            "Concat": 8,
+            "Dropout": 1,
+            "Softmax": 1,
+        }
+        if len(param_lines) - 2 != 75 or layer_counts_by_type != expected_layers:
+            raise RuntimeError(
+                f"vendored SqueezeNet topology changed: {layer_counts_by_type}"
+            )
+        input_fields = param_lines[2].split()
+        if input_fields[:5] != ["Input", "data", "0", "1", "data"] or not {
+            "0=227", "1=227", "2=3"
+        }.issubset(input_fields[5:]):
+            raise RuntimeError("vendored SqueezeNet input contract changed")
+        convolution_fields = next(
+            (line.split() for line in param_lines[2:]
+             if line.split()[:2] == ["Convolution", "conv10"]),
+            None,
+        )
+        if convolution_fields is None or not {
+            "0=1000", "1=1", "2=1", "3=1", "4=1", "5=1", "6=512000"
+        }.issubset(convolution_fields[5:]):
+            raise RuntimeError("vendored SqueezeNet conv10 contract changed")
+        pool_lines = {
+            fields[1]: fields
+            for fields in (line.split() for line in param_lines[2:])
+            if fields[0] == "Pooling"
+        }
+        if not {"pool1", "pool3", "pool5", "pool10"}.issubset(pool_lines):
+            raise RuntimeError("vendored SqueezeNet pooling topology changed")
+        for name in ("pool1", "pool3", "pool5"):
+            if not {"0=0", "1=3", "2=2", "3=0", "4=0"}.issubset(
+                pool_lines[name][5:]
+            ):
+                raise RuntimeError(f"vendored SqueezeNet {name} contract changed")
+        if not {"0=1", "1=0", "2=1", "3=0", "4=1"}.issubset(
+            pool_lines["pool10"][5:]
+        ):
+            raise RuntimeError("vendored SqueezeNet global-average-pool changed")
+        softmax_fields = next(
+            (line.split() for line in param_lines[2:]
+             if line.split()[:2] == ["Softmax", "prob"]),
+            None,
+        )
+        if softmax_fields is None or softmax_fields[5] != "prob" or "0=0" not in softmax_fields[6:]:
+            raise RuntimeError("vendored SqueezeNet probability output changed")
+        fixture["layer_counts"] = dict(sorted(layer_counts_by_type.items()))
+        fixture["param_hash"] = sha256_file(fixture["param"])
+        fixture["bin_hash"] = sha256_file(fixture["bin"])
+        return {fixture["name"]: fixture}
+    if suite not in {"v5.1", "v5.2"}:
+        raise ValueError(f"unsupported V5 product suite: {suite}")
     empty_bin = directory / "empty.bin"
     empty_bin.write_bytes(b"")
     conv_filter = [1.0, 0.5]
@@ -634,6 +723,24 @@ def load_manifest(model_dir, model, backend):
     return path, json.loads(path.read_text(encoding="utf-8"))
 
 
+def record_expected_weight(
+    expected_manifest_weights, weight_roles, resource_id, role, digest, size_bytes
+):
+    previous_role = weight_roles.get(resource_id)
+    if previous_role is not None and previous_role != role:
+        raise RuntimeError(
+            f"shared Conv2D weight resource {resource_id} has incompatible roles"
+        )
+    weight_roles[resource_id] = role
+    expected = {"sha256": digest, "size_bytes": size_bytes}
+    previous = expected_manifest_weights.get(resource_id)
+    if previous is not None and previous != expected:
+        raise RuntimeError(
+            f"shared Conv2D weight resource {resource_id} has conflicting identities"
+        )
+    expected_manifest_weights[resource_id] = expected
+
+
 def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
     model = fixture["model"]
     cpu_header = cpu_dir / f"{model}.h"
@@ -707,13 +814,23 @@ def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
 
     resources = plan.get("resources", [])
     resources_by_id = {resource.get("id"): resource for resource in resources}
+    if len(resources_by_id) != len(resources):
+        raise RuntimeError("Vulkan execution plan repeats a resource id")
     conv_kernels = [kernel for kernel in kernels if kernel.get("operation") == "conv2d"]
     weight_oracles = fixture.get("weight_oracles", [])
-    if len(conv_kernels) != len(weight_oracles):
+    expected_conv_kernels = fixture.get("expected_conv_kernels")
+    if expected_conv_kernels is not None and len(conv_kernels) != expected_conv_kernels:
+        raise RuntimeError(
+            "Conv2D kernel count differs from fixture topology: "
+            f"expected={expected_conv_kernels} actual={len(conv_kernels)}"
+        )
+    if weight_oracles and len(conv_kernels) != len(weight_oracles):
         raise RuntimeError("Conv2D kernels differ from fixed fixture weight oracles")
 
     expected_manifest_weights = {}
-    for kernel, oracle in zip(conv_kernels, weight_oracles):
+    expected_weight_ids = set()
+    weight_roles = {}
+    for kernel_index, kernel in enumerate(conv_kernels):
         reads = kernel.get("reads", [])
         if len(reads) < 3:
             raise RuntimeError("Conv2D plan kernel does not read input/filter/bias")
@@ -722,27 +839,74 @@ def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
         bias_resource = resources_by_id.get(bias_id)
         if filter_resource is None or bias_resource is None:
             raise RuntimeError("Conv2D reads reference missing filter/bias resources")
-        if filter_resource.get("weight_sha256") != oracle["filter_logical_sha256"]:
-            raise RuntimeError(
-                f"{oracle['layer']} logical OIHW filter identity differs from fixture"
+        for role, resource_id, resource in (
+            ("filter", filter_id, filter_resource),
+            ("bias", bias_id, bias_resource),
+        ):
+            if resource.get("kind") != "weight":
+                raise RuntimeError("Conv2D filter/bias operand is not a weight resource")
+            digest = resource.get("weight_sha256")
+            if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise RuntimeError("Conv2D plan weight has an invalid logical digest")
+            if int(resource.get("byte_size", 0)) <= 0:
+                raise RuntimeError("Conv2D plan weight has an invalid byte size")
+            previous_role = weight_roles.get(resource_id)
+            if previous_role is not None and previous_role != role:
+                raise RuntimeError(
+                    f"shared Conv2D weight resource {resource_id} has incompatible roles"
+                )
+            weight_roles[resource_id] = role
+            expected_weight_ids.add(resource_id)
+
+        if weight_oracles:
+            oracle = weight_oracles[kernel_index]
+            if filter_resource.get("weight_sha256") != oracle["filter_logical_sha256"]:
+                raise RuntimeError(
+                    f"{oracle['layer']} logical OIHW filter identity differs from fixture"
+                )
+            if bias_resource.get("weight_sha256") != oracle["bias_sha256"]:
+                raise RuntimeError(
+                    f"{oracle['layer']} row-major bias identity differs from fixture"
+                )
+            if filter_resource.get("byte_size") != oracle["filter_size_bytes"]:
+                raise RuntimeError("Conv2D logical filter byte size differs from fixture")
+            if bias_resource.get("byte_size") != oracle["bias_size_bytes"]:
+                raise RuntimeError("Conv2D bias byte size differs from fixture")
+            record_expected_weight(
+                expected_manifest_weights,
+                weight_roles,
+                filter_id,
+                "filter",
+                oracle["filter_physical_sha256"],
+                oracle["filter_size_bytes"],
             )
-        if bias_resource.get("weight_sha256") != oracle["bias_sha256"]:
-            raise RuntimeError(
-                f"{oracle['layer']} row-major bias identity differs from fixture"
+            record_expected_weight(
+                expected_manifest_weights,
+                weight_roles,
+                bias_id,
+                "bias",
+                oracle["bias_sha256"],
+                oracle["bias_size_bytes"],
             )
-        if filter_resource.get("byte_size") != oracle["filter_size_bytes"]:
-            raise RuntimeError("Conv2D logical filter byte size differs from fixture")
-        if bias_resource.get("byte_size") != oracle["bias_size_bytes"]:
-            raise RuntimeError("Conv2D bias byte size differs from fixture")
-        expected_manifest_weights[filter_id] = {
-            "sha256": oracle["filter_physical_sha256"],
-            "size_bytes": oracle["filter_size_bytes"],
-            "role": "physical-ohwi-filter",
-        }
-        expected_manifest_weights[bias_id] = {
-            "sha256": oracle["bias_sha256"],
-            "size_bytes": oracle["bias_size_bytes"],
-            "role": "row-major-bias",
+
+    plan_weight_ids = {
+        resource["id"] for resource in resources if resource.get("kind") == "weight"
+    }
+    if expected_weight_ids != plan_weight_ids:
+        raise RuntimeError("Vulkan weight resources differ from Conv2D filter/bias operands")
+    expected_weight_count = fixture.get("expected_weight_resources")
+    if expected_weight_count is not None and len(plan_weight_ids) != expected_weight_count:
+        raise RuntimeError(
+            "Vulkan weight resource count differs from fixture topology: "
+            f"expected={expected_weight_count} actual={len(plan_weight_ids)}"
+        )
+    if not expected_manifest_weights:
+        expected_manifest_weights = {
+            resource_id: {
+                "sha256": None,
+                "size_bytes": resources_by_id[resource_id]["byte_size"],
+            }
+            for resource_id in expected_weight_ids
         }
 
     weights = vk_manifest.get("weights", [])
@@ -762,7 +926,7 @@ def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
         digest = weight.get("sha256")
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise RuntimeError("Vulkan manifest contains an invalid weight digest")
-        if digest != expected["sha256"]:
+        if expected["sha256"] is not None and digest != expected["sha256"]:
             raise RuntimeError(
                 f"Vulkan physical weight identity differs for resource {resource_id}"
             )
@@ -1313,6 +1477,8 @@ int main(int argc, char** argv) {
 
 
 def compare_outputs(fixture, reference, actual, label):
+    atol = fixture.get("atol", ATOL)
+    rtol = fixture.get("rtol", RTOL)
     if len(reference) != len(actual):
         raise RuntimeError(f"{label} output arity differs")
     result = []
@@ -1341,7 +1507,7 @@ def compare_outputs(fixture, reference, actual, label):
             if not equal:
                 raise RuntimeError(f"{label} copy output {output_index} is not exact")
         elif any(
-            error > ATOL + RTOL * abs(float(lhs))
+            error > atol + rtol * abs(float(lhs))
             for error, lhs in zip(errors, expected)
         ):
             raise RuntimeError(
@@ -1349,6 +1515,17 @@ def compare_outputs(fixture, reference, actual, label):
             )
         result.append({"max_abs": max_abs, "max_rel": max_rel})
     return result
+
+
+def classification_summary(probabilities, top_k):
+    if not probabilities or any(not math.isfinite(value) for value in probabilities):
+        raise RuntimeError("classification output is empty or contains non-finite values")
+    order = sorted(range(len(probabilities)), key=lambda index: (-probabilities[index], index))
+    return {
+        "probability_sum": math.fsum(probabilities),
+        "top1_index": order[0],
+        "topk_indices": order[:top_k],
+    }
 
 
 def run_reference(args, fixture, input_paths, output_paths, env=None):
@@ -1390,37 +1567,116 @@ def scan_validation_log(path):
     return scan_validation_text(text)
 
 
+def parse_vulkan_device_summary(text, device_match, icd):
+    devices = []
+    current_device = None
+    for line in text.splitlines():
+        device_header = re.fullmatch(r"\s*GPU(\d+):\s*", line)
+        if device_header:
+            if current_device is not None:
+                devices.append(current_device)
+            current_device = {"index": f"GPU{device_header.group(1)}"}
+            continue
+        if current_device is None:
+            continue
+        if not line.strip():
+            devices.append(current_device)
+            current_device = None
+            continue
+        property_match = re.match(
+            r"\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$", line
+        )
+        if property_match:
+            current_device[property_match.group(1)] = property_match.group(2)
+    if current_device is not None:
+        devices.append(current_device)
+
+    matching_devices = [
+        device
+        for device in devices
+        if device_match.lower() in device.get("deviceName", "").lower()
+    ]
+    if not matching_devices:
+        available = [device.get("deviceName", "<unnamed>") for device in devices]
+        raise RuntimeError(
+            f"required Vulkan device {device_match!r} is unavailable under ICD "
+            f"{icd}; enumerated devices: {available}"
+        )
+    device = matching_devices[0]
+    required_fields = ("apiVersion", "driverVersion", "vendorID", "deviceID")
+    missing_fields = [field for field in required_fields if not device.get(field)]
+    if missing_fields:
+        raise RuntimeError(
+            f"Vulkan device summary is missing identity fields: {missing_fields}"
+        )
+    return {
+        "index": device["index"],
+        "device_name": device["deviceName"],
+        "api_version": device["apiVersion"],
+        "driver_version": device["driverVersion"],
+        "vendor_id": device["vendorID"],
+        "device_id": device["deviceID"],
+        "driver_id": device.get("driverID"),
+        "driver_name": device.get("driverName"),
+        "driver_info": device.get("driverInfo"),
+        "vulkaninfo_summary_sha256": sha256_bytes(text.encode("utf-8")),
+    }
+
+
 def check_device(args, env):
     result = invoke([args.vulkaninfo, "--summary"], env=env)
     text = result.stdout + result.stderr
-    if args.device_match.lower() not in text.lower():
-        raise RuntimeError(
-            f"required Vulkan device {args.device_match!r} is unavailable under ICD {args.icd}"
-        )
     if "VK_LAYER_KHRONOS_validation" not in text:
         raise RuntimeError("Khronos Vulkan validation layer is unavailable")
-    match = next(
-        (line.strip() for line in text.splitlines()
-         if args.device_match.lower() in line.lower()),
-        args.device_match,
-    )
-    return match
+    return parse_vulkan_device_summary(text, args.device_match, args.icd)
 
 
-def run_fixture(args, fixture, device_name, env, evidence_root):
+def run_fixture(args, fixture, device_info, env, evidence_root):
+    device_name = device_info["device_name"]
     model_root = evidence_root / fixture["name"]
     shutil.rmtree(model_root, ignore_errors=True)
     model_root.mkdir(parents=True)
+    fixture = dict(fixture)
+    source_model_files = None
+    if args.suite == "v5.3":
+        param_snapshot = model_root / f"{fixture['name']}.param"
+        bin_snapshot = model_root / f"{fixture['name']}.bin"
+        shutil.copyfile(fixture["param"], param_snapshot)
+        shutil.copyfile(fixture["bin"], bin_snapshot)
+        if (
+            sha256_file(param_snapshot) != fixture["param_hash"]
+            or sha256_file(bin_snapshot) != fixture["bin_hash"]
+        ):
+            raise RuntimeError("SqueezeNet evidence model copies changed identity")
+        source_model_files = {
+            "param": str(param_snapshot.relative_to(model_root)),
+            "param_sha256": fixture["param_hash"],
+            "param_size_bytes": param_snapshot.stat().st_size,
+            "bin": str(bin_snapshot.relative_to(model_root)),
+            "bin_sha256": fixture["bin_hash"],
+            "bin_size_bytes": bin_snapshot.stat().st_size,
+        }
+        fixture["param"] = param_snapshot
+        fixture["bin"] = bin_snapshot
     cpu_dir = compile_model(args, fixture, "cpu", model_root / "cpu", env)
     vk_dir = compile_model(args, fixture, "vulkan", model_root / "vulkan", env)
     artifacts = validate_artifacts(args, fixture, cpu_dir, vk_dir, env)
     typed_runner = build_typed_runner(args, fixture, artifacts, model_root, env)
 
-    trial_specs = [("zeros", None), ("negative", None), ("boundary", None)] + [
-        (f"seed-{seed}", seed) for seed in (0, 1, 42)
-    ]
-    if fixture.get("oracle", {}).get("kind") == "softmax":
-        trial_specs.append(("extreme", None))
+    if "seed_base" in fixture:
+        seed_base = fixture["seed_base"]
+        trial_specs = [
+            (f"seed-{seed_base:08x}", seed_base),
+            (f"seed-{seed_base + 1:08x}", seed_base + 1),
+            (f"seed-{seed_base + 2:08x}", seed_base + 2),
+            (f"repeat-seed-{seed_base:08x}", seed_base),
+        ]
+    else:
+        trial_specs = [("zeros", None), ("negative", None), ("boundary", None)] + [
+            (f"seed-{seed}", seed) for seed in (0, 1, 42)
+        ]
+        if fixture.get("oracle", {}).get("kind") == "softmax":
+            trial_specs.append(("extreme", None))
     prepared = []
 
     def prepare_trial(name, seed, context_index, *, recreate=False):
@@ -1473,8 +1729,13 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
 
     for trial_index, (name, seed) in enumerate(trial_specs):
         prepare_trial(name, seed, trial_index % 2)
-    replay_seed = 42
-    prepare_trial("destroy-recreate-seed-42", replay_seed, 0, recreate=True)
+    if "seed_base" in fixture:
+        replay_seed = fixture["seed_base"]
+        replay_name = f"destroy-recreate-seed-{replay_seed:08x}"
+    else:
+        replay_seed = 42
+        replay_name = "destroy-recreate-seed-42"
+    prepare_trial(replay_name, replay_seed, 0, recreate=True)
 
     command = [
         str(typed_runner),
@@ -1537,6 +1798,37 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
         ) != struct.pack(f"<{len(gpu_outputs[0])}f", *gpu_outputs[0]):
             raise RuntimeError("Vulkan copy fixture differs from its raw input")
         cpu_vs_vk = compare_outputs(fixture, cpu_outputs, gpu_outputs, "CPU/Vulkan")
+        classification = None
+        if "classification_top_k" in fixture:
+            top_k = fixture["classification_top_k"]
+            summaries = {
+                "ncnn": classification_summary(reference[0], top_k),
+                "cpu": classification_summary(cpu_outputs[0], top_k),
+                "vulkan": classification_summary(gpu_outputs[0], top_k),
+            }
+            sum_tolerance = fixture["softmax_sum_tolerance"]
+            for label, result in summaries.items():
+                if abs(result["probability_sum"] - 1.0) > sum_tolerance:
+                    raise RuntimeError(
+                        f"{label} SqueezeNet probability sum exceeds "
+                        f"{sum_tolerance}: {result['probability_sum']}"
+                    )
+            expected_labels = [
+                (summaries[label]["top1_index"], summaries[label]["topk_indices"])
+                for label in ("ncnn", "cpu", "vulkan")
+            ]
+            if any(value != expected_labels[0] for value in expected_labels[1:]):
+                raise RuntimeError(
+                    f"SqueezeNet top-1/top-{top_k} differ across ncnn/CPU/Vulkan: "
+                    f"{summaries}"
+                )
+            classification = {
+                "softmax_sum_tolerance": sum_tolerance,
+                "ncnn": summaries["ncnn"],
+                "cpu": summaries["cpu"],
+                "vulkan": summaries["vulkan"],
+                "top1_topk_match": True,
+            }
         golden_vs_cpu = None
         golden_vs_vulkan = None
         if trial["golden"] is not None:
@@ -1577,6 +1869,7 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
                 "cpu_vs_ncnn": cpu_vs_ncnn,
                 "vulkan_vs_ncnn": vk_vs_ncnn,
                 "cpu_vs_vulkan": cpu_vs_vk,
+                "classification": classification,
                 "diagnostic": runtime_call.get("diagnostic", ""),
             }
         )
@@ -1590,13 +1883,22 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
     planned_resource_bytes = sum(
         int(resource.get("byte_size", 0)) for resource in plan_resources
     )
+    if planned_resource_bytes > DEFAULT_CONTEXT_MEMORY_BUDGET_BYTES:
+        raise RuntimeError(
+            "Vulkan plan resources exceed the default context memory budget: "
+            f"{planned_resource_bytes} > {DEFAULT_CONTEXT_MEMORY_BUDGET_BYTES}"
+        )
+    weight_resource_count = len(artifacts["weights"])
     evidence = {
         "schema_version": 1,
         "fixture": fixture["name"],
         "model": fixture["model"],
         "suite": args.suite,
+        "source_model_files": source_model_files,
+        "model_topology": fixture.get("layer_counts"),
         "independent_golden": fixture.get("oracle"),
         "device": device_name,
+        "device_info": device_info,
         "validation": {
             "layer": "VK_LAYER_KHRONOS_validation",
             "forced_by_environment": env.get("VK_INSTANCE_LAYERS"),
@@ -1617,19 +1919,35 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
             {"blob": name, "shape": shape}
             for name, shape in fixture["outputs"]
         ],
-        "tolerance": {"atol": ATOL, "rtol": RTOL,
-                      "copy_exact": fixture["copy_exact"]},
+        "tolerance": {
+            "atol": fixture.get("atol", ATOL),
+            "rtol": fixture.get("rtol", RTOL),
+            "copy_exact": fixture["copy_exact"],
+        },
         "lifecycle": {
             "contexts_created": runtime_result["contexts_created"],
             "contexts_destroyed": runtime_result["contexts_destroyed"],
             "two_contexts_interleaved": True,
             "destroy_recreate_exercised": True,
-            "peak_memory_bytes": manifest.get("peak_memory_bytes"),
-            "peak_memory_evidence": "not exposed by the public Vulkan model ABI",
-            "context_memory_budget_bytes": plan.get("context_memory_budget_bytes"),
+            "peak_memory_bytes": None,
+            "peak_memory_evidence": (
+                "The public Vulkan model ABI does not expose peak allocation; "
+                "successful context creation enforces the runtime allocation cap."
+            ),
+            "context_memory_budget_bytes": DEFAULT_CONTEXT_MEMORY_BUDGET_BYTES,
             "planned_resource_bytes": planned_resource_bytes,
+            "planned_resources_within_budget": True,
             "plan_resource_count": len(plan_resources),
             "plan_kernel_count": len(plan.get("kernels", [])),
+            "weight_upload_contract": {
+                "weight_resource_count_per_context": weight_resource_count,
+                "contexts_created": runtime_result["contexts_created"],
+                "expected_upload_count_total": (
+                    weight_resource_count * runtime_result["contexts_created"]
+                ),
+                "counter_exposed_by_public_model_abi": False,
+                "runtime_contract": "static weights upload once during context creation",
+            },
             "resource_budget": plan.get("resource_budget"),
         },
         "identities": {
@@ -1659,7 +1977,9 @@ def run_fixture(args, fixture, device_name, env, evidence_root):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suite", choices=("v5.1", "v5.2"), default="v5.1")
+    parser.add_argument("--suite", choices=("v5.1", "v5.2", "v5.3"), default="v5.1")
+    parser.add_argument("--model-param")
+    parser.add_argument("--model-bin")
     for name in (
         "compiler", "driver", "opt", "mlir-opt", "translate", "clang", "nm", "readelf",
         "llvm-as", "spirv-val", "spirv-dis", "spirv-extract", "host-cxx",
@@ -1691,14 +2011,17 @@ def main():
     if old_library_path:
         library_paths.append(old_library_path)
     env["LD_LIBRARY_PATH"] = ":".join(library_paths)
-    device_name = check_device(args, env)
-    fixtures = fixture_definitions(args.output_dir / "fixtures", args.suite)
+    device_info = check_device(args, env)
+    fixtures = fixture_definitions(
+        args.output_dir / "fixtures", args.suite, args.model_param, args.model_bin
+    )
     results = []
     for fixture in fixtures.values():
-        results.append(run_fixture(args, fixture, device_name, env, args.output_dir / "models"))
+        results.append(run_fixture(args, fixture, device_info, env, args.output_dir / "models"))
     summary = {
         "schema_version": 1,
-        "device": device_name,
+        "device": device_info["device_name"],
+        "device_info": device_info,
         "icd": args.icd,
         "validation_layer": env["VK_INSTANCE_LAYERS"],
         "fixtures": [
