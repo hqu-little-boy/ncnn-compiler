@@ -331,11 +331,15 @@ def runtime_env(args):
     library_dirs = []
     if args.sanitizer_runtime_dir:
         library_dirs.append(str(args.sanitizer_runtime_dir))
-    library_dirs.append(str(args.llvm_lib_dir))
+    if args.llvm_shared:
+        if args.llvm_lib_dir is None:
+            raise RuntimeError("shared LLVM mode requires --llvm-lib-dir")
+        library_dirs.append(str(args.llvm_lib_dir))
     inherited = env.get("LD_LIBRARY_PATH", "")
     if inherited:
         library_dirs.append(inherited)
-    env["LD_LIBRARY_PATH"] = ":".join(library_dirs)
+    if library_dirs:
+        env["LD_LIBRARY_PATH"] = ":".join(library_dirs)
     return env
 
 
@@ -486,7 +490,7 @@ def main():
     parser.add_argument("--allowed-dependency", action="append", default=[])
     parser.add_argument("--sanitizer-dependency", action="append", default=[])
     parser.add_argument("--llvm-major", required=True)
-    parser.add_argument("--llvm-lib-dir", type=Path, required=True)
+    parser.add_argument("--llvm-lib-dir", type=Path)
     parser.add_argument("--param", type=Path, required=True)
     parser.add_argument("--bin", type=Path, required=True)
     parser.add_argument("--unsupported-param", type=Path, required=True)

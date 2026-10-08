@@ -503,6 +503,11 @@ OpenMP 探测，避免探测失败后静默降为单线程。设置
 `.so` 均受覆盖。直接手工调用 `ncnn-compile` 时仍须显式传递这些参数；driver 只放行对应
 sanitizer 符号族和 runtime `DT_NEEDED`，并拒绝缺少所需 runtime 依赖的 `.so`。
 
+模型 fixture 的编译耗时仍受硬预算约束。静态 LLVM/MLIR ASan+UBSan 的插桩开销经
+串行优化构建多次验证后，ResNet101 的 sanitizer 专用预算为 600s，ResNet18 Winograd
+为 1200s；Release 分别保持 300s、900s，其他 fixture 的预算不变。这个有限余量不改变
+模型数值误差、CTest 运行超时或 sanitizer/LSan 检查；超预算仍必须失败。
+
 若所用 LLVM OpenMP runtime 在退出时被 LeakSanitizer 报告初始化泄漏，不得通过 suppression
 或关闭 leak 检查规避。对 LLVM 21.1.8，可在独立源码树应用
 `test/Native/patches/llvm-21.1.8-libomp-affinity-leak.patch` 构建修复后的 runtime，并配置

@@ -54,3 +54,17 @@ func.func @dynamic_weight(%input: tensor<1x5x5x1xf32>, %weight: tensor<2x3x3x1xf
   return %result : tensor<1x3x3x2xf32>
 }
 // CHECK: is not supported by Vulkan graph: conv2d weights/bias must be constant and zero points must be zero
+
+// -----
+
+// Extracted from ResNet18's normal NCNN-to-TOSA output: convrelu_0 is the
+// first computational convolution after static input-shape metadata is known.
+func.func @resnet18_first_blocked_conv(%input: tensor<1x224x224x3xf32>) -> tensor<1x113x113x64xf32> {
+  %filter = arith.constant dense<0.0> : tensor<64x7x7x3xf32>
+  %bias = arith.constant dense<0.0> : tensor<64xf32>
+  %zero = arith.constant dense<0.0> : tensor<1xf32>
+  %output = "tosa.conv2d"(%input, %filter, %bias, %zero, %zero) <{acc_type = f32, dilation = array<i64: 1, 1>, pad = array<i64: 3, 4, 3, 4>, stride = array<i64: 2, 2>}> : (tensor<1x224x224x3xf32>, tensor<64x7x7x3xf32>, tensor<64xf32>, tensor<1xf32>, tensor<1xf32>) -> tensor<1x113x113x64xf32> loc("convrelu_0"("ncnn-layer":1:0))
+  return %output : tensor<1x113x113x64xf32>
+}
+// CHECK: is not supported by Vulkan graph: conv2d supports only 1x1 and 3x3 kernels
+// CHECK-SAME: ncnn.name="convrelu_0", ncnn.source_layer=1

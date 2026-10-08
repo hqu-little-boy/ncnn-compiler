@@ -204,3 +204,32 @@ func.func @max_pool_bad_stride(%input: tensor<1x4x4x1xf32>) -> tensor<1x2x2x1xf3
   return %pool : tensor<1x2x2x1xf32>
 }
 // CHECK: is not supported by Vulkan graph: max_pool2d supports only stride 2x2
+
+// -----
+
+// Shape tensor constants are compile-time metadata but this static-graph path
+// currently only admits zero integer metadata, not arbitrary index vectors.
+func.func @nonzero_index_shape_metadata(%input: tensor<512xf32>) -> tensor<512xf32> {
+  %shape = arith.constant dense<[512, 1, 1]> : tensor<3xindex>
+  return %input : tensor<512xf32>
+}
+// CHECK: is not supported by Vulkan graph: non-FP32 constants must be scalar zero metadata
+// CHECK-SAME: ncnn.name=<missing>, ncnn.source_layer=<missing>
+
+// -----
+
+func.func @slice_out_of_bounds(%input: tensor<4x4xf32>) -> tensor<2x2xf32> {
+  %start = "tosa.const_shape"() <{values = dense<[3, 3]> : tensor<2xindex>}> : () -> !tosa.shape<2>
+  %size = "tosa.const_shape"() <{values = dense<[2, 2]> : tensor<2xindex>}> : () -> !tosa.shape<2>
+  %out = "tosa.slice"(%input, %start, %size) : (tensor<4x4xf32>, !tosa.shape<2>, !tosa.shape<2>) -> tensor<2x2xf32>
+  return %out : tensor<2x2xf32>
+}
+// CHECK: is not supported by Vulkan graph: slice is outside the source tensor
+
+// -----
+
+func.func @duplicate_transpose_axis(%input: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %out = "tosa.transpose"(%input) <{perms = array<i32: 0, 0>}> : (tensor<2x3xf32>) -> tensor<2x3xf32>
+  return %out : tensor<2x3xf32>
+}
+// CHECK: 'tosa.transpose' op expected valid permutation indices

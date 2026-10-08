@@ -13,6 +13,18 @@ find_program(LLVM_AS NAMES llvm-as-21 REQUIRED)
 find_program(LLVM_OBJDUMP NAMES llvm-objdump-21 REQUIRED)
 find_program(LLVM_SIZE NAMES llvm-size-21 REQUIRED)
 find_program(LLVM_MCA NAMES llvm-mca-21 REQUIRED)
+# Static LLVM/MLIR component builds need no helper-DSO search path. In
+# particular, do not expose instrumented lowercase helper DSOs to unsanitized
+# tools spawned by a sanitized ncnn-compile process.
+set(NCNN_TEST_LLVM_LIBRARY_DIR "")
+foreach(_ncnn_runtime_target IN ITEMS MLIR LLVM MLIRIR LLVMSupport)
+    if(TARGET ${_ncnn_runtime_target})
+        get_target_property(_ncnn_runtime_target_type ${_ncnn_runtime_target} TYPE)
+        if(_ncnn_runtime_target_type STREQUAL "SHARED_LIBRARY")
+            set(NCNN_TEST_LLVM_LIBRARY_DIR "${LLVM_LIBRARY_DIR}")
+        endif()
+    endif()
+endforeach()
 # find_library(MLIR_RUNNER_UTILS NAMES mlir_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
 # find_library(MLIR_C_RUNNER_UTILS NAMES mlir_c_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
 add_subdirectory(Numerical)
@@ -166,6 +178,11 @@ set_tests_properties(squeezenet-shared-library PROPERTIES
     RUN_SERIAL TRUE
     TIMEOUT 180)
 
+set(_ncnn_compile_cli_runtime_args)
+if(NCNN_TEST_LLVM_LIBRARY_DIR)
+    list(APPEND _ncnn_compile_cli_runtime_args
+        --llvm-lib-dir ${NCNN_TEST_LLVM_LIBRARY_DIR})
+endif()
 add_test(NAME ncnn-compile-cli
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_ncnn_compile.py
         --compiler ${CMAKE_BINARY_DIR}/tools/ncnn-compile
@@ -181,7 +198,7 @@ add_test(NAME ncnn-compile-cli
         --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
         --static-baseline ${CMAKE_CURRENT_SOURCE_DIR}/Native/static_artifact_baseline.json
         --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/ncnn-compile-cli
-        --llvm-lib-dir ${LLVM_LIBRARY_DIR})
+        ${_ncnn_compile_cli_runtime_args})
 set_tests_properties(ncnn-compile-cli PROPERTIES
     LABELS "native;integration;cli;static-baseline"
     RUN_SERIAL TRUE
@@ -273,10 +290,18 @@ if(NCNN_ENABLE_VULKAN_PRODUCT AND NCNN_ENABLE_VULKAN_V0_TESTS)
         list(APPEND _ncnn_vulkan_library_dirs
             ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
     endif()
-    list(APPEND _ncnn_vulkan_library_dirs ${LLVM_LIBRARY_DIR})
-    list(JOIN _ncnn_vulkan_library_dirs ":" _ncnn_vulkan_library_path)
-    set(_ncnn_vulkan_product_environment
-        "LD_LIBRARY_PATH=${_ncnn_vulkan_library_path}:$ENV{LD_LIBRARY_PATH}")
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND _ncnn_vulkan_library_dirs ${LLVM_LIBRARY_DIR})
+    endif()
+    if(DEFINED ENV{LD_LIBRARY_PATH} AND NOT "$ENV{LD_LIBRARY_PATH}" STREQUAL "")
+        list(APPEND _ncnn_vulkan_library_dirs "$ENV{LD_LIBRARY_PATH}")
+    endif()
+    set(_ncnn_vulkan_product_environment)
+    if(_ncnn_vulkan_library_dirs)
+        list(JOIN _ncnn_vulkan_library_dirs ":" _ncnn_vulkan_library_path)
+        list(APPEND _ncnn_vulkan_product_environment
+            "LD_LIBRARY_PATH=${_ncnn_vulkan_library_path}")
+    endif()
     if(COMPILER_SANITIZERS MATCHES "(^|;)(address|undefined)(;|$)")
         find_file(_ncnn_sanitizer_vulkan_icd
             NAMES lvp_icd.json
@@ -292,8 +317,11 @@ if(NCNN_ENABLE_VULKAN_PRODUCT AND NCNN_ENABLE_VULKAN_V0_TESTS)
     set_tests_properties(ncnn-compile-vulkan-product PROPERTIES
         LABELS "native;integration;cli;vulkan;product"
         RUN_SERIAL TRUE
-        TIMEOUT 900
-        ENVIRONMENT "${_ncnn_vulkan_product_environment}")
+        TIMEOUT 900)
+    if(_ncnn_vulkan_product_environment)
+        set_tests_properties(ncnn-compile-vulkan-product PROPERTIES
+            ENVIRONMENT "${_ncnn_vulkan_product_environment}")
+    endif()
 endif()
 
 # Unsupported hosts still cross-compile; the script explicitly skips execution.

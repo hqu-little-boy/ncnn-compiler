@@ -238,8 +238,9 @@ Vulkan 当前只接受 Linux x86-64 host ELF，device target 固定为 Vulkan 1.
 Dropout 和必要的静态布局变换。1x1 卷积允许每边至多一格语义 padding；3x3 卷积支持 0/1 显式
 padding 与共享 lowering 推导的末端 padding。Regular/adaptive AveragePool、其他 MaxPool 参数、
 动态 shape、FP16/BF16/INT8 和未列入集合的算子组合不支持；所有 Vulkan 请求 fail closed，不回退
-CPU。轴、归约顺序、布局与参数的精确支持范围见
-[`Vulkan 后端契约`](ncnn-vulkan-backend-contract.md#static-graph-lowering-and-product-package)。
+CPU。当前完整模型验收范围为 SqueezeNet v1.1，不代表任意 ncnn 网络已受支持。产品静态图矩阵及
+V1/V2 历史单计算算子契约的区别、每条参数/轴/布局正反 fixture，见
+[`Vulkan 后端契约`](ncnn-vulkan-backend-contract.md#product-static-graph-support-matrix-v54)。
 
 示例：
 

@@ -673,7 +673,9 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     endif()
     set(V5_CONFIGURED_DEPENDENCY_ARGS)
     if(NCNN_VULKAN_USES_SHARED_LLVM)
-        list(APPEND V5_CONFIGURED_DEPENDENCY_ARGS --shared-llvm)
+        list(APPEND V5_CONFIGURED_DEPENDENCY_ARGS
+            --shared-llvm
+            --llvm-lib-dir ${LLVM_LIBRARY_DIR})
     endif()
     foreach(dependency IN LISTS NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES)
         list(APPEND V5_CONFIGURED_DEPENDENCY_ARGS
@@ -685,11 +687,17 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
             --sanitizer-dependency=${dependency})
     endforeach()
 
-    set(V5_TEST_LIBRARY_PATH "${LLVM_LIBRARY_DIR}")
-    if(V5_SANITIZER_RUNTIME_DIR)
-        string(APPEND V5_TEST_LIBRARY_PATH ":${V5_SANITIZER_RUNTIME_DIR}")
+    set(V5_TEST_LIBRARY_DIRS)
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND V5_TEST_LIBRARY_DIRS ${LLVM_LIBRARY_DIR})
     endif()
-    string(APPEND V5_TEST_LIBRARY_PATH ":$ENV{LD_LIBRARY_PATH}")
+    if(V5_SANITIZER_RUNTIME_DIR)
+        list(APPEND V5_TEST_LIBRARY_DIRS ${V5_SANITIZER_RUNTIME_DIR})
+    endif()
+    if(DEFINED ENV{LD_LIBRARY_PATH} AND NOT "$ENV{LD_LIBRARY_PATH}" STREQUAL "")
+        list(APPEND V5_TEST_LIBRARY_DIRS "$ENV{LD_LIBRARY_PATH}")
+    endif()
+    string(JOIN ":" V5_TEST_LIBRARY_PATH ${V5_TEST_LIBRARY_DIRS})
 
     set(V5_SQUEEZENET_PARAM
         ${PROJECT_SOURCE_DIR}/test/third_party/ncnn/examples/squeezenet_v1.1.param)
@@ -724,7 +732,6 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
                 --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
                 --host-cxx ${CMAKE_CXX_COMPILER}
                 --llvm-major ${LLVM_VERSION_MAJOR}
-                --llvm-lib-dir ${LLVM_LIBRARY_DIR}
                 --runner $<TARGET_FILE:vulkan_model_runner>
                 --vulkaninfo ${VULKANINFO}
                 --project-include ${PROJECT_SOURCE_DIR}/include
@@ -739,8 +746,11 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         set_tests_properties(${test_name} PROPERTIES
             LABELS "vulkan;device;integration;v5;product"
             RUN_SERIAL TRUE
-            TIMEOUT 900
-            ENVIRONMENT "LD_LIBRARY_PATH=${V5_TEST_LIBRARY_PATH}")
+            TIMEOUT 900)
+        if(V5_TEST_LIBRARY_PATH)
+            set_tests_properties(${test_name} PROPERTIES
+                ENVIRONMENT "LD_LIBRARY_PATH=${V5_TEST_LIBRARY_PATH}")
+        endif()
     endfunction()
 
 ncnn_add_vulkan_v5_test(

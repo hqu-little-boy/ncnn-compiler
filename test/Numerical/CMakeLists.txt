@@ -287,6 +287,13 @@ set(ncnn_model_compile_budget_yolov5x_cls 900)
 # 224 输入全主干实测 ~8 分钟——暂列 900s（与常量池大件同档），
 # 向量化收益验证后回头压缩（展开 tap 数或行分组）。
 set(ncnn_model_compile_budget_resnet18_winograd 900)
+# 静态 ASan+UBSan 工具链的编译成本不等于 Release 性能回归：串行 O3
+# 实测 ResNet101 386s、Winograd 895s（并行 1113s）。只给这两个模型
+# 有限插桩余量，仍用硬预算；Release 和其他 fixture 的预算不变。
+if(CMAKE_CXX_FLAGS MATCHES "fsanitize")
+    set(ncnn_model_compile_budget_resnet101 600)
+    set(ncnn_model_compile_budget_resnet18_winograd 1200)
+endif()
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
     set(ncnn_model_scalar_args CLANG_ARG=-march=x86-64-v3)

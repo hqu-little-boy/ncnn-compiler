@@ -1975,6 +1975,21 @@ def run_fixture(args, fixture, device_info, env, evidence_root):
     return evidence
 
 
+def configured_library_path(
+    llvm_shared, llvm_lib_dir, sanitizer_runtime_dir, inherited_library_path
+):
+    paths = []
+    if llvm_shared:
+        if not llvm_lib_dir:
+            raise RuntimeError("shared LLVM mode requires --llvm-lib-dir")
+        paths.append(str(llvm_lib_dir))
+    if sanitizer_runtime_dir:
+        paths.append(str(Path(sanitizer_runtime_dir).resolve()))
+    if inherited_library_path:
+        paths.append(inherited_library_path)
+    return ":".join(paths)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", choices=("v5.1", "v5.2", "v5.3"), default="v5.1")
@@ -1983,10 +1998,11 @@ def parse_args():
     for name in (
         "compiler", "driver", "opt", "mlir-opt", "translate", "clang", "nm", "readelf",
         "llvm-as", "spirv-val", "spirv-dis", "spirv-extract", "host-cxx",
-        "llvm-major", "llvm-lib-dir", "runner", "vulkaninfo", "project-include",
+        "llvm-major", "runner", "vulkaninfo", "project-include",
         "device-match", "icd", "output-dir",
     ):
         parser.add_argument("--" + name, required=True)
+    parser.add_argument("--llvm-lib-dir")
     parser.add_argument("--cxx-arg", action="append", default=[])
     parser.add_argument("--sanitizer-runtime-dir")
     parser.add_argument("--shared-llvm", action="store_true")
@@ -2004,13 +2020,14 @@ def main():
     env = os.environ.copy()
     env["VK_ICD_FILENAMES"] = args.icd
     env["VK_INSTANCE_LAYERS"] = "VK_LAYER_KHRONOS_validation"
-    old_library_path = env.get("LD_LIBRARY_PATH", "")
-    library_paths = [args.llvm_lib_dir]
-    if args.sanitizer_runtime_dir:
-        library_paths.append(str(Path(args.sanitizer_runtime_dir).resolve()))
-    if old_library_path:
-        library_paths.append(old_library_path)
-    env["LD_LIBRARY_PATH"] = ":".join(library_paths)
+    library_path = configured_library_path(
+        args.shared_llvm,
+        args.llvm_lib_dir,
+        args.sanitizer_runtime_dir,
+        env.get("LD_LIBRARY_PATH", ""),
+    )
+    if library_path:
+        env["LD_LIBRARY_PATH"] = library_path
     device_info = check_device(args, env)
     fixtures = fixture_definitions(
         args.output_dir / "fixtures", args.suite, args.model_param, args.model_bin

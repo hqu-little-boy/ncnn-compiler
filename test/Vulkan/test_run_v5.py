@@ -26,6 +26,29 @@ class CompareOutputsTest(unittest.TestCase):
             )
 
 
+class RuntimeLibraryPathTest(unittest.TestCase):
+    def test_static_llvm_does_not_prepend_helper_library_directory(self):
+        path = run_v5.configured_library_path(
+            False,
+            "/opt/static-llvm/lib",
+            "/opt/sanitizer/lib",
+            "/opt/application/lib",
+        )
+        self.assertEqual(path, "/opt/sanitizer/lib:/opt/application/lib")
+
+    def test_shared_llvm_retains_its_runtime_library_directory(self):
+        path = run_v5.configured_library_path(
+            True,
+            "/opt/shared-llvm/lib",
+            "/opt/sanitizer/lib",
+            "/opt/application/lib",
+        )
+        self.assertEqual(
+            path,
+            "/opt/shared-llvm/lib:/opt/sanitizer/lib:/opt/application/lib",
+        )
+
+
 class V53ModelDefinitionTest(unittest.TestCase):
     def test_uses_vendored_squeezenet_with_verified_topology(self):
         repository = MODULE_PATH.resolve().parents[2]
