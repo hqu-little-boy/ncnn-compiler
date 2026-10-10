@@ -20,6 +20,8 @@ option(NCNN_ENABLE_VULKAN_PRODUCT
     "Build ncnn-compile Vulkan product backend support" OFF)
 option(NCNN_ENABLE_VULKAN_V0_TESTS
     "Enable opt-in Vulkan V0-V3 runtime tests (requires Vulkan and SPIR-V tools)" OFF)
+set(NCNN_VULKAN_TEST_DEVICES "nvidia;llvmpipe" CACHE STRING
+    "Vulkan test device matrix (supported values: nvidia;llvmpipe)")
 option(BUILD_SHARED_LIBS
     "Build first-party libraries as shared instead of static (needs PIC-capable LLVM archives)" OFF)
 option(COMPILER_ENABLE_WARNINGS
@@ -120,6 +122,27 @@ include(AddMLIR)
 
 if(NCNN_ENABLE_VULKAN_V0_TESTS AND NOT BUILD_TESTING)
     message(FATAL_ERROR "NCNN_ENABLE_VULKAN_V0_TESTS requires BUILD_TESTING=ON")
+endif()
+if(NCNN_ENABLE_VULKAN_V0_TESTS)
+    if(NCNN_VULKAN_TEST_DEVICES STREQUAL "" OR
+       NCNN_VULKAN_TEST_DEVICES MATCHES "(^;|;$|;;)")
+        message(FATAL_ERROR
+            "NCNN_VULKAN_TEST_DEVICES must contain at least one non-empty device")
+    endif()
+    set(_ncnn_vulkan_seen_devices)
+    foreach(_ncnn_vulkan_device IN LISTS NCNN_VULKAN_TEST_DEVICES)
+        if(NOT _ncnn_vulkan_device STREQUAL "nvidia" AND
+           NOT _ncnn_vulkan_device STREQUAL "llvmpipe")
+            message(FATAL_ERROR
+                "Unsupported NCNN_VULKAN_TEST_DEVICES entry '${_ncnn_vulkan_device}'; "
+                "supported devices are nvidia and llvmpipe")
+        endif()
+        if(_ncnn_vulkan_device IN_LIST _ncnn_vulkan_seen_devices)
+            message(FATAL_ERROR
+                "Duplicate NCNN_VULKAN_TEST_DEVICES entry '${_ncnn_vulkan_device}'")
+        endif()
+        list(APPEND _ncnn_vulkan_seen_devices "${_ncnn_vulkan_device}")
+    endforeach()
 endif()
 if(BUILD_TESTING)
     enable_testing()

@@ -1,0 +1,117 @@
+name: Vulkan qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_hardware:
+        description: Run the provisioned NVIDIA self-hosted qualification job
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  hosted:
+    name: Vulkan ${{ matrix.profile }}
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [offline, software]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout compiler
+        uses: actions/checkout@v4
+        with:
+          path: compiler
+          submodules: true
+      - name: Install LLVM 21 and Vulkan test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/llvm-21.gpg
+          printf '%s\n' \
+            'deb [signed-by=/usr/share/keyrings/llvm-21.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' | \
+            sudo tee /etc/apt/sources.list.d/llvm-21.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libgtest-dev python3 \
+            llvm-21-dev clang-21 clang-tools-21 clang-format-21 clang-tidy-21 \
+            libomp-21-dev libmlir-21-dev mlir-21-tools \
+            libvulkan-dev mesa-vulkan-drivers vulkan-tools \
+            vulkan-validationlayers spirv-tools
+      - name: Download the existing numerical model fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          wget --recursive --no-parent --no-host-directories \
+            https://mirrors.sdu.edu.cn/ncnn_modelzoo/liteocr/
+      - name: Run the fresh complete gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 compiler/test/Vulkan/run_gate.py \
+            --profile '${{ matrix.profile }}' \
+            --build-root "$RUNNER_TEMP/ncnn-vulkan-stages" \
+            --jobs 4 --tidy-jobs 4 --archive
+      - name: Archive successful or failed qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulkan-${{ matrix.profile }}-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/ncnn-vulkan-stages/*.evidence.tar.gz
+            ${{ runner.temp }}/ncnn-vulkan-stages/**/gate-*.log
+            ${{ runner.temp }}/ncnn-vulkan-stages/**/gate-*.json
+            ${{ runner.temp }}/ncnn-vulkan-stages/**/release-evidence.json
+
+  hardware:
+    name: Vulkan NVIDIA hardware
+    if: ${{ inputs.run_hardware }}
+    needs: hosted
+    runs-on: [self-hosted, linux, x64, ncnn-vulkan-nvidia]
+    timeout-minutes: 360
+    steps:
+      - name: Checkout compiler
+        uses: actions/checkout@v4
+        with:
+          path: compiler
+          submodules: true
+      - name: Check the provisioned qualification environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v cmake clang-format-21 clang-tidy-21 mlir-opt-21 \
+            mlir-translate-21 FileCheck-21 spirv-val spirv-dis vulkaninfo
+          nvidia-smi --query-gpu=name,driver_version,pci.device_id --format=csv
+          vulkaninfo --summary
+      - name: Download the existing numerical model fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          wget --recursive --no-parent --no-host-directories \
+            https://mirrors.sdu.edu.cn/ncnn_modelzoo/liteocr/
+      - name: Run the fresh complete hardware gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 compiler/test/Vulkan/run_gate.py \
+            --profile hardware \
+            --build-root "$RUNNER_TEMP/ncnn-vulkan-stages" \
+            --jobs 4 --tidy-jobs 4 --archive
+      - name: Archive successful or failed hardware evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulkan-hardware-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/ncnn-vulkan-stages/*.evidence.tar.gz
+            ${{ runner.temp }}/ncnn-vulkan-stages/**/gate-*.log
+            ${{ runner.temp }}/ncnn-vulkan-stages/**/gate-*.json
+            ${{ runner.temp }}/ncnn-vulkan-stages/**/release-evidence.json

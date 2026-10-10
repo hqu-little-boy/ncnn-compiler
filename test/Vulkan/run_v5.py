@@ -17,6 +17,8 @@ import struct
 import subprocess
 import sys
 
+from record_spirv_validation import make_launcher, validate_records
+
 
 ATOL = 1.0e-6
 RTOL = 1.0e-6
@@ -698,7 +700,8 @@ def compile_model(args, fixture, backend, output_dir, env):
                 "--vulkan-mlir-opt",
                 args.mlir_opt,
                 "--vulkan-spirv-val",
-                args.spirv_val,
+                str(make_launcher(args.spirv_val,
+                                  output_dir.parent / "spirv-validation")),
                 "--vulkan-spirv-dis",
                 args.spirv_dis,
                 "--vulkan-spirv-extract",
@@ -707,11 +710,18 @@ def compile_model(args, fixture, backend, output_dir, env):
                 args.host_cxx,
             ]
         )
-    invoke(
-        command,
-        env=env,
-        sanitizer_enabled=bool(args.sanitizer_dependency),
-    )
+    log = output_dir.parent / f"compile-{backend}.json"
+    record = {"argv": [str(value) for value in command]}
+    try:
+        result = invoke(command, env=env,
+                        sanitizer_enabled=bool(args.sanitizer_dependency))
+    except RuntimeError as error:
+        record["failure"] = str(error)
+        log.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        raise
+    record.update(returncode=result.returncode, stdout=result.stdout,
+                  stderr=result.stderr)
+    log.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return output_dir
 
 
@@ -801,6 +811,16 @@ def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
         if int(shader.get("size_bytes", 0)) <= 0:
             raise RuntimeError("Vulkan manifest shader byte size is invalid")
         shader_hashes.append(digest)
+    shader_validations = validate_records(vk_dir.parent / "spirv-validation",
+                                          shader_hashes)
+    if len(shader_validations) != len(kernels):
+        raise RuntimeError("SPIR-V validator record count differs from plan kernels")
+    for kernel, shader, validation in zip(kernels, shaders, shader_validations):
+        if (validation["sha256"] != shader["sha256"] or
+                validation["size_bytes"] != shader["size_bytes"]):
+            raise RuntimeError(
+                f"SPIR-V validator record differs from kernel {kernel['id']}")
+        validation["kernel_id"] = kernel["id"]
     if vk_manifest.get("shader_sha256s") != shader_hashes:
         raise RuntimeError("Vulkan manifest shader_sha256s differ from shader entries")
     if vk_manifest.get("shader_sha256") != shader_hashes[0]:
@@ -1039,6 +1059,7 @@ def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
         "plan": plan,
         "plan_sha256": sha256_bytes(plan_bytes),
         "shader_sha256": shader_hashes,
+        "shader_validations": shader_validations,
         "vulkan_dependencies": actual_dependencies,
         "cpu_dependencies": cpu_dependencies,
         "shaders": shaders,
@@ -1603,7 +1624,8 @@ def parse_vulkan_device_summary(text, device_match, icd):
             f"{icd}; enumerated devices: {available}"
         )
     device = matching_devices[0]
-    required_fields = ("apiVersion", "driverVersion", "vendorID", "deviceID")
+    required_fields = ("apiVersion", "driverVersion", "vendorID", "deviceID",
+                       "deviceType")
     missing_fields = [field for field in required_fields if not device.get(field)]
     if missing_fields:
         raise RuntimeError(
@@ -1616,6 +1638,7 @@ def parse_vulkan_device_summary(text, device_match, icd):
         "driver_version": device["driverVersion"],
         "vendor_id": device["vendorID"],
         "device_id": device["deviceID"],
+        "device_type": device["deviceType"],
         "driver_id": device.get("driverID"),
         "driver_name": device.get("driverName"),
         "driver_info": device.get("driverInfo"),
@@ -1626,6 +1649,7 @@ def parse_vulkan_device_summary(text, device_match, icd):
 def check_device(args, env):
     result = invoke([args.vulkaninfo, "--summary"], env=env)
     text = result.stdout + result.stderr
+    (args.output_dir / "vulkaninfo-summary.txt").write_text(text, encoding="utf-8")
     if "VK_LAYER_KHRONOS_validation" not in text:
         raise RuntimeError("Khronos Vulkan validation layer is unavailable")
     return parse_vulkan_device_summary(text, args.device_match, args.icd)
@@ -1961,6 +1985,8 @@ def run_fixture(args, fixture, device_info, env, evidence_root):
             "plan_hash": plan.get("plan_hash"),
             "shader_sha256": artifacts["shader_sha256"],
             "shader_entries": artifacts["shaders"],
+            "shader_validations": artifacts["shader_validations"],
+            "shader_validation_directory": "spirv-validation",
             "build_identity": manifest.get("build_identity"),
             "weight_manifest_entries": artifacts["weights"],
             "logical_weight_oracles": fixture.get("weight_oracles", []),
@@ -2039,6 +2065,7 @@ def main():
         "schema_version": 1,
         "device": device_info["device_name"],
         "device_info": device_info,
+        "vulkaninfo_summary": "vulkaninfo-summary.txt",
         "icd": args.icd,
         "validation_layer": env["VK_INSTANCE_LAYERS"],
         "fixtures": [

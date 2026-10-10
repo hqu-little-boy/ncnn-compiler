@@ -48,6 +48,8 @@ enum class VulkanRuntimeOperation : std::uint8_t {
   CreateCommandResources,
   Submit,
   Wait,
+  FlushMappedMemory,
+  InvalidateMappedMemory,
 };
 
 struct VulkanRuntimeOptions final {

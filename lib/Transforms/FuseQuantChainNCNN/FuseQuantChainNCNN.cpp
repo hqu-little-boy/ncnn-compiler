@@ -1,13 +1,10 @@
 #include "ncnn-mlir/Transforms/FuseQuantChainNCNN/FuseQuantChainNCNN.hpp"
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Math/IR/Math.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 
@@ -349,8 +346,10 @@ class FuseQuantChainNCNNPass final
     if (castChain && castChain.getValue()) {
       patterns.add<NormalizeMapConsumer>(&getContext());
     }
-    if (failed(
-          applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+    GreedyRewriteConfig rewriteConfig;
+    rewriteConfig.enableFolding();
+    if (failed(applyPatternsGreedily(
+          getOperation(), std::move(patterns), rewriteConfig))) {
       signalPassFailure();
     }
   }

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -17,8 +18,28 @@ import subprocess
 import sys
 
 
+EXPECTED_FAILURE_LOGS = []
+VALIDATION_ERROR_RE = re.compile(
+    r"VUID-[A-Za-z0-9-]+|Validation Error|^\s*(?:ERROR|Error)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def validation_error_count(text):
+    return len(VALIDATION_ERROR_RE.findall(text))
+
+
 def invoke(command, *, env=None, expect_success=True, cwd=None):
     result = subprocess.run(command, capture_output=True, text=True, env=env, cwd=cwd)
+    if not expect_success:
+        EXPECTED_FAILURE_LOGS.append(
+            {
+                "argv": [str(item) for item in command],
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        )
     if expect_success and result.returncode != 0:
         raise RuntimeError(
             f"command failed ({result.returncode}): {command}\n"
@@ -27,6 +48,10 @@ def invoke(command, *, env=None, expect_success=True, cwd=None):
     if not expect_success and result.returncode == 0:
         raise RuntimeError(f"command unexpectedly succeeded: {command}")
     return result
+
+
+def sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def assert_no_published_artifacts(path):
@@ -282,6 +307,12 @@ def run_product_loader(args, cpu_dir, vulkan_dir, model_name, input_data):
     child = subprocess.run(
         command, capture_output=True, text=True, env=runtime_env(args)
     )
+    (args.work_dir / "vulkan-loader.stdout.log").write_text(
+        child.stdout, encoding="utf-8"
+    )
+    (args.work_dir / "vulkan-loader.stderr.log").write_text(
+        child.stderr, encoding="utf-8"
+    )
     result = None
     if result_path.is_file():
         try:
@@ -335,6 +366,10 @@ def runtime_env(args):
         if args.llvm_lib_dir is None:
             raise RuntimeError("shared LLVM mode requires --llvm-lib-dir")
         library_dirs.append(str(args.llvm_lib_dir))
+    if args.icd:
+        env["VK_ICD_FILENAMES"] = str(args.icd)
+    if not args.offline:
+        env["VK_INSTANCE_LAYERS"] = "VK_LAYER_KHRONOS_validation"
     inherited = env.get("LD_LIBRARY_PATH", "")
     if inherited:
         library_dirs.append(inherited)
@@ -343,9 +378,31 @@ def runtime_env(args):
     return env
 
 
+def load_spirv_validation_recorder():
+    recorder_path = Path(__file__).resolve().parents[1] / "Vulkan" / "record_spirv_validation.py"
+    spec = importlib.util.spec_from_file_location(
+        "ncnn_spirv_validation_recorder", recorder_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load SPIR-V validation recorder: {recorder_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(recorder_path.parent))
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(recorder_path.parent))
+        sys.dont_write_bytecode = previous_dont_write_bytecode
+    return module
+
+
 def reconstruct_shaders(args, directory):
     output = directory / "shader-reconstruction"
     output.mkdir()
+    validation_dir = output / "spirv-validation"
+    recorder = load_spirv_validation_recorder()
+    spirv_val_launcher = recorder.make_launcher(args.spirv_val, validation_dir)
     imported = output / "imported.mlir"
     tosa = output / "strict-tosa.mlir"
     device_ir = output / "device.mlir"
@@ -448,9 +505,45 @@ def reconstruct_shaders(args, directory):
                 str(shader),
             ]
         )
-        invoke([args.spirv_val, "--target-env", "vulkan1.1", str(shader)])
+        invoke(
+            [str(spirv_val_launcher), "--target-env", "vulkan1.1", str(shader)]
+        )
         shader_hashes[kernel["id"]] = hashlib.sha256(shader.read_bytes()).hexdigest()
-    return shader_hashes
+    recorded_validations = recorder.validate_records(
+        validation_dir,
+        [shader_hashes[kernel["id"]] for kernel in plan["kernels"]],
+    )
+    if len(recorded_validations) != len(plan["kernels"]):
+        raise RuntimeError("recorded SPIR-V validation count differs from the kernel plan")
+    shader_validations = []
+    for kernel, record in zip(plan["kernels"], recorded_validations):
+        kernel_id = kernel["id"]
+        expected_hash = shader_hashes[kernel_id]
+        if record["sha256"] != expected_hash:
+            raise RuntimeError(
+                f"SPIR-V validation identity differs for kernel {kernel_id}"
+            )
+        shader_validations.append(
+            {
+                "kernel_id": kernel_id,
+                "log_file": (
+                    "vulkan/shader-reconstruction/spirv-validation/"
+                    + record["log"]
+                ),
+                "log_sha256": record["log_sha256"],
+                "shader_file": (
+                    "vulkan/shader-reconstruction/spirv-validation/"
+                    + record["path"]
+                ),
+                "sha256": record["sha256"],
+                "size_bytes": record["size_bytes"],
+            }
+        )
+    if [item["kernel_id"] for item in shader_validations] != [
+        kernel["id"] for kernel in plan["kernels"]
+    ]:
+        raise RuntimeError("recorded SPIR-V validations do not cover every product kernel")
+    return shader_hashes, shader_validations
 
 
 def compile_args(args, model_name, output_dir, param, binary, backend=True):
@@ -469,8 +562,465 @@ def compile_args(args, model_name, output_dir, param, binary, backend=True):
     return command
 
 
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def artifact_hashes(path):
+    return {
+        entry.name: sha256(entry)
+        for entry in sorted(path.iterdir())
+        if entry.is_file()
+    }
+
+
+def run_cpu_loader(args, cpu_dir, input_values, input_path, output_path, env):
+    directory = args.work_dir / f"cpu-loader-{cpu_dir.name}"
+    directory.mkdir()
+    loader = directory / "cpu-product-loader"
+    result_path = directory / "result.json"
+    count = len(input_values)
+    input_path.write_bytes(struct.pack(f"<{count}f", *input_values))
+    compile_command = [
+        args.host_cxx,
+        "-std=c++20",
+        *args.cxx_arg,
+        "-DNCNN_PRODUCT_TEST_MODEL=paired_relu",
+        "-DNCNN_PRODUCT_TEST_CPU_ONLY=1",
+        "-I",
+        str(cpu_dir),
+        str(args.loader_source),
+        "-ldl",
+        "-o",
+        str(loader),
+    ]
+    compile_result = invoke(compile_command, env=env)
+    command = [
+        str(loader),
+        "paired_relu",
+        str(cpu_dir / "libpaired_relu.so"),
+        str(count),
+        str(input_path),
+        str(output_path),
+        str(result_path),
+    ]
+    child = subprocess.run(command, capture_output=True, text=True, env=env)
+    streams = {}
+    for name, text in (
+        ("compile.stdout.log", compile_result.stdout),
+        ("compile.stderr.log", compile_result.stderr),
+        ("run.stdout.log", child.stdout),
+        ("run.stderr.log", child.stderr),
+    ):
+        path = directory / name
+        path.write_text(text, encoding="utf-8")
+        streams[name] = {
+            "file": str(path.relative_to(args.work_dir)),
+            "sha256": sha256(path),
+        }
+    record = {
+        "compile_argv": [str(item) for item in compile_command],
+        "compile_returncode": compile_result.returncode,
+        "argv": [str(item) for item in command],
+        "returncode": child.returncode,
+        "loader_file": str(loader.relative_to(args.work_dir)),
+        "loader_sha256": sha256(loader),
+        "result_file": str(result_path.relative_to(args.work_dir)),
+        "streams": streams,
+    }
+    (directory / "invocation.json").write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    logs = f"stdout:\n{child.stdout}\nstderr:\n{child.stderr}"
+    diagnostic = sanitizer_diagnostics(child.stdout + "\n" + child.stderr)
+    if diagnostic:
+        raise RuntimeError(
+            f"sanitizer diagnostic from CPU loader ({child.returncode}): "
+            f"{diagnostic.group(0)}\n{logs}"
+        )
+    if child.returncode != 0:
+        raise RuntimeError(f"CPU loader failed ({child.returncode})\n{logs}")
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(result, dict)
+        or result.get("status") != "success"
+        or type(result.get("cpu_status")) is not int
+        or result["cpu_status"] != 0
+    ):
+        raise RuntimeError(f"CPU loader reported failure: {result}\n{logs}")
+    output_bytes = output_path.read_bytes()
+    if len(output_bytes) != count * 4:
+        raise RuntimeError(
+            f"CPU loader wrote {len(output_bytes)} bytes, expected {count * 4}"
+        )
+    record["result_sha256"] = sha256(result_path)
+    (directory / "invocation.json").write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    output_values = list(struct.unpack(f"<{count}f", output_bytes))
+    return result["cpu_status"], output_values, output_bytes, record
+
+
+def run_cpu_relu(args, cpu_dir, input_values, input_path, output_path, env):
+    cpu_command = [
+        args.compiler,
+        str(args.work_dir / "model.param"),
+        "--bin",
+        str(args.work_dir / "model.bin"),
+        "--model-name",
+        "paired_relu",
+        "--output-dir",
+        str(cpu_dir),
+        "--precision=f32",
+        "--threads=1",
+        "--vector-width=0",
+        "-O0",
+        "--verify-execution",
+    ]
+    for flag in args.cxx_arg:
+        cpu_command.extend([f"--clang-arg={flag}", f"--linker-arg={flag}"])
+    result = invoke(cpu_command, env=env)
+    check_cpu_artifact(args, cpu_dir)
+
+    status, output_values, output_bytes, loader_record = run_cpu_loader(
+        args, cpu_dir, input_values, input_path, output_path, env
+    )
+    return result, status, output_values, output_bytes, loader_record
+
+
+def offline_failure(args, name, command, env, output_dir, expected_diagnostic):
+    before = artifact_hashes(output_dir)
+    result = invoke(command, env=env, expect_success=False)
+    diagnostic = result.stdout + "\n" + result.stderr
+    if not re.search(expected_diagnostic, diagnostic, re.IGNORECASE):
+        raise RuntimeError(
+            f"{name} did not report expected diagnostic /{expected_diagnostic}/: "
+            f"{diagnostic}"
+        )
+    after = artifact_hashes(output_dir)
+    unchanged = before == after
+    record = {
+        "name": name,
+        "argv": [str(item) for item in command],
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "expected_diagnostic": expected_diagnostic,
+        "diagnostic_match": True,
+        "artifacts_before_sha256": before,
+        "artifacts_after_sha256": after,
+        "artifacts_unchanged": unchanged,
+    }
+    if not unchanged:
+        raise RuntimeError(f"{name} modified successful Vulkan artifacts")
+    return record
+
+
+def run_offline(args):
+    args.work_dir = args.work_dir.resolve()
+    shutil.rmtree(args.work_dir, ignore_errors=True)
+    args.work_dir.mkdir(parents=True)
+    shutil.copy2(args.param, args.work_dir / "model.param")
+    shutil.copy2(args.bin, args.work_dir / "model.bin")
+    env = runtime_env(args)
+    env.pop("VK_DRIVER_FILES", None)
+    env.pop("VK_ADD_DRIVER_FILES", None)
+    unavailable_icd = args.work_dir / "no-available-icd.json"
+    env["VK_ICD_FILENAMES"] = str(unavailable_icd)
+    if unavailable_icd.exists():
+        unavailable_icd.unlink()
+
+    elements = 257
+    input_values = make_input(elements)
+    golden_values = [value if value > 0.0 else 0.0 for value in input_values]
+    expected_bytes = struct.pack(f"<{elements}f", *golden_values)
+    cpu_dir = args.work_dir / "cpu"
+    input_path = args.work_dir / "public-input.f32"
+    cpu_output_path = args.work_dir / "cpu-output.f32"
+    golden_path = args.work_dir / "scalar-golden.f32"
+    golden_path.write_bytes(expected_bytes)
+    cpu_compile, cpu_status, cpu_values, cpu_bytes, cpu_loader = run_cpu_relu(
+        args, cpu_dir, input_values, input_path, cpu_output_path, env
+    )
+    input_bytes = input_path.read_bytes()
+    if cpu_status != 0:
+        raise RuntimeError(f"CPU ReLU returned status {cpu_status}")
+    cpu_errors = [abs(actual - expected) for actual, expected in zip(cpu_values, golden_values)]
+    max_abs_error = max(cpu_errors, default=0.0)
+    if max_abs_error > 1.0e-6:
+        raise RuntimeError(f"CPU ReLU differs from scalar golden: max_abs={max_abs_error}")
+
+    vulkan_dir = args.work_dir / "vulkan"
+    offline_compile_command = [
+        args.compiler,
+        str(args.work_dir / "model.param"),
+        "--bin",
+        str(args.work_dir / "model.bin"),
+        "--model-name",
+        "paired_relu",
+        "--output-dir",
+        str(vulkan_dir),
+        "--backend=vulkan",
+        "--precision=f32",
+    ]
+    compile_result = invoke(offline_compile_command, env=env)
+    manifest = check_vulkan_artifact(args, vulkan_dir, elements)
+    shader_hashes, shader_validations = reconstruct_shaders(args, args.work_dir)
+    manifest_shader_hashes = {
+        int(shader["kernel_id"]): shader["sha256"]
+        for shader in manifest.get("shaders", [])
+    }
+    if shader_hashes != manifest_shader_hashes:
+        raise RuntimeError("manifest shader hashes differ from offline SPIR-V")
+    if len(shader_hashes) == 1 and next(iter(shader_hashes.values())) != manifest["shader_sha256"]:
+        raise RuntimeError("manifest primary shader hash differs from offline SPIR-V")
+    successful_artifacts = artifact_hashes(vulkan_dir)
+    negative_dir = args.work_dir / "negative-tools"
+    negative_dir.mkdir()
+    negatives = []
+
+    missing_validator = [
+        *offline_compile_command,
+        "--vulkan-spirv-val=" + str(args.work_dir / "missing-spirv-val"),
+    ]
+    negatives.append(
+        offline_failure(
+            args,
+            "missing-validator",
+            missing_validator,
+            env,
+            vulkan_dir,
+            r"cannot execute|no such file|not found",
+        )
+    )
+
+    rejecting_validator = negative_dir / "reject-spirv-val"
+    rejecting_validator.write_text("#!/bin/sh\nexit 23\n", encoding="utf-8")
+    rejecting_validator.chmod(0o755)
+    negatives.append(
+        offline_failure(
+            args,
+            "validator-failure",
+            [*offline_compile_command, "--vulkan-spirv-val=" + str(rejecting_validator)],
+            env,
+            vulkan_dir,
+            r"exit code 23",
+        )
+    )
+
+    rejecting_cxx = negative_dir / "reject-host-link"
+    rejecting_cxx.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"-dumpmachine\" ]; then\n"
+        f"  exec {shlex.quote(args.host_cxx)} -dumpmachine\n"
+        "fi\n"
+        "exit 29\n",
+        encoding="utf-8",
+    )
+    rejecting_cxx.chmod(0o755)
+    negatives.append(
+        offline_failure(
+            args,
+            "link-failure",
+            [*offline_compile_command, "--vulkan-host-cxx=" + str(rejecting_cxx)],
+            env,
+            vulkan_dir,
+            r"exit code 29",
+        )
+    )
+
+    rejecting_readelf = negative_dir / "reject-readelf"
+    rejecting_readelf.write_text("#!/bin/sh\nexit 31\n", encoding="utf-8")
+    rejecting_readelf.chmod(0o755)
+    negatives.append(
+        offline_failure(
+            args,
+            "audit-failure",
+            [*offline_compile_command, "--readelf=" + str(rejecting_readelf)],
+            env,
+            vulkan_dir,
+            r"exit code 31",
+        )
+    )
+
+    no_device_verify = [*offline_compile_command, "--verify-execution"]
+    negatives.append(
+        offline_failure(
+            args,
+            "no-device-execution-verification",
+            no_device_verify,
+            env,
+            vulkan_dir,
+            r"Vulkan ABI execution verification failed|no Vulkan physical devices|no compatible Vulkan",
+        )
+    )
+
+    # Recompile and execute the CPU fixture after all failed product attempts.
+    cpu_repeat_dir = args.work_dir / "cpu-after-negative-cases"
+    repeat_input_path = args.work_dir / "public-input-after-negative-cases.f32"
+    repeat_output_path = args.work_dir / "cpu-output-after-negative-cases.f32"
+    _, repeat_status, repeat_values, repeat_bytes, recovery_loader = run_cpu_relu(
+        args,
+        cpu_repeat_dir,
+        input_values,
+        repeat_input_path,
+        repeat_output_path,
+        env,
+    )
+    if repeat_status != 0 or repeat_bytes != expected_bytes:
+        raise RuntimeError("CPU ReLU did not recover after Vulkan failure cases")
+    cpu_library_sha256 = sha256(cpu_dir / "libpaired_relu.so")
+    recovery_library_sha256 = sha256(cpu_repeat_dir / "libpaired_relu.so")
+    if recovery_library_sha256 != cpu_library_sha256:
+        raise RuntimeError("CPU ReLU recovery changed the CPU artifact identity")
+    shutil.move(
+        args.work_dir / "shader-reconstruction",
+        vulkan_dir / "shader-reconstruction",
+    )
+
+    evidence = {
+        "schema_version": 1,
+        "kind": "ncnn.vulkan_offline_evidence",
+        "execution": {
+            "mode": "offline-no-device",
+            "vk_icd_filenames": str(unavailable_icd),
+            "vk_icd_manifest_exists": unavailable_icd.exists(),
+            "vk_driver_files_override": env.get("VK_DRIVER_FILES"),
+            "vk_add_driver_files_override": env.get("VK_ADD_DRIVER_FILES"),
+            "vulkan_execution": "not_run",
+            "gpu_output": None,
+        },
+        "fixture": {
+            "model": "paired_relu",
+            "param_sha256": sha256(args.work_dir / "model.param"),
+            "bin_sha256": sha256(args.work_dir / "model.bin"),
+            "cpu_library_sha256": sha256(cpu_dir / "libpaired_relu.so"),
+            "cpu_header_sha256": sha256(cpu_dir / "paired_relu.h"),
+            "vulkan_library_sha256": sha256(vulkan_dir / "libpaired_relu_vulkan.so"),
+            "vulkan_header_sha256": sha256(vulkan_dir / "paired_relu_vulkan.h"),
+            "vulkan_manifest_sha256": sha256(vulkan_dir / "paired_relu_vulkan.json"),
+            "vulkan_plan_sha256": sha256(vulkan_dir / "paired_relu_vulkan.plan.json"),
+            "plan_hash": manifest["plan_hash"],
+            "shader_sha256": manifest["shader_sha256"],
+            "reconstructed_shader_sha256": {
+                str(key): value for key, value in sorted(shader_hashes.items())
+            },
+            "shader_files": [
+                {
+                    "file": f"vulkan/shader-reconstruction/kernel-{key}.spv",
+                    "sha256": value,
+                }
+                for key, value in sorted(shader_hashes.items())
+            ],
+            "exports": [
+                "paired_relu_vk_create",
+                "paired_relu_vk_destroy",
+                "paired_relu_vk_run",
+            ],
+            "dependencies": manifest["dependencies"],
+            "offline_success_artifacts_sha256": successful_artifacts,
+            "cpu_recovery_library_sha256": recovery_library_sha256,
+        },
+        "public_io": {
+            "shape": [elements],
+            "element_type": "f32",
+            "input": {
+                "file": input_path.name,
+                "sha256": sha256_bytes(input_bytes),
+                "values": list(struct.unpack(f"<{elements}f", input_bytes)),
+            },
+            "cpu_output": {
+                "file": cpu_output_path.name,
+                "sha256": sha256_bytes(cpu_bytes),
+                "values": cpu_values,
+            },
+            "cpu_recovery_output": {
+                "file": repeat_output_path.name,
+                "sha256": sha256_bytes(repeat_bytes),
+                "values": repeat_values,
+            },
+            "scalar_golden": {
+                "file": golden_path.name,
+                "sha256": sha256_bytes(expected_bytes),
+                "values": golden_values,
+            },
+            "tolerance": {"absolute": 1.0e-6, "relative": 1.0e-6},
+            "max_absolute_error": max_abs_error,
+            "max_relative_error": max(
+                (
+                    abs(actual - expected) / max(abs(expected), 1.0e-30)
+                    for actual, expected in zip(cpu_values, golden_values)
+                ),
+                default=0.0,
+            ),
+            "passed": True,
+            "cpu_status": cpu_status,
+            "cpu_recovery_status": repeat_status,
+            "cpu_recovery_output_sha256": sha256_bytes(repeat_bytes),
+            "cpu_recovery_max_absolute_error": max(
+                (abs(actual - expected) for actual, expected in zip(repeat_values, golden_values)),
+                default=0.0,
+            ),
+        },
+        "negative_cases": negatives,
+        "shader_validations": shader_validations,
+        "commands": {
+            "cpu_compile": [
+                str(item) for item in cpu_compile.args
+            ] if hasattr(cpu_compile, "args") else None,
+            "cpu_compile_returncode": cpu_compile.returncode,
+            "cpu_compile_stdout": cpu_compile.stdout,
+            "cpu_compile_stderr": cpu_compile.stderr,
+            "cpu_loader": cpu_loader,
+            "cpu_recovery_loader": recovery_loader,
+            "offline_vulkan_compile": [str(item) for item in offline_compile_command],
+            "offline_compile_returncode": compile_result.returncode,
+            "offline_compile_stdout": compile_result.stdout,
+            "offline_compile_stderr": compile_result.stderr,
+            "validator": str(args.spirv_val),
+            "validator_version": invoke([args.spirv_val, "--version"]).stdout,
+        },
+        "claims": {
+            "cpu_golden": "passed",
+            "vulkan_static_product_artifacts": "validated",
+            "vulkan_device_execution": "not_run",
+            "cpu_gpu_numerical_comparison": "not_claimed",
+        },
+    }
+    evidence_path = args.work_dir / "evidence.json"
+    evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+    print(f"Offline Vulkan product evidence: {evidence_path}")
+    return 0
+
+
+def parse_vulkan_device_identity(args, summary):
+    parser_path = Path(__file__).resolve().parents[1] / "Vulkan" / "run_v5.py"
+    spec = importlib.util.spec_from_file_location(
+        "ncnn_vulkan_device_parser", parser_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load Vulkan identity parser: {parser_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(parser_path.parent))
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(parser_path.parent))
+        sys.dont_write_bytecode = previous_dont_write_bytecode
+    parse_summary = getattr(module, "parse_vulkan_device_summary", None)
+    if not callable(parse_summary):
+        raise RuntimeError("run_v5.py has no parse_vulkan_device_summary helper")
+    return parse_summary(summary, args.device_match, args.icd)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--icd", help="Force a Vulkan ICD manifest for product execution")
+    parser.add_argument("--device-match", help="Expected physical-device name under the selected ICD")
+    parser.add_argument("--vulkaninfo", help="Path to vulkaninfo for explicit device evidence")
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--driver", required=True)
     parser.add_argument("--opt", required=True)
@@ -497,6 +1047,9 @@ def main():
     parser.add_argument("--unsupported-bin", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     args = parser.parse_args()
+    EXPECTED_FAILURE_LOGS.clear()
+    if args.offline:
+        return run_offline(args)
 
     args.work_dir = args.work_dir.resolve()
     shutil.rmtree(args.work_dir, ignore_errors=True)
@@ -504,6 +1057,35 @@ def main():
     shutil.copy2(args.param, args.work_dir / "model.param")
     shutil.copy2(args.bin, args.work_dir / "model.bin")
     base_env = runtime_env(args)
+    if not args.icd:
+        raise RuntimeError("device product test requires an explicit --icd")
+    if not args.device_match:
+        raise RuntimeError("device product test requires an explicit --device-match")
+    if not args.vulkaninfo:
+        raise RuntimeError("device product test requires an explicit --vulkaninfo")
+    vulkaninfo_command = [args.vulkaninfo, "--summary"]
+    vulkan_info = subprocess.run(
+        vulkaninfo_command,
+        capture_output=True,
+        text=True,
+        env=base_env,
+    )
+    (args.work_dir / "vulkaninfo.stdout.log").write_text(
+        vulkan_info.stdout, encoding="utf-8"
+    )
+    (args.work_dir / "vulkaninfo.stderr.log").write_text(
+        vulkan_info.stderr, encoding="utf-8"
+    )
+    if vulkan_info.returncode != 0:
+        raise RuntimeError(
+            f"vulkaninfo --summary failed ({vulkan_info.returncode})\n"
+            f"stdout:\n{vulkan_info.stdout}stderr:\n{vulkan_info.stderr}"
+        )
+    vulkan_info_summary = vulkan_info.stdout + vulkan_info.stderr
+    if "VK_LAYER_KHRONOS_validation" not in vulkan_info_summary:
+        raise RuntimeError("VK_LAYER_KHRONOS_validation is required for product execution")
+    device_identity = parse_vulkan_device_identity(args, vulkan_info_summary)
+    physical_device_types = [device_identity["device_type"]]
 
     elements = 257
     input_data = make_input(elements)
@@ -530,20 +1112,62 @@ def main():
     check_cpu_artifact(args, cpu_dir)
 
     vulkan_dir = args.work_dir / "vulkan"
-    invoke(
-        compile_args(
-            args,
-            "paired_relu",
-            vulkan_dir,
-            args.work_dir / "model.param",
-            args.work_dir / "model.bin",
-        ),
+    vulkan_compile_command = compile_args(
+        args,
+        "paired_relu",
+        vulkan_dir,
+        args.work_dir / "model.param",
+        args.work_dir / "model.bin",
+    )
+    vulkan_compile_result = subprocess.run(
+        vulkan_compile_command,
+        capture_output=True,
+        text=True,
         env=base_env,
     )
+    (args.work_dir / "vulkan-verify.stdout.log").write_text(
+        vulkan_compile_result.stdout, encoding="utf-8"
+    )
+    (args.work_dir / "vulkan-verify.stderr.log").write_text(
+        vulkan_compile_result.stderr, encoding="utf-8"
+    )
+    if vulkan_compile_result.returncode != 0:
+        raise RuntimeError(
+            "Vulkan product compile/verify failed "
+            f"({vulkan_compile_result.returncode})\n"
+            f"stdout:\n{vulkan_compile_result.stdout}"
+            f"stderr:\n{vulkan_compile_result.stderr}"
+        )
     manifest = check_vulkan_artifact(args, vulkan_dir, elements)
     cpu_output, vulkan_output = run_product_loader(
         args, cpu_dir, vulkan_dir, "paired_relu", input_data
     )
+    validation_streams = [
+        "vulkaninfo.stdout.log",
+        "vulkaninfo.stderr.log",
+        "vulkan-verify.stdout.log",
+        "vulkan-verify.stderr.log",
+        "vulkan-loader.stdout.log",
+        "vulkan-loader.stderr.log",
+    ]
+    validation_text = "".join(
+        f"===== {name} =====\n"
+        f"{(args.work_dir / name).read_text(encoding='utf-8')}\n"
+        for name in validation_streams
+    )
+    validation_path = args.work_dir / "validation.log"
+    validation_path.write_text(validation_text, encoding="utf-8")
+    validation_error_count_value = validation_error_count(validation_text)
+    if validation_error_count_value != 0:
+        raise RuntimeError(
+            "Vulkan validation emitted error diagnostics; see "
+            f"{validation_path} (count={validation_error_count_value})"
+        )
+    public_input_bytes = (args.work_dir / "input.f32").read_bytes()
+    cpu_output_bytes = (args.work_dir / "cpu-output.f32").read_bytes()
+    vulkan_output_bytes = (args.work_dir / "vulkan-output.f32").read_bytes()
+    golden_bytes = struct.pack(f"<{elements}f", *expected)
+    (args.work_dir / "scalar-golden.f32").write_bytes(golden_bytes)
     for label, output in (("CPU", cpu_output), ("Vulkan", vulkan_output)):
         for index, reference in enumerate(expected):
             if abs(output[index] - reference) > 1.0e-6:
@@ -554,7 +1178,9 @@ def main():
     if any(error > 1.0e-6 for error in cpu_vulkan):
         raise RuntimeError("CPU and Vulkan product outputs differ")
 
-    reconstructed_shader_hashes = reconstruct_shaders(args, args.work_dir)
+    reconstructed_shader_hashes, shader_validations = reconstruct_shaders(
+        args, args.work_dir
+    )
     manifest_shader_hashes = {
         int(shader["kernel_id"]): shader["sha256"]
         for shader in manifest.get("shaders", [])
@@ -827,7 +1453,7 @@ def main():
         raise RuntimeError("CPU output collision modified existing Vulkan artifacts")
 
     missing_tool_output = args.work_dir / "missing-tool"
-    invoke(
+    result = invoke(
         compile_args(
             args,
             "missing_tool",
@@ -839,12 +1465,14 @@ def main():
         env=base_env,
         expect_success=False,
     )
+    if not re.search(r"cannot execute|no such file|not found", result.stderr, re.IGNORECASE):
+        raise RuntimeError(f"missing validator diagnostic is unclear: {result.stderr}")
     assert_no_published_artifacts(missing_tool_output)
 
     bad_validator = args.work_dir / "reject-spirv-val"
     bad_validator.write_text("#!/bin/sh\nexit 23\n")
     bad_validator.chmod(0o755)
-    invoke(
+    result = invoke(
         compile_args(
             args,
             "paired_relu",
@@ -856,6 +1484,8 @@ def main():
         env=base_env,
         expect_success=False,
     )
+    if "failed with exit code 23" not in result.stderr:
+        raise RuntimeError(f"validator failure diagnostic is unclear: {result.stderr}")
     if output_snapshot(vulkan_dir) != previous:
         raise RuntimeError("SPIR-V validator failure replaced prior successful artifacts")
 
@@ -900,13 +1530,15 @@ def main():
         env=base_env,
         expect_success=False,
     )
+    if "failed with exit code 31" not in result.stderr:
+        raise RuntimeError(f"audit failure diagnostic is unclear: {result.stderr}")
     if output_snapshot(vulkan_dir) != previous:
         raise RuntimeError("failed Vulkan dependency audit replaced prior artifacts")
 
     lost_icd_env = base_env.copy()
     lost_icd_env["VK_ICD_FILENAMES"] = str(args.work_dir / "missing-icd.json")
     lost_device = args.work_dir / "missing-device"
-    invoke(
+    result = invoke(
         compile_args(
             args,
             "missing_device",
@@ -917,8 +1549,14 @@ def main():
         env=lost_icd_env,
         expect_success=False,
     )
+    if not re.search(
+        r"Vulkan ABI execution verification failed|no Vulkan physical devices|no compatible Vulkan",
+        result.stderr,
+        re.IGNORECASE,
+    ):
+        raise RuntimeError(f"missing-device diagnostic is unclear: {result.stderr}")
     assert_no_published_artifacts(lost_device)
-    invoke(
+    result = invoke(
         compile_args(
             args,
             "paired_relu",
@@ -929,8 +1567,179 @@ def main():
         env=lost_icd_env,
         expect_success=False,
     )
+    if not re.search(
+        r"Vulkan ABI execution verification failed|no Vulkan physical devices|no compatible Vulkan",
+        result.stderr,
+        re.IGNORECASE,
+    ):
+        raise RuntimeError(f"existing-artifact no-device diagnostic is unclear: {result.stderr}")
     if output_snapshot(vulkan_dir) != previous:
         raise RuntimeError("missing Vulkan device replaced prior successful artifacts")
+    shutil.move(
+        args.work_dir / "shader-reconstruction",
+        vulkan_dir / "shader-reconstruction",
+    )
+
+    max_abs_cpu_error = max(
+        (abs(actual - reference) for actual, reference in zip(cpu_output, expected)),
+        default=0.0,
+    )
+    max_abs_vulkan_error = max(
+        (abs(actual - reference) for actual, reference in zip(vulkan_output, expected)),
+        default=0.0,
+    )
+    max_abs_cpu_vulkan_error = max(
+        (abs(actual - reference) for actual, reference in zip(cpu_output, vulkan_output)),
+        default=0.0,
+    )
+    product_evidence = {
+        "schema_version": 1,
+        "kind": "ncnn.vulkan_product_evidence",
+        "execution": {
+            "mode": "device-execution",
+            "icd_manifest": args.icd,
+            "vulkan_execution": "passed",
+            "vulkaninfo": args.vulkaninfo,
+            "vulkaninfo_summary": vulkan_info_summary,
+            "physical_device_types": physical_device_types,
+            "device_evidence": {
+                **json.loads((args.work_dir / "loader-result.json").read_text()),
+                **device_identity,
+            },
+        },
+        "fixture": {
+            "model": "paired_relu",
+            "param_sha256": sha256(args.work_dir / "model.param"),
+            "bin_sha256": sha256(args.work_dir / "model.bin"),
+            "cpu_library_sha256": sha256(cpu_dir / "libpaired_relu.so"),
+            "cpu_header_sha256": sha256(cpu_dir / "paired_relu.h"),
+            "vulkan_library_sha256": sha256(vulkan_dir / "libpaired_relu_vulkan.so"),
+            "vulkan_header_sha256": sha256(vulkan_dir / "paired_relu_vulkan.h"),
+            "vulkan_manifest_sha256": sha256(vulkan_dir / "paired_relu_vulkan.json"),
+            "vulkan_plan_sha256": sha256(vulkan_dir / "paired_relu_vulkan.plan.json"),
+            "plan_hash": manifest["plan_hash"],
+            "shader_sha256": manifest["shader_sha256"],
+            "reconstructed_shader_sha256": {
+                str(key): value
+                for key, value in sorted(reconstructed_shader_hashes.items())
+            },
+            "shader_files": [
+                {
+                    "file": f"vulkan/shader-reconstruction/kernel-{key}.spv",
+                    "sha256": value,
+                }
+                for key, value in sorted(reconstructed_shader_hashes.items())
+            ],
+            "offline_success_artifacts_sha256": artifact_hashes(vulkan_dir),
+            "exports": [
+                "paired_relu_vk_create",
+                "paired_relu_vk_destroy",
+                "paired_relu_vk_run",
+            ],
+            "dependencies": manifest["dependencies"],
+        },
+        "public_io": {
+            "shape": [elements],
+            "element_type": "f32",
+            "input": {
+                "file": "input.f32",
+                "sha256": sha256_bytes(public_input_bytes),
+                "values": list(struct.unpack(f"<{elements}f", public_input_bytes)),
+            },
+            "cpu_output": {
+                "file": "cpu-output.f32",
+                "sha256": sha256_bytes(cpu_output_bytes),
+                "values": cpu_output,
+            },
+            "vulkan_output": {
+                "file": "vulkan-output.f32",
+                "sha256": sha256_bytes(vulkan_output_bytes),
+                "values": vulkan_output,
+            },
+            "scalar_golden": {
+                "file": "scalar-golden.f32",
+                "sha256": sha256_bytes(golden_bytes),
+                "values": expected,
+            },
+            "tolerance": {"absolute": 1.0e-6, "relative": 1.0e-6},
+            "max_absolute_error": {
+                "cpu_to_golden": max_abs_cpu_error,
+                "vulkan_to_golden": max_abs_vulkan_error,
+                "cpu_to_vulkan": max_abs_cpu_vulkan_error,
+            },
+            "max_relative_error": {
+                "cpu_to_golden": max(
+                    (
+                        abs(actual - reference) / max(abs(reference), 1.0e-30)
+                        for actual, reference in zip(cpu_output, expected)
+                    ),
+                    default=0.0,
+                ),
+                "vulkan_to_golden": max(
+                    (
+                        abs(actual - reference) / max(abs(reference), 1.0e-30)
+                        for actual, reference in zip(vulkan_output, expected)
+                    ),
+                    default=0.0,
+                ),
+                "cpu_to_vulkan": max(
+                    (
+                        abs(actual - reference) / max(abs(reference), 1.0e-30)
+                        for actual, reference in zip(cpu_output, vulkan_output)
+                    ),
+                    default=0.0,
+                ),
+            },
+            "passed": True,
+        },
+        "validator": {
+            "executable": args.spirv_val,
+            "version": invoke([args.spirv_val, "--version"]).stdout,
+            "shader_hashes": {
+                str(key): value
+                for key, value in sorted(reconstructed_shader_hashes.items())
+            },
+        },
+        "shader_validations": shader_validations,
+        "commands": {
+            "vulkaninfo_summary": {
+                "argv": [str(item) for item in vulkaninfo_command],
+                "returncode": vulkan_info.returncode,
+                "stdout_file": "vulkaninfo.stdout.log",
+                "stderr_file": "vulkaninfo.stderr.log",
+            },
+            "vulkan_verify_execution": {
+                "argv": [str(item) for item in vulkan_compile_command],
+                "returncode": vulkan_compile_result.returncode,
+                "stdout_file": "vulkan-verify.stdout.log",
+                "stderr_file": "vulkan-verify.stderr.log",
+            },
+            "product_loader": {
+                "stdout_file": "vulkan-loader.stdout.log",
+                "stderr_file": "vulkan-loader.stderr.log",
+                "result_file": "loader-result.json",
+            },
+        },
+        "validation": {
+            "layer": "VK_LAYER_KHRONOS_validation",
+            "error_count": validation_error_count_value,
+            "log_file": validation_path.name,
+            "log_sha256": sha256(validation_path),
+            "streams": [
+                {"file": name, "sha256": sha256(args.work_dir / name)}
+                for name in validation_streams
+            ],
+        },
+        "expected_failure_diagnostics": EXPECTED_FAILURE_LOGS,
+        "claims": {
+            "cpu_golden": "passed",
+            "vulkan_device_execution": "passed",
+            "cpu_vulkan_numerical_comparison": "passed",
+        },
+    }
+    evidence_path = args.work_dir / "evidence.json"
+    evidence_path.write_text(json.dumps(product_evidence, indent=2, sort_keys=True) + "\n")
+    print(f"Vulkan product evidence: {evidence_path}")
     print("Vulkan product CLI, CPU pairing, reproducibility, audit, and failure tests passed")
 
 

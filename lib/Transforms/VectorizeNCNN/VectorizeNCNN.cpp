@@ -18,7 +18,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "ncnn-mlir/Support/Diagnostics.hpp"
 #include "ncnn-mlir/Support/KernelContract.hpp"
@@ -1167,8 +1166,10 @@ class VectorizeNCNNPass final
     // 阶段二：归约链提升为 contract 并完成向量级规范化。
     RewritePatternSet cleanupPatterns(&getContext());
     vector::populateVectorReductionToContractPatterns(cleanupPatterns);
-    if (failed(
-          applyPatternsAndFoldGreedily(module, std::move(cleanupPatterns)))) {
+    GreedyRewriteConfig rewriteConfig;
+    rewriteConfig.enableFolding();
+    if (failed(applyPatternsGreedily(
+          module, std::move(cleanupPatterns), rewriteConfig))) {
       signalPassFailure();
       return;
     }

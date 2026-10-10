@@ -7,10 +7,11 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import struct
 import sys
 
-from run_v0 import run_logged, sha256
+from run_v0 import capture_device_summary, run_logged, sha256
 
 
 MAX_STORAGE_BUFFER_BYTES = 128 * 1024 * 1024
@@ -60,6 +61,7 @@ def main():
     parser.add_argument("--model-param", required=True)
     parser.add_argument("--model-bin", required=True)
     parser.add_argument("--device-match", required=True)
+    parser.add_argument("--vulkaninfo", default="vulkaninfo")
     parser.add_argument("--icd")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--seeds", default="0,1,42")
@@ -74,6 +76,11 @@ def main():
     env = os.environ.copy()
     if args.icd:
         env["VK_ICD_FILENAMES"] = args.icd
+    device_info = None
+    if not args.prepare_only:
+        device_info = capture_device_summary(
+            args.vulkaninfo, args.device_match, args.icd, output_dir, logs, env
+        )
 
     plan = output_dir / "execution-plan.json"
     imported_ir = output_dir / "imported-model.mlir"
@@ -82,6 +89,8 @@ def main():
     shader = output_dir / "kernel.spv"
     disassembly = output_dir / "kernel.spvasm"
     evidence = output_dir / "device-result.json"
+    shutil.copyfile(args.model_param, output_dir / "model.param")
+    shutil.copyfile(args.model_bin, output_dir / "model.bin")
 
     run_logged("ncnn-driver-version", [args.ncnn_driver, "--version"], logs, env=env)
     run_logged("ncnn-mlir-opt-version", [args.ncnn_mlir_opt, "--version"], logs, env=env)
@@ -430,6 +439,7 @@ def main():
         "target_environment": "Vulkan 1.1 / SPIR-V 1.0 + SPV_KHR_storage_buffer_storage_class",
         "model_param_sha256": sha256(args.model_param),
         "model_bin_sha256": sha256(args.model_bin),
+        "model_files": {"param": "model.param", "bin": "model.bin"},
         "cpu_reference_library_sha256": sha256(args.cpu_library),
         "gpu_kernel_source_sha256": sha256(source),
         "execution_plan_sha256": hashlib.sha256(plan.read_bytes()).hexdigest(),
@@ -439,6 +449,8 @@ def main():
         "spirv_disassembly_sha256": sha256(disassembly),
         "execution_plan": execution_plan,
         "seeds": seeds,
+        "device_info": device_info,
+        "vulkaninfo_summary": "vulkaninfo-summary.txt" if device_info else None,
         "device_evidence": device_evidence,
     }
     if conv_hwcf_sha256 is not None:

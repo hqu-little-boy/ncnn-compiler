@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import sys
 
+from run_v5 import parse_vulkan_device_summary
+
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -20,7 +22,8 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def run_logged(name, command, log_dir, env=None, expect_success=True):
+def run_logged(name, command, log_dir, env=None, expect_success=True,
+               expected_failure=None):
     result = subprocess.run(command, text=True, capture_output=True, env=env)
     record = {
         "argv": [str(item) for item in command],
@@ -35,9 +38,24 @@ def run_logged(name, command, log_dir, env=None, expect_success=True):
         raise RuntimeError(
             f"{name} failed ({result.returncode}); see {Path(log_dir) / f'{name}.json'}"
         )
-    if not expect_success and result.returncode == 0:
-        raise RuntimeError(f"{name} unexpectedly succeeded")
+    if not expect_success:
+        if result.returncode == 0:
+            raise RuntimeError(f"{name} unexpectedly succeeded")
+        if result.returncode < 0:
+            raise RuntimeError(f"{name} terminated by signal {-result.returncode}")
+        if not expected_failure or expected_failure not in (
+                result.stdout + result.stderr):
+            raise RuntimeError(f"{name} did not report the expected failure: "
+                               f"{expected_failure!r}")
     return result
+
+
+def capture_device_summary(vulkaninfo, device_match, icd, output, logs, env):
+    result = run_logged("vulkaninfo-summary", [vulkaninfo, "--summary"], logs,
+                        env=env)
+    text = result.stdout + result.stderr
+    (Path(output) / "vulkaninfo-summary.txt").write_text(text, encoding="utf-8")
+    return parse_vulkan_device_summary(text, device_match, icd)
 
 
 def run_device(runner, shader, cpu_library, symbol, device_match, evidence,
@@ -94,8 +112,8 @@ def main():
 
     run_logged("mlir-opt-version", [args.mlir_opt, "--version"], logs, env=env)
     run_logged("spirv-val-version", [args.spirv_val, "--version"], logs, env=env)
-    vulkan_info = run_logged(
-        "vulkaninfo-summary", [args.vulkaninfo, "--summary"], logs, env=env
+    device_info = capture_device_summary(
+        args.vulkaninfo, args.device_match, args.icd, output_dir, logs, env
     )
     run_logged(
         "gpu-func-to-vulkan-binary",
@@ -168,7 +186,9 @@ def main():
         "inputs_sha256": sha256(str(evidence) + ".inputs.bin"),
         "outputs_sha256": sha256(str(evidence) + ".outputs.bin"),
         "device_evidence": json.loads(evidence.read_text(encoding="utf-8")),
-        "vulkaninfo_summary": vulkan_info.stdout,
+        "vulkaninfo_summary": (output_dir / "vulkaninfo-summary.txt").read_text(
+            encoding="utf-8"),
+        "device_info": device_info,
         "icd_override": args.icd,
     }
     (output_dir / "metadata.json").write_text(
@@ -186,7 +206,9 @@ def main():
             "--evidence", str(missing_evidence),
         ]
         run_logged("negative-no-device", command, logs, env=env,
-                   expect_success=False)
+                   expect_success=False,
+                   expected_failure="no compute device matched "
+                   "'NCNN_V0_NO_SUCH_DEVICE_9D62'")
 
         properties = json.loads(evidence.read_text(encoding="utf-8"))
         too_large = int(properties["max_storage_buffer_range"]) + 1
@@ -203,7 +225,9 @@ def main():
         if args.validation:
             command.append("--validation")
         run_logged("negative-oversize-buffer", command, logs, env=env,
-                   expect_success=False)
+                   expect_success=False,
+                   expected_failure="requested storage buffer exceeds "
+                   "maxStorageBufferRange")
 
         invalid_shader = output_dir / "invalid.spv"
         shutil.copyfile(shader, invalid_shader)
@@ -215,6 +239,7 @@ def main():
             logs,
             env=env,
             expect_success=False,
+            expected_failure="Invalid SPIR-V magic number",
         )
 
         recovery_evidence = output_dir / "recovery-result.json"

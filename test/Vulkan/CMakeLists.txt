@@ -1,33 +1,117 @@
-find_package(Vulkan REQUIRED)
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-find_package(Threads REQUIRED)
-find_program(SPIRV_VAL NAMES spirv-val REQUIRED)
-find_program(SPIRV_DIS NAMES spirv-dis REQUIRED)
-find_program(VULKANINFO NAMES vulkaninfo REQUIRED)
-add_test(NAME vulkan-v5-comparison-validation
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_run_v5.py)
-set_tests_properties(vulkan-v5-comparison-validation PROPERTIES
-    LABELS "vulkan;unit;v5"
-    TIMEOUT 30)
-find_file(V0_LLVMPIPE_ICD
-    NAMES lvp_icd.json
-    PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
-    REQUIRED)
-find_file(V0_NVIDIA_SYSTEM_ICD
-    NAMES nvidia_icd.json
-    PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
-    REQUIRED)
-find_library(V0_NVIDIA_EGL_LIBRARY
-    NAMES EGL_nvidia libEGL_nvidia.so.0
-    REQUIRED)
-# NVIDIA supports the EGL frontend as a headless Vulkan ICD. The GLX frontend
-# in driver 615.71.09 leaks a libdrm device on unload; EGL cleans up normally.
-# Use the same device and normal library unloading in both test configurations.
-file(READ "${V0_NVIDIA_SYSTEM_ICD}" V0_NVIDIA_ICD_DOCUMENT)
-string(JSON V0_NVIDIA_ICD_DOCUMENT SET "${V0_NVIDIA_ICD_DOCUMENT}"
-    ICD library_path "\"${V0_NVIDIA_EGL_LIBRARY}\"")
-set(V0_NVIDIA_ICD "${CMAKE_CURRENT_BINARY_DIR}/nvidia-egl-icd.json")
-file(WRITE "${V0_NVIDIA_ICD}" "${V0_NVIDIA_ICD_DOCUMENT}\n")
+if(NCNN_ENABLE_VULKAN_PRODUCT OR NCNN_ENABLE_VULKAN_V0_TESTS)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vulkan-v5-comparison-validation
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_run_v5.py)
+    set_tests_properties(vulkan-v5-comparison-validation PROPERTIES
+        LABELS "vulkan;unit;v5;offline"
+        TIMEOUT 30)
+
+    add_test(NAME vulkan-release-evidence-validation
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_release_evidence.py)
+    set_tests_properties(vulkan-release-evidence-validation PROPERTIES
+        LABELS "vulkan;unit;offline;tooling"
+        TIMEOUT 60)
+
+    add_test(NAME vulkan-gate-validation
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_run_gate.py)
+    set_tests_properties(vulkan-gate-validation PROPERTIES
+        LABELS "vulkan;unit;offline;tooling"
+        TIMEOUT 60)
+endif()
+
+if(NCNN_ENABLE_VULKAN_PRODUCT)
+    set(_ncnn_vulkan_offline_test_args)
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND _ncnn_vulkan_offline_test_args --llvm-shared)
+    endif()
+    foreach(_dependency IN LISTS
+            NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES
+            NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
+        list(APPEND _ncnn_vulkan_offline_test_args
+            --allowed-dependency=${_dependency})
+    endforeach()
+    foreach(_dependency IN LISTS NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
+        list(APPEND _ncnn_vulkan_offline_test_args
+            --sanitizer-dependency=${_dependency})
+    endforeach()
+    if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+        foreach(_cxx_arg IN LISTS NCNN_VULKAN_HOST_SANITIZER_ARGS)
+            list(APPEND _ncnn_vulkan_offline_test_args --cxx-arg=${_cxx_arg})
+        endforeach()
+        list(APPEND _ncnn_vulkan_offline_test_args
+            --sanitizer-runtime-dir ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+    endif()
+    add_test(NAME ncnn-compile-vulkan-offline
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../Native/check_ncnn_compile_vulkan.py
+            --offline
+            --compiler $<TARGET_FILE:ncnn-compile>
+            --driver $<TARGET_FILE:ncnn-mlir-driver>
+            --opt $<TARGET_FILE:ncnn-mlir-opt>
+            --mlir-opt ${NCNN_MLIR_OPT_EXECUTABLE}
+            --spirv-val ${NCNN_SPIRV_VAL_EXECUTABLE}
+            --spirv-dis ${NCNN_SPIRV_DIS_EXECUTABLE}
+            --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
+            --clang ${CLANG}
+            --nm ${LLVM_NM}
+            --readelf ${LLVM_READELF}
+            --host-cxx ${CMAKE_CXX_COMPILER}
+            --vulkan-include-dir ${PROJECT_SOURCE_DIR}/include
+            --loader-source ${CMAKE_CURRENT_SOURCE_DIR}/../Native/vulkan_product_loader.cpp
+            --llvm-major ${LLVM_VERSION_MAJOR}
+            --llvm-lib-dir ${LLVM_LIBRARY_DIR}
+            ${_ncnn_vulkan_offline_test_args}
+            --param ${CMAKE_CURRENT_SOURCE_DIR}/relu.param
+            --bin ${CMAKE_CURRENT_BINARY_DIR}/../Numerical/fixtures/empty.bin
+            --unsupported-param ${CMAKE_CURRENT_SOURCE_DIR}/../Numerical/fixtures/convolution.param
+            --unsupported-bin ${CMAKE_CURRENT_BINARY_DIR}/../Numerical/fixtures/convolution.bin
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR}/../Native/vulkan-product-offline)
+    set_tests_properties(ncnn-compile-vulkan-offline PROPERTIES
+        LABELS "native;integration;cli;vulkan;product;offline"
+        RUN_SERIAL TRUE
+        TIMEOUT 900)
+endif()
+
+if(NCNN_ENABLE_VULKAN_V0_TESTS)
+    find_package(Vulkan REQUIRED)
+    find_package(Threads REQUIRED)
+    find_program(SPIRV_VAL NAMES spirv-val REQUIRED)
+    find_program(SPIRV_DIS NAMES spirv-dis REQUIRED)
+    find_program(VULKANINFO NAMES vulkaninfo REQUIRED)
+    set(V0_LLVMPIPE_ICD
+        "${CMAKE_CURRENT_BINARY_DIR}/unrequested-llvmpipe-icd.json")
+    set(V0_NVIDIA_ICD
+        "${CMAKE_CURRENT_BINARY_DIR}/unrequested-nvidia-icd.json")
+    if("llvmpipe" IN_LIST NCNN_VULKAN_TEST_DEVICES)
+        find_file(V0_LLVMPIPE_ICD_PATH
+            NAMES lvp_icd.json
+            PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
+            REQUIRED)
+        set(V0_LLVMPIPE_ICD "${V0_LLVMPIPE_ICD_PATH}")
+    endif()
+    if("nvidia" IN_LIST NCNN_VULKAN_TEST_DEVICES)
+        find_file(V0_NVIDIA_SYSTEM_ICD
+            NAMES nvidia_icd.json
+            PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
+            REQUIRED)
+        find_library(V0_NVIDIA_EGL_LIBRARY
+            NAMES EGL_nvidia libEGL_nvidia.so.0
+            REQUIRED)
+        # NVIDIA supports the EGL frontend as a headless Vulkan ICD. The GLX
+        # frontend in driver 615.71.09 leaks a libdrm device on unload; EGL
+        # cleans up normally. Only the explicitly requested NVIDIA layer looks
+        # up this frontend.
+        file(READ "${V0_NVIDIA_SYSTEM_ICD}" V0_NVIDIA_ICD_DOCUMENT)
+        string(JSON V0_NVIDIA_ICD_DOCUMENT SET "${V0_NVIDIA_ICD_DOCUMENT}"
+            ICD library_path "\"${V0_NVIDIA_EGL_LIBRARY}\"")
+        set(V0_NVIDIA_ICD "${CMAKE_CURRENT_BINARY_DIR}/nvidia-egl-icd.json")
+        file(WRITE "${V0_NVIDIA_ICD}" "${V0_NVIDIA_ICD_DOCUMENT}\n")
+    endif()
+    set(NCNN_VULKAN_DEVICE_LLVMPIPE_ICD "${V0_LLVMPIPE_ICD}" PARENT_SCOPE)
+    set(NCNN_VULKAN_DEVICE_NVIDIA_ICD "${V0_NVIDIA_ICD}" PARENT_SCOPE)
+    set(NCNN_VULKANINFO "${VULKANINFO}" PARENT_SCOPE)
 
 add_executable(vulkan_add_runner vulkan_add_runner.cpp)
 target_link_libraries(vulkan_add_runner PRIVATE Vulkan::Vulkan ${CMAKE_DL_LIBS})
@@ -404,7 +488,51 @@ add_custom_target(vulkan-v3-build ALL
     DEPENDS vulkan-v2-build vulkan_runtime_runner
             vulkan_runtime_weight_runner v3_cpu_add_relu_fixture)
 
+set(V6_DUAL_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-add-split-relu)
+set(V6_DUAL_CPU_LIBRARY ${V6_DUAL_CPU_DIR}/libv6_add_split_relu.so)
+set(V6_DUAL_CPU_HEADER ${V6_DUAL_CPU_DIR}/v6_add_split_relu.h)
+set(V6_DUAL_CPU_MANIFEST ${V6_DUAL_CPU_DIR}/v6_add_split_relu.json)
+add_custom_command(
+    OUTPUT ${V6_DUAL_CPU_LIBRARY} ${V6_DUAL_CPU_HEADER} ${V6_DUAL_CPU_MANIFEST}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${V6_DUAL_CPU_DIR}
+    COMMAND $<TARGET_FILE:ncnn-compile>
+        --driver $<TARGET_FILE:ncnn-mlir-driver>
+        --opt $<TARGET_FILE:ncnn-mlir-opt>
+        --translate ${MLIR_TRANSLATE}
+        --clang ${CLANG}
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF}
+        --llvm-as ${LLVM_AS}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/add_split_relu.param
+        --bin ${V0_EMPTY_BIN}
+        --model-name v6_add_split_relu
+        --precision=f32
+        --threads=1
+        --emit-manifest
+        --verify-execution
+        --output-dir ${V6_DUAL_CPU_DIR}
+    DEPENDS ncnn-compile ncnn-mlir-driver ncnn-mlir-opt
+            ${CMAKE_CURRENT_SOURCE_DIR}/add_split_relu.param ${V0_EMPTY_BIN}
+    VERBATIM)
+add_custom_target(v6_cpu_add_split_relu_fixture
+    DEPENDS ${V6_DUAL_CPU_LIBRARY} ${V6_DUAL_CPU_HEADER} ${V6_DUAL_CPU_MANIFEST})
+target_include_directories(vulkan_runtime_runner PRIVATE ${V6_DUAL_CPU_DIR})
+add_dependencies(vulkan_runtime_runner v6_cpu_add_split_relu_fixture)
+add_dependencies(vulkan-v3-build v6_cpu_add_split_relu_fixture)
+
 function(ncnn_add_vulkan_v0_test test_name device_match output_name)
+    if(device_match STREQUAL "NVIDIA")
+        set(device_name nvidia)
+        set(device_layer hardware)
+        set(device_icd ${V0_NVIDIA_ICD})
+    else()
+        set(device_name llvmpipe)
+        set(device_layer software)
+        set(device_icd ${V0_LLVMPIPE_ICD})
+    endif()
+    if(NOT device_name IN_LIST NCNN_VULKAN_TEST_DEVICES)
+        return()
+    endif()
     set(test_args
         --mlir-opt ${MLIR_OPT}
         --spirv-val ${SPIRV_VAL}
@@ -416,6 +544,7 @@ function(ncnn_add_vulkan_v0_test test_name device_match output_name)
         --cpu-library ${V0_CPU_LIBRARY}
         --cpu-symbol v0_add
         --device-match ${device_match}
+        --icd ${device_icd}
         --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/gpu-func/${output_name}
         --validation)
     if(ARGC GREATER 3)
@@ -426,23 +555,35 @@ function(ncnn_add_vulkan_v0_test test_name device_match output_name)
             ${CMAKE_CURRENT_SOURCE_DIR}/run_v0.py
             ${test_args})
     set_tests_properties(${test_name} PROPERTIES
-        LABELS "vulkan;device;integration"
+        LABELS "vulkan;device;integration;${device_layer}"
         RUN_SERIAL TRUE
         TIMEOUT 180)
 endfunction()
 
-ncnn_add_vulkan_v0_test(vulkan-v0-add-nvidia NVIDIA nvidia
-    --icd ${V0_NVIDIA_ICD} --run-negative)
-ncnn_add_vulkan_v0_test(vulkan-v0-add-llvmpipe llvmpipe llvmpipe --icd ${V0_LLVMPIPE_ICD})
+ncnn_add_vulkan_v0_test(vulkan-v0-add-nvidia NVIDIA nvidia --run-negative)
+ncnn_add_vulkan_v0_test(vulkan-v0-add-llvmpipe llvmpipe llvmpipe)
 
 function(ncnn_add_vulkan_v2_test test_name device_match output_name operation
          kernel_file binary_symbol cpu_library cpu_symbol model_param model_bin)
+    if(device_match STREQUAL "NVIDIA")
+        set(device_name nvidia)
+        set(device_layer hardware)
+        set(device_icd ${V0_NVIDIA_ICD})
+    else()
+        set(device_name llvmpipe)
+        set(device_layer software)
+        set(device_icd ${V0_LLVMPIPE_ICD})
+    endif()
+    if(NOT device_name IN_LIST NCNN_VULKAN_TEST_DEVICES)
+        return()
+    endif()
     set(test_args
         --ncnn-driver $<TARGET_FILE:ncnn-mlir-driver>
         --ncnn-mlir-opt $<TARGET_FILE:ncnn-mlir-opt>
         --mlir-opt ${MLIR_OPT}
         --spirv-val ${SPIRV_VAL}
         --spirv-dis ${SPIRV_DIS}
+        --vulkaninfo ${VULKANINFO}
         --spirv-extract $<TARGET_FILE:vulkan_v0_spirv_extract>
         --runner $<TARGET_FILE:vulkan_add_runner>
         --operation ${operation}
@@ -453,11 +594,9 @@ function(ncnn_add_vulkan_v2_test test_name device_match output_name operation
         --model-param ${CMAKE_CURRENT_SOURCE_DIR}/${model_param}
         --model-bin ${model_bin}
         --device-match ${device_match}
+        --icd ${device_icd}
         --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/v2/${output_name}
         --validation)
-    if(device_match STREQUAL "NVIDIA")
-        list(APPEND test_args --icd ${V0_NVIDIA_ICD})
-    endif()
     if(NOT kernel_file STREQUAL "from-model")
         list(APPEND test_args
             --kernel ${CMAKE_CURRENT_SOURCE_DIR}/../Conversion/NCNNToVulkan/${kernel_file})
@@ -470,18 +609,31 @@ function(ncnn_add_vulkan_v2_test test_name device_match output_name operation
             ${CMAKE_CURRENT_SOURCE_DIR}/run_v2.py
             ${test_args})
     set_tests_properties(${test_name} PROPERTIES
-        LABELS "vulkan;device;integration;v2"
+        LABELS "vulkan;device;integration;v2;${device_layer}"
         RUN_SERIAL TRUE
         TIMEOUT 180)
 endfunction()
 
 function(ncnn_add_vulkan_v3_runtime_test test_name device_match output_name)
+    if(device_match STREQUAL "NVIDIA")
+        set(device_name nvidia)
+        set(device_layer hardware)
+        set(device_icd ${V0_NVIDIA_ICD})
+    else()
+        set(device_name llvmpipe)
+        set(device_layer software)
+        set(device_icd ${V0_LLVMPIPE_ICD})
+    endif()
+    if(NOT device_name IN_LIST NCNN_VULKAN_TEST_DEVICES)
+        return()
+    endif()
     set(test_args
         --ncnn-driver $<TARGET_FILE:ncnn-mlir-driver>
         --ncnn-mlir-opt $<TARGET_FILE:ncnn-mlir-opt>
         --mlir-opt ${MLIR_OPT}
         --spirv-val ${SPIRV_VAL}
         --spirv-dis ${SPIRV_DIS}
+        --vulkaninfo ${VULKANINFO}
         --spirv-extract $<TARGET_FILE:vulkan_v0_spirv_extract>
         --v2-runner $<TARGET_FILE:vulkan_add_runner>
         --runtime-runner $<TARGET_FILE:vulkan_runtime_runner>
@@ -497,6 +649,7 @@ function(ncnn_add_vulkan_v3_runtime_test test_name device_match output_name)
         --relu-cpu-symbol v2_relu
         --empty-bin ${V0_EMPTY_BIN}
         --device-match ${device_match}
+        --icd ${device_icd}
         --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/v3/${output_name}
         --validation)
     if(ARGC GREATER 3)
@@ -507,43 +660,43 @@ function(ncnn_add_vulkan_v3_runtime_test test_name device_match output_name)
             ${CMAKE_CURRENT_SOURCE_DIR}/run_v3.py
             ${test_args})
     set_tests_properties(${test_name} PROPERTIES
-        LABELS "vulkan;device;integration;v3"
+        LABELS "vulkan;device;integration;v3;${device_layer}"
         RUN_SERIAL TRUE
-        TIMEOUT 300)
+        TIMEOUT 300
+        ENVIRONMENT
+            "NCNN_V6_DUAL_CPU_LIBRARY=${V6_DUAL_CPU_LIBRARY};NCNN_V6_DUAL_CPU_SYMBOL=v6_add_split_relu")
 endfunction()
 
 ncnn_add_vulkan_v3_runtime_test(
-    vulkan-v3-runtime-nvidia NVIDIA nvidia --icd ${V0_NVIDIA_ICD})
+    vulkan-v3-runtime-nvidia NVIDIA nvidia )
 ncnn_add_vulkan_v3_runtime_test(
-    vulkan-v3-runtime-llvmpipe llvmpipe llvmpipe --icd ${V0_LLVMPIPE_ICD})
+    vulkan-v3-runtime-llvmpipe llvmpipe llvmpipe )
 
 ncnn_add_vulkan_v2_test(
     vulkan-v2-add-nvidia NVIDIA add-nvidia add from-model model_vulkan
     ${V0_CPU_LIBRARY} v0_add add.param ${V0_EMPTY_BIN})
 ncnn_add_vulkan_v2_test(
     vulkan-v2-add-llvmpipe llvmpipe add-llvmpipe add from-model model_vulkan
-    ${V0_CPU_LIBRARY} v0_add add.param ${V0_EMPTY_BIN} --icd ${V0_LLVMPIPE_ICD})
+    ${V0_CPU_LIBRARY} v0_add add.param ${V0_EMPTY_BIN} )
 ncnn_add_vulkan_v2_test(
     vulkan-v2-relu-nvidia NVIDIA relu-nvidia relu from-model model_vulkan
     ${V2_RELU_CPU_LIBRARY} v2_relu relu.param ${V0_EMPTY_BIN})
 ncnn_add_vulkan_v2_test(
     vulkan-v2-relu-llvmpipe llvmpipe relu-llvmpipe relu from-model model_vulkan
     ${V2_RELU_CPU_LIBRARY} v2_relu relu.param ${V0_EMPTY_BIN}
-    --icd ${V0_LLVMPIPE_ICD})
+    )
 ncnn_add_vulkan_v2_test(
     vulkan-v2-copy-nvidia NVIDIA copy-nvidia copy lower-copy.mlir copy_vulkan
     ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN})
 ncnn_add_vulkan_v2_test(
     vulkan-v2-copy-llvmpipe llvmpipe copy-llvmpipe copy lower-copy.mlir copy_vulkan
-    ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN}
-    --icd ${V0_LLVMPIPE_ICD})
+    ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN})
 ncnn_add_vulkan_v2_test(
     vulkan-v2-identity-nvidia NVIDIA identity-nvidia identity from-model model_vulkan
     ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN})
 ncnn_add_vulkan_v2_test(
     vulkan-v2-identity-llvmpipe llvmpipe identity-llvmpipe identity from-model model_vulkan
-    ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN}
-    --icd ${V0_LLVMPIPE_ICD})
+    ${V2_IDENTITY_CPU_LIBRARY} v2_identity identity.param ${V0_EMPTY_BIN})
 ncnn_add_vulkan_v2_test(
     vulkan-v2-transpose-nvidia NVIDIA transpose-nvidia transpose from-model model_vulkan
     ${V2_TRANSPOSE_CPU_LIBRARY} v2_transpose transpose.param ${V0_EMPTY_BIN}
@@ -551,7 +704,7 @@ ncnn_add_vulkan_v2_test(
 ncnn_add_vulkan_v2_test(
     vulkan-v2-transpose-llvmpipe llvmpipe transpose-llvmpipe transpose from-model model_vulkan
     ${V2_TRANSPOSE_CPU_LIBRARY} v2_transpose transpose.param ${V0_EMPTY_BIN}
-    --icd ${V0_LLVMPIPE_ICD} --elements 255
+    --elements 255
     --input-shape 51x5x1 --permutation 1,0,2)
 ncnn_add_vulkan_v2_test(
     vulkan-v2-reshape-nvidia NVIDIA reshape-nvidia reshape from-model model_vulkan
@@ -560,7 +713,7 @@ ncnn_add_vulkan_v2_test(
 ncnn_add_vulkan_v2_test(
     vulkan-v2-reshape-llvmpipe llvmpipe reshape-llvmpipe reshape from-model model_vulkan
     ${V2_RESHAPE_CPU_LIBRARY} v2_reshape ../Numerical/fixtures/reshape.param
-    ${V0_EMPTY_BIN} --icd ${V0_LLVMPIPE_ICD} --elements 8)
+    ${V0_EMPTY_BIN} --elements 8)
 ncnn_add_vulkan_v2_test(
     vulkan-v2-conv3x3-nvidia NVIDIA conv3x3-nvidia conv2d from-model model_vulkan
     ${V2_CONV3X3_CPU_LIBRARY} v2_conv3x3 ../Numerical/fixtures/convolution.param
@@ -570,7 +723,7 @@ ncnn_add_vulkan_v2_test(
 ncnn_add_vulkan_v2_test(
     vulkan-v2-conv3x3-llvmpipe llvmpipe conv3x3-llvmpipe conv2d from-model model_vulkan
     ${V2_CONV3X3_CPU_LIBRARY} v2_conv3x3 ../Numerical/fixtures/convolution.param
-    ${V2_CONV3X3_BIN} --icd ${V0_LLVMPIPE_ICD} --elements 32
+    ${V2_CONV3X3_BIN} --elements 32
     --input-shape 1x4x4 --kernel-size 3x3 --stride 1x1
     --padding 1,1,1,1 --output-channels 2 --conv-bias)
 ncnn_add_vulkan_v2_test(
@@ -583,7 +736,7 @@ ncnn_add_vulkan_v2_test(
     vulkan-v2-conv3x3-no-bias-llvmpipe llvmpipe conv3x3-no-bias-llvmpipe
     conv2d from-model model_vulkan ${V2_CONV3X3_NO_BIAS_CPU_LIBRARY}
     v2_conv3x3_no_bias ../Numerical/fixtures/convolution_no_bias.param
-    ${V2_CONV3X3_NO_BIAS_BIN} --icd ${V0_LLVMPIPE_ICD} --elements 32
+    ${V2_CONV3X3_NO_BIAS_BIN} --elements 32
     --input-shape 1x4x4 --kernel-size 3x3 --stride 1x1
     --padding 1,1,1,1 --output-channels 2)
 ncnn_add_vulkan_v2_test(
@@ -596,7 +749,7 @@ ncnn_add_vulkan_v2_test(
     vulkan-v2-conv3x3-stride2-llvmpipe llvmpipe conv3x3-stride2-llvmpipe
     conv2d from-model model_vulkan ${V2_CONV3X3_STRIDE2_CPU_LIBRARY}
     v2_conv3x3_stride2 convolution_3x3_stride2.param ${V2_CONV3X3_BIN}
-    --icd ${V0_LLVMPIPE_ICD} --elements 8 --input-shape 1x4x4
+    --elements 8 --input-shape 1x4x4
     --kernel-size 3x3 --stride 2x2 --padding 1,1,1,1
     --output-channels 2 --conv-bias)
 ncnn_add_vulkan_v2_test(
@@ -608,9 +761,10 @@ ncnn_add_vulkan_v2_test(
 ncnn_add_vulkan_v2_test(
     vulkan-v2-conv1x1-llvmpipe llvmpipe conv1x1-llvmpipe conv2d from-model model_vulkan
     ${V2_CONV1X1_CPU_LIBRARY} v2_conv1x1 convolution_1x1.param
-    ${V2_CONV1X1_BIN} --icd ${V0_LLVMPIPE_ICD} --elements 18
+    ${V2_CONV1X1_BIN} --elements 18
     --input-shape 2x3x5 --kernel-size 1x1 --stride 2x2
     --padding 0,0,0,0 --output-channels 3 --conv-bias)
+endif()
 
 if(NCNN_ENABLE_VULKAN_PRODUCT)
     add_test(NAME vulkan-math-exp-runner-pipeline
@@ -618,12 +772,12 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
             ${CMAKE_CURRENT_SOURCE_DIR}/test_math_exp_pipeline.py
             --mlir-opt ${MLIR_OPT}
             --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
-            --spirv-val ${SPIRV_VAL}
-            --spirv-dis ${SPIRV_DIS}
+            --spirv-val ${NCNN_SPIRV_VAL_EXECUTABLE}
+            --spirv-dis ${NCNN_SPIRV_DIS_EXECUTABLE}
             --probe ${CMAKE_CURRENT_SOURCE_DIR}/math_exp_probe.mlir
             --evidence ${CMAKE_CURRENT_BINARY_DIR}/evidence/math-exp)
     set_tests_properties(vulkan-math-exp-runner-pipeline PROPERTIES
-        LABELS "vulkan;tooling;v5"
+        LABELS "vulkan;tooling;v5;offline"
         TIMEOUT 60)
 
     # V5.1 product multi-I/O fixtures use the vendored CPU-only ncnn reference
@@ -635,11 +789,12 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     add_test(NAME vulkan-v5-reference-rank-roundtrip
         COMMAND $<TARGET_FILE:vulkan_model_runner> --self-test-ranks)
     set_tests_properties(vulkan-v5-reference-rank-roundtrip PROPERTIES
-        LABELS "vulkan;unit;v5"
+        LABELS "vulkan;unit;v5;offline"
         TIMEOUT 30)
     set_source_files_properties(vulkan_model_runner.cpp PROPERTIES
         COMPILE_OPTIONS "-fexceptions")
 
+    if(NCNN_ENABLE_VULKAN_V0_TESTS)
     set(V5_CXX_SANITIZER_ARGS)
     set(V5_SANITIZER_RUNTIME_DIR)
     if(COMPILER_SANITIZERS MATCHES "(^|;)(address|undefined)(;|$)")
@@ -704,6 +859,16 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     set(V5_SQUEEZENET_BIN
         ${PROJECT_SOURCE_DIR}/test/third_party/ncnn/examples/squeezenet_v1.1.bin)
     function(ncnn_add_vulkan_v5_test test_name device_match output_name icd suite)
+        if(device_match STREQUAL "NVIDIA")
+            set(device_name nvidia)
+            set(device_layer hardware)
+        else()
+            set(device_name llvmpipe)
+            set(device_layer software)
+        endif()
+        if(NOT device_name IN_LIST NCNN_VULKAN_TEST_DEVICES)
+            return()
+        endif()
         set(sanitizer_runtime_args)
         if(V5_SANITIZER_RUNTIME_DIR)
             list(APPEND sanitizer_runtime_args
@@ -744,7 +909,7 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
                 --suite ${suite}
                 --output-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/v5/${output_name})
         set_tests_properties(${test_name} PROPERTIES
-            LABELS "vulkan;device;integration;v5;product"
+            LABELS "vulkan;device;integration;v5;product;${device_layer}"
             RUN_SERIAL TRUE
             TIMEOUT 900)
         if(V5_TEST_LIBRARY_PATH)
@@ -769,5 +934,6 @@ ncnn_add_vulkan_v5_test(
 ncnn_add_vulkan_v5_test(
     vulkan-v5-squeezenet-llvmpipe llvmpipe squeezenet-llvmpipe
     ${V0_LLVMPIPE_ICD} v5.3)
+    endif()
 endif()
 

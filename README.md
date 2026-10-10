@@ -12,7 +12,7 @@
 
 `ncnn-compiler` 将 ncnn 的网络结构文件（`.param`）和权重文件（`.bin`）编译为可由 C/C++ 程序调用的原生共享库。项目基于 LLVM/MLIR，定义了 ncnn 方言及一组逐级 lowering、验证和优化 pass。
 
-产品编译主流程为：
+默认 CPU 产品编译主流程为：
 
 ```text
 ncnn .param/.bin
@@ -25,6 +25,8 @@ ncnn .param/.bin
 ```
 
 当前产品目标为 **64 位 Linux ELF**。并非所有 ncnn layer 或参数组合都已实现端到端 lowering；严格产品 pipeline 会在存在未支持的 ncnn 操作时报告失败，而不会把部分 lowering 当作成功编译。
+
+配置 `NCNN_ENABLE_VULKAN_PRODUCT=ON` 后，可显式使用 `--backend=vulkan` 生成静态 FP32 图的模型专用 Vulkan 库；CPU 仍是默认后端。Vulkan 有独立的支持矩阵、实例 C ABI 和部署依赖，不支持透明 CPU 回退，也不意味着任意模型或设备都受支持。构建、部署和分层验收见 [Vulkan 后端契约](docs/ncnn-vulkan-backend-contract.md)及 [Vulkan 测试说明](test/Vulkan/README.md)。
 
 ### 工具
 
@@ -123,6 +125,8 @@ docs/      命令行、IR 格式、开发及验证文档
 
 - [ncnn-compile 命令行参考](docs/ncnn-compile-command-line.md)
 - [CLI 选项索引](docs/cli-options.md)
+- [Vulkan 后端契约与支持矩阵](docs/ncnn-vulkan-backend-contract.md)
+- [Vulkan 分层测试与证据工具](test/Vulkan/README.md)
 - [ncnn-mlir-driver 使用说明](docs/ncnn-mlir-driver-usage.md)
 - [ncnn 方言 IR 格式](docs/ncnn-ir-format.md)
 - [Parsed graph 格式](docs/parsed-graph-format.md)
@@ -137,7 +141,7 @@ docs/      命令行、IR 格式、开发及验证文档
 
 `ncnn-compiler` compiles an ncnn network definition (`.param`) and its weights (`.bin`) into a native shared library callable from C/C++ programs. Built on LLVM/MLIR, the project defines an ncnn dialect and a set of staged lowering, verification, and optimization passes.
 
-The product compilation path is:
+The default CPU product compilation path is:
 
 ```text
 ncnn .param/.bin
@@ -150,6 +154,8 @@ ncnn .param/.bin
 ```
 
 The current product target is **64-bit Linux ELF**. Not every ncnn layer or parameter configuration has an end-to-end lowering implementation. The strict product pipeline reports failure when unsupported ncnn operations remain instead of treating a partial lowering as a successful compile.
+
+With `NCNN_ENABLE_VULKAN_PRODUCT=ON`, explicit `--backend=vulkan` emits a model-specific Vulkan library for the supported static FP32 graph subset; CPU remains the default. Vulkan has separate instance-ABI and deployment requirements, no transparent CPU fallback, and no arbitrary-model or arbitrary-device compatibility claim. See the [Vulkan backend contract](docs/ncnn-vulkan-backend-contract.md) and [Vulkan qualification tests](test/Vulkan/README.md).
 
 ### Tools
 
@@ -248,6 +254,8 @@ docs/      CLI, IR format, development, and validation documentation
 
 - [ncnn-compile command-line reference](docs/ncnn-compile-command-line.md)
 - [CLI options index](docs/cli-options.md)
+- [Vulkan backend contract and support matrix](docs/ncnn-vulkan-backend-contract.md)
+- [Vulkan qualification tests and evidence tools](test/Vulkan/README.md)
 - [ncnn-mlir-driver usage](docs/ncnn-mlir-driver-usage.md)
 - [ncnn dialect IR format](docs/ncnn-ir-format.md)
 - [Parsed graph format](docs/parsed-graph-format.md)

@@ -20,7 +20,8 @@
 //   * 不插入任何调用；
 //   * 不猜 source-op——溯源不明就不记（见 recoverSource 的 ambiguous）。
 
-#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <map>
 #include <set>
 #include <string>
@@ -35,7 +36,7 @@
 
 namespace mlir::ncnn::sites {
 
-SiteAnalysis analyzeProfileSites(ModuleOp module, func::FuncOp function) {
+SiteAnalysis analyzeProfileSites(ModuleOp, func::FuncOp function) {
   SiteAnalysis analysis;
   std::map<std::string, unsigned> operation_ordinals;
   function.walk([&](Operation* operation) {

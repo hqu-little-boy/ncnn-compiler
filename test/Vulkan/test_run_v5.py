@@ -145,6 +145,7 @@ GPU0:
     driverVersion = 615.71.9.0
     vendorID = 0x10de
     deviceID = 0x2803
+    deviceType = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
     deviceName = NVIDIA GeForce RTX 4060 Ti
     driverID = DRIVER_ID_NVIDIA_PROPRIETARY
     driverName = NVIDIA
@@ -155,6 +156,7 @@ GPU0:
         self.assertEqual(device["driver_name"], "NVIDIA")
         self.assertEqual(device["driver_info"], "615.71.09")
         self.assertEqual(device["vendor_id"], "0x10de")
+        self.assertEqual(device["device_type"], "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU")
 
     def test_llvmpipe_record_captures_driver_identity(self):
         text = """\
@@ -163,6 +165,7 @@ GPU0:
     driverVersion = 0.0.1
     vendorID = 0x10005
     deviceID = 0x0000
+    deviceType = PHYSICAL_DEVICE_TYPE_CPU
     deviceName = llvmpipe (LLVM 19.1.7, 256 bits)
     driverID = DRIVER_ID_MESA_LLVMPIPE
     driverName = llvmpipe
@@ -172,7 +175,20 @@ GPU0:
         self.assertEqual(device["device_name"], "llvmpipe (LLVM 19.1.7, 256 bits)")
         self.assertEqual(device["driver_name"], "llvmpipe")
         self.assertEqual(device["vendor_id"], "0x10005")
+        self.assertEqual(device["device_type"], "PHYSICAL_DEVICE_TYPE_CPU")
         self.assertEqual(len(device["vulkaninfo_summary_sha256"]), 64)
+
+    def test_missing_device_type_is_not_hardware_evidence(self):
+        text = """\
+GPU0:
+    apiVersion = 1.4.351
+    driverVersion = 615.71.9.0
+    vendorID = 0x10de
+    deviceID = 0x2803
+    deviceName = NVIDIA GeForce RTX 4060 Ti
+"""
+        with self.assertRaisesRegex(RuntimeError, "deviceType"):
+            run_v5.parse_vulkan_device_summary(text, "NVIDIA", "/icd/nvidia.json")
 
     def test_layer_match_cannot_substitute_for_a_physical_device(self):
         text = "VK_LAYER_NV_optimus NVIDIA Optimus layer\nGPU0:\n    deviceName = llvmpipe\n"

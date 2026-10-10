@@ -5,6 +5,7 @@ import argparse
 import ctypes
 import hashlib
 import json
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -152,7 +153,22 @@ def main() -> None:
         if output_hash != baseline["expected_output_sha256"] or output_hash != expected_hash:
             raise RuntimeError("CPU callable output differs from the captured golden")
 
+        archived_dir = Path(tempfile.mkdtemp(prefix="artifacts-", dir=args.work_dir))
+        shutil.copytree(output_dir, archived_dir / "model")
+        for name, data in (("input.f32", input_bytes),
+                           ("cpu-output.f32", actual_bytes),
+                           ("scalar-golden.f32", expected_bytes)):
+            (args.work_dir / name).write_bytes(data)
+        artifact_files = {
+            key: str((archived_dir / "model" / path.name).relative_to(args.work_dir))
+            for key, path in artifact_paths.items()
+        }
+        library_copy = archived_dir / "model" / f"lib{model}.so"
+        shutil.copyfile(args.param, args.work_dir / "model.param")
+        shutil.copyfile(args.bin, args.work_dir / "model.bin")
         evidence = {
+            "schema_version": 1,
+            "kind": "ncnn.vulkan_cpu_baseline_evidence",
             "baseline_revision": baseline["baseline_revision"],
             "fixture": baseline["fixture"],
             "model": model,
@@ -164,6 +180,16 @@ def main() -> None:
             "atol": tolerance,
             "status": status,
             "artifact_sha256": actual_hashes,
+            "artifact_files": artifact_files,
+            "cpu_library": str(library_copy.relative_to(args.work_dir)),
+            "cpu_library_sha256": sha256(library_copy),
+            "input_file": "input.f32",
+            "output_file": "cpu-output.f32",
+            "golden_file": "scalar-golden.f32",
+            "source_model_files": {
+                "param": "model.param", "param_sha256": sha256(args.param),
+                "bin": "model.bin", "bin_sha256": sha256(args.bin),
+            },
             "plan_hash": plan["plan_hash"],
             "build_identity": plan["build_identity"],
         }

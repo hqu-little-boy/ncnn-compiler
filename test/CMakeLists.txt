@@ -28,7 +28,7 @@ endforeach()
 # find_library(MLIR_RUNNER_UTILS NAMES mlir_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
 # find_library(MLIR_C_RUNNER_UTILS NAMES mlir_c_runner_utils PATHS ${LLVM_LIBRARY_DIR} REQUIRED)
 add_subdirectory(Numerical)
-if(NCNN_ENABLE_VULKAN_V0_TESTS)
+if(NCNN_ENABLE_VULKAN_PRODUCT OR NCNN_ENABLE_VULKAN_V0_TESTS)
     add_subdirectory(Vulkan)
 endif()
 # LLVM 的 lit 运行器（Debian 安装在 <prefix>/build/utils/lit）。可在
@@ -61,7 +61,7 @@ add_dependencies(vulkan_abi_contract_test compile_relu_scalar)
 add_test(NAME vulkan-abi-c-contract
     COMMAND $<TARGET_FILE:vulkan_abi_contract_test>)
 set_tests_properties(vulkan-abi-c-contract PROPERTIES
-    LABELS "abi;tooling"
+    LABELS "abi;tooling;offline"
     TIMEOUT 30)
 
 add_test(NAME vulkan-v1-cpu-baseline
@@ -80,7 +80,7 @@ add_test(NAME vulkan-v1-cpu-baseline
         --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-v1-cpu-baseline
         --result ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-v1-cpu-baseline/evidence.json)
 set_tests_properties(vulkan-v1-cpu-baseline PROPERTIES
-    LABELS "abi;integration;cpu-baseline"
+    LABELS "abi;integration;cpu-baseline;offline"
     RUN_SERIAL TRUE
     TIMEOUT 180)
 
@@ -260,13 +260,13 @@ if(NCNN_ENABLE_VULKAN_PRODUCT AND NCNN_ENABLE_VULKAN_V0_TESTS)
         --host-cxx ${CMAKE_CXX_COMPILER}
         --loader-source ${CMAKE_CURRENT_SOURCE_DIR}/Native/vulkan_product_loader.cpp
         --vulkan-include-dir ${PROJECT_SOURCE_DIR}/include
+        --vulkaninfo ${NCNN_VULKANINFO}
         --llvm-major ${LLVM_VERSION_MAJOR}
         --llvm-lib-dir ${LLVM_LIBRARY_DIR}
         --param ${CMAKE_CURRENT_SOURCE_DIR}/Vulkan/relu.param
         --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
         --unsupported-param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/convolution.param
-        --unsupported-bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/convolution.bin
-        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-product-cli)
+        --unsupported-bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/convolution.bin)
     if(NCNN_VULKAN_USES_SHARED_LLVM)
         list(APPEND _ncnn_vulkan_product_test_args --llvm-shared)
     endif()
@@ -302,26 +302,42 @@ if(NCNN_ENABLE_VULKAN_PRODUCT AND NCNN_ENABLE_VULKAN_V0_TESTS)
         list(APPEND _ncnn_vulkan_product_environment
             "LD_LIBRARY_PATH=${_ncnn_vulkan_library_path}")
     endif()
-    if(COMPILER_SANITIZERS MATCHES "(^|;)(address|undefined)(;|$)")
-        find_file(_ncnn_sanitizer_vulkan_icd
-            NAMES lvp_icd.json
-            PATHS /usr/share/vulkan/icd.d /etc/vulkan/icd.d
-            REQUIRED)
-        list(APPEND _ncnn_vulkan_product_environment
-            "VK_ICD_FILENAMES=${_ncnn_sanitizer_vulkan_icd}")
-    endif()
-    add_test(NAME ncnn-compile-vulkan-product
-        COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_ncnn_compile_vulkan.py
-            ${_ncnn_vulkan_product_test_args})
-    set_tests_properties(ncnn-compile-vulkan-product PROPERTIES
-        LABELS "native;integration;cli;vulkan;product"
-        RUN_SERIAL TRUE
-        TIMEOUT 900)
-    if(_ncnn_vulkan_product_environment)
-        set_tests_properties(ncnn-compile-vulkan-product PROPERTIES
-            ENVIRONMENT "${_ncnn_vulkan_product_environment}")
-    endif()
+    set(_ncnn_vulkan_product_first_test TRUE)
+    foreach(_ncnn_vulkan_product_device IN LISTS NCNN_VULKAN_TEST_DEVICES)
+        if(_ncnn_vulkan_product_device STREQUAL "nvidia")
+            set(_ncnn_vulkan_product_icd "${NCNN_VULKAN_DEVICE_NVIDIA_ICD}")
+            set(_ncnn_vulkan_product_layer hardware)
+        else()
+            set(_ncnn_vulkan_product_icd "${NCNN_VULKAN_DEVICE_LLVMPIPE_ICD}")
+            set(_ncnn_vulkan_product_layer software)
+        endif()
+        if(_ncnn_vulkan_product_first_test)
+            set(_ncnn_vulkan_product_test_name ncnn-compile-vulkan-product)
+            set(_ncnn_vulkan_product_work_dir
+                ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-product-cli)
+            set(_ncnn_vulkan_product_first_test FALSE)
+        else()
+            set(_ncnn_vulkan_product_test_name
+                ncnn-compile-vulkan-product-${_ncnn_vulkan_product_device})
+            set(_ncnn_vulkan_product_work_dir
+                ${CMAKE_CURRENT_BINARY_DIR}/Native/vulkan-product-cli-${_ncnn_vulkan_product_device})
+        endif()
+        add_test(NAME ${_ncnn_vulkan_product_test_name}
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/Native/check_ncnn_compile_vulkan.py
+                ${_ncnn_vulkan_product_test_args}
+                --device-match ${_ncnn_vulkan_product_device}
+                --icd ${_ncnn_vulkan_product_icd}
+                --work-dir ${_ncnn_vulkan_product_work_dir})
+        set_tests_properties(${_ncnn_vulkan_product_test_name} PROPERTIES
+            LABELS "native;integration;cli;vulkan;product;${_ncnn_vulkan_product_layer}"
+            RUN_SERIAL TRUE
+            TIMEOUT 900)
+        if(_ncnn_vulkan_product_environment)
+            set_tests_properties(${_ncnn_vulkan_product_test_name} PROPERTIES
+                ENVIRONMENT "${_ncnn_vulkan_product_environment}")
+        endif()
+    endforeach()
 endif()
 
 # Unsupported hosts still cross-compile; the script explicitly skips execution.

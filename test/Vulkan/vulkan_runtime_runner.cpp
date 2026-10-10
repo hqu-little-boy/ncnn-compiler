@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <fstream>
 #include <iomanip>
@@ -22,6 +23,10 @@
 #include <utility>
 #include <vector>
 
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/SHA256.h"
+#include "v6_add_split_relu.h"
+
 namespace {
 
 using ncnn_mlir::vulkan::KernelExecution;
@@ -34,6 +39,10 @@ using ncnn_mlir::vulkan::serializeExecutionPlan;
 using ncnn_mlir::vulkan::TensorResource;
 using ncnn_mlir::vulkan::verifyExecutionPlan;
 using ncnn_mlir::vulkan::VulkanExecutionPlan;
+using ncnn_mlir::vulkan::VulkanInputTensor;
+using ncnn_mlir::vulkan::VulkanKernelBinary;
+using ncnn_mlir::vulkan::VulkanOutputTensor;
+using ncnn_mlir::vulkan::VulkanRuntimeContext;
 using ncnn_mlir::vulkan::VulkanRuntimeDeviceInfo;
 using ncnn_mlir::vulkan::VulkanRuntimeOperation;
 using ncnn_mlir::vulkan::VulkanRuntimeOptions;
@@ -45,6 +54,13 @@ using ncnn_mlir::vulkan::test::getFixtureWeightUploadCount;
 
 constexpr std::size_t kElementCount = 257;
 constexpr float kTolerance = 1.0e-6F;
+
+static_assert(V6_ADD_SPLIT_RELU_INPUT_COUNT == 2);
+static_assert(V6_ADD_SPLIT_RELU_OUTPUT_COUNT == 2);
+static_assert(V6_ADD_SPLIT_RELU_INPUT1_ELEMENTS == kElementCount);
+static_assert(V6_ADD_SPLIT_RELU_INPUT2_ELEMENTS == kElementCount);
+static_assert(V6_ADD_SPLIT_RELU_OUTPUT1_ELEMENTS == kElementCount);
+static_assert(V6_ADD_SPLIT_RELU_OUTPUT2_ELEMENTS == kElementCount);
 
 struct Options final {
   std::string add_shader;
@@ -69,6 +85,26 @@ struct RunCapture final {
   std::vector<float> cpu_output;
   std::vector<float> gpu_output;
   std::vector<float> golden;
+};
+
+struct OutputCapture final {
+  std::vector<float> cpu;
+  std::vector<float> runtime;
+  std::vector<float> golden;
+  Difference cpu_golden;
+  Difference runtime_golden;
+  Difference cpu_runtime;
+};
+
+struct DualRunCapture final {
+  std::uint32_t seed;
+  std::string role;
+  std::vector<float> input1;
+  std::vector<float> input2;
+  OutputCapture sum;
+  OutputCapture relu;
+  std::size_t input_binary_offset_floats = 0;
+  std::size_t output_binary_offset_floats = 0;
 };
 
 ncnn_mlir::vulkan::VulkanExecutionPlan makePlan() {
@@ -173,6 +209,20 @@ ncnn_mlir::vulkan::VulkanExecutionPlan makePlan() {
     .outputs = {4},
     .plan_hash = "",
   };
+}
+
+VulkanExecutionPlan makeDualOutputPlan() {
+  VulkanExecutionPlan plan = makePlan();
+  plan.model = "v6_add_split_relu_dual_output_runtime_fixture";
+  plan.build_identity = "v6-dual-output-runtime-fixture-v1";
+  TensorResource& sum = plan.resources[2];
+  sum.kind = ResourceKind::Output;
+  sum.name = "sum";
+  sum.host_layout = "CHW";
+  sum.layout_transform = LayoutTransform{
+    .from_layout = "linear", .to_layout = "CHW", .operation = "de-linearize"};
+  plan.outputs = {3, 4};
+  return plan;
 }
 
 Options parseOptions(int argc, char** argv) {
@@ -336,6 +386,121 @@ void writeFloats(const std::string& path, std::span<const float> values) {
   }
 }
 
+std::string hashBytesSHA256(std::span<const std::byte> bytes) {
+  llvm::SHA256 hash;
+  hash.update(
+    llvm::StringRef(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+  const std::array<std::uint8_t, 32> digest = hash.final();
+  constexpr char hex[] = "0123456789abcdef";
+  std::string result;
+  result.reserve(digest.size() * 2);
+  for (std::uint8_t byte : digest) {
+    result.push_back(hex[byte >> 4]);
+    result.push_back(hex[byte & 0x0f]);
+  }
+  return result;
+}
+
+std::string hashFloatsSHA256(std::span<const float> values) {
+  return hashBytesSHA256(std::as_bytes(values));
+}
+
+std::string hashFileSHA256(const std::string& path) {
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input) {
+    throw std::runtime_error("cannot open AOT fixture for hashing: " + path);
+  }
+  const std::streamoff byte_count = input.tellg();
+  if (byte_count < 0 ||
+      std::cmp_greater(byte_count, std::vector<char>{}.max_size())) {
+    throw std::runtime_error("AOT fixture is too large to hash: " + path);
+  }
+  std::vector<char> bytes(static_cast<std::size_t>(byte_count));
+  input.seekg(0);
+  if (!bytes.empty() &&
+      !input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()))) {
+    throw std::runtime_error("cannot read AOT fixture for hashing: " + path);
+  }
+  return hashBytesSHA256(std::as_bytes(std::span<const char>(bytes)));
+}
+
+bool allEqual(std::span<const float> values, float expected) {
+  return std::ranges::all_of(
+    values, [expected](float value) { return value == expected; });
+}
+
+using CpuDualModel = decltype(&v6_add_split_relu);
+
+DualRunCapture runDualOnce(VulkanRuntimeContext& context,
+                           std::uint32_t seed,
+                           CpuDualModel cpu_model) {
+  DualRunCapture capture{.seed = seed,
+                         .role = "routine",
+                         .input1 = std::vector<float>(kElementCount),
+                         .input2 = std::vector<float>(kElementCount)};
+  std::vector<float> cpu_sum(kElementCount,
+                             std::numeric_limits<float>::quiet_NaN());
+  std::vector<float> cpu_relu(kElementCount,
+                              std::numeric_limits<float>::quiet_NaN());
+  std::vector<float> runtime_sum(kElementCount,
+                                 std::numeric_limits<float>::quiet_NaN());
+  std::vector<float> runtime_relu(kElementCount,
+                                  std::numeric_limits<float>::quiet_NaN());
+  std::vector<float> golden_sum(kElementCount);
+  std::vector<float> golden_relu(kElementCount);
+  makeInput(seed, capture.input1, capture.input2);
+  for (std::size_t index = 0; index < kElementCount; ++index) {
+    golden_sum[index] = capture.input1[index] + capture.input2[index];
+    golden_relu[index] = std::max(golden_sum[index], 0.0F);
+  }
+  if (cpu_model(capture.input1.data(),
+                capture.input2.data(),
+                cpu_sum.data(),
+                cpu_relu.data()) != 0) {
+    throw std::runtime_error("dual-output CPU AOT fixture returned failure");
+  }
+  const std::array<VulkanInputTensor, 2> inputs{
+    VulkanInputTensor{
+      .resource_id = 1,
+      .bytes = std::as_bytes(std::span<const float>(capture.input1))},
+    VulkanInputTensor{
+      .resource_id = 2,
+      .bytes = std::as_bytes(std::span<const float>(capture.input2))}};
+  const std::array<VulkanOutputTensor, 2> outputs{
+    VulkanOutputTensor{
+      .resource_id = 3,
+      .bytes = std::as_writable_bytes(std::span<float>(runtime_sum))},
+    VulkanOutputTensor{
+      .resource_id = 4,
+      .bytes = std::as_writable_bytes(std::span<float>(runtime_relu))}};
+  const auto result = context.run(inputs, outputs);
+  if (!result) {
+    throw std::runtime_error("dual-output direct runtime failed: " +
+                             result.error().diagnostic);
+  }
+
+  capture.sum = OutputCapture{.cpu = std::move(cpu_sum),
+                              .runtime = std::move(runtime_sum),
+                              .golden = std::move(golden_sum)};
+  capture.sum.cpu_golden = compare(capture.sum.cpu, capture.sum.golden);
+  capture.sum.runtime_golden = compare(capture.sum.runtime, capture.sum.golden);
+  capture.sum.cpu_runtime = compare(capture.sum.cpu, capture.sum.runtime);
+  capture.relu = OutputCapture{.cpu = std::move(cpu_relu),
+                               .runtime = std::move(runtime_relu),
+                               .golden = std::move(golden_relu)};
+  capture.relu.cpu_golden = compare(capture.relu.cpu, capture.relu.golden);
+  capture.relu.runtime_golden =
+    compare(capture.relu.runtime, capture.relu.golden);
+  capture.relu.cpu_runtime = compare(capture.relu.cpu, capture.relu.runtime);
+  if (!capture.sum.cpu_golden.passed || !capture.sum.runtime_golden.passed ||
+      !capture.sum.cpu_runtime.passed || !capture.relu.cpu_golden.passed ||
+      !capture.relu.runtime_golden.passed || !capture.relu.cpu_runtime.passed) {
+    throw std::runtime_error(
+      "dual-output CPU/runtime/golden comparison failed");
+  }
+  return capture;
+}
+
 void validateFailureCleanup(
   const ncnn_mlir::vulkan::VulkanExecutionPlan& plan,
   const std::vector<std::uint32_t>& add_shader,
@@ -466,6 +631,40 @@ int run(const Options& options) {
   }
   using CpuModel = int (*)(const float*, const float*, float*);
   auto cpu_model = reinterpret_cast<CpuModel>(symbol);
+
+  const char* dual_cpu_library_env = std::getenv("NCNN_V6_DUAL_CPU_LIBRARY");
+  const char* dual_cpu_symbol_env = std::getenv("NCNN_V6_DUAL_CPU_SYMBOL");
+  if (dual_cpu_library_env == nullptr || dual_cpu_library_env[0] == '\0' ||
+      dual_cpu_symbol_env == nullptr || dual_cpu_symbol_env[0] == '\0') {
+    dlclose(cpu_library);
+    throw std::runtime_error(
+      "dual-output CPU fixture environment is missing; expected "
+      "NCNN_V6_DUAL_CPU_LIBRARY and NCNN_V6_DUAL_CPU_SYMBOL");
+  }
+  const std::string dual_cpu_library_path(dual_cpu_library_env);
+  const std::string dual_cpu_symbol_name(dual_cpu_symbol_env);
+  void* dual_cpu_library =
+    dlopen(dual_cpu_library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (dual_cpu_library == nullptr) {
+    const std::string error = dlerror();
+    dlclose(cpu_library);
+    throw std::runtime_error("cannot load dual-output CPU AOT fixture: " +
+                             error);
+  }
+  dlerror();
+  void* dual_cpu_symbol = dlsym(dual_cpu_library, dual_cpu_symbol_name.c_str());
+  const char* dual_cpu_symbol_error = dlerror();
+  if (dual_cpu_symbol_error != nullptr || dual_cpu_symbol == nullptr) {
+    const std::string error =
+      dual_cpu_symbol_error != nullptr ? dual_cpu_symbol_error : "null symbol";
+    dlclose(dual_cpu_library);
+    dlclose(cpu_library);
+    throw std::runtime_error("cannot find dual-output CPU model symbol: " +
+                             error);
+  }
+  auto dual_cpu_model = reinterpret_cast<CpuDualModel>(dual_cpu_symbol);
+  const std::string dual_cpu_library_sha256 =
+    hashFileSHA256(dual_cpu_library_path);
 
   ncnn_vk_options abi_options;
   ncnn_vk_options_init(&abi_options);
@@ -760,6 +959,257 @@ int run(const Options& options) {
     throw std::runtime_error("healthy context cleanup reported an error");
   }
   context = nullptr;
+
+  const VulkanExecutionPlan dual_plan = makeDualOutputPlan();
+  const auto verified_dual_plan = verifyExecutionPlan(dual_plan);
+  if (!verified_dual_plan) {
+    dlclose(dual_cpu_library);
+    dlclose(cpu_library);
+    throw std::runtime_error("invalid V6 dual-output plan: " +
+                             verified_dual_plan.error());
+  }
+  const auto serialized_dual_plan = serializeExecutionPlan(dual_plan);
+  if (!serialized_dual_plan) {
+    dlclose(dual_cpu_library);
+    dlclose(cpu_library);
+    throw std::runtime_error("cannot serialize V6 dual-output plan: " +
+                             serialized_dual_plan.error());
+  }
+  std::ofstream dual_plan_evidence(options.evidence +
+                                   ".dual-execution-plan.json");
+  if (!dual_plan_evidence ||
+      !dual_plan_evidence.write(
+        serialized_dual_plan->data(),
+        static_cast<std::streamsize>(serialized_dual_plan->size()))) {
+    dlclose(dual_cpu_library);
+    dlclose(cpu_library);
+    throw std::runtime_error("cannot write dual-output plan evidence");
+  }
+  const std::array<VulkanKernelBinary, 2> dual_kernels{
+    VulkanKernelBinary{.kernel_id = 100, .words = add_shader},
+    VulkanKernelBinary{.kernel_id = 101, .words = relu_shader}};
+  VulkanRuntimeOptions dual_options = makeVulkanRuntimeOptions();
+  dual_options.enable_validation = options.validation;
+  dual_options.device_name_match = options.device_match;
+  dual_options.force_mapped_memory_sync = true;
+  auto create_dual_context = [&](const VulkanRuntimeOptions& runtime_options) {
+    return VulkanRuntimeContext::create(
+      dual_plan, dual_kernels, {}, runtime_options);
+  };
+  auto dual_context_result = create_dual_context(dual_options);
+  if (!dual_context_result) {
+    dlclose(dual_cpu_library);
+    dlclose(cpu_library);
+    throw std::runtime_error("dual-output runtime context creation failed: " +
+                             dual_context_result.error().diagnostic);
+  }
+  VulkanRuntimeContext dual_context = std::move(*dual_context_result);
+  const VulkanRuntimeDeviceInfo dual_device_info =
+    dual_context.get_device_info();
+  if (dual_device_info.name != device_info.name ||
+      dual_device_info.vendor_id != device_info.vendor_id ||
+      dual_device_info.device_id != device_info.device_id) {
+    dlclose(dual_cpu_library);
+    dlclose(cpu_library);
+    throw std::runtime_error(
+      "direct dual-output runtime selected a different device");
+  }
+  std::vector<DualRunCapture> dual_trials;
+  bool host_validation_retry = false;
+  std::uint32_t flush_operation_calls = 0;
+  std::uint32_t flush_injected_failures = 0;
+  std::uint32_t invalidate_operation_calls = 0;
+  std::uint32_t invalidate_injected_failures = 0;
+  std::uint64_t sentinel_elements_checked = 0;
+  bool flush_failure_sentinels_unchanged = false;
+  bool flush_poison_retry_rejected = false;
+  bool healthy_context_after_flush_failure = false;
+  bool flush_destroy_create_recovery = false;
+  bool invalidate_failure_sentinels_unchanged = false;
+  bool invalidate_poison_retry_rejected = false;
+  bool healthy_context_after_invalidate_failure = false;
+  bool invalidate_destroy_create_recovery = false;
+  std::uint32_t dual_validation_errors = 0;
+
+  std::vector<float> validation_input1(kElementCount);
+  std::vector<float> validation_input2(kElementCount);
+  makeInput(71U, validation_input1, validation_input2);
+  std::vector<float> validation_output_sum(kElementCount, -31.0F);
+  std::vector<float> validation_output_relu(kElementCount, -31.0F);
+  const std::array<VulkanInputTensor, 2> invalid_dual_inputs{
+    VulkanInputTensor{
+      .resource_id = 1,
+      .bytes = std::as_bytes(std::span<const float>(
+        validation_input1.data(), validation_input1.size() - 1))},
+    VulkanInputTensor{
+      .resource_id = 2,
+      .bytes = std::as_bytes(std::span<const float>(validation_input2))}};
+  const std::array<VulkanOutputTensor, 2> validation_outputs{
+    VulkanOutputTensor{
+      .resource_id = 3,
+      .bytes = std::as_writable_bytes(std::span<float>(validation_output_sum))},
+    VulkanOutputTensor{.resource_id = 4,
+                       .bytes = std::as_writable_bytes(
+                         std::span<float>(validation_output_relu))}};
+  const auto invalid_host_result =
+    dual_context.run(invalid_dual_inputs, validation_outputs);
+  if (invalid_host_result ||
+      invalid_host_result.error().status !=
+        NCNN_VK_STATUS_BUFFER_SIZE_MISMATCH ||
+      !allEqual(validation_output_sum, -31.0F) ||
+      !allEqual(validation_output_relu, -31.0F)) {
+    throw std::runtime_error(
+      "dual-output host validation did not fail without publishing outputs");
+  }
+  DualRunCapture host_retry_capture =
+    runDualOnce(dual_context, 71U, dual_cpu_model);
+  host_retry_capture.role = "host_validation_retry";
+  dual_trials.push_back(std::move(host_retry_capture));
+  host_validation_retry = true;
+
+  for (std::uint32_t call = 0; call < options.calls; ++call) {
+    dual_trials.push_back(
+      runDualOnce(dual_context, call * 37U, dual_cpu_model));
+  }
+
+  auto exercise_sync_failure = [&](VulkanRuntimeOperation failure_operation,
+                                   std::uint32_t fail_on_call,
+                                   float sentinel,
+                                   std::uint32_t seed,
+                                   std::string_view label,
+                                   std::uint32_t& observed_calls,
+                                   std::uint32_t& injected_failures,
+                                   bool& failure_sentinels_unchanged,
+                                   bool& poison_retry_rejected,
+                                   bool& healthy_context_passed,
+                                   bool& destroy_create_recovery) {
+    VulkanRuntimeOptions failed_options = dual_options;
+    failed_options.failure_injector =
+      [failure_operation, fail_on_call, &observed_calls, &injected_failures](
+        VulkanRuntimeOperation operation) -> std::optional<ncnn_vk_status> {
+      if (operation == failure_operation && ++observed_calls == fail_on_call) {
+        ++injected_failures;
+        return NCNN_VK_STATUS_DEVICE_LOST;
+      }
+      return std::nullopt;
+    };
+    auto failed_context_result = create_dual_context(failed_options);
+    if (!failed_context_result) {
+      throw std::runtime_error("cannot create injected-failure context for " +
+                               std::string(label) + ": " +
+                               failed_context_result.error().diagnostic);
+    }
+    VulkanRuntimeContext failed_context = std::move(*failed_context_result);
+    std::vector<float> input1(kElementCount);
+    std::vector<float> input2(kElementCount);
+    makeInput(seed, input1, input2);
+    const std::array<VulkanInputTensor, 2> inputs{
+      VulkanInputTensor{.resource_id = 1,
+                        .bytes = std::as_bytes(std::span<const float>(input1))},
+      VulkanInputTensor{
+        .resource_id = 2,
+        .bytes = std::as_bytes(std::span<const float>(input2))}};
+    std::vector<float> sum_output(kElementCount, sentinel);
+    std::vector<float> relu_output(kElementCount, sentinel);
+    const std::array<VulkanOutputTensor, 2> outputs{
+      VulkanOutputTensor{
+        .resource_id = 3,
+        .bytes = std::as_writable_bytes(std::span<float>(sum_output))},
+      VulkanOutputTensor{
+        .resource_id = 4,
+        .bytes = std::as_writable_bytes(std::span<float>(relu_output))}};
+    const auto failed_run = failed_context.run(inputs, outputs);
+    failure_sentinels_unchanged =
+      !failed_run && failed_run.error().status == NCNN_VK_STATUS_DEVICE_LOST &&
+      allEqual(sum_output, sentinel) && allEqual(relu_output, sentinel);
+    sentinel_elements_checked += 2 * kElementCount;
+    if (!failure_sentinels_unchanged || observed_calls != fail_on_call ||
+        injected_failures != 1) {
+      throw std::runtime_error(
+        std::string(label) + " failure did not preserve every output element");
+    }
+
+    std::ranges::fill(sum_output, sentinel);
+    std::ranges::fill(relu_output, sentinel);
+    const auto retry_result = failed_context.run(inputs, outputs);
+    poison_retry_rejected =
+      !retry_result &&
+      retry_result.error().status == NCNN_VK_STATUS_DEVICE_LOST &&
+      retry_result.error().diagnostic.find("previous execution failure") !=
+        std::string::npos &&
+      allEqual(sum_output, sentinel) && allEqual(relu_output, sentinel);
+    sentinel_elements_checked += 2 * kElementCount;
+    if (!poison_retry_rejected) {
+      throw std::runtime_error(
+        std::string(label) +
+        " poisoned context accepted retry or modified output");
+    }
+
+    DualRunCapture healthy_capture =
+      runDualOnce(dual_context, seed, dual_cpu_model);
+    healthy_capture.role = std::string(label) + "_healthy_context";
+    dual_trials.push_back(std::move(healthy_capture));
+    healthy_context_passed = true;
+
+    dual_validation_errors += failed_context.get_validation_error_count();
+    const auto failed_destroy = failed_context.destroy();
+    if (!failed_destroy) {
+      throw std::runtime_error(std::string(label) +
+                               " poisoned context destroy failed: " +
+                               failed_destroy.error().diagnostic);
+    }
+
+    auto recovered_context_result = create_dual_context(dual_options);
+    if (!recovered_context_result) {
+      throw std::runtime_error(std::string(label) +
+                               " destroy/create recovery failed: " +
+                               recovered_context_result.error().diagnostic);
+    }
+    VulkanRuntimeContext recovered_context =
+      std::move(*recovered_context_result);
+    DualRunCapture recovered_capture =
+      runDualOnce(recovered_context, seed, dual_cpu_model);
+    recovered_capture.role = std::string(label) + "_recreated_context";
+    dual_trials.push_back(std::move(recovered_capture));
+    dual_validation_errors += recovered_context.get_validation_error_count();
+    const auto recovered_destroy = recovered_context.destroy();
+    if (!recovered_destroy) {
+      throw std::runtime_error(std::string(label) +
+                               " recreated context destroy failed: " +
+                               recovered_destroy.error().diagnostic);
+    }
+    destroy_create_recovery = true;
+  };
+
+  exercise_sync_failure(VulkanRuntimeOperation::FlushMappedMemory,
+                        1,
+                        -41.0F,
+                        7101U,
+                        "input_flush",
+                        flush_operation_calls,
+                        flush_injected_failures,
+                        flush_failure_sentinels_unchanged,
+                        flush_poison_retry_rejected,
+                        healthy_context_after_flush_failure,
+                        flush_destroy_create_recovery);
+  exercise_sync_failure(VulkanRuntimeOperation::InvalidateMappedMemory,
+                        2,
+                        -43.0F,
+                        7102U,
+                        "second_output_invalidate",
+                        invalidate_operation_calls,
+                        invalidate_injected_failures,
+                        invalidate_failure_sentinels_unchanged,
+                        invalidate_poison_retry_rejected,
+                        healthy_context_after_invalidate_failure,
+                        invalidate_destroy_create_recovery);
+  dual_validation_errors += dual_context.get_validation_error_count();
+  if (dual_validation_errors != 0) {
+    throw std::runtime_error(
+      "validation layer reported an error in dual-output runtime paths");
+  }
+  validation_errors += dual_validation_errors;
+  dlclose(dual_cpu_library);
   dlclose(cpu_library);
 
   std::vector<float> input_evidence;
@@ -782,6 +1232,33 @@ int run(const Options& options) {
   output_evidence.insert(output_evidence.end(),
                          reference_capture.golden.begin(),
                          reference_capture.golden.end());
+  input_evidence.reserve(input_evidence.size() +
+                         (dual_trials.size() * 2 * kElementCount));
+  output_evidence.reserve(output_evidence.size() +
+                          (dual_trials.size() * 6 * kElementCount));
+  for (DualRunCapture& trial : dual_trials) {
+    trial.input_binary_offset_floats = input_evidence.size();
+    input_evidence.insert(
+      input_evidence.end(), trial.input1.begin(), trial.input1.end());
+    input_evidence.insert(
+      input_evidence.end(), trial.input2.begin(), trial.input2.end());
+    trial.output_binary_offset_floats = output_evidence.size();
+    output_evidence.insert(
+      output_evidence.end(), trial.sum.cpu.begin(), trial.sum.cpu.end());
+    output_evidence.insert(output_evidence.end(),
+                           trial.sum.runtime.begin(),
+                           trial.sum.runtime.end());
+    output_evidence.insert(
+      output_evidence.end(), trial.sum.golden.begin(), trial.sum.golden.end());
+    output_evidence.insert(
+      output_evidence.end(), trial.relu.cpu.begin(), trial.relu.cpu.end());
+    output_evidence.insert(output_evidence.end(),
+                           trial.relu.runtime.begin(),
+                           trial.relu.runtime.end());
+    output_evidence.insert(output_evidence.end(),
+                           trial.relu.golden.begin(),
+                           trial.relu.golden.end());
+  }
   writeFloats(options.evidence + ".inputs.bin", input_evidence);
   writeFloats(options.evidence + ".outputs.bin", output_evidence);
 
@@ -789,23 +1266,121 @@ int run(const Options& options) {
   if (!evidence) {
     throw std::runtime_error("cannot create runtime evidence file");
   }
-  evidence << "{\n"
-           << R"(  "device_match": ")" << options.device_match << R"(",)"
-           << '\n'
-           << R"(  "device_name": )" << std::quoted(device_info.name) << ",\n"
-           << R"(  "api_version": )" << device_info.api_version << ",\n"
-           << R"(  "driver_version": )" << device_info.driver_version << ",\n"
-           << R"(  "vendor_id": )" << device_info.vendor_id << ",\n"
-           << R"(  "device_id": )" << device_info.device_id << ",\n"
-           << R"(  "operation": "add_then_relu",)" << '\n'
-           << R"(  "kernel_count": 2,)" << '\n'
-           << R"(  "calls": )" << options.calls << ",\n"
-           << R"(  "concurrent_calls": )" << options.concurrent_calls << ",\n"
-           << R"(  "validation_enabled": )"
-           << (options.validation ? "true" : "false") << ",\n"
-           << R"(  "validation_errors": )" << validation_errors << ",\n"
-           << R"(  "cpu_max_abs_error": )" << max_cpu_error << ",\n"
-           << R"(  "gpu_max_abs_error": )" << max_gpu_error << ",\n"
+  evidence
+    << "{\n"
+    << R"(  "device_match": )" << std::quoted(options.device_match) << ",\n"
+    << R"(  "device_name": )" << std::quoted(device_info.name) << ",\n"
+    << R"(  "api_version": )" << device_info.api_version << ",\n"
+    << R"(  "driver_version": )" << device_info.driver_version << ",\n"
+    << R"(  "vendor_id": )" << device_info.vendor_id << ",\n"
+    << R"(  "device_id": )" << device_info.device_id << ",\n"
+    << R"(  "operation": "add_then_relu",)" << '\n'
+    << R"(  "kernel_count": 2,)" << '\n'
+    << R"(  "calls": )" << options.calls << ",\n"
+    << R"(  "concurrent_calls": )" << options.concurrent_calls << ",\n"
+    << R"(  "validation_enabled": )" << (options.validation ? "true" : "false")
+    << ",\n"
+    << R"(  "validation_errors": )" << validation_errors << ",\n"
+    << R"(  "cpu_max_abs_error": )" << max_cpu_error << ",\n"
+    << R"(  "gpu_max_abs_error": )" << max_gpu_error << ",\n"
+    << R"(  "failure_counts": {)" << '\n'
+    << R"(    "create_injection_cases": 11,)" << '\n'
+    << R"(    "memory_budget_failures": 1,)" << '\n'
+    << R"(    "submit": 1,)" << '\n'
+    << R"(    "wait": 1,)" << '\n'
+    << R"(    "input_flush": )" << flush_injected_failures << ",\n"
+    << R"(    "output_invalidate": )" << invalidate_injected_failures << '\n'
+    << "  },\n"
+    << R"(  "dual_output": {)" << '\n'
+    << R"(    "operation": "add_split_relu_two_public_outputs",)" << '\n'
+    << R"(    "plan": )"
+    << std::quoted(options.evidence + ".dual-execution-plan.json") << ",\n"
+    << R"(    "plan_outputs": [3, 4],)" << '\n'
+    << R"(    "cpu_aot_library": )" << std::quoted(dual_cpu_library_path)
+    << ",\n"
+    << R"(    "cpu_aot_library_sha256": )"
+    << std::quoted(dual_cpu_library_sha256) << ",\n"
+    << R"(    "cpu_aot_symbol": )" << std::quoted(dual_cpu_symbol_name) << ",\n"
+    << R"json(    "output_hash_algorithm": "sha256 (raw FP32 bytes)",)json"
+    << '\n'
+    << R"(    "binary_layout": "outputs.bin: legacy cpu/runtime/golden, then per trial sum cpu/runtime/golden and relu cpu/runtime/golden; offsets in FP32 elements",)"
+    << '\n'
+    << R"(    "failure_counts": {)" << '\n'
+    << R"(      "input_flush_events": )" << flush_operation_calls << ",\n"
+    << R"(      "input_flush_injected": )" << flush_injected_failures << ",\n"
+    << R"(      "output_invalidate_events": )" << invalidate_operation_calls
+    << ",\n"
+    << R"(      "second_output_invalidate_injected": )"
+    << invalidate_injected_failures << '\n'
+    << "    },\n"
+    << R"(    "sentinel_elements_checked_per_output_failure": )"
+    << (2 * kElementCount) << ",\n"
+    << R"(    "sentinel_elements_checked_total": )" << sentinel_elements_checked
+    << ",\n"
+    << R"(    "lifecycle": {)" << '\n'
+    << R"(      "host_validation_retry": )"
+    << (host_validation_retry ? "true" : "false") << ",\n"
+    << R"(      "flush_failure_all_sentinels_unchanged": )"
+    << (flush_failure_sentinels_unchanged ? "true" : "false") << ",\n"
+    << R"(      "flush_poison_retry_rejected": )"
+    << (flush_poison_retry_rejected ? "true" : "false") << ",\n"
+    << R"(      "healthy_context_after_flush_failure": )"
+    << (healthy_context_after_flush_failure ? "true" : "false") << ",\n"
+    << R"(      "flush_destroy_create_recovery": )"
+    << (flush_destroy_create_recovery ? "true" : "false") << ",\n"
+    << R"(      "second_invalidate_failure_all_sentinels_unchanged": )"
+    << (invalidate_failure_sentinels_unchanged ? "true" : "false") << ",\n"
+    << R"(      "second_invalidate_poison_retry_rejected": )"
+    << (invalidate_poison_retry_rejected ? "true" : "false") << ",\n"
+    << R"(      "healthy_context_after_invalidate_failure": )"
+    << (healthy_context_after_invalidate_failure ? "true" : "false") << ",\n"
+    << R"(      "invalidate_destroy_create_recovery": )"
+    << (invalidate_destroy_create_recovery ? "true" : "false") << '\n'
+    << "    },\n"
+    << R"(    "trials": [)" << '\n';
+  auto write_output_capture = [&](std::string_view name,
+                                  std::uint32_t resource_id,
+                                  const OutputCapture& capture) {
+    evidence << R"(        {"name": )" << std::quoted(std::string(name))
+             << R"(, "resource_id": )" << resource_id
+             << R"(, "cpu_vs_golden_max_abs": )"
+             << capture.cpu_golden.max_absolute
+             << R"(, "runtime_vs_golden_max_abs": )"
+             << capture.runtime_golden.max_absolute
+             << R"(, "cpu_vs_runtime_max_abs": )"
+             << capture.cpu_runtime.max_absolute
+             << R"(, "cpu_vs_golden_pass": )"
+             << (capture.cpu_golden.passed ? "true" : "false")
+             << R"(, "runtime_vs_golden_pass": )"
+             << (capture.runtime_golden.passed ? "true" : "false")
+             << R"(, "cpu_vs_runtime_pass": )"
+             << (capture.cpu_runtime.passed ? "true" : "false")
+             << R"(, "cpu_sha256": )"
+             << std::quoted(hashFloatsSHA256(capture.cpu))
+             << R"(, "runtime_sha256": )"
+             << std::quoted(hashFloatsSHA256(capture.runtime))
+             << R"(, "golden_sha256": )"
+             << std::quoted(hashFloatsSHA256(capture.golden)) << "}";
+  };
+  for (std::size_t index = 0; index < dual_trials.size(); ++index) {
+    const DualRunCapture& trial = dual_trials[index];
+    evidence << "      {\n"
+             << R"(        "seed": )" << trial.seed << ",\n"
+             << R"(        "role": )" << std::quoted(trial.role) << ",\n"
+             << R"(        "input_binary_offset_floats": )"
+             << trial.input_binary_offset_floats << ",\n"
+             << R"(        "output_binary_offset_floats": )"
+             << trial.output_binary_offset_floats << ",\n"
+             << R"(        "sum": )";
+    write_output_capture("sum", 3, trial.sum);
+    evidence << ",\n" << R"(        "relu": )";
+    write_output_capture("relu", 4, trial.relu);
+    evidence << '\n'
+             << "      }" << (index + 1 == dual_trials.size() ? "\n" : ",\n");
+  }
+  evidence << "    ],\n"
+           << R"(    "trial_count": )" << dual_trials.size() << '\n'
+           << "  },\n"
            << R"(  "allocation_budget_bytes": )"
            << makeVulkanRuntimeOptions().max_context_memory_bytes << "\n"
            << "}\n";

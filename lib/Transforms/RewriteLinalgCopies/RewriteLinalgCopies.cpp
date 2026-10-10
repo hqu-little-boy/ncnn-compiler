@@ -17,7 +17,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
-#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "ncnn-mlir/Support/KernelContract.hpp"
 #include "ncnn-mlir/Support/ModelLedger.hpp"
@@ -577,8 +576,10 @@ class RewriteLinalgCopiesPass final
     patterns.add<LowerMemRefCopy>(&getContext(), stats, vectorize, vectorLanes);
     patterns.add<LinalgCopyToLoops>(
       &getContext(), stats, vectorize, vectorLanes);
-    if (failed(
-          applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+    GreedyRewriteConfig rewriteConfig;
+    rewriteConfig.enableFolding();
+    if (failed(applyPatternsGreedily(
+          getOperation(), std::move(patterns), rewriteConfig))) {
       signalPassFailure();
       return;
     }

@@ -36,9 +36,9 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     target_link_libraries(unit_tests PRIVATE NCNNVulkanProductSupport)
 endif()
 
-if(NCNN_ENABLE_VULKAN_V0_TESTS)
+if(NCNN_ENABLE_VULKAN_PRODUCT OR NCNN_ENABLE_VULKAN_V0_TESTS)
     target_sources(unit_tests PRIVATE vulkan_runtime_test.cpp)
     target_link_libraries(unit_tests PRIVATE NCNNVulkanRuntime)
 endif()
 
-gtest_discover_tests(unit_tests)
+gtest_discover_tests(unit_tests PROPERTIES LABELS "unit\\;offline")

@@ -1,10 +1,8 @@
 #include "ncnn-mlir/Transforms/VectorizeNCNN/LowerVectorTransfersNCNN.hpp"
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir::ncnn {
@@ -28,12 +26,12 @@ class LowerVectorTransfersNCNNPass final
   void runOnOperation() final {
     ModuleOp module = getOperation();
     bool hasTransfer = false;
-    module.walk([&](vector::TransferReadOp op) {
+    module.walk([&](vector::TransferReadOp) {
       if (!hasTransfer) {
         hasTransfer = true;
       }
     });
-    module.walk([&](vector::TransferWriteOp op) {
+    module.walk([&](vector::TransferWriteOp) {
       if (!hasTransfer) {
         hasTransfer = true;
       }
@@ -47,7 +45,10 @@ class LowerVectorTransfersNCNNPass final
     vector::populateVectorTransferDropUnitDimsPatterns(patterns);
     vector::populateFlattenVectorTransferPatterns(patterns,
                                                   targetBitwidth.getValue());
-    if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns)))) {
+    GreedyRewriteConfig rewriteConfig;
+    rewriteConfig.enableFolding();
+    if (failed(
+          applyPatternsGreedily(module, std::move(patterns), rewriteConfig))) {
       signalPassFailure();
     }
   }

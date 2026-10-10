@@ -8,7 +8,9 @@
 #define NCNN_PRODUCT_STRINGIFY(value) NCNN_PRODUCT_STRINGIFY_IMPL(value)
 
 #include NCNN_PRODUCT_STRINGIFY(NCNN_PRODUCT_TEST_MODEL.h)
+#ifndef NCNN_PRODUCT_TEST_CPU_ONLY
 #include NCNN_PRODUCT_STRINGIFY(NCNN_PRODUCT_JOIN(NCNN_PRODUCT_TEST_MODEL, _vulkan).h)
+#endif
 
 #include <dlfcn.h>
 
@@ -26,6 +28,7 @@
 #include <vector>
 
 using CpuFunction = decltype(&NCNN_PRODUCT_TEST_MODEL);
+#ifndef NCNN_PRODUCT_TEST_CPU_ONLY
 using VulkanContext = NCNN_PRODUCT_JOIN(NCNN_PRODUCT_TEST_MODEL, _vk_context);
 using VulkanCreateFunction =
   decltype(&NCNN_PRODUCT_JOIN(NCNN_PRODUCT_TEST_MODEL, _vk_create));
@@ -33,10 +36,13 @@ using VulkanRunFunction =
   decltype(&NCNN_PRODUCT_JOIN(NCNN_PRODUCT_TEST_MODEL, _vk_run));
 using VulkanDestroyFunction =
   decltype(&NCNN_PRODUCT_JOIN(NCNN_PRODUCT_TEST_MODEL, _vk_destroy));
+#endif
 
 namespace {
 
+#ifndef NCNN_PRODUCT_TEST_CPU_ONLY
 constexpr std::size_t kDiagnosticCapacity = 1024;
+#endif
 
 struct Result {
   std::string status = "failure";
@@ -106,15 +112,14 @@ auto write_result(const std::string& path, const Result& result) -> bool {
     std::cerr << "cannot open result JSON: " << path << '\n';
     return false;
   }
-  output << "{\"status\":\"" << json_escape(result.status) << "\",\"phase\":\""
-         << json_escape(result.phase)
-         << "\",\"cpu_status\":" << result.cpu_status
-         << ",\"vulkan_create_status\":" << result.vulkan_create_status
-         << ",\"vulkan_run_status\":" << result.vulkan_run_status
-         << ",\"vulkan_destroy_status\":" << result.vulkan_destroy_status
-         << ",\"vulkan_destroy_null_status\":"
-         << result.vulkan_destroy_null_status << ",\"diagnostic\":\""
-         << json_escape(result.diagnostic) << "\"}\n";
+  output << R"({"status":")" << json_escape(result.status) << R"(","phase":")"
+         << json_escape(result.phase) << R"(","cpu_status":)"
+         << result.cpu_status << R"(,"vulkan_create_status":)"
+         << result.vulkan_create_status << R"(,"vulkan_run_status":)"
+         << result.vulkan_run_status << R"(,"vulkan_destroy_status":)"
+         << result.vulkan_destroy_status << R"(,"vulkan_destroy_null_status":)"
+         << result.vulkan_destroy_null_status << R"(,"diagnostic":")"
+         << json_escape(result.diagnostic) << R"("})" << '\n';
   if (!output) {
     std::cerr << "failed to write result JSON: " << path << '\n';
     return false;
@@ -187,31 +192,52 @@ auto write_floats(const std::string& path, const std::vector<float>& values)
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 9) {
-    std::cerr << "usage: loader MODEL CPU_DSO VULKAN_DSO ELEMENTS INPUT "
-                 "CPU_OUTPUT VULKAN_OUTPUT RESULT_JSON\n";
+#ifdef NCNN_PRODUCT_TEST_CPU_ONLY
+  constexpr int kArgumentCount = 7;
+  constexpr int kElementsArgument = 3;
+  constexpr int kInputArgument = 4;
+  constexpr int kCpuOutputArgument = 5;
+  constexpr int kResultArgument = 6;
+  constexpr std::string_view kUsage =
+    "usage: loader MODEL CPU_DSO ELEMENTS INPUT CPU_OUTPUT RESULT_JSON\n";
+#else
+  constexpr int kArgumentCount = 9;
+  constexpr int kElementsArgument = 4;
+  constexpr int kInputArgument = 5;
+  constexpr int kCpuOutputArgument = 6;
+  constexpr int kResultArgument = 8;
+  constexpr std::string_view kUsage =
+    "usage: loader MODEL CPU_DSO VULKAN_DSO ELEMENTS INPUT "
+    "CPU_OUTPUT VULKAN_OUTPUT RESULT_JSON\n";
+#endif
+  if (argc != kArgumentCount) {
+    std::cerr << kUsage;
     return 2;
   }
 
   Result result;
   const std::string model_name = argv[1];
-  const std::string result_path = argv[8];
+  const std::string result_path = argv[kResultArgument];
   errno = 0;
   char* end = nullptr;
-  const unsigned long long parsed_elements = std::strtoull(argv[4], &end, 10);
-  if (errno != 0 || end == argv[4] || *end != '\0' || parsed_elements == 0 ||
+  const unsigned long long parsed_elements =
+    std::strtoull(argv[kElementsArgument], &end, 10);
+  if (errno != 0 || end == argv[kElementsArgument] || *end != '\0' ||
+      parsed_elements == 0 ||
       parsed_elements > std::numeric_limits<std::size_t>::max()) {
     return fail(result_path, result, "arguments", "invalid element count");
   }
-  const std::size_t elements = static_cast<std::size_t>(parsed_elements);
+  const auto elements = static_cast<std::size_t>(parsed_elements);
 
   std::vector<float> input;
-  if (!read_input(argv[5], elements, input)) {
+  if (!read_input(argv[kInputArgument], elements, input)) {
     return fail(
       result_path, result, "input", "failed to read exact FP32 input buffer");
   }
   std::vector<float> cpu_output(elements);
+#ifndef NCNN_PRODUCT_TEST_CPU_ONLY
   std::vector<float> vulkan_output(elements);
+#endif
 
   result.phase = "cpu-dlopen";
   DynamicLibrary cpu_library(dlopen(argv[2], RTLD_NOW | RTLD_LOCAL));
@@ -223,6 +249,7 @@ int main(int argc, char** argv) {
                 error == nullptr ? "dlopen failed" : error);
   }
 
+#ifndef NCNN_PRODUCT_TEST_CPU_ONLY
   result.phase = "vulkan-dlopen";
   DynamicLibrary vulkan_library(dlopen(argv[3], RTLD_NOW | RTLD_LOCAL));
   if (!vulkan_library) {
@@ -232,9 +259,10 @@ int main(int argc, char** argv) {
                 result.phase,
                 error == nullptr ? "dlopen failed" : error);
   }
+#endif
 
   std::string symbol_error;
-  const CpuFunction cpu_function =
+  const auto cpu_function =
     typed_symbol<CpuFunction>(cpu_library.get(), model_name, symbol_error);
   if (cpu_function == nullptr) {
     return fail(result_path, result, "cpu-symbol", symbol_error);
@@ -247,16 +275,17 @@ int main(int argc, char** argv) {
                 result.phase,
                 "generated CPU function returned nonzero status");
   }
-  if (!write_floats(argv[6], cpu_output)) {
+  if (!write_floats(argv[kCpuOutputArgument], cpu_output)) {
     return fail(
       result_path, result, "cpu-output", "failed to write raw FP32 output");
   }
 
-  const VulkanCreateFunction create = typed_symbol<VulkanCreateFunction>(
+#ifndef NCNN_PRODUCT_TEST_CPU_ONLY
+  const auto create = typed_symbol<VulkanCreateFunction>(
     vulkan_library.get(), model_name + "_vk_create", symbol_error);
-  const VulkanRunFunction run = typed_symbol<VulkanRunFunction>(
+  const auto run = typed_symbol<VulkanRunFunction>(
     vulkan_library.get(), model_name + "_vk_run", symbol_error);
-  const VulkanDestroyFunction destroy = typed_symbol<VulkanDestroyFunction>(
+  const auto destroy = typed_symbol<VulkanDestroyFunction>(
     vulkan_library.get(), model_name + "_vk_destroy", symbol_error);
   if (create == nullptr || run == nullptr || destroy == nullptr) {
     return fail(result_path, result, "vulkan-symbol", symbol_error);
@@ -307,6 +336,8 @@ int main(int argc, char** argv) {
     return fail(
       result_path, result, "vulkan-output", "failed to write raw FP32 output");
   }
+
+#endif
 
   result.status = "success";
   result.phase = "complete";

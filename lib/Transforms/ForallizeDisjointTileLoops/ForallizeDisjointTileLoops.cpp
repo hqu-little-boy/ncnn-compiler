@@ -4,14 +4,13 @@
 #include <optional>
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 namespace mlir::ncnn {
@@ -140,8 +139,8 @@ class DisjointTileLoopRewrite : public OpRewritePattern<scf::ForOp> {
           strideValue != 1) {
         return failure();
       }
-      if (offsets[dimension].is<Value>()) {
-        auto offsetValue = offsets[dimension].get<Value>();
+      if (llvm::isa<Value>(offsets[dimension])) {
+        auto offsetValue = llvm::cast<Value>(offsets[dimension]);
         if (int64_t constant = 0; resolveConstantIndex(offsetValue, constant)) {
           continue;
         }
@@ -216,10 +215,11 @@ class DisjointTileLoopRewrite : public OpRewritePattern<scf::ForOp> {
 
  private:
   static bool resolveMixedConstant(OpFoldResult mixed, int64_t& out) {
-    if (!mixed.is<Attribute>()) {
-      return resolveConstantIndex(mixed.get<Value>(), out);
+    if (!llvm::isa<Attribute>(mixed)) {
+      return resolveConstantIndex(llvm::cast<Value>(mixed), out);
     }
-    if (auto integer = mlir::dyn_cast<IntegerAttr>(mixed.get<Attribute>())) {
+    if (auto integer =
+          mlir::dyn_cast<IntegerAttr>(llvm::cast<Attribute>(mixed))) {
       out = integer.getInt();
       return true;
     }
@@ -229,8 +229,8 @@ class DisjointTileLoopRewrite : public OpRewritePattern<scf::ForOp> {
   static OpFoldResult mapMixed(PatternRewriter& rewriter,
                                IRMapping& mapping,
                                OpFoldResult mixed) {
-    if (mixed.is<Value>()) {
-      return ensureMapped(rewriter, mapping, mixed.get<Value>());
+    if (llvm::isa<Value>(mixed)) {
+      return ensureMapped(rewriter, mapping, llvm::cast<Value>(mixed));
     }
     return mixed;
   }
@@ -264,8 +264,10 @@ class ForallizeDisjointTileLoopsPass final
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
     patterns.add<DisjointTileLoopRewrite>(&getContext());
-    if (failed(
-          applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+    GreedyRewriteConfig rewriteConfig;
+    rewriteConfig.enableFolding();
+    if (failed(applyPatternsGreedily(
+          getOperation(), std::move(patterns), rewriteConfig))) {
       signalPassFailure();
     }
   }

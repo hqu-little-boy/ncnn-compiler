@@ -239,7 +239,8 @@ extern "C" ncnn_vk_status v3_add_relu_vk_destroy(
   }
   try {
     const auto result = owned->runtime.destroy();
-    return result ? NCNN_VK_STATUS_SUCCESS : result.error().status;
+    return result ? static_cast<ncnn_vk_status>(NCNN_VK_STATUS_SUCCESS)
+                  : result.error().status;
   } catch (...) {
     return NCNN_VK_STATUS_API_ERROR;
   }

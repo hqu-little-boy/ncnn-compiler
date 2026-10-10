@@ -7,6 +7,7 @@
 #include <cstring>
 #include <exception>
 #include <expected>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <new>
@@ -76,6 +77,13 @@ void checkVk(VkResult result, std::string_view operation) {
          std::string(operation) + " failed with VkResult " +
            std::to_string(result));
   }
+}
+
+template <typename Structure>
+Structure makeVkStructure(VkStructureType type) {
+  Structure structure{};
+  structure.sType = type;
+  return structure;
 }
 
 bool checkedAdd(std::uint64_t lhs,
@@ -191,9 +199,12 @@ class VulkanRuntimeContext::Impl final {
              "Vulkan context cannot run after a previous execution failure");
       }
       validateHostTensors(inputs, outputs);
-      prepareInputStaging(inputs);
       try {
+        prepareInputStaging(inputs);
         recordAndSubmit(inputs, outputs);
+        invalidateOutputs(outputs);
+        publishOutputs(outputs);
+        return {};
       } catch (const RuntimeFailure& error) {
         unusable_status_ = error.get_error().status;
         throw;
@@ -203,9 +214,10 @@ class VulkanRuntimeContext::Impl final {
       } catch (const std::exception&) {
         unusable_status_ = NCNN_VK_STATUS_API_ERROR;
         throw;
+      } catch (...) {
+        unusable_status_ = NCNN_VK_STATUS_API_ERROR;
+        fail(NCNN_VK_STATUS_API_ERROR, "unknown exception during Vulkan run");
       }
-      publishOutputs(outputs);
-      return {};
     } catch (const RuntimeFailure& error) {
       return std::unexpected(error.get_error());
     } catch (const std::bad_alloc&) {
@@ -363,6 +375,10 @@ class VulkanRuntimeContext::Impl final {
         return "queue submission";
       case VulkanRuntimeOperation::Wait:
         return "queue wait";
+      case VulkanRuntimeOperation::FlushMappedMemory:
+        return "mapped-memory flush";
+      case VulkanRuntimeOperation::InvalidateMappedMemory:
+        return "mapped-memory invalidate";
     }
     return "unknown operation";
   }
@@ -448,8 +464,8 @@ class VulkanRuntimeContext::Impl final {
     inject(VulkanRuntimeOperation::CreateInstance);
     std::vector<const char*> layers;
     std::vector<const char*> extensions;
-    VkDebugUtilsMessengerCreateInfoEXT debug_info{
-      VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+    auto debug_info = makeVkStructure<VkDebugUtilsMessengerCreateInfoEXT>(
+      VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT);
     if (options_.enable_validation) {
       std::uint32_t layer_count = 0;
       checkVk(vkEnumerateInstanceLayerProperties(&layer_count, nullptr),
@@ -478,14 +494,16 @@ class VulkanRuntimeContext::Impl final {
       debug_info.pUserData = this;
     }
 
-    VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    auto application =
+      makeVkStructure<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
     application.pApplicationName = "ncnn-mlir-vulkan-v0";
     application.applicationVersion = VK_MAKE_API_VERSION(0, 0, 1, 0);
     application.pEngineName = "ncnn-mlir-vulkan-v0";
     application.engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
     application.apiVersion = VK_API_VERSION_1_1;
 
-    VkInstanceCreateInfo create_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    auto create_info = makeVkStructure<VkInstanceCreateInfo>(
+      VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
     create_info.pNext = options_.enable_validation ? &debug_info : nullptr;
     create_info.pApplicationInfo = &application;
     create_info.enabledLayerCount = static_cast<std::uint32_t>(layers.size());
@@ -578,12 +596,13 @@ class VulkanRuntimeContext::Impl final {
   void createDevice() {
     inject(VulkanRuntimeOperation::CreateDevice);
     constexpr float priority = 1.0F;
-    VkDeviceQueueCreateInfo queue_info{
-      VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+    auto queue_info = makeVkStructure<VkDeviceQueueCreateInfo>(
+      VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
     queue_info.queueFamilyIndex = queue_family_;
     queue_info.queueCount = 1;
     queue_info.pQueuePriorities = &priority;
-    VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    auto device_info =
+      makeVkStructure<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
     device_info.queueCreateInfoCount = 1;
     device_info.pQueueCreateInfos = &queue_info;
     checkVk(vkCreateDevice(physical_device_, &device_info, nullptr, &device_),
@@ -738,7 +757,8 @@ class VulkanRuntimeContext::Impl final {
       fail(NCNN_VK_STATUS_INVALID_ARGUMENT, "invalid Vulkan buffer size");
     }
     inject(VulkanRuntimeOperation::CreateBuffer);
-    VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    auto buffer_info =
+      makeVkStructure<VkBufferCreateInfo>(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
     buffer_info.size = size;
     buffer_info.usage = usage;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -773,14 +793,14 @@ class VulkanRuntimeContext::Impl final {
 
   void createCommandResources() {
     inject(VulkanRuntimeOperation::CreateCommandResources);
-    VkCommandPoolCreateInfo pool_info{
-      VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    auto pool_info = makeVkStructure<VkCommandPoolCreateInfo>(
+      VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
     pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pool_info.queueFamilyIndex = queue_family_;
     checkVk(vkCreateCommandPool(device_, &pool_info, nullptr, &command_pool_),
             "vkCreateCommandPool");
-    VkCommandBufferAllocateInfo command_info{
-      VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    auto command_info = makeVkStructure<VkCommandBufferAllocateInfo>(
+      VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
     command_info.commandPool = command_pool_;
     command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     command_info.commandBufferCount = 1;
@@ -788,7 +808,8 @@ class VulkanRuntimeContext::Impl final {
     checkVk(vkAllocateCommandBuffers(device_, &command_info, &command_buffer_),
             "vkAllocateCommandBuffers");
     inject(VulkanRuntimeOperation::CreateCommandResources);
-    VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    auto fence_info =
+      makeVkStructure<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
     fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     checkVk(vkCreateFence(device_, &fence_info, nullptr, &fence_),
             "vkCreateFence");
@@ -934,7 +955,8 @@ class VulkanRuntimeContext::Impl final {
                    std::uint32_t memory_type,
                    bool map) {
     inject(VulkanRuntimeOperation::AllocateMemory);
-    VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    auto allocation = makeVkStructure<VkMemoryAllocateInfo>(
+      VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
     allocation.allocationSize = requirements.size;
     allocation.memoryTypeIndex = memory_type;
     checkVk(vkAllocateMemory(device_, &allocation, nullptr, &buffer.memory),
@@ -999,8 +1021,8 @@ class VulkanRuntimeContext::Impl final {
       VkDescriptorPoolSize pool_size{
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
         static_cast<std::uint32_t>(descriptor_count)};
-      VkDescriptorPoolCreateInfo pool_info{
-        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+      auto pool_info = makeVkStructure<VkDescriptorPoolCreateInfo>(
+        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
       pool_info.maxSets = static_cast<std::uint32_t>(set_count);
       pool_info.poolSizeCount = 1;
       pool_info.pPoolSizes = &pool_size;
@@ -1019,8 +1041,8 @@ class VulkanRuntimeContext::Impl final {
                                            .pipeline = VK_NULL_HANDLE,
                                            .set_layouts = {},
                                            .sets = {}});
-      VkShaderModuleCreateInfo shader_info{
-        VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+      auto shader_info = makeVkStructure<VkShaderModuleCreateInfo>(
+        VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
       shader_info.codeSize = binary.words.size_bytes();
       shader_info.pCode = binary.words.data();
       inject(VulkanRuntimeOperation::CreateShaderModule);
@@ -1047,8 +1069,8 @@ class VulkanRuntimeContext::Impl final {
               .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
               .pImmutableSamplers = nullptr});
           }
-          VkDescriptorSetLayoutCreateInfo layout_info{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+          auto layout_info = makeVkStructure<VkDescriptorSetLayoutCreateInfo>(
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
           layout_info.bindingCount =
             static_cast<std::uint32_t>(bindings.size());
           layout_info.pBindings = bindings.data();
@@ -1059,8 +1081,8 @@ class VulkanRuntimeContext::Impl final {
         }
 
         std::vector<VkDescriptorSetLayout> layout_handles = kernel.set_layouts;
-        VkDescriptorSetAllocateInfo set_info{
-          VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        auto set_info = makeVkStructure<VkDescriptorSetAllocateInfo>(
+          VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
         set_info.descriptorPool = descriptor_pool_;
         set_info.descriptorSetCount =
           static_cast<std::uint32_t>(layout_handles.size());
@@ -1109,8 +1131,8 @@ class VulkanRuntimeContext::Impl final {
       VkPushConstantRange push_range{.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
                                      .offset = 0,
                                      .size = max_push_end};
-      VkPipelineLayoutCreateInfo pipeline_layout_info{
-        VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+      auto pipeline_layout_info = makeVkStructure<VkPipelineLayoutCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
       pipeline_layout_info.setLayoutCount =
         static_cast<std::uint32_t>(kernel.set_layouts.size());
       pipeline_layout_info.pSetLayouts = kernel.set_layouts.data();
@@ -1120,13 +1142,13 @@ class VulkanRuntimeContext::Impl final {
       checkVk(vkCreatePipelineLayout(
                 device_, &pipeline_layout_info, nullptr, &kernel.layout),
               "vkCreatePipelineLayout");
-      VkPipelineShaderStageCreateInfo stage{
-        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+      auto stage = makeVkStructure<VkPipelineShaderStageCreateInfo>(
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
       stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
       stage.module = kernel.module;
       stage.pName = spec.entry_point.c_str();
-      VkComputePipelineCreateInfo pipeline_info{
-        VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+      auto pipeline_info = makeVkStructure<VkComputePipelineCreateInfo>(
+        VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
       pipeline_info.stage = stage;
       pipeline_info.layout = kernel.layout;
       inject(VulkanRuntimeOperation::CreatePipeline);
@@ -1159,7 +1181,8 @@ class VulkanRuntimeContext::Impl final {
     checkVk(vkResetFences(device_, 1, &fence_), "vkResetFences");
     checkVk(vkResetCommandPool(device_, command_pool_, 0),
             "vkResetCommandPool");
-    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    auto begin = makeVkStructure<VkCommandBufferBeginInfo>(
+      VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     checkVk(vkBeginCommandBuffer(command_buffer_, &begin),
             "vkBeginCommandBuffer");
@@ -1277,7 +1300,9 @@ class VulkanRuntimeContext::Impl final {
     if (buffer.coherent) {
       return;
     }
-    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+    inject(VulkanRuntimeOperation::FlushMappedMemory);
+    auto range = makeVkStructure<VkMappedMemoryRange>(
+      VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
     range.memory = buffer.memory;
     range.offset = 0;
     range.size = VK_WHOLE_SIZE;
@@ -1289,7 +1314,9 @@ class VulkanRuntimeContext::Impl final {
     if (buffer.coherent) {
       return;
     }
-    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+    inject(VulkanRuntimeOperation::InvalidateMappedMemory);
+    auto range = makeVkStructure<VkMappedMemoryRange>(
+      VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
     range.memory = buffer.memory;
     range.offset = 0;
     range.size = VK_WHOLE_SIZE;
@@ -1312,7 +1339,8 @@ class VulkanRuntimeContext::Impl final {
     checkVk(vkResetFences(device_, 1, &fence_), "vkResetFences");
     checkVk(vkResetCommandPool(device_, command_pool_, 0),
             "vkResetCommandPool");
-    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    auto begin = makeVkStructure<VkCommandBufferBeginInfo>(
+      VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     checkVk(vkBeginCommandBuffer(command_buffer_, &begin),
             "vkBeginCommandBuffer");
@@ -1512,7 +1540,7 @@ class VulkanRuntimeContext::Impl final {
 
   void submitAndWait() {
     inject(VulkanRuntimeOperation::Submit);
-    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    auto submit = makeVkStructure<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &command_buffer_;
     checkVk(vkQueueSubmit(queue_, 1, &submit, fence_), "vkQueueSubmit");
@@ -1521,11 +1549,26 @@ class VulkanRuntimeContext::Impl final {
             "vkWaitForFences");
   }
 
+  void invalidateOutputs(std::span<const VulkanOutputTensor> outputs) {
+    for (const VulkanOutputTensor& output : outputs) {
+      invalidateBuffer(resources_.at(output.resource_id).staging);
+    }
+  }
+
   void publishOutputs(std::span<const VulkanOutputTensor> outputs) {
+    std::vector<std::reference_wrapper<const Buffer>> staging_buffers;
+    staging_buffers.reserve(outputs.size());
     for (const VulkanOutputTensor& output : outputs) {
       const Buffer& staging = resources_.at(output.resource_id).staging;
-      invalidateBuffer(staging);
-      std::memcpy(output.bytes.data(), staging.mapped, output.bytes.size());
+      if (staging.mapped == nullptr) {
+        fail(NCNN_VK_STATUS_API_ERROR, "output staging memory is not mapped");
+      }
+      staging_buffers.emplace_back(staging);
+    }
+    for (std::size_t index = 0; index < outputs.size(); ++index) {
+      std::memcpy(outputs[index].bytes.data(),
+                  staging_buffers[index].get().mapped,
+                  outputs[index].bytes.size());
     }
   }
 

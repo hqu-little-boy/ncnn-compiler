@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import sys
 
-from run_v0 import run_logged, sha256
+from run_v0 import capture_device_summary, run_logged, sha256
 
 
 def prepare_shader(args, name, operation, param, cpu_library, cpu_symbol, output):
@@ -80,6 +80,7 @@ def main():
     parser.add_argument("--relu-cpu-symbol", required=True)
     parser.add_argument("--empty-bin", required=True)
     parser.add_argument("--device-match", required=True)
+    parser.add_argument("--vulkaninfo", default="vulkaninfo")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--icd")
     parser.add_argument("--validation", action="store_true")
@@ -92,6 +93,9 @@ def main():
     args.env = os.environ.copy()
     if args.icd:
         args.env["VK_ICD_FILENAMES"] = args.icd
+    device_info = capture_device_summary(
+        args.vulkaninfo, args.device_match, args.icd, output, args.logs, args.env
+    )
 
     add_plan, add_shader = prepare_shader(
         args,
@@ -236,6 +240,8 @@ def main():
         "runtime_context_calls": result["calls"],
         "same_context_concurrent_calls": result["concurrent_calls"],
         "device_match": args.device_match,
+        "device_info": device_info,
+        "vulkaninfo_summary": "vulkaninfo-summary.txt",
         "validation_enabled": args.validation,
         "cpu_library_sha256": sha256(args.cpu_library),
         "conv_cpu_library_sha256": sha256(args.conv_cpu_library),

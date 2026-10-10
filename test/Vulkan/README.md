@@ -1,55 +1,172 @@
-# Vulkan device and runtime tests
+# Vulkan qualification tests
 
-This is an opt-in Vulkan test suite, not a product backend. It covers V0 feasibility, V2 single-operation lowering, and the standalone V3 host runtime. The compiler's default CPU pipeline and C ABI do not depend on Vulkan. V0 lowers the fixed FP32 `Add` GPU fixture with MLIR's Vulkan runner pipeline, extracts and validates the SPIR-V, dispatches it, and compares output against the CPU AOT result and an independent scalar golden.
+The suite tests the explicitly enabled Vulkan product backend as well as its
+isolated shader and runtime components. CPU remains the default backend and its
+ABI has no Vulkan dependency. The authoritative model, layout, ABI and deployment
+subset is the [Vulkan backend contract](../../docs/ncnn-vulkan-backend-contract.md).
+There is no transparent CPU fallback.
 
-## Enable and run
+## Independent test tiers
 
-The opt-in configuration requires MLIR/LLVM 21, Vulkan headers/loader, NVIDIA and llvmpipe ICD manifests, `spirv-val`, `spirv-dis`, `vulkaninfo`, and the Khronos validation layer:
+| Tier | CMake options | Execution and dependencies |
+|---|---|---|
+| Offline | `NCNN_ENABLE_VULKAN_PRODUCT=ON`, `NCNN_ENABLE_VULKAN_V0_TESTS=OFF` | CPU AOT/golden regression, legality/lowering, SPIR-V validation, package/ELF checks and failure paths. Requires compiler dependencies and Vulkan headers/loader, not a working ICD or GPU. |
+| Software | Both options `ON`, `NCNN_VULKAN_TEST_DEVICES=llvmpipe` | The offline tests plus explicitly selected llvmpipe ABI/lifecycle/numerical tests. Requires its ICD, `vulkaninfo` and validation layer; does not require NVIDIA libraries. |
+| Hardware | Both options `ON`, `NCNN_VULKAN_TEST_DEVICES=nvidia` | The offline tests plus the same device chain on the selected NVIDIA ICD. Requires its manifest, EGL frontend, actual GPU and validation layer. |
+| Full device matrix | Both options `ON`, `NCNN_VULKAN_TEST_DEVICES=nvidia;llvmpipe` | Both device tiers. This is the default device list when the device-test option is enabled. |
 
-```sh
-cmake -S compiler -B /tmp/ncnn-v0-build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_TESTING=ON \
-  -DNCNN_ENABLE_VULKAN_V0_TESTS=ON \
-  -DCOMPILER_ENABLE_FORMAT_TARGETS=OFF \
-  -DCOMPILER_INSTALL_RPATH=ON
-cmake --build /tmp/ncnn-v0-build --target vulkan-v0-build --parallel
-ctest --test-dir /tmp/ncnn-v0-build \
-  -R '^vulkan-v0-add-(nvidia|llvmpipe)$' --output-on-failure
-```
+Both product and device-test options default to `OFF`. Device selection is
+explicit: an invalid, duplicate or empty requested device list is an error.
+Missing requested dependencies or devices fail instead of silently dropping or
+skipping tests. Software results do not establish hardware compatibility or
+performance. Tests retain the `vulkan` label and add `offline`, `software` or
+`hardware` labels where applicable.
 
-The NVIDIA test is the real-device gate and runs negative cases; the llvmpipe test forces the software ICD and is only functional/numerical coverage. The host runner has no CPU fallback. If a required tool or device is absent, the opt-in test fails with a diagnostic rather than silently skipping.
-
-## GPU-dialect kernel and lowering
-
-`gpu_func_add_probe.mlir` is the positive V0 kernel source: a static 257-element FP32 Add with three `StorageBuffer` memrefs, 64×1×1 workgroup, and explicit tail bounds check. Its module target environment is Vulkan 1.1 with SPIR-V 1.0 plus `SPV_KHR_storage_buffer_storage_class`.
-
-The opt-in harness runs MLIR 21 `--test-vulkan-runner-pipeline`, which lowers the `gpu.func` and emits a `gpu.binary` object. `vulkan_v0_spirv_extract` writes the embedded SPIR-V bytes for `spirv-val`, checks/disassembly, and the existing Vulkan host runner. The test requires the converted IR to contain `gpu.binary @v0_add` and no `gpu.func`, `memref.load/store`, or unrealized conversion casts; SPIR-V must expose the `add` GLCompute entry point, local size `[64,1,1]`, and set 0 bindings 0–2. Lowering or extraction failure is a hard test failure—there is no fallback to the older hand-authored shader.
-
-`add.mlir` is retained only as the first direct-SPIR-V-dialect experiment and historical comparison. It is not used to satisfy the current GPU-dialect provenance gate.
-
-## Evidence
-
-CTest writes generated artifacts to `<build>/test/Vulkan/evidence/gpu-func/<device>/`: GPU-binary MLIR, extracted `.spv`, disassembly, validator and tool logs, fixed input/output bytes, CPU library identity, device properties, tolerance and per-element comparison summaries. The earlier `evidence/nvidia/` and `evidence/llvmpipe/` snapshots are the 2026-09-28 direct-SPIR-V-dialect run; preserve them as historical evidence. The new GPU-dialect provenance run is archived separately under `evidence/gpu-func/{nvidia,llvmpipe}/`. It uses the same 257-element input contract; the device runs reported zero validation errors and zero CPU/GPU/golden difference under `atol=1e-6, rtol=1e-6`.
-
-## V2 isolated operation tests
-
-With `NCNN_ENABLE_VULKAN_V0_TESTS=ON`, the default build also creates the V2 CPU AOT fixtures and registers `vulkan-v2-*` tests. `run_v2.py` imports the `.param/.bin` fixture with `ncnn-mlir-driver`, runs the Vulkan preparation/lowering pipeline, writes and verifies the execution plan, lowers the resulting GPU module to `gpu.binary`, extracts SPIR-V, runs `spirv-val --target-env vulkan1.1`, and dispatches each operation on NVIDIA and llvmpipe. Each device case runs fixed edge values plus seeds `0,1,42`, comparing GPU results against the matching CPU AOT artifact and an independent scalar golden; evidence is written under `evidence/v2/<case>/`.
-
-The test matrix covers static FP32 Add, ReLU, copy, identity, transpose, reshape, and restricted 1x1/3x3 Conv2D with stride/padding/bias variants. Conv tests hash-check the schema-v1 plan’s HWCF weights and bias against the ncnn binary stream; the runner converts source OIHW weights to the device buffer order and checks CHW outputs against CPU AOT/golden. V2 tests retain the one-shot test runner and do not exercise persistent model contexts.
-
-## V3 persistent host runtime
-
-V3 builds the opt-in `NCNNVulkanRuntime` library and two runtime-backed integration fixtures. `run_v3.py` first generates and validates the existing V2 Add, ReLU, and Conv2D SPIR-V/plan packages, then calls the plan-driven V3 runtime directly. The Add→ReLU fixture dispatches two kernels in one context, exercises a shared intermediate/barrier, repeated changing inputs, serialized concurrent calls, alternating independent contexts, bounded diagnostics/status validation, injected create/submit/wait failures, failed-output preservation, and post-failure recovery. It compares each tested run against a freshly built CPU AOT model for the same `.param/.bin` graph and a scalar golden.
-
-The Conv2D fixture builds a persistent context with one V2 kernel and two static FP32 weight resources. It checks OIHW-to-HWCF weight identity, verifies each weight payload is uploaded exactly once during create, repeats inference with changed inputs, and compares each output against the same fixture's CPU AOT and scalar golden. Runtime test options force the mapped-memory flush/invalidate call path so it is exercised even on coherent host memory; actual non-coherent memory is used when selected by the device. Both fixtures require validation-layer error count zero and run on explicitly selected NVIDIA and llvmpipe ICDs; evidence records the physical device/driver identity, execution-plan and SPIR-V hashes, CPU library identity, input/output hashes, numerical errors, upload count, and peak context memory. Absence of either required device is a test failure, not a skip.
-
-The V3 runtime build is still test-option gated and is not linked into `ncnn-compile` products. A typical focused development invocation is:
+From the parent directory containing `compiler/`, a focused software setup is:
 
 ```sh
-cmake --build /tmp/ncnn-vulkan-build --target vulkan-v3-build --parallel
-ctest --test-dir /tmp/ncnn-vulkan-build \
-  -R '^vulkan-v3-runtime-' --output-on-failure
+cmake -S compiler -B /tmp/ncnn-vulkan-software-dev \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+  -DNCNN_ENABLE_VULKAN_PRODUCT=ON -DNCNN_ENABLE_VULKAN_V0_TESTS=ON \
+  -DNCNN_VULKAN_TEST_DEVICES=llvmpipe -DCOMPILER_INSTALL_RPATH=ON
+cmake --build /tmp/ncnn-vulkan-software-dev --parallel 4
+cmake --build /tmp/ncnn-vulkan-software-dev \
+  --target numerical_tests numerical_dynamic_operator_tests numerical_dynamic_tests \
+  --parallel 4
+ctest --test-dir /tmp/ncnn-vulkan-software-dev --output-on-failure
 ```
 
-The V3 device evidence (plans, SPIR-V, inputs/outputs, hashes, CPU/GPU/golden errors, and runtime resource counters) is written under `<build>/test/Vulkan/evidence/v3/<device>/`.
+Filtered runs are useful for development but are not full engineering gates.
+For qualification, create a new build directory; never count an old generated
+model `.so` as evidence for a changed compiler.
+
+## Shader, runtime and product coverage
+
+- `VulkanRuntimeTest.*`: all five device-independent plan/package/budget,
+  injected instance-creation and status-name cases run whenever the product or
+  device tests are enabled, including product-only offline configurations.
+  Every gate profile and the V6.1/V6.2/V6.4 evidence mappings require them.
+- `vulkan-v0-add-*`: `gpu_func_add_probe.mlir` supplies the 257-element FP32 Add
+  kernel with StorageBuffers, local size `[64,1,1]` and tail bounds protection.
+  MLIR `--test-vulkan-runner-pipeline` must produce `gpu.binary`; extraction,
+  residual IR checks and `spirv-val --target-env vulkan1.1` precede dispatch.
+  CPU AOT, GPU and independent scalar golden use identical inputs. Negative
+  cases require the expected diagnostic, not just any nonzero exit, followed by
+  recovery. `add.mlir` is only a historical direct-SPIR-V experiment.
+- `vulkan-v2-*`: single-op Add, ReLU, copy, identity, transpose, reshape and
+  restricted Conv2D variants. Seeds `0,1,42`, boundary inputs, plan/binding/layout
+  checks and logical OIHW/device HWCF weight identities are recorded.
+- `vulkan-v3-runtime-*`: persistent Add→ReLU and weighted Conv2D contexts;
+  changing inputs, alternating contexts, same-context concurrent calls, ABI
+  errors, create/budget/submit/wait failure injection and cleanup. The direct
+  Add→Split→ReLU dual-output fixture additionally compares sum and ReLU against
+  its CPU AOT and golden, injects input flush and second-output invalidate
+  failures, checks every sentinel, and verifies poison/isolation/recreation.
+  Forced mapped-memory sync exercises flush/invalidate even on coherent memory;
+  it is not evidence that non-coherent physical memory was selected.
+- `ncnn-compile-vulkan-offline`: an unusable ICD is imposed in subprocesses.
+  CPU AOT runs in a CPU-only native loader, not inside Python; sanitizer builds
+  instrument the loader and model with the same shared ASan/UBSan configuration
+  and disable recovery after reports without suppressing leak detection. Initial
+  and post-failure CPU calls retain separate command, result and raw-stream
+  records. Vulkan compilation without `--verify-execution` still validates and
+  audits the package, and shader/tool/link/audit/device verification failures
+  preserve successful output. It has no GPU numerical claim.
+- `ncnn-compile-vulkan-product`: real generated-header/DSO lifecycle,
+  CPU/Vulkan/golden ReLU comparison, deterministic identities, export/dependency
+  audit and transactional failure paths. The configured ICD is explicit.
+- `vulkan-v5-{multiop,pooling-softmax,squeezenet}-*`: generated multi-I/O product
+  ABI and complete static-graph execution. Every trial compares newly compiled
+  CPU AOT and Vulkan products against vendored ncnn and, for small fixtures,
+  independent goldens; multiple contexts and destroy/recreate are checked.
+  SqueezeNet retains its fixed elementwise, finite/probability-sum and top-k
+  budgets.
+
+The C ABI stub test is not a substitute for loading a product DSO. Likewise,
+`--verify-execution` is a finite-output lifecycle smoke, not a numerical oracle.
+NVIDIA tests use the vendor-supported headless EGL ICD in a build-local manifest;
+no system manifest is modified and normal library unloading is retained.
+
+## Fresh engineering gates and evidence
+
+`run_gate.py` creates a unique build directory on every invocation and runs
+configure, global `format_check`, complete build, all three numerical targets,
+global `tidy`, and unfiltered CTest. All build commands use `--parallel`. It records
+raw logs, source content identity (including dirty/new files and submodules),
+configuration/cache/tool identities, pre-run CTest inventory, JUnit results and
+a preserved `LastTest.log`. Compiler/tidy project warnings and sanitizer reports
+are failures. It does not apply source formatting automatically.
+
+```sh
+python3 compiler/test/Vulkan/run_gate.py --profile release --archive
+python3 compiler/test/Vulkan/run_gate.py --profile offline --archive
+python3 compiler/test/Vulkan/run_gate.py --profile software --archive
+```
+
+The `hardware` profile selects only NVIDIA; `release` selects both ICDs. The
+`sanitize` profile also selects both and requires a matching static PIC
+ASan+UBSan LLVM/MLIR installation, its actual Vulkan runner test tools and lit,
+and a leak-clean isolated OpenMP runtime:
+
+```sh
+python3 compiler/test/Vulkan/run_gate.py --profile sanitize --jobs 1 --archive \
+  --sanitizer-install /path/to/static-asan-llvm/install \
+  --lit /path/to/llvm-source/llvm/utils/lit/lit.py \
+  --openmp-dir /path/to/libomp-only \
+  --toolchain-identity /path/to/toolchain-identity.json
+```
+
+The sanitizer gate audits host executables for shared ASan and absence of core
+LLVM/MLIR DSOs. Inherited sanitizer suppression/cleanup overrides are rejected.
+The fixture compiler must not recover after sanitizer reports. A budget
+exception is accepted only for the two named PP OCR v5 fixtures, at the existing
+450-second authorization ceiling, and requires `--budget-evidence FIXTURE=JSON`
+with a same-source fingerprint and the hash-matched raw 300-second hard-timeout
+log. The record and log are copied into the gate stage/archive. Release budgets,
+mathematical oracles, CTest, leak detection and sanitizer checks remain
+unchanged; an unrelated failure or a stale/different-source timeout is not a
+budget waiver.
+
+Stage evidence is generated under:
+
+- `test/Native/vulkan-v1-cpu-baseline/` for CPU non-regression;
+- `test/Native/vulkan-product-{offline,cli}/` for product tests;
+- `test/Vulkan/evidence/gpu-func/<device>/`, `v2/<case>/`, `v3/<device>/`, and
+  `v5/<suite>-<device>/` for device chains.
+
+Device jobs preserve physical-device API/driver/vendor/device/type and raw
+`vulkaninfo` summaries, validation outputs, model/plan/shader identities, fixed
+inputs, seeds, per-output numerical results and failure records. Runtime-specific
+measured counters are not public product ABI telemetry. A model's plan byte sum
+is not a measured allocation peak; absent measurements must remain marked as
+such. Committed `evidence/` snapshots are historical, not fresh qualification.
+
+After CTest, `check_release_evidence.py` validates stage scope and associates
+step IDs with actual tests and CPU/Vulkan/golden records. Its synthetic regression
+suite is registered independently in CTest; the complete collector is not a
+CTest dependency on itself. A combined decision can be requested with:
+
+```sh
+python3 compiler/test/Vulkan/check_release_evidence.py \
+  --stage /tmp/current-release-stage --stage /tmp/current-sanitize-stage \
+  --stage /tmp/current-offline-stage --stage /tmp/current-software-stage \
+  --require-release --output /tmp/vulkan-release-evidence.json
+```
+
+Missing, modified, stale or unexecuted evidence, a numerical/validation error,
+false hardware identity, mismatched source identities or an unexpected skip
+blocks qualification. Existing configured PerformanceModel skips are explicitly
+listed, not counted as numerical or device passes. A single offline/software/
+hardware report is not a release decision. The supported model/device scope
+remains bounded even when all gates pass.
+
+`--archive` writes a stage-adjacent evidence tarball on success or failure with a
+file-hash manifest, raw gate records and model evidence. A sanitizer archive also
+contains the verified toolchain identity, its configuration/build/smoke logs and
+the patch records used for the isolated OpenMP runtime. It excludes unrelated
+full numerical build trees. Logs are preserved before any CTest enumeration can
+rewrite `LastTest.log`; moving a bundle must not silently reuse absolute paths
+from a previous build. `.github/workflows/vulkan.yml` uses the same fresh runner
+for hosted offline/software jobs and an explicitly requested self-hosted NVIDIA
+job. Unrequested hardware coverage is absent, not passed; these CI tier jobs do
+not by themselves supply the separate complete sanitizer/release decision.

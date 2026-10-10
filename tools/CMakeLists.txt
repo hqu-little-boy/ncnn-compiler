@@ -296,7 +296,8 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         list(REMOVE_DUPLICATES _vulkan_sanitizers)
         list(JOIN _vulkan_sanitizers "," _vulkan_sanitizer_string)
         list(APPEND NCNN_VULKAN_HOST_SANITIZER_ARGS
-            "-fsanitize=${_vulkan_sanitizer_string}" "-fno-omit-frame-pointer")
+            "-fsanitize=${_vulkan_sanitizer_string}"
+            "-fno-sanitize-recover=all" "-fno-omit-frame-pointer")
         if("address" IN_LIST _vulkan_sanitizers AND
            CMAKE_CXX_COMPILER_ID MATCHES "Clang")
             list(APPEND NCNN_VULKAN_HOST_SANITIZER_ARGS "-shared-libasan")
