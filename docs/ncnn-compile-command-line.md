@@ -266,10 +266,15 @@ buffer 必须与头文件中的静态 `*_ELEMENTS` 数量完全一致。`--verif
 `dlopen` 临时 DSO，对每个静态输入生成确定性数据，执行 create/run/destroy 并检查所有输出有限；
 这是 ABI/生命周期 smoke 检查，不是一般模型数学 golden。必须有兼容 Vulkan ICD 和设备；
 不指定该选项时，编译仍会对每个 shader 离线执行 SPIR-V validator，但不会创建 Vulkan device。
-manifest 记录 plan/全部 shader 与常量 payload/模型
-输入的哈希和 ELF `DT_NEEDED` 依赖。调用者部署时须提供 manifest 列出的 LLVM 21 shared runtime、
-Vulkan loader 及系统 C/C++ runtime，且系统必须有兼容 Vulkan 设备/ICD。全部 shader、plan 和常量
-数据嵌入 DSO，不依赖编译临时目录或旁置 `.spv`、权重文件。
+manifest 记录 plan/全部 shader 与常量 payload/模型输入的哈希和直接 ELF `DT_NEEDED` 依赖。
+宿主字段固定为 `host_implementation="generic-plan-runtime"`、整数 `host_codegen_version=1`、
+`execution_plan_usage="embedded-runtime-required"`，宿主实现与 codegen 版本参与构建 identity；
+公共 ABI v1 不变。当前 create 解析**内嵌**计划，run 调用静态编入模型库的通用执行器，
+不等于模型专用宿主 AOT。`dependencies` 不是传递依赖或静态代码来源清单；共享 LLVM 配置下
+调用方须提供实际列出的 LLVM 21 SONAME，静态 LLVM 配置也可能把 LLVM Support 代码带入模型。
+部署还需要系统 Vulkan loader、兼容设备/ICD 和必要 C/C++ 平台库。全部 shader、plan 和常量
+数据嵌入 DSO，不读取诊断 `.plan.json` sidecar，不依赖编译临时目录或旁置 `.spv`、权重文件。
+软件 ICD 自身使用的 LLVM 属于驱动实现，应与模型的 LLVM 依赖分开审计。
 
 Vulkan 模式不接受 CPU 专用的线程、SIMD/target-ISA、INT8、tuning、动态输入 shape、CPU 中间
 阶段、debug-info、CPU profile、定制 clang/linker 和 undefined-symbol expectation 参数；

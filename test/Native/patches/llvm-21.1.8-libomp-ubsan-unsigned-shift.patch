@@ -1,0 +1,28 @@
+--- a/openmp/runtime/src/kmp_affinity.cpp
++++ b/openmp/runtime/src/kmp_affinity.cpp
+@@ -2225,7 +2225,7 @@
+       cache_mask_width = __kmp_cpuid_mask_width(max_threads_sharing);
+       cache_level = __kmp_extract_bits<5, 7>(buf2.eax);
+       table[depth].level = cache_level;
+-      table[depth].mask = ((-1) << cache_mask_width);
++      table[depth].mask = ((~0u) << cache_mask_width);
+       depth++;
+       level++;
+     }
+@@ -2755,13 +2755,13 @@
+   // Set the masks to & with apicid
+   for (unsigned i = 0; i < levels_index; ++i) {
+     if (levels[i].level_type != INTEL_LEVEL_TYPE_INVALID) {
+-      levels[i].mask = ~((-1) << levels[i].mask_width);
+-      levels[i].cache_mask = (-1) << levels[i].mask_width;
++      levels[i].mask = ~((~0u) << levels[i].mask_width);
++      levels[i].cache_mask = (~0u) << levels[i].mask_width;
+       for (unsigned j = 0; j < i; ++j)
+         levels[i].mask ^= levels[j].mask;
+     } else {
+       KMP_DEBUG_ASSERT(i > 0);
+-      levels[i].mask = (-1) << levels[i - 1].mask_width;
++      levels[i].mask = (~0u) << levels[i - 1].mask_width;
+       levels[i].cache_mask = 0;
+     }
+     info->description.add(info->levels[i].level_type);

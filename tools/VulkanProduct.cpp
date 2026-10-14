@@ -34,6 +34,8 @@ using ncnn_mlir::vulkan::VulkanModelShader;
 using ncnn_mlir::vulkan::VulkanModelWeight;
 
 constexpr std::array<unsigned char, 4> kSpirvMagic = {0x03, 0x02, 0x23, 0x07};
+constexpr std::string_view kHostImplementation = "generic-plan-runtime";
+constexpr std::int64_t kHostCodegenVersion = 1;
 
 std::string sha256Hex(std::string_view bytes) {
   llvm::SHA256 hash;
@@ -552,7 +554,8 @@ std::string makeGeneralWrapperSource(std::string_view model_name,
                 shaders.size());
   for (std::size_t index = 0; index < shaders.size(); ++index) {
     source += std::format(
-      "  VulkanKernelBinary{{.kernel_id = {0}, .words = kShaderWords{1}}}{2}\n",
+      "  VulkanKernelBinary{{.kernel_id = {0}, .words = "
+      "kShaderWords{1}}}{2}\n",
       shaders[index].kernel_id,
       index,
       index + 1 == shaders.size() ? "" : ",");
@@ -842,6 +845,9 @@ std::string makeManifest(const VulkanExecutionPlan& plan,
   manifest["schema_version"] = 1;
   manifest["kind"] = mlir::ncnn::contract::kVulkanModelManifestKind.str();
   manifest["backend"] = "vulkan";
+  manifest["host_implementation"] = std::string(kHostImplementation);
+  manifest["host_codegen_version"] = kHostCodegenVersion;
+  manifest["execution_plan_usage"] = "embedded-runtime-required";
   manifest["abi_version"] = static_cast<std::int64_t>(NCNN_VK_ABI_VERSION);
   manifest["model"] = std::string(model_name);
   manifest["host_triple"] = plan.host_triple;
@@ -937,6 +943,9 @@ std::string makeGeneralManifest(const VulkanExecutionPlan& plan,
   manifest["schema_version"] = 1;
   manifest["kind"] = mlir::ncnn::contract::kVulkanModelManifestKind.str();
   manifest["backend"] = "vulkan";
+  manifest["host_implementation"] = std::string(kHostImplementation);
+  manifest["host_codegen_version"] = kHostCodegenVersion;
+  manifest["execution_plan_usage"] = "embedded-runtime-required";
   manifest["abi_version"] = static_cast<std::int64_t>(NCNN_VK_ABI_VERSION);
   manifest["model"] = std::string(model_name);
   manifest["host_triple"] = plan.host_triple;
@@ -1232,12 +1241,15 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
   const std::string param_sha256 = sha256Hex(param_bytes);
   const std::string bin_sha256 = sha256Hex(bin_bytes);
   std::string identity_input = std::format(
-    "ncnn-vulkan-static-plan-v2|model={}|host={}|param={}|bin={}|plan={}",
+    "ncnn-vulkan-static-plan-v2|model={}|host={}|param={}|bin={}|plan={}"
+    "|host_implementation={}|host_codegen_version={}",
     model_name,
     host_triple,
     param_sha256,
     bin_sha256,
-    sha256Hex(plan_json));
+    sha256Hex(plan_json),
+    kHostImplementation,
+    kHostCodegenVersion);
   for (std::size_t index = 0; index < ordered_shaders.size(); ++index) {
     identity_input += std::format("|kernel={}:{}:{}",
                                   ordered_shaders[index].kernel_id,
@@ -1367,12 +1379,15 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
   const std::string param_sha256 = sha256Hex(param_bytes);
   const std::string bin_sha256 = sha256Hex(bin_bytes);
   const std::string identity_input = std::format(
-    "ncnn-vulkan-product-v1|model={}|host={}|param={}|bin={}|shader={}",
+    "ncnn-vulkan-product-v1|model={}|host={}|param={}|bin={}|shader={}"
+    "|host_implementation={}|host_codegen_version={}",
     model_name,
     host_triple,
     param_sha256,
     bin_sha256,
-    shader_sha256);
+    shader_sha256,
+    kHostImplementation,
+    kHostCodegenVersion);
   const std::string build_identity =
     "ncnn-vulkan-product-v1-" + sha256Hex(identity_input);
   parsed->model = model_name;

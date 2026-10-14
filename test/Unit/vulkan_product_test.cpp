@@ -3,12 +3,17 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <format>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/SHA256.h"
 #include "ncnn-mlir/Support/VulkanExecutionPlan.hpp"
 
 namespace ncnn_compile {
@@ -235,6 +240,112 @@ TEST(VulkanProductTest, PackagesReproduciblyAndEmbedsBothIdentities) {
             std::string::npos);
 }
 
+TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
+  const auto hash_bytes = [](std::string_view bytes) {
+    llvm::SHA256 hash;
+    hash.update(llvm::StringRef(bytes.data(), bytes.size()));
+    return llvm::toHex(hash.final(), true);
+  };
+  const auto expect_host_contract = [](const VulkanModelPackage& package) {
+    EXPECT_NE(package.manifest_json.find(
+                "\"host_implementation\": \"generic-plan-runtime\""),
+              std::string::npos);
+    EXPECT_NE(package.manifest_json.find("\"host_codegen_version\": 1"),
+              std::string::npos);
+    EXPECT_NE(package.manifest_json.find(
+                "\"execution_plan_usage\": \"embedded-runtime-required\""),
+              std::string::npos);
+    EXPECT_EQ(package.manifest_json.find("\"host_implementation\": \"aot\""),
+              std::string::npos);
+  };
+
+  const std::string shader = makeSpirvBytes();
+  auto legacy_plan = ncnn_mlir::vulkan::serializeExecutionPlan(makeReluPlan());
+  ASSERT_TRUE(legacy_plan) << legacy_plan.error();
+  auto legacy_first = makeVulkanModelPackage(
+    "host_contract", "x86_64-linux-gnu", *legacy_plan, shader, "param", "bin");
+  ASSERT_TRUE(legacy_first) << legacy_first.error();
+  auto legacy_repeat = makeVulkanModelPackage(
+    "host_contract", "x86_64-linux-gnu", *legacy_plan, shader, "param", "bin");
+  ASSERT_TRUE(legacy_repeat) << legacy_repeat.error();
+  auto legacy_changed = makeVulkanModelPackage("host_contract",
+                                               "x86_64-linux-gnu",
+                                               *legacy_plan,
+                                               shader,
+                                               "changed-param",
+                                               "bin");
+  ASSERT_TRUE(legacy_changed) << legacy_changed.error();
+  expect_host_contract(*legacy_first);
+  const std::string legacy_identity_input = std::format(
+    "ncnn-vulkan-product-v1|model=host_contract|host=x86_64-linux-gnu"
+    "|param={}|bin={}|shader={}|host_implementation=generic-plan-runtime"
+    "|host_codegen_version=1",
+    hash_bytes("param"),
+    hash_bytes("bin"),
+    hash_bytes(shader));
+  EXPECT_EQ(legacy_first->build_identity,
+            "ncnn-vulkan-product-v1-" + hash_bytes(legacy_identity_input));
+  EXPECT_EQ(legacy_first->build_identity, legacy_repeat->build_identity);
+  EXPECT_NE(legacy_first->build_identity, legacy_changed->build_identity);
+
+  const VulkanModelWeight weight{
+    .resource_id = 3,
+    .bytes = {0x00, 0x00, 0x80, 0x3f},
+  };
+  const VulkanExecutionPlan general_plan = makeTwoKernelPlan(weight);
+  auto general_json = ncnn_mlir::vulkan::serializeExecutionPlan(general_plan);
+  ASSERT_TRUE(general_json) << general_json.error();
+  const std::vector<std::uint32_t> words = {
+    UINT32_C(0x07230203), UINT32_C(0x00010000), 0, 1, 0};
+  const std::array<VulkanModelShader, 2> shaders = {
+    VulkanModelShader{
+      .kernel_id = 10, .binary_symbol = "model_vulkan_k10", .words = words},
+    VulkanModelShader{
+      .kernel_id = 20, .binary_symbol = "model_vulkan_k20", .words = words},
+  };
+  const std::array<VulkanModelWeight, 1> weights = {weight};
+  auto general_first = makeVulkanModelPackage("host_contract_general",
+                                              "x86_64-linux-gnu",
+                                              *general_json,
+                                              shaders,
+                                              weights,
+                                              "param",
+                                              "bin");
+  ASSERT_TRUE(general_first) << general_first.error();
+  auto general_repeat = makeVulkanModelPackage("host_contract_general",
+                                               "x86_64-linux-gnu",
+                                               *general_json,
+                                               shaders,
+                                               weights,
+                                               "param",
+                                               "bin");
+  ASSERT_TRUE(general_repeat) << general_repeat.error();
+  auto general_changed = makeVulkanModelPackage("host_contract_general",
+                                                "x86_64-linux-gnu",
+                                                *general_json,
+                                                shaders,
+                                                weights,
+                                                "changed-param",
+                                                "bin");
+  ASSERT_TRUE(general_changed) << general_changed.error();
+  expect_host_contract(*general_first);
+  const std::string general_identity_input = std::format(
+    "ncnn-vulkan-static-plan-v2|model=host_contract_general"
+    "|host=x86_64-linux-gnu|param={}|bin={}|plan={}"
+    "|host_implementation=generic-plan-runtime|host_codegen_version=1"
+    "|kernel=10:model_vulkan_k10:{}|kernel=20:model_vulkan_k20:{}|weight=3:{}",
+    hash_bytes("param"),
+    hash_bytes("bin"),
+    hash_bytes(*general_json),
+    general_first->shader_sha256s[0],
+    general_first->shader_sha256s[1],
+    hash_bytes(std::string_view("\0\0\x80\x3f", 4)));
+  EXPECT_EQ(general_first->build_identity,
+            "ncnn-vulkan-static-plan-v2-" + hash_bytes(general_identity_input));
+  EXPECT_EQ(general_first->build_identity, general_repeat->build_identity);
+  EXPECT_NE(general_first->build_identity, general_changed->build_identity);
+}
+
 TEST(VulkanProductTest, RejectsMalformedShaderAndUnsupportedGraph) {
   auto serialized = ncnn_mlir::vulkan::serializeExecutionPlan(makeReluPlan());
   ASSERT_TRUE(serialized) << serialized.error();
@@ -421,8 +532,8 @@ TEST(VulkanProductTest, GeneralSingleTensorAbiKeepsPointerAndCountSignature) {
   EXPECT_NE(package->header.find("float *output1, size_t output1_elements"),
             std::string::npos);
   EXPECT_NE(
-    package->wrapper_source.find(
-      "tiny_relu_vk_run(tiny_relu_vk_context* context, const float* input1"),
+    package->wrapper_source.find("tiny_relu_vk_run(tiny_relu_vk_context* "
+                                 "context, const float* input1"),
     std::string::npos);
 }
 

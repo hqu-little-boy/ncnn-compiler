@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 from record_spirv_validation import make_launcher, validate_records
+import model_dependency_evidence as dependency_evidence
 
 
 ATOL = 1.0e-6
@@ -96,6 +97,36 @@ def independent_golden(fixture, input_values):
     oracle = fixture["oracle"]
     kind = oracle["kind"]
     output_shape = fixture["outputs"][0][1]
+    if kind == "add_relu":
+        if len(input_values) != 2 or len(input_values[0]) != len(input_values[1]):
+            raise RuntimeError("add_relu golden expects two matching input tensors")
+        summed = [lhs + rhs for lhs, rhs in zip(input_values[0], input_values[1])]
+        return [summed, [max(0.0, value) for value in summed]]
+    if kind in {"conv_relu", "conv1x1"}:
+        input_channels, height, width = fixture["inputs"][0][1]
+        output_channels, output_height, output_width = output_shape
+        pad_top, _, pad_left, _ = oracle["padding"]
+        weights = oracle["weights"]
+        biases = oracle["biases"]
+        source = input_values[0]
+        convolution = []
+        for output_channel in range(output_channels):
+            for out_y in range(output_height):
+                for out_x in range(output_width):
+                    value = biases[output_channel]
+                    input_y = out_y - pad_top
+                    input_x = out_x - pad_left
+                    if 0 <= input_y < height and 0 <= input_x < width:
+                        for input_channel in range(input_channels):
+                            source_index = (
+                                input_channel * height * width + input_y * width + input_x
+                            )
+                            weight_index = output_channel * input_channels + input_channel
+                            value += source[source_index] * weights[weight_index]
+                    convolution.append(value)
+        if kind == "conv_relu":
+            return [convolution, [max(0.0, value) for value in convolution]]
+        return [convolution]
     if kind == "max_pool":
         channels, height, width = fixture["inputs"][0][1]
         output_channels, output_height, output_width = output_shape
@@ -126,29 +157,6 @@ def independent_golden(fixture, input_values):
             sum(source[channel * plane_size:(channel + 1) * plane_size]) / plane_size
             for channel in range(channels)
         ]]
-    if kind == "conv1x1":
-        input_channels, height, width = fixture["inputs"][0][1]
-        output_channels, output_height, output_width = output_shape
-        pad_top, _, pad_left, _ = oracle["padding"]
-        weights = oracle["weights"]
-        biases = oracle["biases"]
-        source = input_values[0]
-        output = []
-        for output_channel in range(output_channels):
-            for out_y in range(output_height):
-                for out_x in range(output_width):
-                    value = biases[output_channel]
-                    input_y = out_y - pad_top
-                    input_x = out_x - pad_left
-                    if 0 <= input_y < height and 0 <= input_x < width:
-                        for input_channel in range(input_channels):
-                            source_index = (
-                                input_channel * height * width + input_y * width + input_x
-                            )
-                            weight_index = output_channel * input_channels + input_channel
-                            value += source[source_index] * weights[weight_index]
-                    output.append(value)
-        return [output]
     if kind == "softmax":
         axis = oracle["axis"]
         source_shape = fixture["inputs"][0][1]
@@ -500,6 +508,12 @@ def fixture_definitions(directory, suite, model_param=None, model_bin=None):
                 convolution_weight_oracle("conv", 2, 1, conv_filter, conv_bias)
             ],
             "copy_exact": False,
+            "oracle": {
+                "kind": "conv_relu",
+                "weights": conv_filter,
+                "biases": conv_bias,
+                "padding": (0, 0, 0, 0),
+            },
         },
         "double_conv": {
             "inputs": [("data", (1, 2, 2))],
@@ -532,6 +546,7 @@ def fixture_definitions(directory, suite, model_param=None, model_bin=None):
             "layers": add_relu_layers,
             "bin": empty_bin,
             "copy_exact": False,
+            "oracle": {"kind": "add_relu"},
         },
         "repeated_input_alias": {
             "inputs": [("data", (1, 1, 4))],
@@ -646,6 +661,13 @@ def fixture_definitions(directory, suite, model_param=None, model_bin=None):
 
     for name, fixture in fixtures.items():
         fixture.setdefault("weight_oracles", [])
+        oracle = fixture.get("oracle", {})
+        if oracle.get("kind") in {"conv_relu", "conv1x1"}:
+            expected_bin = convolution_bin(oracle["weights"], oracle["biases"])
+            if fixture["bin"].read_bytes() != expected_bin:
+                raise RuntimeError(
+                    f"{name} independent golden weights/biases differ from model .bin"
+                )
         fixture["name"] = name
         fixture["model"] = "v5_" + name
         fixture["param"] = directory / f"{name}.param"
@@ -707,7 +729,8 @@ def compile_model(args, fixture, backend, output_dir, env):
                 "--vulkan-spirv-extract",
                 args.spirv_extract,
                 "--vulkan-host-cxx",
-                args.host_cxx,
+                str(dependency_evidence.make_host_cxx_launcher(
+                    args.host_cxx, output_dir.parent / "link-evidence")),
             ]
         )
     log = output_dir.parent / f"compile-{backend}.json"
@@ -723,6 +746,41 @@ def compile_model(args, fixture, backend, output_dir, env):
                   stderr=result.stderr)
     log.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return output_dir
+
+
+def collect_build_dependencies(args, model, cpu_dir, vk_dir, model_root, env):
+    link_root = model_root / "link-evidence"
+    cpu_root = model_root / "cpu-dependencies"
+    tools = {"readelf": args.readelf,
+             "ldd": shutil.which("ldd") or "ldd",
+             "ar": shutil.which("ar") or "ar"}
+    sanitizers = ([args.sanitizer_runtime_dir]
+                  if args.sanitizer_runtime_dir else [])
+    llvm_mode = "shared" if args.shared_llvm else "static"
+    dependency_evidence.collect_model_dependencies(
+        vk_dir / f"lib{model}_vulkan.so", link_root,
+        tool_paths=tools, sanitizer_dirs=sanitizers,
+        llvm_mode=llvm_mode, runtime_env=env)
+    dependency_evidence.collect_elf_dependency_closure(
+        cpu_dir / f"lib{model}.so", cpu_root,
+        tool_paths={"readelf": args.readelf, "ldd": tools["ldd"]},
+        sanitizer_dirs=sanitizers, llvm_mode=llvm_mode, runtime_env=env)
+    driver = {
+        "status": "not_measured",
+        "reference": "v5-runtime-process",
+        "reason": "V5 runner does not capture native loader module maps; no driver absence claim",
+    }
+    return {
+        "vulkan": {
+            "file": "link-evidence/model-dependency-evidence.json",
+            "sha256": sha256_file(link_root / "model-dependency-evidence.json"),
+        },
+        "cpu": {
+            "file": "cpu-dependencies/elf-dependency-closure.json",
+            "sha256": sha256_file(cpu_root / "elf-dependency-closure.json"),
+        },
+        "driver": driver,
+    }
 
 
 def load_manifest(model_dir, model, backend):
@@ -787,6 +845,12 @@ def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
         "kind"
     ) != "ncnn.vulkan_model_manifest":
         raise RuntimeError(f"unexpected Vulkan manifest: {vk_manifest}")
+    if (
+        vk_manifest.get("host_implementation") != "generic-plan-runtime"
+        or vk_manifest.get("host_codegen_version") != 1
+        or vk_manifest.get("execution_plan_usage") != "embedded-runtime-required"
+    ):
+        raise RuntimeError("Vulkan manifest host execution contract is incorrect")
     if vk_manifest.get("plan_hash") != plan.get("plan_hash"):
         raise RuntimeError("Vulkan manifest plan_hash differs from plan JSON")
     if vk_manifest.get("plan_sha256") != sha256_bytes(plan_bytes):
@@ -1477,7 +1541,7 @@ int main(int argc, char** argv) {
     invoke(
         [
             args.host_cxx,
-            "-std=c++20",
+            "-std=c++23",
             "-O1",
             "-I",
             args.project_include,
@@ -1661,30 +1725,30 @@ def run_fixture(args, fixture, device_info, env, evidence_root):
     shutil.rmtree(model_root, ignore_errors=True)
     model_root.mkdir(parents=True)
     fixture = dict(fixture)
-    source_model_files = None
-    if args.suite == "v5.3":
-        param_snapshot = model_root / f"{fixture['name']}.param"
-        bin_snapshot = model_root / f"{fixture['name']}.bin"
-        shutil.copyfile(fixture["param"], param_snapshot)
-        shutil.copyfile(fixture["bin"], bin_snapshot)
-        if (
-            sha256_file(param_snapshot) != fixture["param_hash"]
-            or sha256_file(bin_snapshot) != fixture["bin_hash"]
-        ):
-            raise RuntimeError("SqueezeNet evidence model copies changed identity")
-        source_model_files = {
-            "param": str(param_snapshot.relative_to(model_root)),
-            "param_sha256": fixture["param_hash"],
-            "param_size_bytes": param_snapshot.stat().st_size,
-            "bin": str(bin_snapshot.relative_to(model_root)),
-            "bin_sha256": fixture["bin_hash"],
-            "bin_size_bytes": bin_snapshot.stat().st_size,
-        }
-        fixture["param"] = param_snapshot
-        fixture["bin"] = bin_snapshot
+    param_snapshot = model_root / f"{fixture['name']}.param"
+    bin_snapshot = model_root / f"{fixture['name']}.bin"
+    shutil.copyfile(fixture["param"], param_snapshot)
+    shutil.copyfile(fixture["bin"], bin_snapshot)
+    if (
+        sha256_file(param_snapshot) != fixture["param_hash"]
+        or sha256_file(bin_snapshot) != fixture["bin_hash"]
+    ):
+        raise RuntimeError("evidence model copies changed identity")
+    source_model_files = {
+        "param": str(param_snapshot.relative_to(model_root)),
+        "param_sha256": fixture["param_hash"],
+        "param_size_bytes": param_snapshot.stat().st_size,
+        "bin": str(bin_snapshot.relative_to(model_root)),
+        "bin_sha256": fixture["bin_hash"],
+        "bin_size_bytes": bin_snapshot.stat().st_size,
+    }
+    fixture["param"] = param_snapshot
+    fixture["bin"] = bin_snapshot
     cpu_dir = compile_model(args, fixture, "cpu", model_root / "cpu", env)
     vk_dir = compile_model(args, fixture, "vulkan", model_root / "vulkan", env)
     artifacts = validate_artifacts(args, fixture, cpu_dir, vk_dir, env)
+    build_dependencies = collect_build_dependencies(
+        args, fixture["model"], cpu_dir, vk_dir, model_root, env)
     typed_runner = build_typed_runner(args, fixture, artifacts, model_root, env)
 
     if "seed_base" in fixture:
@@ -1723,12 +1787,17 @@ def run_fixture(args, fixture, device_info, env, evidence_root):
                       for index in range(len(fixture["outputs"]))]
         reference = run_reference(args, fixture, input_paths, ncnn_paths, env)
         golden = None
+        golden_paths = []
         golden_vs_ncnn = None
         if "oracle" in fixture:
             golden = independent_golden(fixture, input_values)
             golden_vs_ncnn = compare_outputs(
                 fixture, golden, reference, "independent golden/ncnn"
             )
+            for output_index, values in enumerate(golden):
+                path = trial_dir / f"golden-{output_index}.f32"
+                write_floats(path, values)
+                golden_paths.append(path)
         cpu_paths = [trial_dir / f"cpu-{index}.f32"
                      for index in range(len(fixture["outputs"]))]
         vk_paths = [trial_dir / f"vulkan-{index}.f32"
@@ -1744,6 +1813,7 @@ def run_fixture(args, fixture, device_info, env, evidence_root):
                 "ncnn_paths": ncnn_paths,
                 "reference": reference,
                 "golden": golden,
+                "golden_paths": golden_paths,
                 "golden_vs_ncnn": golden_vs_ncnn,
                 "cpu_paths": cpu_paths,
                 "vk_paths": vk_paths,
@@ -1882,11 +1952,16 @@ def run_fixture(args, fixture, device_info, env, evidence_root):
                                     for path in trial["cpu_paths"]],
                     "vulkan_outputs": [str(path.relative_to(model_root))
                                        for path in trial["vk_paths"]],
+                    "golden_outputs": [str(path.relative_to(model_root))
+                                       for path in trial["golden_paths"]],
                 },
                 "input_sha256": [sha256_file(path) for path in trial["input_paths"]],
                 "ncnn_output_sha256": [sha256_file(path) for path in trial["ncnn_paths"]],
                 "cpu_output_sha256": [sha256_file(path) for path in trial["cpu_paths"]],
                 "vulkan_output_sha256": [sha256_file(path) for path in trial["vk_paths"]],
+                "golden_output_sha256": [
+                    sha256_file(path) for path in trial["golden_paths"]
+                ],
                 "independent_golden_vs_ncnn": trial["golden_vs_ncnn"],
                 "independent_golden_vs_cpu": golden_vs_cpu,
                 "independent_golden_vs_vulkan": golden_vs_vulkan,
@@ -1919,6 +1994,7 @@ def run_fixture(args, fixture, device_info, env, evidence_root):
         "model": fixture["model"],
         "suite": args.suite,
         "source_model_files": source_model_files,
+        "build_dependencies": build_dependencies,
         "model_topology": fixture.get("layer_counts"),
         "independent_golden": fixture.get("oracle"),
         "device": device_name,
@@ -1979,6 +2055,10 @@ def run_fixture(args, fixture, device_info, env, evidence_root):
             "model_bin_sha256": fixture["bin_hash"],
             "cpu_library_sha256": sha256_file(artifacts["cpu_library"]),
             "vulkan_library_sha256": sha256_file(artifacts["vk_library"]),
+            "cpu_header_sha256": sha256_file(artifacts["cpu_header"]),
+            "cpu_manifest_sha256": sha256_file(artifacts["cpu_manifest_path"]),
+            "vulkan_header_sha256": sha256_file(artifacts["vk_header"]),
+            "vulkan_manifest_sha256": sha256_file(artifacts["vk_manifest_path"]),
             "vulkan_dependencies": artifacts["vulkan_dependencies"],
             "cpu_dependencies": artifacts["cpu_dependencies"],
             "plan_sha256": artifacts["plan_sha256"],
@@ -2072,6 +2152,7 @@ def main():
             {"fixture": result["fixture"],
              "plan_hash": result["identities"]["plan_hash"],
              "shader_sha256": result["identities"]["shader_sha256"],
+             "build_dependencies": result["build_dependencies"],
              "trials": len(result["trials"])}
             for result in results
         ],

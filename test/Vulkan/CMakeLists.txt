@@ -13,6 +13,17 @@ if(NCNN_ENABLE_VULKAN_PRODUCT OR NCNN_ENABLE_VULKAN_V0_TESTS)
         LABELS "vulkan;unit;offline;tooling"
         TIMEOUT 60)
 
+    foreach(_validation IN ITEMS va0-evidence va0-baseline model-dependency-evidence
+            sanitizer-toolchain-inventory sanitizer-toolchain-v2)
+        string(REPLACE "-" "_" _validation_module "${_validation}")
+        add_test(NAME vulkan-${_validation}-validation
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/test_${_validation_module}.py)
+        set_tests_properties(vulkan-${_validation}-validation PROPERTIES
+            LABELS "vulkan;unit;offline;tooling"
+            TIMEOUT 60)
+    endforeach()
+
     add_test(NAME vulkan-gate-validation
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/test_run_gate.py)

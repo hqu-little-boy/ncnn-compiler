@@ -514,7 +514,11 @@ sanitizer 符号族和 runtime `DT_NEEDED`，并拒绝缺少所需 runtime 依�
 `-DNCNN_SANITIZER_OPENMP_LIBRARY_DIR=<仅含 libomp.so 的目录>`。该补丁释放 affinity map 缓冲区，并让 ASan 构建
 在 LeakSanitizer 检查前执行 OpenMP affinity cleanup。隔离目录同时用于生成模型和 sanitizer numerical harness，
 使动态加载模型与 harness 共用同一个、进程生命周期内保持加载的 OpenMP runtime；也避免其 `libgomp.so`
-兼容别名替换 reference ncnn 使用的 GCC runtime。该依赖补丁只用于 sanitizer 测试环境，不修改系统 LLVM/MLIR 安装。
+兼容别名替换 reference ncnn 使用的 GCC runtime。LLVM 21.1.8 的 affinity mask 构造还含有负数
+左移；`test/Native/patches/llvm-21.1.8-libomp-ubsan-unsigned-shift.patch` 将四处 `(-1)` mask
+左移改为相同位宽的 unsigned mask 左移，避免 UBSan 的 signed-left-shift 报告。两份真实补丁及应用前后
+源码身份必须记录，重建的 runtime 必须通过启用 leak detection、no-recover 的 ASan+UBSan/LSan smoke，
+不得以省略 patch 记录或关闭检查冒充通过。这些依赖补丁只用于隔离 sanitizer 测试环境，不修改系统 LLVM/MLIR 安装。
 
 ncnn reference 在构建目录复制 vendored snapshot，并应用
 `test/Native/patches/ncnn-x86-im2col-null-scratch.patch`；Release 和 sanitizer 使用同一修复。

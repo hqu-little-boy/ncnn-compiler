@@ -17,6 +17,8 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
+import model_dependency_evidence as dependency_evidence
+
 
 SCHEMA_VERSION = 1
 GATE_KIND = "ncnn.vulkan_gate"
@@ -319,10 +321,97 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
             identity = load_json(identity_copy)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             _finding(findings, "sanitizer-toolchain-identity-invalid", str(error))
-    if not isinstance(identity, dict) or identity.get("schema") != "ncnn-san-toolchain-identity/v1" or identity.get("status") != "verified":
+    identity_schema = identity.get("schema") if isinstance(identity, dict) else None
+    if (not isinstance(identity, dict) or identity_schema not in {
+            "ncnn-san-toolchain-identity/v1", "ncnn-san-toolchain-identity/v2"} or
+            identity.get("status") != "verified"):
         _finding(findings, "sanitizer-toolchain-identity-status", "copied toolchain identity is not verified")
         identity = identity if isinstance(identity, dict) else {}
+    is_v2 = identity_schema == "ncnn-san-toolchain-identity/v2"
     llvm = identity.get("llvm", {})
+    inventory_result = None
+    source_to_bundle = {}
+    if is_v2:
+        from sanitizer_toolchain_inventory import InventoryError, validate_inventory
+        inventory_record = llvm.get("inventory", {})
+        inputs = inventory_record.get("inputs", {}) if isinstance(inventory_record, dict) else {}
+        required_inputs = ("compile_commands", "cmake_cache", "llvm_config", "mlir_config",
+                           "cmake_exports", "install_manifest", "source_archive", "applied_patches")
+        if not isinstance(inputs, dict) or any(key not in inputs for key in required_inputs):
+            _finding(findings, "sanitizer-inventory-inputs", "v2 SAN toolchain inventory inputs are incomplete")
+        else:
+            bundle_records = evidence.get("files", [])
+            if isinstance(bundle_records, list):
+                for item in bundle_records:
+                    if not isinstance(item, dict) or not isinstance(item.get("source"), str):
+                        continue
+                    target = safe_stage_file(stage, item.get("path"))
+                    source = Path(item["source"]).resolve()
+                    expected = item.get("source_sha256")
+                    if (target is not None and target.is_file() and
+                            isinstance(expected, str) and SHA256_RE.fullmatch(expected) and
+                            sha256_file(target) == expected):
+                        source_to_bundle[source] = target
+            install_prefix_for_resolver = Path(str(llvm.get("install_prefix", ""))).resolve()
+            staged_install_prefix = stage / "toolchain-evidence/llvm-install"
+            def inventory_resolver(source_path):
+                source_path = Path(source_path).resolve()
+                try:
+                    return staged_install_prefix / source_path.relative_to(install_prefix_for_resolver)
+                except ValueError:
+                    target = source_to_bundle.get(source_path)
+                    if target is None:
+                        raise InventoryError(f"v2 bundle omits source-bound input: {source_path}")
+                    return target
+            def staged_input(value, label):
+                source = Path(value).resolve()
+                target = source_to_bundle.get(source)
+                if target is None:
+                    raise InventoryError(f"v2 bundle omits {label}: {source}")
+                return target
+            source_archive_input = inputs.get("source_archive")
+            try:
+                if not isinstance(source_archive_input, dict):
+                    raise InventoryError("source_archive input is malformed")
+                inventory_result = validate_inventory(
+                    staged_input(inputs["compile_commands"], "compile_commands.json"),
+                    staged_input(inputs["cmake_cache"], "CMakeCache.txt"),
+                    staged_input(inputs["llvm_config"], "LLVMConfig.cmake"),
+                    staged_input(inputs["mlir_config"], "MLIRConfig.cmake"),
+                    [staged_input(path, "CMake export") for path in inputs["cmake_exports"]],
+                    staged_input(inputs["install_manifest"], "install manifest"),
+                    source_archive_path=staged_input(source_archive_input.get("path", ""), "LLVM source archive"),
+                    source_archive_sha256=source_archive_input.get("sha256", ""),
+                    resolver=inventory_resolver,
+                    applied_patch_records=inputs["applied_patches"],
+                    expected_identity_sha256=inventory_record.get("identity_sha256"),
+                )
+            except (InventoryError, OSError, TypeError, ValueError, KeyError) as error:
+                _finding(findings, "sanitizer-inventory-invalid", f"v2 SAN inventory/bundle validation failed: {error}")
+            if inventory_result is not None:
+                actual_inventory_bundle = {}
+                for item in bundle_records if isinstance(bundle_records, list) else ():
+                    if not isinstance(item, dict) or not isinstance(item.get("source"), str):
+                        continue
+                    target = safe_stage_file(stage, item.get("path"))
+                    if target is not None:
+                        actual_inventory_bundle[Path(item["source"]).resolve()] = (
+                            target.resolve(), item.get("source_sha256"))
+                for required_file in inventory_result["bundle_files"]:
+                    source_path = Path(required_file["source"]).resolve()
+                    actual = actual_inventory_bundle.get(source_path)
+                    expected_target = Path(required_file["path"]).resolve()
+                    if actual != (expected_target, required_file["source_sha256"]):
+                        _finding(findings, "sanitizer-inventory-bundle-missing",
+                                 "v2 content-bound archive/response input is absent or misbound in final bundle",
+                                 source=str(source_path), expected_path=str(expected_target))
+    def staged_evidence_file(path):
+        source = Path(str(path)).resolve()
+        if not is_v2:
+            return source
+        return source_to_bundle.get(
+            source, stage / "toolchain-evidence/__missing_evidence__" / source.name)
+
     configuration = llvm.get("configuration", {})
     if (evidence.get("llvm_version") != "21.1.8" or llvm.get("version") != "21.1.8" or
             llvm.get("shared_mode") != "static" or
@@ -337,9 +426,22 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
         _finding(findings, "sanitizer-toolchain-config", "copied LLVM/MLIR identity violates static LLVM 21.1.8 PIC ASan+UBSan contract")
     archives = llvm.get("static_archive_artifacts", [])
     archive_count = evidence.get("static_archive_count")
+    inventory_record = llvm.get("inventory", {}) if is_v2 else {}
+    expected_archive_count = (
+        len(inventory_result["inventory"]["static_archives"])
+        if is_v2 and inventory_result is not None else
+        len(archives) if is_v2 and isinstance(archives, list) else 486
+    )
+    if is_v2 and (not isinstance(inventory_record, dict) or
+                  not SHA256_RE.fullmatch(str(inventory_record.get("identity_sha256", "")))):
+        _finding(findings, "sanitizer-inventory-identity", "v2 SAN toolchain lacks canonical inventory identity")
     archive_paths = []
-    if archive_count != 486 or llvm.get("static_archive_count") != 486 or not isinstance(archives, list) or len(archives) != 486:
-        _finding(findings, "sanitizer-archive-count", "SAN toolchain must identify all 486 static LLVM/MLIR archives")
+    if (archive_count != expected_archive_count or
+            llvm.get("static_archive_count") != expected_archive_count or
+            not isinstance(archives, list) or len(archives) != expected_archive_count):
+        message = ("SAN toolchain archive count differs from the content-bound inventory"
+                   if is_v2 else "SAN toolchain must identify all 486 static LLVM/MLIR archives")
+        _finding(findings, "sanitizer-archive-count", message)
     else:
         for record in archives:
             if (not isinstance(record, dict) or not isinstance(record.get("path"), str) or
@@ -348,16 +450,18 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
                 continue
             archive_path = Path(record["path"])
             archive_paths.append(str(archive_path.resolve()))
-            if not archive_path.is_file():
-                _finding(findings, "sanitizer-archive-missing", "identified static LLVM/MLIR archive is missing",
+            audited_archive = staged_evidence_file(archive_path)
+            if not audited_archive.is_file():
+                _finding(findings, "sanitizer-archive-missing", "staged static LLVM/MLIR archive is missing",
                          path=record["path"])
-            elif sha256_file(archive_path) != record["sha256"]:
-                _finding(findings, "sanitizer-archive-hash", "static LLVM/MLIR archive content changed after preflight",
+            elif sha256_file(audited_archive) != record["sha256"]:
+                _finding(findings, "sanitizer-archive-hash", "staged static LLVM/MLIR archive content changed after preflight",
                          path=record["path"])
         if len(set(archive_paths)) != len(archive_paths):
             _finding(findings, "sanitizer-archive-duplicate", "static archive manifest repeats an archive path")
     archive_list = llvm.get("static_archive_list", {})
-    archive_list_path = Path(str(archive_list.get("path", ""))) if isinstance(archive_list, dict) else Path()
+    archive_list_source = Path(str(archive_list.get("path", ""))) if isinstance(archive_list, dict) else Path()
+    archive_list_path = staged_evidence_file(archive_list_source)
     archive_list_hash = archive_list.get("sha256") if isinstance(archive_list, dict) else None
     listed_archives = []
     if (not archive_list_path.is_file() or not SHA256_RE.fullmatch(str(archive_list_hash or "")) or
@@ -368,9 +472,11 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
             listed_archives = [str(Path(line.strip()).resolve()) for line in
                                archive_list_path.read_text(encoding="utf-8").splitlines()
                                if line.strip()]
-            if len(listed_archives) != 486 or len(set(listed_archives)) != 486:
-                _finding(findings, "sanitizer-archive-list-count",
-                         "SAN static archive list must contain 486 unique paths")
+            if (len(listed_archives) != expected_archive_count or
+                    len(set(listed_archives)) != expected_archive_count):
+                message = ("SAN static archive list must contain the exact content-bound archive set"
+                           if is_v2 else "SAN static archive list must contain 486 unique paths")
+                _finding(findings, "sanitizer-archive-list-count", message)
             if archive_paths and sorted(listed_archives) != sorted(archive_paths):
                 _finding(findings, "sanitizer-archive-list-mismatch",
                          "SAN archive list path multiset differs from static archive identities")
@@ -379,22 +485,40 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
     source_archive = identity.get("source_archive_identity", {})
     source_archive_path = Path(str(source_archive.get("path", ""))) if isinstance(source_archive, dict) else Path()
     source_archive_hash = source_archive.get("required_sha256") if isinstance(source_archive, dict) else None
-    if (not source_archive_path.is_file() or not SHA256_RE.fullmatch(str(source_archive_hash or "")) or
-            (source_archive_path.is_file() and sha256_file(source_archive_path) != source_archive_hash)):
+    if is_v2:
+        staged_source_archive = source_to_bundle.get(source_archive_path.resolve())
+        if (not SHA256_RE.fullmatch(str(source_archive_hash or "")) or
+                staged_source_archive is None or not staged_source_archive.is_file() or
+                sha256_file(staged_source_archive) != source_archive_hash):
+            _finding(findings, "sanitizer-source-archive",
+                     "SAN staged LLVM source archive path/hash is missing or changed")
+    elif (not source_archive_path.is_file() or not SHA256_RE.fullmatch(str(source_archive_hash or "")) or
+          sha256_file(source_archive_path) != source_archive_hash):
         _finding(findings, "sanitizer-source-archive", "SAN LLVM source archive path/hash is missing or changed")
+    if is_v2:
+        inventory_inputs = inventory_record.get("inputs", {}) if isinstance(inventory_record, dict) else {}
+        source_input = inventory_inputs.get("source_archive", {}) if isinstance(inventory_inputs, dict) else {}
+        if (not isinstance(source_input, dict) or
+                Path(str(source_input.get("path", ""))).resolve() != source_archive_path.resolve() or
+                source_input.get("sha256") != source_archive_hash or
+                evidence.get("inventory_identity_sha256") != inventory_record.get("identity_sha256")):
+            _finding(findings, "sanitizer-inventory-source-binding",
+                     "v2 source archive or returned inventory identity differs from verified identity")
     tool_artifacts = identity.get("tool_artifacts", {})
     if not isinstance(tool_artifacts, dict) or not tool_artifacts:
         _finding(findings, "sanitizer-tool-artifacts", "SAN verified tool binary identities are missing")
     else:
         for role, tool_record in tool_artifacts.items():
-            tool_path = Path(str(tool_record.get("path", ""))) if isinstance(tool_record, dict) else Path()
+            tool_source = Path(str(tool_record.get("path", ""))) if isinstance(tool_record, dict) else Path()
+            tool_path = staged_evidence_file(tool_source)
             tool_hash = tool_record.get("sha256") if isinstance(tool_record, dict) else None
             if (not tool_path.is_file() or not SHA256_RE.fullmatch(str(tool_hash or "")) or
                     (tool_path.is_file() and sha256_file(tool_path) != tool_hash)):
                 _finding(findings, "sanitizer-tool-artifact", f"SAN tool artifact path/hash is invalid: {role}")
     for smoke_key in ("gpu_runner_pipeline_fixture", "gpu_runner_pipeline_output"):
         smoke_record = identity.get("smokes", {}).get(smoke_key, {})
-        smoke_path = Path(str(smoke_record.get("path", ""))) if isinstance(smoke_record, dict) else Path()
+        smoke_source = Path(str(smoke_record.get("path", ""))) if isinstance(smoke_record, dict) else Path()
+        smoke_path = staged_evidence_file(smoke_source)
         if not smoke_path.is_file() or not isinstance(smoke_record, dict) or not SHA256_RE.fullmatch(str(smoke_record.get("sha256", ""))):
             _finding(findings, "sanitizer-gpu-smoke", f"SAN GPU runner smoke identity is missing: {smoke_key}")
         elif sha256_file(smoke_path) != smoke_record.get("sha256"):
@@ -402,15 +526,16 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
     libomp = identity.get("libomp", {})
     libomp_shared = libomp.get("shared_library", {})
     libomp_hash = libomp_shared.get("sha256")
-    libomp_path = Path(str(libomp_shared.get("path", "")))
+    libomp_source_path = Path(str(libomp_shared.get("path", "")))
+    libomp_path = staged_evidence_file(libomp_source_path)
     if (evidence.get("libomp_sha256") != libomp_hash or not SHA256_RE.fullmatch(str(libomp_hash or ""))
             or not libomp_path.is_file() or (libomp_path.is_file() and sha256_file(libomp_path) != libomp_hash)):
-        _finding(findings, "sanitizer-libomp-identity", "bundled libomp SHA differs from verified identity")
+        _finding(findings, "sanitizer-libomp-identity", "staged libomp SHA differs from verified identity")
     if libomp.get("static_library") is not None or libomp.get("libgomp_aliases") != []:
         _finding(findings, "sanitizer-libomp-alias", "SAN libomp identity includes a static/foreign OpenMP alias")
     smoke = libomp.get("lsan_smoke", {})
-    smoke_binary = Path(str(smoke.get("binary", "")))
-    smoke_log = Path(str(smoke.get("log", "")))
+    smoke_binary = staged_evidence_file(smoke.get("binary", ""))
+    smoke_log = staged_evidence_file(smoke.get("log", ""))
     if (smoke.get("leak_detection") is not True or smoke.get("suppressions") is not False or
             not smoke_binary.is_file() or not smoke_log.is_file()):
         _finding(findings, "sanitizer-lsan-smoke", "SAN libomp smoke did not prove unsuppressed leak detection")
@@ -418,7 +543,7 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
         _finding(findings, "sanitizer-lsan-diagnostic", "SAN libomp leak smoke raw log contains sanitizer/runtime diagnostics")
     smokes = identity.get("smokes", {})
     verification_text = evidence.get("verification_status")
-    verification_source = Path(str(smokes.get("verification_status", "")))
+    verification_source = staged_evidence_file(smokes.get("verification_status", ""))
     if (not isinstance(verification_text, str) or "verification=passed" not in verification_text or
             "exit=0" not in verification_text or not verification_source.is_file() or
             verification_source.read_text(encoding="utf-8", errors="replace") != verification_text):
@@ -431,7 +556,7 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
             if not value or prefix not in Path(value).resolve().parents:
                 _finding(findings, "sanitizer-cmake-prefix", f"SAN {key} does not use the copied toolchain install")
         openmp_dir = cache.get("NCNN_SANITIZER_OPENMP_LIBRARY_DIR")
-        if not openmp_dir or Path(openmp_dir).resolve() / "libomp.so" != libomp_path.resolve():
+        if not openmp_dir or Path(openmp_dir).resolve() / "libomp.so" != libomp_source_path.resolve():
             _finding(findings, "sanitizer-libomp-cache", "SAN CMake cache does not select the verified isolated libomp")
         tool_paths = llvm.get("tools", {})
         compiler_identity = llvm.get("compiler", {})
@@ -445,10 +570,10 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
             if cache.get(cache_key) and (not verified_path or
                     Path(cache[cache_key]).resolve() != Path(verified_path).resolve()):
                 _finding(findings, "sanitizer-tool-path-mismatch", f"SAN {cache_key} differs from verified tool identity")
-    core_audit = Path(llvm.get("core_shared_dso_audit", ""))
+    core_audit = staged_evidence_file(llvm.get("core_shared_dso_audit", ""))
     if not core_audit.is_file() or core_audit.stat().st_size != 0:
         _finding(findings, "sanitizer-core-dso-audit", "SAN core LLVM/MLIR shared-object audit is missing or nonempty")
-    compile_audit_path = Path(llvm.get("compile_pic_sanitizer_audit", ""))
+    compile_audit_path = staged_evidence_file(llvm.get("compile_pic_sanitizer_audit", ""))
     if not compile_audit_path.is_file():
         _finding(findings, "sanitizer-pic-audit", "SAN instrumentation/PIC source audit is missing")
     else:
@@ -456,25 +581,153 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
         count_records = re.findall(
             r"^compile_commands=(\d+); sanitizer_instrumented_sources=(\d+); pic_sources=(\d+)$",
             compile_audit, re.MULTILINE)
-        if count_records != [("4316", "4312", "4316")]:
-            _finding(findings, "sanitizer-pic-audit", "SAN instrumentation/PIC source counts are not the exact verified record")
+        expected_compile_record = (
+            (
+                str(inventory_result["inventory"]["compile_commands"]["total"]),
+                str(inventory_result["inventory"]["compile_commands"]["c_cpp_count"]),
+                str(inventory_result["inventory"]["compile_commands"]["total"]),
+            ) if inventory_result is not None else None
+        ) if is_v2 else ("4316", "4312", "4316")
+        if expected_compile_record is not None and count_records != [expected_compile_record]:
+            message = ("SAN instrumentation/PIC counts differ from full compile_commands inventory"
+                       if is_v2 else "SAN instrumentation/PIC source counts are not the exact verified record")
+            _finding(findings, "sanitizer-pic-audit", message)
     asan_runtime = llvm.get("shared_asan_runtime_identity", {})
-    asan_path = Path(asan_runtime.get("path", ""))
+    asan_source_path = Path(asan_runtime.get("path", ""))
+    asan_path = staged_evidence_file(asan_source_path)
     if not asan_path.is_file() or not SHA256_RE.fullmatch(str(asan_runtime.get("sha256", ""))) or (asan_path.is_file() and sha256_file(asan_path) != asan_runtime.get("sha256")):
         _finding(findings, "sanitizer-runtime-identity", "shared ASan runtime identity is missing or changed")
+    if is_v2:
+        log_paths = identity.get("log_files", {})
+        def staged_log_text(name):
+            source = log_paths.get(name) if isinstance(log_paths, dict) else None
+            log_path = staged_evidence_file(source or "")
+            if not source or not log_path.is_file():
+                _finding(findings, "sanitizer-toolchain-log-missing",
+                         "required identity-bound sanitizer runtime log is absent from the stage",
+                         log=name)
+                return None
+            return log_path.read_text(encoding="utf-8", errors="replace")
+
+        for name in ("mlir-opt.dynamic.log", "mlir-translate.dynamic.log",
+                     "FileCheck.dynamic.log"):
+            dynamic_text = staged_log_text(name)
+            if dynamic_text is not None and (
+                    "NEEDED" not in dynamic_text or "libclang_rt.asan" not in dynamic_text or
+                    re.search(r"NEEDED.*lib(?:LLVM|MLIR|LTO)", dynamic_text, re.IGNORECASE)):
+                _finding(findings, "sanitizer-tool-dynamic-audit",
+                         "staged LLVM tool DT_NEEDED log lacks shared ASan or contains a core DSO",
+                         log=name)
+
+        core_tool_text = staged_log_text("core-tool-dynamic-audit.log")
+        if core_tool_text is not None:
+            try:
+                core_tool_audit = json.loads(core_tool_text)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                core_tool_audit = None
+            if (not isinstance(core_tool_audit, dict) or
+                    core_tool_audit.get("passed") is not True or
+                    core_tool_audit.get("failures") != [] or
+                    core_tool_audit.get("llvm_config_version") != "21.1.8"):
+                _finding(findings, "sanitizer-tool-dynamic-audit",
+                         "staged LLVM tool dynamic/version audit does not record a clean pass")
+
+        libomp_dynamic_text = staged_log_text("libomp-dynamic-and-symbol-audit.log")
+        if libomp_dynamic_text is not None and (
+                "READ_ELF_DYNAMIC:" not in libomp_dynamic_text or
+                "NEEDED" not in libomp_dynamic_text or
+                "libclang_rt.asan" not in libomp_dynamic_text or
+                re.search(r"NEEDED.*lib(?:LLVM|MLIR|LTO)|libgomp", libomp_dynamic_text, re.IGNORECASE)):
+            _finding(findings, "sanitizer-libomp-dynamic-audit",
+                     "staged libomp dynamic/symbol audit is incomplete or has a forbidden dependency")
+        ldd_text = staged_log_text("libomp-smoke-ldd.log")
+        if ldd_text is not None and (
+                "libclang_rt.asan" not in ldd_text or
+                str(libomp_source_path) not in ldd_text or
+                "libomp.so =>" not in ldd_text or "libgomp" in ldd_text):
+            _finding(findings, "sanitizer-libomp-ldd-audit",
+                     "staged libomp ldd evidence does not resolve isolated libomp/shared ASan")
+        link_text = staged_log_text("libomp-lsan-link-audit.log")
+        if link_text is not None and (
+                str(libomp_source_path) not in link_text or
+                "libclang_rt.asan" not in link_text or "libgomp" in link_text):
+            _finding(findings, "sanitizer-libomp-link-audit",
+                     "staged libomp LSan link audit resolves an unexpected runtime")
     for symbol_field in ("mlir_ir_asan_symbol_audit", "mlir_ir_ubsan_symbol_audit"):
-        symbol_file = Path(llvm.get(symbol_field, ""))
+        symbol_file = staged_evidence_file(llvm.get(symbol_field, ""))
         if not symbol_file.is_file() or symbol_file.stat().st_size == 0:
             _finding(findings, "sanitizer-symbol-audit", f"SAN static library symbol audit is missing: {symbol_field}")
-    pic_probe = Path(identity.get("root", "")) / "smoke/libMLIRIR-pic.so"
+    pic_probe = staged_evidence_file(Path(identity.get("root", "")) / "smoke/libMLIRIR-pic.so")
     if not pic_probe.is_file():
         _finding(findings, "sanitizer-pic-link-smoke", "SAN static archive PIC link smoke output is missing")
-    relocation = Path(llvm.get("mlir_ir_pic_relocation_audit", ""))
+    relocation = staged_evidence_file(llvm.get("mlir_ir_pic_relocation_audit", ""))
     if not relocation.is_file() or "TEXTREL" in relocation.read_text(encoding="utf-8", errors="replace"):
         _finding(findings, "sanitizer-pic-relocation", "SAN static archive has no clean relocation audit")
+    bound_source_hashes = {}
+
+    def bind_source_hash(source, expected):
+        if isinstance(source, (str, Path)) and isinstance(expected, str) and SHA256_RE.fullmatch(expected):
+            bound_source_hashes[Path(source).resolve()] = expected
+
+    for name, source in identity.get("log_files", {}).items():
+        bind_source_hash(source, identity.get("log_sha256", {}).get(name))
+    for mapping_key in ("status_files", "configuration_files"):
+        records = identity.get(mapping_key, {})
+        if isinstance(records, dict):
+            for source, expected in records.items():
+                bind_source_hash(source, expected)
+    bind_source_hash(source_archive_path, source_archive_hash)
+    if isinstance(tool_artifacts, dict):
+        for tool_record in tool_artifacts.values():
+            if isinstance(tool_record, dict):
+                bind_source_hash(tool_record.get("path"), tool_record.get("sha256"))
+    bind_source_hash(archive_list_source, archive_list_hash)
+    bind_source_hash(libomp_source_path, libomp_hash)
+    bind_source_hash(asan_source_path, asan_runtime.get("sha256"))
+    for smoke_record in identity.get("smokes", {}).values():
+        if isinstance(smoke_record, dict):
+            bind_source_hash(smoke_record.get("path"), smoke_record.get("sha256"))
+    for field in ("source_patch", "ubsan_fix_patch"):
+        patch_record = libomp.get(field, {})
+        if isinstance(patch_record, dict):
+            bind_source_hash(patch_record.get("path"), patch_record.get("sha256"))
+    if is_v2 and inventory_result is not None:
+        normalized_inventory = inventory_result["inventory"]
+        normalized_inputs = normalized_inventory["inputs"]
+        for field in ("compile_commands", "cmake_cache", "llvm_config", "mlir_config", "install_manifest"):
+            bind_source_hash(inventory_record["inputs"][field], normalized_inputs[field]["sha256"])
+        install_prefix_for_hashes = Path(normalized_inventory["toolchain"]["cmake_install_prefix"])
+        export_sources = sorted(
+            (Path(path).resolve() for path in inventory_record["inputs"]["cmake_exports"]),
+            key=lambda path: path.relative_to(install_prefix_for_hashes).as_posix())
+        export_hashes = normalized_inputs["cmake_exports"]
+        for source, hash_record in zip(export_sources, export_hashes):
+            bind_source_hash(source, hash_record["sha256"])
+        patch_hashes = {record["id"]: record for record in normalized_inventory["applied_patches"]}
+        for record in inventory_record["inputs"]["applied_patches"]:
+            normalized = patch_hashes.get(record.get("id"), {})
+            for path_key, hash_key in (("patch_path", "patch_sha256"),
+                                       ("application_record_path", "application_record_sha256"),
+                                       ("smoke_evidence_path", "smoke_evidence_sha256")):
+                if path_key in record:
+                    bind_source_hash(record[path_key], normalized.get(hash_key))
+        for response_record in normalized_inputs["response_files"]:
+            bind_source_hash(response_record["path"], response_record["sha256"])
+        for archive_record in normalized_inventory["static_archives"]:
+            bind_source_hash(archive_record["source_path"], archive_record["sha256"])
+    if is_v2:
+        for source_path, expected_hash in bound_source_hashes.items():
+            staged_path = source_to_bundle.get(source_path)
+            if (staged_path is None or not staged_path.is_file() or
+                    sha256_file(staged_path) != expected_hash):
+                _finding(findings, "sanitizer-toolchain-bound-file-missing",
+                         "v2 identity-bound input is absent or changed in the staged bundle",
+                         source=str(source_path))
     copied = evidence.get("files")
-    if not isinstance(copied, list) or len(copied) < 79:
-        _finding(findings, "sanitizer-toolchain-files", "SAN toolchain bundle lacks the full verified log/status/config/patch inventory")
+    if not isinstance(copied, list) or (not is_v2 and len(copied) < 79):
+        message = ("SAN toolchain bundle lacks the full verified log/status/config/patch inventory"
+                   if not is_v2 else "SAN v2 toolchain bundle file inventory is malformed")
+        _finding(findings, "sanitizer-toolchain-files", message)
         copied = []
     found_identity_copy = False
     refs_out = []
@@ -490,10 +743,17 @@ def _audit_sanitizer_toolchain(stage: Path, state: dict, cache_path: Path | None
                 found_identity_copy = True
             source_hash = item.get("source_sha256")
             source_path = Path(item.get("source", ""))
-            if not isinstance(source_hash, str) or not SHA256_RE.fullmatch(source_hash):
-                _finding(findings, "sanitizer-toolchain-source-hash", "SAN toolchain source file hash is missing")
-            elif not source_path.is_file() or sha256_file(source_path) != source_hash:
-                _finding(findings, "sanitizer-toolchain-source-tampered", "SAN toolchain source is missing or changed after bundling",
+            staged_hash = item.get("sha256")
+            bound_hash = bound_source_hashes.get(source_path.resolve())
+            if (not isinstance(source_hash, str) or not SHA256_RE.fullmatch(source_hash) or
+                    (is_v2 and source_hash != staged_hash) or
+                    (bound_hash is not None and source_hash != bound_hash)):
+                _finding(findings, "sanitizer-toolchain-source-hash", "SAN toolchain source file hash is missing or differs from staged bytes")
+            elif source_path.is_file() and sha256_file(source_path) != source_hash:
+                _finding(findings, "sanitizer-toolchain-source-tampered", "SAN toolchain source changed after bundling",
+                         source=str(source_path))
+            elif not source_path.is_file() and not is_v2:
+                _finding(findings, "sanitizer-toolchain-source-tampered", "SAN toolchain source is missing",
                          source=str(source_path))
     if not found_identity_copy:
         _finding(findings, "sanitizer-toolchain-copy", "SAN toolchain bundle file list omits copied identity JSON")
@@ -722,6 +982,18 @@ def audit_stage_gate(stage_dir: Path, *, source_root: Path | None = None,
                  build_dir=stage_build)
     if not isinstance(state.get("git_revision"), str) or not state["git_revision"]:
         _finding(findings, "git-revision-missing", "baseline git_revision is missing")
+    if (state.get("stage_id") != "VA0" or state.get("host_execution_role") != "legacy-product" or
+            state.get("host_aot_candidate") is not False):
+        _finding(findings, "va0-execution-role", "VA0 validates the actual legacy product, not a host AOT candidate")
+    worktree = state.get("worktree")
+    if not isinstance(worktree, dict):
+        _finding(findings, "source-worktree-missing", "gate must preserve worktree status and tracked diff")
+    else:
+        status_path = _verify_hash_record(stage, worktree.get("status"), "source worktree status", findings)
+        _verify_hash_record(stage, worktree.get("tracked_diff"), "source tracked diff", findings)
+        if status_path and (type(worktree.get("dirty")) is not bool or
+                            worktree["dirty"] != bool(status_path.read_bytes())):
+            _finding(findings, "source-worktree-state", "dirty status differs from the preserved worktree bytes")
     fingerprint = state.get("source_fingerprint")
     if not isinstance(fingerprint, str) or not SHA256_RE.fullmatch(fingerprint):
         _finding(findings, "source-fingerprint-invalid", "source_fingerprint is not a SHA-256 digest")
@@ -2059,6 +2331,17 @@ def _verify_raw_tensor_record(stage: Path, base: Path, record: object,
         return path, None
 
 
+def _audit_current_host_contract(manifest: object, label: str,
+                                  findings: list[dict]) -> None:
+    if (not isinstance(manifest, dict) or
+            manifest.get("host_implementation") != "generic-plan-runtime" or
+            type(manifest.get("host_codegen_version")) is not int or
+            manifest["host_codegen_version"] != 1 or
+            manifest.get("execution_plan_usage") != "embedded-runtime-required"):
+        _finding(findings, "host-implementation-contract",
+                 f"{label} must identify the actual generic plan runtime/codegen v1, not host AOT")
+
+
 def _check_product_artifact_set(stage: Path, base: Path, fixture: dict,
                                 refs: list[dict], findings: list[dict]) -> None:
     vk_dir = base / "vulkan"
@@ -2066,6 +2349,7 @@ def _check_product_artifact_set(stage: Path, base: Path, fixture: dict,
     mapping = {
         "cpu_library_sha256": cpu_dir / "libpaired_relu.so",
         "cpu_header_sha256": cpu_dir / "paired_relu.h",
+        "cpu_manifest_sha256": cpu_dir / "paired_relu.json",
         "vulkan_library_sha256": vk_dir / "libpaired_relu_vulkan.so",
         "vulkan_header_sha256": vk_dir / "paired_relu_vulkan.h",
         "vulkan_manifest_sha256": vk_dir / "paired_relu_vulkan.json",
@@ -2075,6 +2359,12 @@ def _check_product_artifact_set(stage: Path, base: Path, fixture: dict,
         _evidence_file(stage, path.parent, path.name, f"product {field}", refs, findings)
         _check_digest_claim(fixture.get(field), path if path.is_file() else None,
                             f"product {field}", findings)
+    manifest_path = vk_dir / "paired_relu_vulkan.json"
+    if manifest_path.is_file():
+        try:
+            _audit_current_host_contract(load_json(manifest_path), "product ReLU", findings)
+        except (ValueError, OSError) as error:
+            _finding(findings, "host-implementation-contract", f"product manifest is invalid: {error}")
     snapshot = fixture.get("offline_success_artifacts_sha256")
     if not isinstance(snapshot, dict) or not snapshot:
         _finding(findings, "product-artifact-snapshot", "successful Vulkan artifact snapshot is missing")
@@ -2217,7 +2507,7 @@ def _audit_offline_cpu_loader(stage: Path, base: Path, record: object,
         # must not override instrumentation, recovery or the CPU-only mode.
         compile_valid = (
             compile_args[0] != "" and len(compile_args) == expected_argument_count and
-            compile_args.count("-std=c++20") == 1 and
+            compile_args.count("-std=c++23") == 1 and
             model_definitions == ["-DNCNN_PRODUCT_TEST_MODEL=paired_relu"] and
             cpu_only_definitions == ["-DNCNN_PRODUCT_TEST_CPU_ONLY=1"] and
             len(source_positions) == 1 and
@@ -2294,6 +2584,120 @@ def _audit_offline_cpu_loader(stage: Path, base: Path, record: object,
                          f"{label} {stream_name} contains a sanitizer/runtime diagnostic")
 
 
+def _audit_no_device_lifecycle(stage: Path, base: Path, record: object,
+                               sanitizer_flags: set[str], refs: list[dict],
+                               findings: list[dict]) -> None:
+    if not isinstance(record, dict):
+        _finding(findings, "no-device-lifecycle-missing",
+                 "generated Vulkan DSO no-device lifecycle evidence is required")
+        return
+    result_name = "no-device-loader-result.json"
+    loader_name = "no-device-vulkan-product-loader"
+    expected_argv = [str((base / loader_name).resolve()), "paired_relu",
+                     str((base / "cpu/libpaired_relu.so").resolve()),
+                     str((base / "vulkan/libpaired_relu_vulkan.so").resolve()),
+                     "257", str((base / "no-device-input.f32").resolve()),
+                     str((base / "no-device-cpu-output.f32").resolve()),
+                     str((base / "no-device-vulkan-output.f32").resolve()),
+                     str((base / result_name).resolve())]
+    if (record.get("argv") != expected_argv or
+            type(record.get("returncode")) is not int or record["returncode"] != 0 or
+            type(record.get("compile_returncode")) is not int or
+            record["compile_returncode"] != 0 or record.get("gpu_numeric") is not False):
+        _finding(findings, "no-device-lifecycle-command",
+                 "no-device loader must compile/run successfully with fixed product paths")
+    source = (Path(__file__).resolve().parents[1] /
+              "Native/vulkan_product_loader.cpp").resolve()
+    compile_argv = record.get("compile_argv", [])
+    sanitizer_args = ["-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+                      "-fno-omit-frame-pointer", "-shared-libasan"] if sanitizer_flags else []
+    expected_compile_tail = ["-std=c++23", *sanitizer_args,
+                             "-DNCNN_PRODUCT_TEST_MODEL=paired_relu",
+                             "-DNCNN_PRODUCT_TEST_EXPECT_NO_DEVICE=1",
+                             "-I", str((base / "cpu").resolve()),
+                             "-I", str((base / "vulkan").resolve()),
+                             "-I", str(source.parents[2] / "include"),
+                             str(source), "-ldl", "-o", str((base / loader_name).resolve())]
+    normalized_compile_argv = list(compile_argv) if isinstance(compile_argv, list) else []
+    source_arguments = [index for index, argument in enumerate(normalized_compile_argv)
+                        if isinstance(argument, str) and
+                        Path(argument).name == "vulkan_product_loader.cpp"]
+    if len(source_arguments) == 1:
+        source_index = source_arguments[0]
+        try:
+            if Path(normalized_compile_argv[source_index]).resolve() == source:
+                normalized_compile_argv[source_index] = str(source)
+        except (OSError, ValueError):
+            pass
+    if (not isinstance(compile_argv, list) or len(compile_argv) < 2 or
+            not compile_argv[0] or normalized_compile_argv[1:] != expected_compile_tail):
+        _finding(findings, "no-device-lifecycle-instrumentation",
+                 "no-device loader must use generated headers and matching profile instrumentation")
+    for field, name, digest_field in (("loader_file", loader_name, "loader_sha256"),
+                                      ("result_file", result_name, "result_sha256")):
+        if record.get(field) != name:
+            _finding(findings, "no-device-lifecycle-artifact", f"wrong {field} path")
+        path = _evidence_file(stage, base, name, f"no-device {field}", refs, findings)
+        _check_digest_claim(record.get(digest_field), path, f"no-device {field}", findings)
+    result_path = base / result_name
+    if result_path.is_file():
+        result = load_json(result_path)
+        if (not isinstance(result, dict) or result.get("status") != "success" or
+                result.get("phase") != "expected-no-device" or
+                type(result.get("cpu_status")) is not int or result["cpu_status"] != 0 or
+                type(result.get("vulkan_create_status")) is not int or
+                result["vulkan_create_status"] not in (2, 5) or
+                type(result.get("vulkan_run_status")) is not int or result["vulkan_run_status"] != -1 or
+                type(result.get("vulkan_destroy_status")) is not int or result["vulkan_destroy_status"] != -1 or
+                type(result.get("vulkan_destroy_null_status")) is not int or result["vulkan_destroy_null_status"] != 0 or
+                result.get("context_null") is not True or
+                result.get("diagnostic_bounded") is not True or
+                not isinstance(result.get("diagnostic"), str) or not result["diagnostic"]):
+            _finding(findings, "no-device-lifecycle-result",
+                     "no-device create must fail explicitly, clear context, bound diagnostics and allow destroy(NULL)")
+    environment = record.get("icd_environment", {})
+    if not isinstance(environment, dict):
+        _finding(findings, "no-device-lifecycle-environment", "ICD environment is malformed")
+        environment = {}
+    if (environment.get("VK_ICD_FILENAMES") != str(base / "no-available-icd.json") or
+            environment.get("VK_DRIVER_FILES") is not None or
+            environment.get("VK_ADD_DRIVER_FILES") is not None):
+        _finding(findings, "no-device-lifecycle-environment",
+                 "no-device lifecycle must use only the unavailable ICD")
+    streams = record.get("streams", {})
+    if not isinstance(streams, dict):
+        _finding(findings, "no-device-lifecycle-streams", "no-device streams are malformed")
+        streams = {}
+    required_streams = {"compile.stdout.log", "compile.stderr.log", "stdout.log", "stderr.log"}
+    if set(streams) != required_streams:
+        _finding(findings, "no-device-lifecycle-streams", "no-device raw streams are incomplete")
+    for name in sorted(required_streams):
+        entry = streams.get(name, {})
+        path = _evidence_file(stage, base, entry.get("file"),
+                              f"no-device {name}", refs, findings)
+        _check_digest_claim(entry.get("sha256"), path, f"no-device {name}", findings)
+        if path and SANITIZER_RE.search(path.read_text(encoding="utf-8", errors="replace")):
+            _finding(findings, "no-device-lifecycle-sanitizer", "no-device loader emitted a sanitizer report")
+    modules = record.get("loaded_modules", {})
+    if not isinstance(modules, dict):
+        _finding(findings, "no-device-lifecycle-modules", "no-device module records are malformed")
+        modules = {}
+    for phase in ("before-load", "after-model-load", "after-create"):
+        entry = modules.get(phase, {})
+        path = _evidence_file(stage, base, entry.get("file"),
+                              f"no-device loaded modules {phase}", refs, findings)
+        _check_digest_claim(entry.get("sha256"), path, f"no-device modules {phase}", findings)
+    input_path = _evidence_file(stage, base, "no-device-input.f32", "no-device input", refs, findings)
+    cpu_path = _evidence_file(stage, base, "no-device-cpu-output.f32", "no-device CPU output", refs, findings)
+    if input_path and cpu_path:
+        inputs = read_f32(input_path, 257)
+        if input_path.read_bytes() != (base / "public-input.f32").read_bytes() or not compare_f32(
+                read_f32(cpu_path, 257), [max(value, 0.0) for value in inputs], 1e-6, 1e-6)["passed"]:
+            _finding(findings, "no-device-lifecycle-cpu", "no-device loader CPU/golden baseline differs")
+    if (base / "no-device-vulkan-output.f32").exists():
+        _finding(findings, "no-device-lifecycle-output", "failed create must not publish a GPU output")
+
+
 def _audit_offline(stage: Path, refs: list[dict], findings: list[dict]) -> dict | None:
     base = stage / "test/Native/vulkan-product-offline"
     evidence_path = _evidence_file(stage, base, "evidence.json", "V6 offline evidence", refs, findings)
@@ -2323,7 +2727,8 @@ def _audit_offline(stage: Path, refs: list[dict], findings: list[dict]) -> dict 
         for field, path in (("param_sha256", model_param), ("bin_sha256", model_bin)):
             _check_digest_claim(fixture.get(field), path, f"offline {field}", findings)
         public_io = evidence.get("public_io", {})
-        if public_io.get("element_type") != "f32" or public_io.get("shape") != [257]:
+        if (public_io.get("element_type") != "f32" or public_io.get("shape") != [257] or
+                public_io.get("shape_chw") != [1, 1, 257] or public_io.get("host_layout") != "CHW"):
             _finding(findings, "offline-io-contract", "offline fixture must be static FP32 [257]")
         input_path, input_values = _verify_raw_tensor_record(stage, base, public_io.get("input"), None,
                                                              "offline input", refs, findings)
@@ -2359,6 +2764,8 @@ def _audit_offline(stage: Path, refs: list[dict], findings: list[dict]) -> dict 
             stage, base, commands.get("cpu_recovery_loader"), "recovery",
             "cpu-after-negative-cases", "public-input-after-negative-cases.f32",
             "cpu-output-after-negative-cases.f32", sanitizer_flags, refs, findings)
+        _audit_no_device_lifecycle(stage, base, evidence.get("no_device_lifecycle"),
+                                   sanitizer_flags, refs, findings)
         recovery_input = _evidence_file(stage, base, "public-input-after-negative-cases.f32",
                                         "offline recovered CPU input", refs, findings)
         recovery_path = _evidence_file(stage, base, "cpu-output-after-negative-cases.f32",
@@ -2706,6 +3113,71 @@ def _audit_v4_failure_records(stage: Path, base: Path, records: object,
                  duplicates=sorted(case for case in set(observed) if observed.count(case) > 1))
 
 
+SANITIZER_TEMP_BITCODE_RE = re.compile(
+    rb"/(?:[^/\x00]+/)*ncnn-compile-[A-Za-z0-9_-]+/vulkan_model_wrapper\.bc")
+
+
+def _normalize_sanitizer_temp_bitcode_paths(data: bytes) -> tuple[bytes, int]:
+    matches = list(SANITIZER_TEMP_BITCODE_RE.finditer(data))
+    normalized = SANITIZER_TEMP_BITCODE_RE.sub(
+        b"/ncnn-compile-XXXXXX/vulkan_model_wrapper.bc", data)
+    return normalized, len(matches)
+
+
+def _audit_product_reproducibility(stage: Path, base: Path, evidence: dict,
+                                   sanitizer_flags: set[str], refs: list[dict],
+                                   findings: list[dict]) -> None:
+    records = evidence.get("vulkan_reproducibility")
+    required = {"libpaired_relu_vulkan.so", "paired_relu_vulkan.h",
+                "paired_relu_vulkan.json", "paired_relu_vulkan.plan.json"}
+    if not isinstance(records, dict) or set(records) != required:
+        _finding(findings, "product-reproducibility-record",
+                 "Vulkan reproducibility evidence must cover all published artifacts")
+        return
+    sanitizer = {"address", "undefined"}.issubset(sanitizer_flags)
+    for name in sorted(required):
+        record = records.get(name)
+        if not isinstance(record, dict):
+            _finding(findings, "product-reproducibility-record",
+                     f"Vulkan reproducibility record is malformed: {name}")
+            continue
+        first_path = base / "vulkan" / name
+        repeat_path = base / "vulkan-repeat" / name
+        _evidence_file(stage, first_path.parent, name,
+                       f"Vulkan initial reproducibility artifact {name}", refs, findings)
+        _evidence_file(stage, repeat_path.parent, name,
+                       f"Vulkan repeat reproducibility artifact {name}", refs, findings)
+        if not first_path.is_file() or not repeat_path.is_file():
+            continue
+        first, repeat = first_path.read_bytes(), repeat_path.read_bytes()
+        first_sha, repeat_sha = sha256_bytes(first), sha256_bytes(repeat)
+        if (record.get("first_sha256") != first_sha or
+                record.get("repeat_sha256") != repeat_sha):
+            _finding(findings, "product-reproducibility-hash",
+                     f"Vulkan reproducibility byte hash differs: {name}")
+            continue
+        if first == repeat:
+            expected_mode, normalized, normalized_count = "byte-identical", first, 0
+        elif name == "libpaired_relu_vulkan.so" and sanitizer:
+            normalized_first, first_count = _normalize_sanitizer_temp_bitcode_paths(first)
+            normalized_repeat, repeat_count = _normalize_sanitizer_temp_bitcode_paths(repeat)
+            if first_count == 0 or first_count != repeat_count or normalized_first != normalized_repeat:
+                _finding(findings, "product-reproducibility-mismatch",
+                         "SAN DSO differs beyond the compiler's unique temporary bitcode path")
+                continue
+            expected_mode, normalized, normalized_count = (
+                "sanitizer-temp-path-normalized", normalized_first, first_count)
+        else:
+            _finding(findings, "product-reproducibility-mismatch",
+                     f"Vulkan output is not byte-reproducible: {name}")
+            continue
+        if (record.get("mode") != expected_mode or
+                record.get("normalized_temp_paths") != normalized_count or
+                record.get("canonical_sha256") != sha256_bytes(normalized)):
+            _finding(findings, "product-reproducibility-claim",
+                     f"Vulkan reproducibility normalization claim is invalid: {name}")
+
+
 def _audit_product(stage: Path, expected_devices: set[str], refs: list[dict],
                    findings: list[dict]) -> dict:
     records = {}
@@ -2714,6 +3186,9 @@ def _audit_product(stage: Path, expected_devices: set[str], refs: list[dict],
         _finding(findings, "product-evidence-missing", "fresh V4 product CLI evidence is absent")
         return records
     found = set()
+    product_cache = _parse_cmake_cache(stage / "CMakeCache.txt")
+    product_sanitizers = set(filter(None,
+                                    product_cache.get("COMPILER_SANITIZERS", "").split(";")))
     for evidence_path in paths:
         base = evidence_path.parent
         try:
@@ -2721,12 +3196,15 @@ def _audit_product(stage: Path, expected_devices: set[str], refs: list[dict],
             _evidence_file(stage, base, "evidence.json", f"V4 {base.name} evidence", refs, findings)
             if not isinstance(evidence, dict) or evidence.get("schema_version") != 1 or evidence.get("kind") != "ncnn.vulkan_product_evidence":
                 raise ValueError("unsupported product evidence schema/kind")
+            _audit_product_reproducibility(
+                stage, base, evidence, product_sanitizers, refs, findings)
             execution = evidence.get("execution", {})
             if execution.get("mode") != "device-execution" or execution.get("vulkan_execution") != "passed":
                 _finding(findings, "product-execution", f"V4 {base.name} does not record a successful device execution")
             fixture = evidence.get("fixture", {})
             io = evidence.get("public_io", {})
-            if fixture.get("model") != "paired_relu" or io.get("element_type") != "f32":
+            if (fixture.get("model") != "paired_relu" or io.get("element_type") != "f32" or
+                    io.get("shape_chw") != [1, 1, 257] or io.get("host_layout") != "CHW"):
                 _finding(findings, "product-fixture", "V4 product fixture is not static FP32 ReLU")
             input_path, input_values = _verify_raw_tensor_record(stage, base, io.get("input"), None,
                                                                  f"V4 {base.name} input", refs, findings)
@@ -3070,6 +3548,25 @@ def _audit_v5(stage: Path, expected_devices: set[str], refs: list[dict],
                         else:
                             _evidence_file(stage, matching_input.parent, matching_input.name,
                                            f"V5 {model_root.name} source {role}", refs, findings)
+                    source_files = evidence.get("source_model_files", {})
+                    for role, identity_field in (("param", "param_sha256"), ("bin", "model_bin_sha256")):
+                        source_file = _evidence_file(stage, model_root, source_files.get(role),
+                                                     f"V5 {model_root.name} source {role}", refs, findings)
+                        _check_digest_claim(model_identity.get(identity_field), source_file,
+                                            f"V5 {model_root.name} source {role}", findings)
+                    oracle = evidence.get("independent_golden")
+                    if model_root.name in {"conv_relu", "add_relu"}:
+                        if not isinstance(oracle, dict) or oracle.get("kind") != model_root.name:
+                            _finding(findings, "va0-small-graph-golden",
+                                     f"{model_root.name} requires its independent multi-output scalar oracle")
+                    if isinstance(oracle, dict) and oracle.get("kind") in {"conv_relu", "conv1x1"}:
+                        binary = model_root / str(source_files.get("bin", ""))
+                        if binary.is_file():
+                            values = oracle.get("weights", []) + oracle.get("biases", [])
+                            expected_bytes = struct.pack("<I", 0) + struct.pack(f"<{len(values)}f", *values)
+                            if binary.read_bytes() != expected_bytes:
+                                _finding(findings, "va0-golden-weight-source",
+                                         "scalar oracle weights/biases differ from the actual model .bin bytes")
                     ports_in = evidence.get("inputs", [])
                     ports_out = evidence.get("outputs", [])
                     input_counts = _v5_port_element_counts(ports_in, f"V5 {model_root.name}",
@@ -3124,6 +3621,15 @@ def _audit_v5(stage: Path, expected_devices: set[str], refs: list[dict],
                                                         for port in ports_out],
                                            "oracle": evidence["independent_golden"]}
                                 golden = golden_fn(fixture, inputs)
+                                recorded_golden = _read_raw_arrays(
+                                    stage, model_root, raw.get("golden_outputs"),
+                                    trial.get("golden_output_sha256"),
+                                    f"V5 {model_root.name} {trial.get('name')} scalar golden", refs, findings)
+                                if (len(recorded_golden) != len(golden) or any(
+                                        not compare_f32(actual, expected, atol, rtol)["passed"]
+                                        for actual, expected in zip(recorded_golden, golden))):
+                                    _finding(findings, "va0-golden-raw-mismatch",
+                                             "recorded scalar golden bytes differ from independently recomputed inputs/weights")
                                 if len(golden) != len(output_counts) or any(
                                         len(values) != expected for values, expected in zip(golden, output_counts)):
                                     raise ValueError("independent golden output count/shape differs from declared ports")
@@ -3215,9 +3721,10 @@ def _audit_v5_artifacts(stage: Path, out_dir: Path, model_root: Path,
     paths = {"cpu_library_sha256": cpu_dir / f"lib{model}.so",
              "vulkan_library_sha256": vk_dir / f"lib{model}_vulkan.so",
              "plan_sha256": vk_dir / f"{model}_vulkan.plan.json",
-             "cpu_manifest": cpu_dir / f"{model}.json",
-             "vulkan_manifest": vk_dir / f"{model}_vulkan.json",
-             "vulkan_header": vk_dir / f"{model}_vulkan.h"}
+             "cpu_manifest_sha256": cpu_dir / f"{model}.json",
+             "cpu_header_sha256": cpu_dir / f"{model}.h",
+             "vulkan_manifest_sha256": vk_dir / f"{model}_vulkan.json",
+             "vulkan_header_sha256": vk_dir / f"{model}_vulkan.h"}
     for field, path in paths.items():
         _evidence_file(stage, path.parent, path.name, f"V5 {model} {field}", refs, findings)
         if field.endswith("sha256"):
@@ -3253,13 +3760,14 @@ def _audit_v5_artifacts(stage: Path, out_dir: Path, model_root: Path,
         plan_by_id[kernel_id] = kernel["entry_point"]
 
     manifest = None
-    manifest_path = paths["vulkan_manifest"]
+    manifest_path = paths["vulkan_manifest_sha256"]
     if manifest_path.is_file():
         try:
             manifest = load_json(manifest_path)
         except (OSError, ValueError, json.JSONDecodeError) as error:
             _finding(findings, "v5-manifest-invalid", f"V5 {model} Vulkan manifest JSON invalid: {error}")
     manifest = manifest if isinstance(manifest, dict) else {}
+    _audit_current_host_contract(manifest, f"V5 {model}", findings)
     if plan_hash and manifest.get("plan_sha256") != plan_hash:
         _finding(findings, "v5-plan-manifest-mismatch", f"V5 {model} Vulkan manifest does not bind the audited plan bytes")
     manifest_shaders = manifest.get("shaders", [])
@@ -3461,11 +3969,41 @@ OFFLINE_RUNTIME_TESTS = frozenset({
 })
 
 
+OFFLINE_PRODUCT_TESTS = frozenset(
+    "VulkanProductTest." + name for name in (
+        "PackagesReproduciblyAndEmbedsBothIdentities",
+        "ManifestPinsHostExecutionContractAndIdentityDomain",
+        "RejectsMalformedShaderAndUnsupportedGraph",
+        "ChecksSpirvEntryPointWorkgroupAndDescriptors",
+        "PackagesGeneralPlanByKernelAndResourceIdentity",
+        "GeneralSingleTensorAbiKeepsPointerAndCountSignature",
+        "ManifestHashesPhysicalWeightsNotLogicalLayout",
+        "BuildIdentityIncludesStaticPublicPlanContract",
+        "WeightSidecarIsStrictAndVerifiesEveryPayload",
+        "LogicalWeightHashNormalizesBothConvLayouts",
+    ))
+OFFLINE_PLAN_TESTS = frozenset(
+    "VulkanExecutionPlanTest." + name for name in (
+        "SerializesDeterministicallyAndRoundTrips",
+        "PreservesUnusedPublicInputLifetimeSentinel",
+        "RejectsUnusedSentinelForAccessedOrNonInputResource",
+        "RejectsDuplicateDescriptorBindings", "RejectsReadBeforeWrite",
+        "RejectsInvalidDispatchAndPushConstants", "RejectsOverflowAndByteSizeMismatch",
+        "RejectsInvalidHostDeviceLayoutMappings", "RejectsInvalidLifetimeAndSchemaVersion",
+        "RejectsUnsupportedJsonFieldsAndHashTampering",
+    ))
+OFFLINE_HOST_TESTS = OFFLINE_RUNTIME_TESTS | OFFLINE_PRODUCT_TESTS | OFFLINE_PLAN_TESTS
+
+
 def _required_tests(profile: str) -> set[str]:
     tests = {"vulkan-abi-c-contract", "vulkan-v1-cpu-baseline",
              "vulkan-release-evidence-validation", "vulkan-gate-validation",
              "ncnn-compile-vulkan-offline", "vulkan-v5-comparison-validation",
-             "ncnn-mlir-lit", *OFFLINE_RUNTIME_TESTS}
+             "vulkan-va0-evidence-validation", "vulkan-va0-baseline-validation",
+             "vulkan-model-dependency-evidence-validation",
+             "vulkan-sanitizer-toolchain-inventory-validation",
+             "vulkan-sanitizer-toolchain-v2-validation",
+             "ncnn-mlir-lit", *OFFLINE_HOST_TESTS}
     devices = {"release": ("nvidia", "llvmpipe"),
                "sanitize": ("nvidia", "llvmpipe"),
                "software": ("llvmpipe",), "hardware": ("nvidia",)}.get(profile, ())
@@ -3536,6 +4074,24 @@ def _make_id_catalog() -> dict[str, dict]:
     add("V6.2", "all-CPU-baselines-and-fixtures", ["vulkan-v1-cpu-baseline", "ncnn-compile-vulkan-offline", *offline_runtime_tests, *both_v0, *both_v2, *both_v3, *both_v4, *both_v5], "gate", "full-gate-and-numerical")
     add("V6.3", "all-fresh-stage-evidence", ["vulkan-release-evidence-validation", "vulkan-gate-validation"], "index", "hash-verified-index")
     add("V6.4", "all-release-matrix-fixtures", ["vulkan-v1-cpu-baseline", "ncnn-compile-vulkan-offline", *offline_runtime_tests, *both_v0, *both_v2, *both_v3, *both_v4, *both_v5], "decision", "release-decision-after-index")
+    va0_product_tests = ["ncnn-compile-vulkan-offline", "ncnn-compile-vulkan-product",
+                         "ncnn-compile-vulkan-product-llvmpipe"]
+    add("VA0.1", "relu-add-relu-conv-relu-squeezenet", [
+        "vulkan-v1-cpu-baseline", *va0_product_tests, *both_v5],
+        "va0", "profile-scoped-cpu-current-legacy-product-old-reference-small-golden")
+    add("VA0.2", "current-model-dso-dependency-closures", [
+        "vulkan-model-dependency-evidence-validation", *va0_product_tests,
+        *both_v5], "va0", "observed-current-legacy-dependencies-no-target-claim")
+    add("VA0.3", "generic-plan-runtime-host-identity", [
+        "VulkanProductTest.ManifestPinsHostExecutionContractAndIdentityDomain",
+        *va0_product_tests, *both_v5], "va0",
+        "generic-plan-runtime-v1-current-contract-not-host-aot")
+    add("VA0.4", "legacy-tests-to-host-aot-migration-map", [
+        "vulkan-va0-baseline-validation", "vulkan-va0-evidence-validation",
+        "vulkan-gate-validation", "vulkan-release-evidence-validation",
+        "ncnn-compile-vulkan-offline", *sorted(OFFLINE_HOST_TESTS),
+        *va0_product_tests, *both_v0, *both_v2, *both_v3, *both_v4, *both_v5],
+        "va0", "pending-migration-coverage-and-no-device-lifecycle")
     return catalog
 
 
@@ -3547,6 +4103,1321 @@ def _devices_for_profile(profile: str) -> set[str]:
             "sanitize": {"nvidia", "llvmpipe"},
             "software": {"llvmpipe"},
             "hardware": {"nvidia"}}.get(profile, set())
+
+
+VA0_LEGACY_REFERENCE_IDENTITY = {
+    "profile": "release",
+    "source_fingerprint": "6d2f2b2ecacab5a17385ea9acdf67482f321bb85772d513739cd2186edab20d3",
+    "git_revision": "310276ec49cccbcb309ddb0f002d98a5dab7fb9d",
+    "host_aot_candidate": False,
+}
+VA0_LEGACY_FIXTURE_KEYS = frozenset((
+    "relu-product-nvidia", "relu-product-llvmpipe",
+    "add-relu-nvidia", "add-relu-llvmpipe",
+    "conv-relu-nvidia", "conv-relu-llvmpipe",
+    "squeezenet-nvidia", "squeezenet-llvmpipe"))
+VA0_MODEL_NAMES = {"add_relu": "add-relu", "conv_relu": "conv-relu",
+                   "squeezenet_v1_1": "squeezenet"}
+VA0_DEVICE_NAMES = {"nvidia": "nvidia", "llvmpipe": "llvmpipe"}
+VA0_MIGRATION_RESPONSIBILITY = {
+    "VA1": "interface/planner",
+    "VA2/3": "helper/budget/lifecycle",
+    "VA4": "fixedrun/sync",
+    "VA5": "link/cleanpublish",
+    "VA6": "fullmatrix/faults",
+    "VA7": "profiles/inventory",
+}
+
+
+def _va0_migration_owners(test_name: str, identifiers: list[str]) -> list[str]:
+    lowered = test_name.lower()
+    owners = set()
+    if any(token in lowered for token in ("sync", "thread", "output", "barrier", "fixedrun")):
+        owners.add("VA4")
+    if any(token in lowered for token in ("plan", "schema", "abi", "manifest", "identity", "interface")):
+        owners.add("VA1")
+    if any(token in lowered for token in ("lifecycle", "budget", "memory", "resource", "weight", "context", "destroy", "create", "no-device")):
+        owners.add("VA2/3")
+    if any(token in lowered for token in ("link", "publish", "transaction", "product-cli", "artifact")):
+        owners.add("VA5")
+    if any(token in lowered for token in ("negative", "failure", "fault", "recovery")):
+        owners.add("VA6")
+    if lowered.startswith(("vulkan-v0-", "vulkan-v2-", "vulkan-v3-", "vulkan-v5-")):
+        owners.add("VA6")
+    if lowered.startswith("vulkan-v3-runtime"):
+        owners.update(("VA2/3", "VA4"))
+    if any(token in lowered for token in ("gate", "inventory", "profile", "release-evidence", "ctest", "sanitizer")):
+        owners.add("VA7")
+    if not owners:
+        for identifier in identifiers:
+            if identifier.startswith(("V0.", "V5.")):
+                owners.add("VA6")
+            elif identifier.startswith("V1.") or identifier.startswith("V2."):
+                owners.add("VA1")
+            elif identifier.startswith("V3."):
+                owners.update(("VA2/3", "VA4"))
+            elif identifier.startswith("V4."):
+                owners.add("VA5")
+            elif identifier.startswith("V6."):
+                owners.add("VA7")
+            elif identifier == "VA0.1":
+                owners.add("VA6")
+            elif identifier == "VA0.2":
+                owners.add("VA5")
+            elif identifier == "VA0.3":
+                owners.add("VA1")
+            elif identifier == "VA0.4":
+                owners.add("VA7")
+    if not owners:
+        owners.add("VA7")
+    return sorted(owners, key=lambda item: (int(item.split("/")[0][2:]), item))
+
+
+def _va0_migration_coverage(gate: dict) -> dict:
+    actual_names = sorted(set(gate.get("ctest", {}).get("test_names", [])))
+    id_rows = {}
+    related_by_test: dict[str, list[str]] = {}
+    for identifier, spec in ID_CATALOG.items():
+        id_rows[identifier] = {
+            "legacy_tests": sorted(set(spec["tests"])),
+            "future_migration": _va0_migration_owners(
+                identifier, [identifier]),
+            "migration_status": "pending",
+            "legacy_pass_is_migration_pass": False,
+        }
+        for test_name in spec["tests"]:
+            related_by_test.setdefault(test_name, []).append(identifier)
+    test_rows = {}
+    for test_name in actual_names:
+        identifiers = sorted(related_by_test.get(test_name, []))
+        test_rows[test_name] = {
+            "related_ids": identifiers,
+            "future_migration": _va0_migration_owners(test_name, identifiers),
+            "migration_status": "pending",
+            "legacy_pass_is_migration_pass": False,
+            "legacy_test_status": (
+                "failed" if test_name in set(gate.get("ctest", {}).get("failed", [])) else
+                "skipped" if test_name in set(gate.get("ctest", {}).get("skipped", [])) else
+                "passed"),
+        }
+    profile = gate.get("profile", "")
+    applicable = set().union(*(_applicable_tests(row["legacy_tests"], profile)
+                               for row in id_rows.values())) if id_rows else set()
+    missing = sorted(applicable - set(actual_names))
+    return {
+        "status": "pending",
+        "migration_status": "pending",
+        "legacy_pass_is_migration_pass": False,
+        "responsibilities": VA0_MIGRATION_RESPONSIBILITY,
+        "current_ids": id_rows,
+        "current_test_cases": test_rows,
+        "unexecuted_related_tests": missing,
+        "product_only_required_tests": sorted(OFFLINE_HOST_TESTS),
+    }
+
+
+def _va0_file_record(stage: Path, snapshot: dict, relative: str,
+                     label: str, refs: list[dict], findings: list[dict]) -> Path | None:
+    path = _evidence_file(stage, stage, relative, label, refs, findings)
+    if path is None:
+        return None
+    record = next((item for item in snapshot.get("files", [])
+                   if isinstance(item, dict) and item.get("path") == relative), None)
+    if record is None:
+        _finding(findings, "legacy-reference-index-missing",
+                 f"legacy-reference snapshot file is absent from its content index: {relative}")
+        return path
+    _check_digest_claim(record.get("sha256"), path, label, findings)
+    return path
+
+
+def _audit_legacy_reference(stage: Path, gate_state: dict | None,
+                            refs: list[dict], findings: list[dict]) -> dict | None:
+    record = gate_state.get("legacy_reference") if isinstance(gate_state, dict) else None
+    if (not isinstance(record, dict) or record.get("status") != "captured"):
+        _finding(findings, "legacy-reference-missing",
+                 "VA0 requires an explicitly supplied frozen legacy Release reference stage")
+        return None
+    snapshot_path = _verify_hash_record(stage, record, "legacy-reference snapshot", findings)
+    if snapshot_path is None:
+        return None
+    try:
+        snapshot = load_json(snapshot_path)
+        if (not isinstance(snapshot, dict) or snapshot.get("kind") !=
+                "ncnn.vulkan_legacy_reference_snapshot" or snapshot.get("schema_version") != 1):
+            raise ValueError("unsupported legacy-reference snapshot schema")
+        identity = snapshot.get("identity")
+        if identity != VA0_LEGACY_REFERENCE_IDENTITY or snapshot.get("role") != "legacy-reference" or snapshot.get("status") != "captured":
+            raise ValueError("legacy-reference identity does not match the approved frozen baseline")
+        files = snapshot.get("files")
+        fixture_rows = snapshot.get("fixtures")
+        if not isinstance(files, list) or not files or not isinstance(fixture_rows, dict):
+            raise ValueError("legacy-reference file/fixture index is empty or malformed")
+        source_manifest_rel = "legacy-reference/source/gate-archive-manifest.json"
+        source_manifest_path = _va0_file_record(
+            stage, snapshot, source_manifest_rel,
+            "legacy-reference original archive hash manifest", refs, findings)
+        source_manifest = load_json(source_manifest_path) if source_manifest_path else None
+        if (not isinstance(source_manifest, dict) or
+                source_manifest.get("kind") != "ncnn.vulkan_evidence_archive" or
+                not isinstance(source_manifest.get("files"), dict) or
+                snapshot.get("source_archive_manifest_sha256") != sha256_file(source_manifest_path)):
+            raise ValueError("legacy-reference original archive manifest is invalid/tampered")
+        if set(fixture_rows) != VA0_LEGACY_FIXTURE_KEYS:
+            raise ValueError("legacy-reference fixture set is incomplete or contains extras")
+        file_paths = [item.get("path") for item in files if isinstance(item, dict)]
+        if len(file_paths) != len(files) or len(set(file_paths)) != len(file_paths):
+            raise ValueError("legacy-reference file index is malformed or duplicated")
+        file_by_path = {item["path"]: item for item in files}
+        for item in files:
+            if (not isinstance(item.get("source"), str) or
+                    not isinstance(item.get("role"), str) or
+                    not item["role"].startswith("legacy-reference ")):
+                _finding(findings, "legacy-reference-file-role",
+                         "legacy-reference file record lacks its historical role/source",
+                         path=item.get("path"))
+                continue
+            path = _va0_file_record(stage, snapshot, item["path"],
+                                    f"{item['role']} {item['source']}", refs, findings)
+            if item["source"] != "gate-archive-manifest.json":
+                archived_hash = source_manifest["files"].get(item["source"])
+                if archived_hash != item.get("sha256"):
+                    _finding(findings, "legacy-reference-source-manifest",
+                             "legacy-reference copied bytes are not bound by the original archive manifest",
+                             source=item["source"])
+            if path is None:
+                continue
+        required_provenance = {
+            "legacy-reference/source/gate-state.json",
+            "legacy-reference/source/release-evidence.json",
+            "legacy-reference/source/gate-va0-legacy-source.json",
+            "legacy-reference/source/gate-ctest.xml",
+            "legacy-reference/source/gate-ctest-lasttest.log",
+            "legacy-reference/source/gate-ctest.log",
+            "legacy-reference/source/test/gate-tests.json",
+            source_manifest_rel,
+        }
+        provenance = [item for item in files if item.get("path") in required_provenance]
+        if {item.get("path") for item in provenance} != required_provenance:
+            _finding(findings, "legacy-reference-provenance-missing",
+                     "legacy-reference omitted original gate state/report/source/JUnit/LastTest/hash manifest")
+        for fixture, row in fixture_rows.items():
+            if (not isinstance(row, dict) or not isinstance(row.get("path"), str) or
+                    not isinstance(row.get("files"), list) or not row["files"]):
+                _finding(findings, "legacy-reference-fixture-index",
+                         "legacy-reference fixture row is empty or malformed", fixture=fixture)
+                continue
+            expected_prefix = row["path"].rstrip("/") + "/"
+            listed = set(row["files"])
+            indexed = {path for path in file_paths if path.startswith(expected_prefix)}
+            if listed != indexed or not indexed:
+                _finding(findings, "legacy-reference-fixture-index",
+                         "fixture file inventory differs from the copied-file index",
+                         fixture=fixture, missing=sorted(indexed - listed),
+                         unindexed=sorted(listed - indexed))
+            if not (stage / expected_prefix / "evidence.json").is_file():
+                _finding(findings, "legacy-reference-fixture-evidence",
+                         "legacy-reference fixture evidence JSON is missing", fixture=fixture)
+        original_state_path = stage / "legacy-reference/source/gate-state.json"
+        original_state = load_json(original_state_path) if original_state_path.is_file() else {}
+        original_source_path = stage / "legacy-reference/source/gate-va0-legacy-source.json"
+        original_source = load_json(original_source_path) if original_source_path.is_file() else {}
+        original_report_path = stage / "legacy-reference/source/release-evidence.json"
+        original_report = load_json(original_report_path) if original_report_path.is_file() else {}
+        if (original_state.get("profile") != "release" or original_state.get("completed") is not True or
+                original_state.get("source_fingerprint") != VA0_LEGACY_REFERENCE_IDENTITY["source_fingerprint"] or
+                original_state.get("git_revision") != VA0_LEGACY_REFERENCE_IDENTITY["git_revision"]):
+            _finding(findings, "legacy-reference-original-gate",
+                     "copied original gate state is not the frozen completed Release source")
+        original_steps = original_state.get("steps", [])
+        if ([item.get("name") for item in original_steps if isinstance(item, dict)] != list(STEP_NAMES) or
+                any(type(item.get("exit_code")) is not int or item["exit_code"] != 0
+                    for item in original_steps if isinstance(item, dict))):
+            _finding(findings, "legacy-reference-original-gate",
+                     "copied original gate state has incomplete/failed steps")
+        if (original_source.get("role") != "legacy-reference" or
+                original_source.get("stage_id") != "VA0.1" or
+                original_source.get("worktree_porcelain") != "" or
+                original_source.get("git_revision") != VA0_LEGACY_REFERENCE_IDENTITY["git_revision"] or
+                original_source.get("host_aot_candidate") is not False or
+                original_source.get("source_fingerprint") != VA0_LEGACY_REFERENCE_IDENTITY["source_fingerprint"] or
+                original_report.get("source_fingerprint") != VA0_LEGACY_REFERENCE_IDENTITY["source_fingerprint"] or
+                original_report.get("blocking_findings")):
+            _finding(findings, "legacy-reference-source-identity",
+                     "copied original source record/report does not bind the frozen clean source")
+        original_release_rows = [item for item in original_report.get("stages", [])
+                                 if item.get("profile") == "release"]
+        if (len(original_release_rows) != 1 or
+                original_release_rows[0].get("scope_passed") is not True or
+                original_release_rows[0].get("findings")):
+            _finding(findings, "legacy-reference-original-report",
+                     "copied old Release report does not show the original profile scope passed")
+        original_inventory_path = stage / "legacy-reference/source/test/gate-tests.json"
+        original_junit_path = stage / "legacy-reference/source/gate-ctest.xml"
+        original_lasttest_path = stage / "legacy-reference/source/gate-ctest-lasttest.log"
+        try:
+            original_inventory = load_json(original_inventory_path)
+            original_junit = ET.parse(original_junit_path).getroot()
+            original_lasttest = original_lasttest_path.read_text(encoding="utf-8")
+            inventory_names = {item.get("name") for item in original_inventory.get("tests", [])
+                               if isinstance(item, dict)}
+            test_cases = list(original_junit.iter("testcase"))
+            junit_names = {item.get("name") for item in test_cases}
+            skipped_names = {item.get("name") for item in test_cases
+                             if item.find("skipped") is not None}
+            lasttest_names = re.findall(r"^\d+/\d+ Testing: (.+)$", original_lasttest,
+                                        re.MULTILINE)
+            if (len(inventory_names) != 525 or len(test_cases) != 525 or
+                    junit_names != inventory_names or len(lasttest_names) != 525 or
+                    set(lasttest_names) != inventory_names or
+                    skipped_names != {"PerformanceModel.PPLCNetDocOriInt8",
+                                      "PerformanceModel.PPLCNetTextlineOriInt8"} or
+                    any(item.find("failure") is not None or item.find("error") is not None
+                        for item in test_cases) or
+                    "Test Failed." in original_lasttest or "Test Not Run." in original_lasttest):
+                raise ValueError("old CTest inventory/JUnit/LastTest counts or statuses differ")
+            for key, relative in (("inventory", "test/gate-tests.json"),
+                                  ("junit", "gate-ctest.xml"),
+                                  ("lasttest", "gate-ctest-lasttest.log")):
+                record = original_state.get(key)
+                old_file = stage / "legacy-reference/source" / relative
+                if (not isinstance(record, dict) or record.get("path") != relative or
+                        sha256_file(old_file) != record.get("sha256")):
+                    raise ValueError(f"old gate-state {key} hash does not bind its copied raw file")
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError, ET.ParseError) as error:
+            _finding(findings, "legacy-reference-original-ctest",
+                     f"copied old CTest result evidence is invalid: {error}")
+        return {"status": "verified", "identity": identity,
+                "fixtures": fixture_rows,
+                "raw_artifacts": [item for item in files if item.get("role", "").startswith("legacy-reference ")],
+                "snapshot_path": str(snapshot_path.relative_to(stage))}
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+        _finding(findings, "legacy-reference-invalid", f"legacy-reference snapshot is invalid: {error}")
+        return None
+
+
+def _va0_normalize_host_triple(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    fields = value.split("-")
+    if (len(fields) == 4 and fields[0] == "x86_64" and
+            fields[1] in {"pc", "unknown"} and fields[2:] == ["linux", "gnu"]):
+        return "x86_64-linux-gnu"
+    return value
+
+
+def _va0_normalize_semantic_json(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: (_va0_normalize_host_triple(item) if key == "host_triple" else
+                      _va0_normalize_semantic_json(item))
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_va0_normalize_semantic_json(item) for item in value]
+    return value
+
+
+def _va0_manifest_semantics(path: Path) -> object:
+    value = load_json(path)
+    ignored = {"build_identity", "host_implementation", "host_codegen_version",
+               "execution_plan_usage", "dependencies", "plan_hash", "plan_sha256",
+               "shader_sha256", "shader_sha256s"}
+    if isinstance(value, dict):
+        normalized = {key: item for key, item in value.items() if key not in ignored}
+        shaders = normalized.get("shaders")
+        if isinstance(shaders, list):
+            normalized["shaders"] = [
+                {key: item for key, item in shader.items() if key != "sha256"}
+                if isinstance(shader, dict) else shader for shader in shaders]
+        value = normalized
+    return _va0_normalize_semantic_json(value)
+
+
+def _va0_plan_semantics(path: Path) -> object:
+    value = load_json(path)
+    if isinstance(value, dict):
+        value = {key: item for key, item in value.items()
+                 if key not in {"build_identity", "plan_hash", "plan_sha256"}}
+    return _va0_normalize_semantic_json(value)
+
+
+def _va0_spirv_semantic_form(disassembler: str, path: Path) -> str:
+    result = subprocess.run([disassembler, "--raw-id", "--no-header", str(path)],
+                            capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise ValueError(f"SPIR-V disassembly failed for {path}: {result.stderr}")
+    return _va0_normalize_spirv_disassembly(result.stdout)
+
+
+def _va0_normalize_spirv_disassembly(disassembly: str) -> str:
+    pure_ops = {"OpLogicalAnd", "OpULessThan", "OpUGreaterThanEqual"}
+    definitions = {}
+    blocks = []
+    preamble = []
+    current = None
+    definition_pattern = re.compile(r"^(%[\w.]+)\s*=\s*(Op\w+)\s+(.*)$")
+    label_pattern = re.compile(r"^%[\w.]+\s*=\s*OpLabel\b")
+    for raw_line in disassembly.splitlines():
+        line = raw_line.strip()
+        match = definition_pattern.match(line)
+        if match and match.group(2) in pure_ops:
+            operands = match.group(3).split()
+            definitions[match.group(1)] = (match.group(2), operands)
+        if label_pattern.match(line):
+            current = {"header": line, "body": []}
+            blocks.append(current)
+            continue
+        if current is None:
+            preamble.append(line)
+        else:
+            current["body"].append(line)
+
+    def expression(identifier: str, stack: tuple[str, ...] = ()) -> object:
+        definition = definitions.get(identifier)
+        if definition is None:
+            return identifier
+        if identifier in stack:
+            raise ValueError("cyclic pure SPIR-V expression")
+        opcode, operands = definition
+        if not operands:
+            raise ValueError(f"malformed SPIR-V pure operation {opcode}")
+        arguments = tuple(expression(item, stack + (identifier,))
+                          for item in operands[1:])
+        if opcode == "OpLogicalAnd":
+            arguments = tuple(sorted(arguments, key=repr))
+        return opcode, operands[0], arguments
+
+    def substitute(line: str) -> str:
+        return re.sub(r"%[\w.]+", lambda match: repr(expression(match.group(0)))
+                      if match.group(0) in definitions else match.group(0), line)
+
+    normalized = list(preamble)
+    for block in blocks:
+        normalized.append(block["header"])
+        body = block["body"]
+        index = 0
+        while index < len(body):
+            match = definition_pattern.match(body[index])
+            if match and match.group(2) in pure_ops:
+                identifiers = []
+                while index < len(body):
+                    match = definition_pattern.match(body[index])
+                    if not match or match.group(2) not in pure_ops:
+                        break
+                    identifiers.append(match.group(1))
+                    index += 1
+                normalized.extend("PURE " + repr(expression(identifier))
+                                  for identifier in sorted(identifiers,
+                                                           key=lambda item: repr(expression(item))))
+                continue
+            normalized.append(substitute(body[index]))
+            index += 1
+    return "\n".join(normalized) + "\n"
+
+
+def _va0_compare_product_artifacts(stage: Path, old_root: Path, current_root: Path,
+                                   label: str, findings: list[dict],
+                                   shader_comparisons: list[dict] | None = None) -> bool:
+    passed = True
+    for category in ("cpu", "vulkan"):
+        old_dir, current_dir = old_root / category, current_root / category
+        if not old_dir.is_dir() or not current_dir.is_dir():
+            _finding(findings, "va0-product-artifact-missing",
+                     f"{label} {category} artifact directory is missing")
+            passed = False
+            continue
+        old_headers = {item.name: item for item in old_dir.glob("*.h")}
+        current_headers = {item.name: item for item in current_dir.glob("*.h")}
+        if set(old_headers) != set(current_headers) or any(
+                old_headers[name].read_bytes() != current_headers[name].read_bytes()
+                for name in old_headers.keys() & current_headers.keys()):
+            _finding(findings, "va0-header-semantics",
+                     f"{label} {category} generated public header semantics changed")
+            passed = False
+        old_manifests = {item.name: item for item in old_dir.glob("*.json")
+                         if not item.name.endswith(".plan.json")}
+        current_manifests = {item.name: item for item in current_dir.glob("*.json")
+                             if not item.name.endswith(".plan.json")}
+        additive_current_cpu_manifest = (
+            category == "cpu" and set(old_manifests).issubset(current_manifests))
+        if set(old_manifests) != set(current_manifests) and not additive_current_cpu_manifest:
+            _finding(findings, "va0-manifest-semantics",
+                     f"{label} {category} manifest artifact set changed")
+            passed = False
+        for name in old_manifests.keys() & current_manifests.keys():
+            try:
+                if _va0_manifest_semantics(old_manifests[name]) != _va0_manifest_semantics(current_manifests[name]):
+                    _finding(findings, "va0-manifest-semantics",
+                             f"{label} {category}/{name} changed beyond the declared build/host metadata")
+                    passed = False
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                _finding(findings, "va0-manifest-invalid", f"{label} {category}/{name}: {error}")
+                passed = False
+        if category == "vulkan":
+            old_plans = {item.name: item for item in old_dir.glob("*.plan.json")}
+            current_plans = {item.name: item for item in current_dir.glob("*.plan.json")}
+            if set(old_plans) != set(current_plans) or any(
+                    _va0_plan_semantics(old_plans[name]) != _va0_plan_semantics(current_plans[name])
+                    for name in old_plans.keys() & current_plans.keys()):
+                _finding(findings, "va0-plan-semantics",
+                         f"{label} embedded execution plan changed")
+                passed = False
+    old_shader_dir = old_root / "spirv-validation"
+    current_shader_dir = current_root / "spirv-validation"
+    if not old_shader_dir.is_dir():
+        old_shader_dir = old_root / "vulkan/shader-reconstruction/spirv-validation"
+    if not current_shader_dir.is_dir():
+        current_shader_dir = current_root / "vulkan/shader-reconstruction/spirv-validation"
+    old_shaders = {item.name: item for item in old_shader_dir.glob("shader-*.spv")}
+    current_shaders = {item.name: item for item in current_shader_dir.glob("shader-*.spv")}
+    if not old_shaders or set(old_shaders) != set(current_shaders):
+        _finding(findings, "va0-shader-semantics",
+                 f"{label} validated SPIR-V kernel inventory changed or is incomplete")
+        passed = False
+    else:
+        gate_state = load_json(stage / "gate-state.json")
+        disassemblers = [item.get("path") for item in gate_state.get("toolchain_identities", [])
+                         if isinstance(item, dict) and item.get("role") == "spirv-dis"]
+        disassembler = disassemblers[0] if len(disassemblers) == 1 else None
+        for name in sorted(old_shaders):
+            old_path, current_path = old_shaders[name], current_shaders[name]
+            old_sha, current_sha = sha256_file(old_path), sha256_file(current_path)
+            if old_sha == current_sha:
+                continue
+            if not disassembler or not Path(disassembler).is_file():
+                _finding(findings, "va0-shader-semantics",
+                         f"{label}/{name} SPIR-V bytes changed and no audited disassembler is available")
+                passed = False
+                continue
+            try:
+                old_form = _va0_spirv_semantic_form(disassembler, old_path)
+                current_form = _va0_spirv_semantic_form(disassembler, current_path)
+            except (OSError, ValueError, subprocess.SubprocessError) as error:
+                _finding(findings, "va0-shader-disassembly-invalid",
+                         f"{label}/{name} SPIR-V semantic comparison failed: {error}")
+                passed = False
+                continue
+            if old_form != current_form:
+                _finding(findings, "va0-shader-semantics",
+                         f"{label}/{name} SPIR-V changed beyond pure comparison/logical-and reordering")
+                passed = False
+                continue
+            if shader_comparisons is not None:
+                shader_comparisons.append({
+                    "label": label, "shader": name,
+                    "status": "semantic-equivalent-pure-expression-reordering",
+                    "old_sha256": old_sha, "current_sha256": current_sha,
+                    "semantic_form_sha256": sha256_bytes(old_form.encode("utf-8")),
+                })
+    return passed
+
+
+def _va0_read_raw_roles(model_root: Path, trial: dict, role: str) -> list[list[float]]:
+    raw_files = trial.get("raw_files", {})
+    names = raw_files.get(role) if isinstance(raw_files, dict) else None
+    if not isinstance(names, list) or not names:
+        raise ValueError(f"{role} raw tensor list is missing")
+    return [read_f32(model_root / name) for name in names]
+
+
+def _va0_compare_small_model(stage: Path, old_root: Path, current_root: Path,
+                             model_name: str, label: str,
+                             refs: list[dict], findings: list[dict],
+                             shader_comparisons: list[dict] | None = None) -> bool:
+    try:
+        old = load_json(old_root / "evidence.json")
+        current = load_json(current_root / "evidence.json")
+        old_ids, current_ids = old.get("identities", {}), current.get("identities", {})
+        for field in ("param_sha256", "model_bin_sha256"):
+            if old_ids.get(field) != current_ids.get(field):
+                raise ValueError(f"{field} differs from the frozen reference")
+        if model_name == "add_relu":
+            source_names = ("add_relu.param", "empty.bin")
+            old_source_root = old_root / "inputs"
+            current_source_root = current_root.parent.parent / "fixtures"
+        elif model_name == "conv_relu":
+            source_names = ("conv_relu.param", "conv_weights.bin")
+            old_source_root = old_root / "inputs"
+            current_source_root = current_root.parent.parent / "fixtures"
+        else:
+            source_names = ("squeezenet_v1_1.param", "squeezenet_v1_1.bin")
+            old_source_root = old_root
+            current_source_root = current_root
+        for name, identity_field in zip(source_names, ("param_sha256", "model_bin_sha256")):
+            old_source = old_source_root / name
+            current_source = current_source_root / name
+            if (not old_source.is_file() or not current_source.is_file() or
+                    sha256_file(old_source) != old_ids.get(identity_field) or
+                    sha256_file(current_source) != current_ids.get(identity_field) or
+                    old_source.read_bytes() != current_source.read_bytes()):
+                raise ValueError(f"{identity_field} source bytes differ from the paired models")
+        old_trials = {item.get("name"): item for item in old.get("trials", [])
+                      if isinstance(item, dict)}
+        current_trials = {item.get("name"): item for item in current.get("trials", [])
+                          if isinstance(item, dict)}
+        if not old_trials or set(old_trials) != set(current_trials):
+            raise ValueError("old/current raw trial inventories differ")
+        atol, rtol = ((1.0e-6, 1.0e-4) if model_name == "squeezenet_v1_1"
+                      else (1.0e-6, 1.0e-6))
+        expected_roles = ("inputs", "cpu_outputs", "ncnn_outputs", "vulkan_outputs")
+        oracle = current.get("independent_golden")
+        if model_name in {"add_relu", "conv_relu"} and not isinstance(oracle, dict):
+            raise ValueError("current Add/Conv fixture lacks its independent scalar golden oracle")
+        if model_name == "conv_relu":
+            source_inputs = old_root / "inputs"
+            old_weights = source_inputs / "conv_weights.bin"
+            if not old_weights.is_file():
+                raise ValueError("old Conv reference weights are missing")
+            payload = old_weights.read_bytes()
+            oracle_values = oracle.get("weights", []) + oracle.get("biases", [])
+            expected_payload = struct.pack("<I", 0) + struct.pack(
+                f"<{len(oracle_values)}f", *oracle_values)
+            if payload != expected_payload:
+                raise ValueError("independent Conv oracle weights differ from frozen model bin bytes")
+        golden_fn = _v5_golden_function() if model_name in {"add_relu", "conv_relu"} else None
+        input_specs = current.get("inputs", [])
+        output_specs = current.get("outputs", [])
+        golden_fixture = {
+            "inputs": [(item["blob"], tuple(item.get("shape", item.get("shape_chw"))))
+                       for item in input_specs],
+            "outputs": [(item["blob"], tuple(item.get("shape", item.get("shape_chw"))))
+                        for item in output_specs],
+            "oracle": oracle,
+        }
+        for trial_name in sorted(old_trials):
+            old_trial, current_trial = old_trials[trial_name], current_trials[trial_name]
+            old_arrays = {role: _va0_read_raw_roles(old_root, old_trial, role)
+                          for role in expected_roles}
+            current_arrays = {role: _va0_read_raw_roles(current_root, current_trial, role)
+                              for role in expected_roles}
+            for index, (old_values, current_values) in enumerate(zip(
+                    old_arrays["inputs"], current_arrays["inputs"])):
+                old_path = old_root / old_trial["raw_files"]["inputs"][index]
+                current_path = current_root / current_trial["raw_files"]["inputs"][index]
+                if old_path.read_bytes() != current_path.read_bytes():
+                    raise ValueError(f"{trial_name} input tensor {index} changed")
+            for role in expected_roles[1:]:
+                if len(old_arrays[role]) != len(current_arrays[role]):
+                    raise ValueError(f"{trial_name} {role} output count changed")
+                for old_values, current_values in zip(old_arrays[role], current_arrays[role]):
+                    if not compare_f32(current_values, old_values, atol, rtol)["passed"]:
+                        raise ValueError(f"{trial_name} {role} values changed beyond the frozen budget")
+            if golden_fn is not None:
+                golden = golden_fn(golden_fixture, old_arrays["inputs"])
+                if len(golden) != len(output_specs):
+                    raise ValueError(f"{trial_name} scalar golden output count differs from model signature")
+                for role in ("cpu_outputs", "ncnn_outputs", "vulkan_outputs"):
+                    if len(old_arrays[role]) != len(golden):
+                        raise ValueError(f"{trial_name} {role} count differs from scalar golden")
+                    for values, expected in zip(old_arrays[role], golden):
+                        if not compare_f32(values, expected, atol, rtol)["passed"]:
+                            raise ValueError(f"{trial_name} old {role} differs from recomputed scalar golden")
+                current_golden = current_trial.get("raw_files", {}).get("golden_outputs")
+                if not isinstance(current_golden, list) or len(current_golden) != len(golden):
+                    raise ValueError(f"{trial_name} current raw scalar golden outputs are missing")
+                for path, expected in zip(current_golden, golden):
+                    if not compare_f32(read_f32(current_root / path), expected,
+                                       atol, rtol)["passed"]:
+                        raise ValueError(f"{trial_name} current raw scalar golden bytes differ from recomputation")
+            if model_name == "squeezenet_v1_1":
+                for role in ("cpu_outputs", "ncnn_outputs", "vulkan_outputs"):
+                    for values in old_arrays[role] + current_arrays[role]:
+                        if not values or abs(sum(values) - 1.0) > 1.0e-4:
+                            raise ValueError(f"{trial_name} {role} probability sum is outside 1e-4")
+                old_reference = old_arrays["ncnn_outputs"][0]
+                current_reference = current_arrays["ncnn_outputs"][0]
+                for role in ("cpu_outputs", "vulkan_outputs"):
+                    if _top_indices(old_reference, 5) != _top_indices(old_arrays[role][0], 5):
+                        raise ValueError(f"{trial_name} frozen {role} top-5 differs from ncnn")
+                    if _top_indices(current_reference, 5) != _top_indices(current_arrays[role][0], 5):
+                        raise ValueError(f"{trial_name} current {role} top-5 differs from ncnn")
+        artifact_match = _va0_compare_product_artifacts(
+            stage, old_root, current_root, label, findings, shader_comparisons)
+        return artifact_match
+    except (OSError, ValueError, TypeError, KeyError, struct.error, json.JSONDecodeError) as error:
+        _finding(findings, "va0-legacy-numeric-baseline",
+                 f"{label} old/current numeric comparison could not be verified: {error}")
+        return False
+
+
+def _top_indices(values: list[float], count: int) -> list[int]:
+    return sorted(range(len(values)), key=lambda index: (-values[index], index))[:count]
+
+
+def _va0_relu_manifest_io(root: Path, backend: str, *, required: bool = True) -> tuple[dict, dict] | None:
+    directory = root / backend
+    suffix = "_vulkan.json" if backend == "vulkan" else ".json"
+    manifests = [path for path in directory.glob("*.json")
+                 if path.name.endswith(suffix) and not path.name.endswith(".plan.json")]
+    if not manifests and not required:
+        return None
+    if len(manifests) != 1:
+        raise ValueError(f"{backend} must have exactly one ABI manifest")
+    manifest = load_json(manifests[0])
+    inputs, outputs = manifest.get("inputs"), manifest.get("outputs")
+    if not isinstance(inputs, list) or not isinstance(outputs, list) or len(inputs) != 1 or len(outputs) != 1:
+        raise ValueError(f"{backend} ABI manifest must describe one input and output")
+    expected_layout = "CHW"
+    for role, ports in (("input", inputs), ("output", outputs)):
+        tensor = ports[0]
+        if tensor.get("element_type") != "f32" or tensor.get("shape") != [1, 1, 257]:
+            raise ValueError(f"{backend} {role} manifest tensor type/shape changed")
+        if backend == "vulkan" and any(
+                tensor.get(key) != expected_layout
+                for key in ("host_layout", "logical_layout", "physical_layout")):
+            raise ValueError(f"Vulkan {role} manifest layout changed")
+    return inputs[0], outputs[0]
+
+
+def _va0_relu_manifest_contract(root: Path, *, require_cpu_manifest: bool) -> dict:
+    cpu_ports = _va0_relu_manifest_io(root, "cpu", required=require_cpu_manifest)
+    vk_input, vk_output = _va0_relu_manifest_io(root, "vulkan")
+    if cpu_ports is not None:
+        cpu_input, cpu_output = cpu_ports
+        if (cpu_input.get("shape") != vk_input.get("shape") or
+                cpu_output.get("shape") != vk_output.get("shape") or
+                cpu_input.get("element_type") != vk_input.get("element_type") or
+                cpu_output.get("element_type") != vk_output.get("element_type")):
+            raise ValueError("CPU and Vulkan manifest public tensor contracts differ")
+    return {"element_type": "f32", "shape": [257],
+            "input_shape": vk_input["shape"], "output_shape": vk_output["shape"],
+            "shape_chw": [1, 1, 257], "host_layout": "CHW"}
+
+
+def _va0_compare_relu_product(stage: Path, old_root: Path, current_root: Path,
+                              label: str, findings: list[dict],
+                              shader_comparisons: list[dict] | None = None) -> bool:
+    try:
+        old = load_json(old_root / "evidence.json")
+        current = load_json(current_root / "evidence.json")
+        old_fixture, current_fixture = old.get("fixture", {}), current.get("fixture", {})
+        for field in ("param_sha256", "bin_sha256"):
+            if old_fixture.get(field) != current_fixture.get(field):
+                raise ValueError(f"ReLU model {field} differs from frozen reference")
+        for name, field in (("model.param", "param_sha256"), ("model.bin", "bin_sha256")):
+            old_source, current_source = old_root / name, current_root / name
+            if (not old_source.is_file() or not current_source.is_file() or
+                    sha256_file(old_source) != old_fixture.get(field) or
+                    sha256_file(current_source) != current_fixture.get(field) or
+                    old_source.read_bytes() != current_source.read_bytes()):
+                raise ValueError(f"ReLU {field} source model bytes changed")
+        old_io, current_io = old.get("public_io", {}), current.get("public_io", {})
+        old_manifest_contract = _va0_relu_manifest_contract(old_root, require_cpu_manifest=False)
+        current_manifest_contract = _va0_relu_manifest_contract(current_root, require_cpu_manifest=True)
+        if old_manifest_contract != current_manifest_contract:
+            raise ValueError("old/current ReLU manifest tensor layout/shape contract changed")
+        for label, io in (("old", old_io), ("current", current_io)):
+            if io.get("element_type") != "f32" or io.get("shape") != [257]:
+                raise ValueError(f"{label} ReLU public tensor type/shape contract changed")
+            for key in ("shape_chw", "host_layout"):
+                if key in io and io.get(key) != old_manifest_contract[key]:
+                    raise ValueError(f"{label} ReLU {key} conflicts with manifest layout/shape")
+            tolerance = io.get("tolerance", {})
+            if (tolerance.get("absolute"), tolerance.get("relative")) != (1.0e-6, 1.0e-6):
+                raise ValueError(f"{label} ReLU fixed numeric budget changed")
+        for role in ("input", "scalar_golden", "cpu_output"):
+            old_record, current_record = old_io.get(role), current_io.get(role)
+            if not isinstance(old_record, dict) or not isinstance(current_record, dict):
+                raise ValueError(f"{role} raw tensor record is missing")
+            old_path, current_path = old_root / old_record["file"], current_root / current_record["file"]
+            old_values, current_values = read_f32(old_path), read_f32(current_path)
+            if old_values != current_values:
+                raise ValueError(f"ReLU {role} FP32 values changed")
+        if current_io.get("vulkan_output"):
+            old_values = read_f32(old_root / old_io["vulkan_output"]["file"])
+            current_values = read_f32(current_root / current_io["vulkan_output"]["file"])
+            if not compare_f32(current_values, old_values, 1.0e-6, 1.0e-6)["passed"]:
+                raise ValueError("ReLU Vulkan output changed beyond fixed 1e-6 budget")
+        artifact_match = _va0_compare_product_artifacts(
+            stage, old_root, current_root, label, findings, shader_comparisons)
+        return artifact_match
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
+        _finding(findings, "va0-legacy-product-baseline",
+                 f"{label} old/current ReLU product comparison failed: {error}")
+        return False
+
+
+def _dependency_raw_artifact_refs(stage: Path, root: Path, label: str,
+                                  refs: list[dict], findings: list[dict]) -> list[dict]:
+    output = []
+    if not root.is_dir():
+        _finding(findings, "dependency-evidence-directory-missing",
+                 f"{label} evidence directory is missing", path=str(root))
+        return output
+    files = sorted(path for path in root.rglob("*") if path.is_file())
+    if not files:
+        _finding(findings, "dependency-evidence-empty",
+                 f"{label} evidence directory contains no raw files", path=str(root))
+        return output
+    for path in files:
+        if path.stat().st_size == 0:
+            _finding(findings, "dependency-evidence-empty-file",
+                     f"{label} contains an empty evidence file",
+                     path=str(path.relative_to(stage)))
+            continue
+        record = _evidence_file(stage, stage, str(path.relative_to(stage)),
+                                f"{label} raw evidence", refs, findings)
+        if record is not None:
+            output.append({"path": str(path.relative_to(stage)),
+                           "sha256": sha256_file(path), "role": f"{label} raw evidence"})
+    return output
+
+
+def _check_dependency_elf_claims(summary: object, root: Path,
+                                 label: str, findings: list[dict]) -> None:
+    if not isinstance(summary, dict):
+        _finding(findings, "dependency-elf-summary", f"{label} ELF summary is missing")
+        return
+    raw_records = {}
+    for key in ("readelf_dynamic", "readelf_symbols"):
+        record = summary.get(key)
+        if not isinstance(record, dict):
+            _finding(findings, "dependency-elf-raw-missing",
+                     f"{label} {key} raw output record is missing")
+            continue
+        try:
+            raw_path = dependency_evidence._safe_evidence_path(root, record.get("path"))
+            if not raw_path.is_file() or raw_path.stat().st_size == 0 or \
+                    dependency_evidence.sha256(raw_path) != record.get("sha256"):
+                raise ValueError("raw output missing, empty, or tampered")
+            raw_records[key] = raw_path.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError, dependency_evidence.EvidenceError) as error:
+            _finding(findings, "dependency-elf-raw-invalid",
+                     f"{label} {key} raw output cannot be verified: {error}")
+    if "readelf_dynamic" in raw_records:
+        actual = dependency_evidence.parse_readelf_dynamic(raw_records["readelf_dynamic"])
+        if (actual["needed"] != summary.get("needed") or
+                actual["soname"] != summary.get("soname") or
+                actual["rpath_runpath"] != summary.get("rpath_runpath")):
+            _finding(findings, "dependency-elf-dynamic-claim",
+                     f"{label} DT_NEEDED/SONAME/RPATH claims differ from raw readelf bytes")
+    if "readelf_symbols" in raw_records:
+        undefined, exports = dependency_evidence.parse_readelf_symbols(
+            raw_records["readelf_symbols"])
+        if (undefined != summary.get("undefined_symbols") or
+                exports != summary.get("exports")):
+            _finding(findings, "dependency-elf-symbol-claim",
+                     f"{label} exported/undefined symbol claims differ from raw readelf bytes")
+
+
+def _cpu_is_sanitizer_runtime_soname(soname: str) -> bool:
+    return re.fullmatch(r"libclang_rt\.asan[^/]*\.so(?:\..*)?", soname, re.I) is not None
+
+
+def _cpu_forbidden_soname(soname: str, *, sanitizer: bool) -> bool:
+    if sanitizer and _cpu_is_sanitizer_runtime_soname(soname):
+        return False
+    forbidden_vulkan_dso = re.compile(r"libvulkan(?:[_-][^/]+)?\.so(?:\..*)?$", re.I)
+    forbidden_compiler_dso = re.compile(r"lib(?:LLVM|MLIR|clang).*\.so(?:\..*)?$", re.I)
+    return bool(forbidden_compiler_dso.search(soname) or
+                forbidden_vulkan_dso.search(soname))
+
+
+def _cpu_forbidden_runtime(item: dict, *, sanitizer: bool,
+                           needed: set[str] | list[str] | tuple[str, ...] = (),
+                           sanitizer_runtime_identity: dict | None = None) -> bool:
+    soname = str(item.get("soname") or Path(str(item.get("path", ""))).name)
+    path = str(item.get("path", ""))
+    path_name = Path(path).name
+    expected_path = sanitizer_runtime_identity.get("path") if isinstance(
+        sanitizer_runtime_identity, dict) else None
+    expected_hash = sanitizer_runtime_identity.get("sha256") if isinstance(
+        sanitizer_runtime_identity, dict) else None
+    try:
+        path_matches_identity = (isinstance(expected_path, str) and
+                                 str(Path(path).resolve()) == str(Path(expected_path).resolve()))
+    except (OSError, RuntimeError):
+        path_matches_identity = False
+    direct_needed_names = item.get("direct_needed_names", [])
+    if not isinstance(direct_needed_names, list):
+        return True
+    asan_direct_names = {str(name) for name in direct_needed_names
+                         if _cpu_is_sanitizer_runtime_soname(str(name))}
+    sanitizer_runtime = (
+        sanitizer and item.get("classification") == "SAN" and
+        item.get("role") == "sanitizer-runtime" and
+        path_name.startswith("libclang_rt.asan") and
+        path_matches_identity and
+        isinstance(expected_hash, str) and SHA256_RE.fullmatch(expected_hash) is not None and
+        item.get("sha256") == expected_hash and
+        (item.get("soname") is None or
+         (_cpu_is_sanitizer_runtime_soname(str(item.get("soname"))) and
+          str(item.get("soname")) in asan_direct_names)) and
+        bool(asan_direct_names) and asan_direct_names.issubset(needed))
+    if asan_direct_names:
+        return not sanitizer_runtime
+    if sanitizer and _cpu_is_sanitizer_runtime_soname(soname):
+        return True
+    return (item.get("classification") == "compiler" or
+            _cpu_forbidden_soname(soname, sanitizer=sanitizer))
+
+
+def _audit_dependency_bundle(stage: Path, base: Path, evidence: dict,
+                             expected_hashes: dict[str, object], label: str,
+                             refs: list[dict], findings: list[dict], *,
+                             sanitizer: bool = False,
+                             sanitizer_runtime_identity: dict | None = None) -> dict:
+    findings_before = len(findings)
+    bundle = evidence.get("build_dependencies")
+    if not isinstance(bundle, dict):
+        _finding(findings, "dependency-bundle-missing",
+                 f"{label} build_dependencies records are missing")
+        return {"status": "missing", "label": label}
+    dependencies = {}
+    roots = {}
+    for role, validator in (("vulkan", dependency_evidence.validate_dependency_evidence),
+                            ("cpu", dependency_evidence.validate_elf_dependency_closure)):
+        record = bundle.get(role)
+        relative = Path(record.get("file", "")) if isinstance(record, dict) else Path()
+        if (not isinstance(record, dict) or not isinstance(record.get("file"), str) or
+                relative.is_absolute() or ".." in relative.parts):
+            _finding(findings, "dependency-bundle-record",
+                     f"{label} {role} dependency record is malformed or escapes its model root")
+            continue
+        path = _evidence_file(stage, base, record.get("file"),
+                              f"{label} {role} dependency summary", refs, findings)
+        _check_digest_claim(record.get("sha256"), path,
+                            f"{label} {role} dependency summary", findings)
+        if path is None:
+            continue
+        root = path.parent
+        roots[role] = root
+        try:
+            value = validator(path, root)
+            expected = expected_hashes.get(role)
+            actual = value.get("model_library", {}).get("sha256")
+            if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected) or actual != expected:
+                _finding(findings, "dependency-model-dso-mismatch",
+                         f"{label} {role} dependency capture does not identify the audited current model DSO",
+                         expected=expected, actual=actual)
+            _check_dependency_elf_claims(value.get("model_elf"), root,
+                                         f"{label} {role} model", findings)
+            for index, item in enumerate(value.get("runtime_closure", [])):
+                _check_dependency_elf_claims(item, root,
+                                             f"{label} {role} closure {index}", findings)
+            dependencies[role] = value
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError,
+                json.JSONDecodeError, dependency_evidence.EvidenceError) as error:
+            _finding(findings, "dependency-evidence-invalid",
+                     f"{label} {role} dependency evidence failed its primary validator: {error}")
+    vulkan = dependencies.get("vulkan", {})
+    cpu = dependencies.get("cpu", {})
+    if not vulkan or not cpu:
+        return {"status": "invalid", "label": label}
+    cpu_elf = cpu.get("model_elf", {})
+    cpu_symbols = cpu_elf.get("undefined_symbols", [])
+    cpu_needed = cpu_elf.get("needed", [])
+    cpu_closure = cpu.get("runtime_closure", [])
+    bad_cpu_closure = []
+    allowed_asan_needed = set()
+    for item in cpu_closure:
+        soname = str(item.get("soname") or Path(str(item.get("path", ""))).name)
+        forbidden_runtime = _cpu_forbidden_runtime(
+            item, sanitizer=sanitizer, needed=set(cpu_needed),
+            sanitizer_runtime_identity=sanitizer_runtime_identity)
+        if forbidden_runtime:
+            bad_cpu_closure.append(soname)
+        else:
+            allowed_asan_needed.update(
+                str(name) for name in item.get("direct_needed_names", [])
+                if _cpu_is_sanitizer_runtime_soname(str(name)))
+    bad_cpu_needed = [str(name) for name in cpu_needed
+                      if (_cpu_forbidden_soname(str(name), sanitizer=sanitizer) or
+                          (sanitizer and _cpu_is_sanitizer_runtime_soname(str(name)) and
+                           str(name) not in allowed_asan_needed))]
+    bad_cpu_symbols = [name for name in cpu_symbols if
+                       re.match(r"(?:vk[A-Za-z0-9_]|LLVM|mlir[A-Za-z0-9_]|clang[A-Za-z0-9_])", str(name))]
+    if bad_cpu_needed or bad_cpu_closure or bad_cpu_symbols:
+        _finding(findings, "cpu-dependency-import-policy",
+                 f"{label} CPU model dynamically imports Vulkan or LLVM/MLIR",
+                 needed=bad_cpu_needed, closure=bad_cpu_closure,
+                 undefined_symbols=bad_cpu_symbols)
+    llvm = vulkan.get("llvm", {})
+    if (llvm.get("static_archive_status") not in (None, "not_measured") or
+            not isinstance(llvm.get("legacy_blockers"), list) or
+            not isinstance(llvm.get("status"), str) or
+            not isinstance(llvm.get("absence_claim"), str)):
+        _finding(findings, "dependency-legacy-llvm-status",
+                 f"{label} legacy LLVM presence/blocker classification is malformed")
+    else:
+        selected_compiler_members = sorted({
+            str(origin.get("member"))
+            for archive in vulkan.get("archive_inputs", [])
+            for origin in archive.get("selected_member_origins", [])
+            if isinstance(origin, dict) and origin.get("classification") == "compiler"})
+        compiler_dsos = sorted({str(item.get("path"))
+                                for item in vulkan.get("runtime_closure", [])
+                                if item.get("classification") == "compiler"})
+        observed_llvm = bool(selected_compiler_members or compiler_dsos)
+        mode = llvm.get("mode")
+        expected_blockers = set()
+        if selected_compiler_members:
+            expected_blockers.add("static_llvm_archive_members_selected")
+        if compiler_dsos:
+            expected_blockers.add("shared_llvm_dso_in_runtime_closure")
+        if mode == "static" and not selected_compiler_members:
+            expected_blockers.add("configured_static_llvm_not_observed")
+        if mode == "shared" and not compiler_dsos:
+            expected_blockers.add("configured_shared_llvm_not_observed")
+        expected_status = ("measured_presence" if observed_llvm else
+                           "not_measured" if mode == "not_measured" else
+                           "measured_no_presence_observed")
+        expected_claim = ("presence_observed" if observed_llvm else
+                          "not_measured" if mode == "not_measured" else
+                          "none_observed_in_captured_link_and_runtime_closure")
+        if (sorted(set(llvm.get("static_archive_members", []))) != selected_compiler_members or
+                sorted(set(llvm.get("shared_objects", []))) != compiler_dsos or
+                set(llvm.get("legacy_blockers", [])) != expected_blockers or
+                llvm.get("status") != expected_status or
+                llvm.get("absence_claim") != expected_claim):
+            _finding(findings, "dependency-legacy-llvm-claim",
+                     f"{label} configured LLVM presence/blockers differ from actual archive/map/runtime evidence")
+    if cpu.get("llvm", {}).get("static_archive_status") != "not_measured":
+        _finding(findings, "cpu-static-inputs-overclaimed",
+                 f"{label} CPU model evidence must report static archive inputs as not measured")
+    driver_result = {"status": "not_measured", "reason": "driver maps were not supplied"}
+    driver = bundle.get("driver")
+    if isinstance(driver, dict):
+        driver_file = driver.get("file")
+        if driver_file:
+            driver_relative = Path(driver_file) if isinstance(driver_file, str) else Path()
+            if driver_relative.is_absolute() or ".." in driver_relative.parts:
+                _finding(findings, "driver-module-path-invalid",
+                         f"{label} driver comparison path escapes its model evidence root")
+                driver_file = None
+        if driver_file:
+            driver_path = _evidence_file(stage, base, driver_file,
+                                         f"{label} driver module comparison", refs, findings)
+            _check_digest_claim(driver.get("sha256"), driver_path,
+                                f"{label} driver module comparison", findings)
+            if driver_path is not None:
+                try:
+                    driver_result = load_json(driver_path)
+                    comparison = dependency_evidence.compare_driver_module_snapshots(
+                        driver_path.parent, persist=False)
+                    if (driver.get("comparison_status") not in {None, comparison.get("status")} or
+                            (driver.get("status") == "measured" and
+                             driver.get("comparison_status") != "measured")):
+                        _finding(findings, "driver-module-status-claim",
+                                 f"{label} driver comparison status differs from raw three-phase maps")
+                    if driver.get("status") == "measured" and (
+                            comparison.get("status") != "measured" or
+                            comparison.get("driver_origin_status") != "measured" or
+                            not isinstance(comparison.get("after_dlopen_added"), list) or
+                            not isinstance(comparison.get("after_create_added"), list) or
+                            not comparison.get("driver_icd_modules_after_create")):
+                        _finding(findings, "driver-module-phase-evidence",
+                                 f"{label} driver maps do not distinguish after-dlopen from after-create")
+                    manifest_claim = driver.get("manifest")
+                    if driver.get("status") == "measured" and isinstance(manifest_claim, dict):
+                        driver_modules = comparison.get("driver_icd_modules_after_create", [])
+                        if not any(item.get("manifest_origin") == "explicit-driver-manifest"
+                                   for item in driver_modules if isinstance(item, dict)):
+                            _finding(findings, "driver-module-manifest-origin",
+                                     f"{label} after-create driver module is not bound to its explicit ICD manifest")
+                except (OSError, ValueError, RuntimeError, TypeError,
+                        json.JSONDecodeError, dependency_evidence.EvidenceError) as error:
+                    _finding(findings, "driver-module-evidence-invalid",
+                             f"{label} driver module evidence is invalid: {error}")
+        elif driver.get("status") not in {"not_measured", "not-applicable"}:
+            _finding(findings, "driver-module-evidence-missing",
+                     f"{label} driver status claims measurement without a comparison file")
+        elif not (driver.get("reason") or driver.get("reference")):
+            _finding(findings, "driver-module-not-measured-reason",
+                     f"{label} missing driver map evidence must state why it was not measured")
+        manifest = driver.get("manifest")
+        if isinstance(manifest, dict):
+            manifest_relative = Path(manifest.get("file", ""))
+            if manifest_relative.is_absolute() or ".." in manifest_relative.parts:
+                _finding(findings, "driver-manifest-path-invalid",
+                         f"{label} explicit ICD manifest path escapes its model evidence root")
+                manifest_relative = Path("invalid")
+            manifest_path = _evidence_file(stage, base, manifest_relative.as_posix(),
+                                           f"{label} explicit ICD manifest", refs, findings)
+            _check_digest_claim(manifest.get("sha256"), manifest_path,
+                                f"{label} explicit ICD manifest", findings)
+        driver_result = {**driver_result, "status": driver.get("status", "not_measured"),
+                         "comparison_status": driver.get("comparison_status"),
+                         "reason": driver.get("reason"),
+                         "reference": driver.get("reference")}
+    evidence_roots = set(roots.values())
+    if isinstance(driver, dict) and isinstance(driver.get("file"), str):
+        driver_path = safe_stage_file(stage, (base / driver["file"]).relative_to(stage))
+        if driver_path:
+            evidence_roots.add(driver_path.parent)
+    evidence_file_refs = []
+    for root in sorted(evidence_roots, key=str):
+        evidence_file_refs.extend(_dependency_raw_artifact_refs(
+            stage, root, f"{label} dependency", refs, findings))
+    return {
+        "status": "verified" if len(findings) == findings_before else "invalid",
+        "label": label,
+        "vulkan": {"file": bundle["vulkan"].get("file"),
+                    "sha256": bundle["vulkan"].get("sha256"),
+                    "llvm_status": llvm.get("status"),
+                    "llvm_mode": llvm.get("mode"),
+                    "legacy_blockers": llvm.get("legacy_blockers", []),
+                    "static_archive_members": llvm.get("static_archive_members", []),
+                    "runtime_closure_count": len(vulkan.get("runtime_closure", []))},
+        "cpu": {"file": bundle["cpu"].get("file"),
+                "sha256": bundle["cpu"].get("sha256"),
+                "static_archive_status": cpu.get("llvm", {}).get("static_archive_status"),
+                "runtime_closure_count": len(cpu_closure)},
+        "driver": driver_result,
+        "evidence_file_refs": evidence_file_refs,
+    }
+
+
+def _sanitizer_runtime_identity(stage: Path, gate: dict,
+                                findings: list[dict]) -> dict | None:
+    state = gate.get("state", {})
+    evidence = state.get("sanitizer_toolchain_evidence", {}) if isinstance(state, dict) else {}
+    identity_path = _verify_hash_record(
+        stage, evidence.get("identity") if isinstance(evidence, dict) else None,
+        "SAN toolchain identity for CPU runtime binding", findings)
+    if identity_path is None:
+        return None
+    try:
+        identity = load_json(identity_path)
+        runtime = identity.get("llvm", {}).get("shared_asan_runtime_identity", {})
+        path = runtime.get("path")
+        digest = runtime.get("sha256")
+        if (not isinstance(path, str) or not Path(path).is_absolute() or
+                not isinstance(digest, str) or not SHA256_RE.fullmatch(digest)):
+            raise ValueError("shared ASan runtime identity lacks an absolute path and SHA-256")
+        return {"path": str(Path(path).resolve()), "sha256": digest}
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError) as error:
+        _finding(findings, "sanitizer-runtime-identity-invalid",
+                 f"configured shared ASan runtime identity is invalid: {error}")
+        return None
+
+
+def _audit_va0_dependencies(stage: Path, profile: str, families: dict,
+                            refs: list[dict], findings: list[dict], *,
+                            sanitizer_runtime_identity: dict | None = None) -> dict:
+    candidates = []
+
+    def candidate_from_path(label, evidence_path, *, kind, device=None):
+        try:
+            current = load_json(evidence_path)
+        except (OSError, json.JSONDecodeError) as error:
+            _finding(findings, "dependency-model-evidence-invalid",
+                     f"{label} model evidence cannot be read: {error}")
+            return
+        if kind == "v5":
+            identities = current.get("identities", {})
+            hashes = {"vulkan": identities.get("vulkan_library_sha256"),
+                      "cpu": identities.get("cpu_library_sha256")}
+        else:
+            fixture = current.get("fixture", {})
+            hashes = {"vulkan": fixture.get("vulkan_library_sha256"),
+                      "cpu": fixture.get("cpu_library_sha256")}
+        candidates.append((label, evidence_path.parent, current, hashes, kind, device))
+
+    if profile == "offline":
+        offline_path = stage / "test/Native/vulkan-product-offline/evidence.json"
+        if offline_path.is_file():
+            candidate_from_path("offline/ReLU", offline_path, kind="offline")
+    else:
+        for name, record in families.get("v4", {}).items():
+            evidence_path = stage / str(record.get("path", ""))
+            if evidence_path.is_file():
+                vendor = (record.get("identity", {}).get("vendor_id")
+                          if isinstance(record.get("identity"), dict) else None)
+                device = "nvidia" if _int_field(vendor) == 0x10DE else "llvmpipe"
+                candidate_from_path(f"product/{device}/{name}", evidence_path,
+                                    kind="product", device=device)
+    for device_rows in families.get("v5", {}).values():
+        for model_name, record in device_rows.items():
+            if model_name not in VA0_MODEL_NAMES:
+                continue
+            evidence_path = stage / str(record.get("path", ""))
+            if not evidence_path.is_file():
+                continue
+            vendor = (record.get("identity", {}).get("vendor_id")
+                      if isinstance(record.get("identity"), dict) else None)
+            current = None
+            try:
+                current = load_json(evidence_path)
+                vendor = current.get("device_info", {}).get("vendor_id", vendor)
+            except (OSError, json.JSONDecodeError) as error:
+                _finding(findings, "dependency-model-evidence-invalid",
+                         f"V5 {model_name} evidence cannot be read: {error}")
+                continue
+            device = "nvidia" if _int_field(vendor) == 0x10DE else "llvmpipe"
+            candidate_from_path(f"v5/{device}/{model_name}", evidence_path,
+                                kind="v5", device=device)
+    if not candidates:
+        _finding(findings, "dependency-evidence-missing",
+                 "profile has no current generated model DSO dependency evidence")
+        return {"status": "missing", "models": {}}
+    models = {}
+    for label, base, evidence, expected_hashes, kind, device in candidates:
+        record = _audit_dependency_bundle(
+            stage, base, evidence, expected_hashes, label, refs, findings,
+            sanitizer=(profile == "sanitize"),
+            sanitizer_runtime_identity=sanitizer_runtime_identity)
+        if kind == "product" and record.get("driver", {}).get("status") != "measured":
+            _finding(findings, "native-driver-phase-evidence-missing",
+                     f"{label} Native run must measure distinct after-dlopen/after-create driver phases")
+        if kind == "v5" and record.get("driver", {}).get("status") != "measured":
+            native_matches = []
+            for native_name, native in families.get("v4", {}).items():
+                identity = native.get("identity", {}) if isinstance(native, dict) else {}
+                native_device = "nvidia" if _int_field(identity.get("vendor_id")) == 0x10DE else "llvmpipe"
+                if native_device == device and native.get("evidence", {}).get("build_dependencies", {}).get("driver", {}).get("status") == "measured":
+                    native_matches.append(native)
+            if len(native_matches) != 1:
+                _finding(findings, "v5-driver-reference-missing",
+                         f"{label} driver maps are not measured by V5 and no unique same-ICD Native proof is available")
+            else:
+                native = native_matches[0]
+                native_path = native.get("path")
+                native_driver = native.get("evidence", {}).get("build_dependencies", {}).get("driver", {})
+                record["driver"]["same_icd_native_reference"] = {
+                    "profile": profile, "device": device,
+                    "test_evidence_path": native_path,
+                    "driver_comparison_file": native_driver.get("file"),
+                    "driver_comparison_sha256": native_driver.get("sha256"),
+                    "v5_maps_claimed": False,
+                }
+        models[label] = record
+    configured_dirs = []
+    cache_path = stage / "CMakeCache.txt"
+    if cache_path.is_file():
+        for line in cache_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith(("LLVM_DIR:", "MLIR_DIR:")) and "=" in line:
+                key, value = line.split("=", 1)
+                if value and value not in {"NOTFOUND", ""}:
+                    configured_dirs.append({"key": key.split(":", 1)[0], "path": value})
+    return {"status": "verified" if models and all(
+                item.get("status") == "verified" for item in models.values()) else "invalid",
+            "models": models,
+            "configured_llvm_directories": configured_dirs,
+            "cpu_static_archive_inputs": "not_measured",
+            "legacy_blockers_are_observations_not_va0_no_go": True}
+
+
+def _audit_va0_baseline(stage: Path, gate: dict, families: dict,
+                        refs: list[dict], findings: list[dict]) -> dict:
+    gate_state = gate.get("state", {})
+    reference = _audit_legacy_reference(stage, gate_state, refs, findings)
+    comparisons = {"relu-product": {}, "add_relu": {}, "conv_relu": {}, "squeezenet_v1_1": {}}
+    shader_comparisons = []
+    profile = gate.get("profile")
+    if reference:
+        reference_fixtures = reference["fixtures"]
+        reference_root = stage / "legacy-reference/fixtures"
+        devices = _devices_for_profile(profile)
+        if profile == "offline":
+            current_root = stage / "test/Native/vulkan-product-offline"
+            if (current_root / "evidence.json").is_file():
+                comparisons["relu-product"]["offline"] = _va0_compare_relu_product(
+                    stage, reference_root / "relu-product-nvidia", current_root,
+                    "offline product-only ReLU", findings, shader_comparisons)
+            else:
+                _finding(findings, "va0-current-product-missing",
+                         "offline profile lacks its current generated ReLU product snapshot")
+        else:
+            product_records = families.get("v4", {})
+            if not isinstance(product_records, dict) or not product_records:
+                _finding(findings, "va0-current-product-missing",
+                         "device profile lacks actual current legacy-product ReLU records")
+            else:
+                for record_name, product in product_records.items():
+                    current_root = stage / str(product.get("path", "")).rsplit("/", 1)[0]
+                    vendor_id = (product.get("identity", {}).get("vendor_id")
+                                 if isinstance(product.get("identity"), dict) else None)
+                    reference_device = "nvidia" if _int_field(vendor_id) == 0x10DE else "llvmpipe"
+                    comparisons["relu-product"][record_name] = _va0_compare_relu_product(
+                        stage, reference_root / f"relu-product-{reference_device}", current_root,
+                        f"current product {record_name}", findings, shader_comparisons)
+        model_paths = {
+            "add_relu": {"nvidia": "test/Vulkan/evidence/v5/nvidia/models/add_relu",
+                         "llvmpipe": "test/Vulkan/evidence/v5/llvmpipe/models/add_relu"},
+            "conv_relu": {"nvidia": "test/Vulkan/evidence/v5/nvidia/models/conv_relu",
+                          "llvmpipe": "test/Vulkan/evidence/v5/llvmpipe/models/conv_relu"},
+            "squeezenet_v1_1": {
+                "nvidia": "test/Vulkan/evidence/v5/squeezenet-nvidia/models/squeezenet_v1_1",
+                "llvmpipe": "test/Vulkan/evidence/v5/squeezenet-llvmpipe/models/squeezenet_v1_1"},
+        }
+        current_records = families.get("v5", {})
+        for model_name, paths in model_paths.items():
+            for device in sorted(devices):
+                reference_key = f"{VA0_MODEL_NAMES[model_name]}-{device}"
+                old_row = reference_fixtures.get(reference_key)
+                old_rel = old_row.get("path") if isinstance(old_row, dict) else None
+                matching = [record for by_model in current_records.values()
+                            for name, record in by_model.items()
+                            if name == model_name and
+                            (f"/{device}/" in str(record.get("path", "/")) or
+                             str(record.get("path", "")).endswith(
+                                 f"{device}/models/{model_name}/evidence.json"))]
+                if not isinstance(old_rel, str) or len(matching) != 1:
+                    _finding(findings, "va0-small-model-reference-missing",
+                             "profile lacks exactly one current and one frozen model record",
+                             model=model_name, device=device, current_records=len(matching))
+                    continue
+                current_rel = matching[0].get("path")
+                current_root = stage / str(current_rel).rsplit("/", 1)[0]
+                comparisons[model_name][device] = _va0_compare_small_model(
+                    stage, stage / old_rel, current_root, model_name,
+                    f"{profile}/{device}/{model_name}", refs, findings,
+                    shader_comparisons)
+    else:
+        for identifier in ("VA0.1", "VA0.2", "VA0.3", "VA0.4"):
+            pass
+    manifest_paths = []
+    if profile == "offline":
+        manifest_paths.append(stage / "test/Native/vulkan-product-offline/vulkan/paired_relu_vulkan.json")
+    else:
+        for product in families.get("v4", {}).values():
+            record_path = product.get("path") if isinstance(product, dict) else None
+            if isinstance(record_path, str):
+                base = stage / record_path.rsplit("/", 1)[0]
+                manifest_paths.append(base / "vulkan/paired_relu_vulkan.json")
+        for models in families.get("v5", {}).values():
+            for model_name, model in models.items():
+                if model_name not in VA0_MODEL_NAMES:
+                    continue
+                record_path = model.get("path")
+                if isinstance(record_path, str):
+                    model_root = stage / record_path.rsplit("/", 1)[0]
+                    vulkan_dir = model_root / "vulkan"
+                    manifest_paths.extend(path for path in vulkan_dir.glob("*.json")
+                                          if not path.name.endswith(".plan.json"))
+    host_contract_verified = bool(manifest_paths)
+    for manifest_path in manifest_paths:
+        try:
+            manifest = load_json(manifest_path)
+            valid = (isinstance(manifest, dict) and
+                     manifest.get("host_implementation") == "generic-plan-runtime" and
+                     type(manifest.get("host_codegen_version")) is int and
+                     manifest.get("host_codegen_version") == 1 and
+                     manifest.get("execution_plan_usage") == "embedded-runtime-required")
+        except (OSError, ValueError, json.JSONDecodeError):
+            valid = False
+        if not valid:
+            host_contract_verified = False
+            _finding(findings, "va0-current-host-contract",
+                     "current legacy-product manifest does not pin generic-plan-runtime codegen v1",
+                     path=str(manifest_path.relative_to(stage)) if manifest_path.is_relative_to(stage) else str(manifest_path))
+    if not host_contract_verified:
+        _finding(findings, "va0-current-host-contract-missing",
+                 "no verified current legacy-product manifest was found for this profile")
+    sanitizer_runtime = (_sanitizer_runtime_identity(stage, gate, findings)
+                         if profile == "sanitize" else None)
+    dependencies = _audit_va0_dependencies(
+        stage, profile, families, refs, findings,
+        sanitizer_runtime_identity=sanitizer_runtime)
+    migration = _va0_migration_coverage(gate)
+    return {"legacy_reference": reference, "comparisons": comparisons,
+            "shader_comparisons": shader_comparisons,
+            "dependencies": dependencies,
+            "current_host_contract_verified": host_contract_verified,
+            "migration_coverage": migration,
+            "host_aot_release_eligible": False,
+            "host_aot_status": "not-implemented-va1-and-later",
+            "scope": "legacy generic-plan-runtime only; no current host AOT/no-LLVM claim"}
 
 
 def audit_stage_evidence(gate: dict) -> dict:
@@ -3565,6 +5436,9 @@ def audit_stage_evidence(gate: dict) -> dict:
         families["v3"] = _audit_v3(stage, devices, refs, findings)
         families["v4"] = _audit_product(stage, devices, refs, findings)
         families["v5"] = _audit_v5(stage, devices, refs, findings)
+    va0_findings = []
+    families["va0"] = _audit_va0_baseline(
+        stage, gate, families, refs, va0_findings)
     compact = {}
     for name, data in families.items():
         if name == "cpu_baseline":
@@ -3618,6 +5492,25 @@ def audit_stage_evidence(gate: dict) -> dict:
                                               "planned_resource_bytes": record.get("planned_resource_bytes")}
                                       for model, record in models.items()}
                              for device, models in data.items()} if isinstance(data, dict) else {}
+        elif name == "va0":
+            reference = data.get("legacy_reference") if isinstance(data, dict) else None
+            compact[name] = {
+                "legacy_reference": ({"status": reference.get("status"),
+                                      "identity": reference.get("identity"),
+                                      "fixtures": {key: value.get("path")
+                                                   for key, value in reference.get("fixtures", {}).items()},
+                                      "snapshot_path": reference.get("snapshot_path")}
+                                     if isinstance(reference, dict) else None),
+                "comparisons": data.get("comparisons", {}) if isinstance(data, dict) else {},
+                "shader_comparisons": data.get("shader_comparisons", []) if isinstance(data, dict) else [],
+                "dependencies": data.get("dependencies", {}) if isinstance(data, dict) else {},
+                "current_host_contract_verified": data.get("current_host_contract_verified", False) if isinstance(data, dict) else False,
+                "migration_coverage": data.get("migration_coverage", {}) if isinstance(data, dict) else {},
+                "findings": va0_findings,
+                "host_aot_release_eligible": False,
+                "host_aot_status": "not-implemented-va1-and-later",
+                "scope": "legacy generic-plan-runtime only; no current host AOT/no-LLVM claim",
+            }
     gate_state = gate.get("state", {})
     for label, key in (("gate-state", None), ("CMakeCache", "cmake_cache"),
                        ("CTest inventory", "inventory"), ("CTest JUnit", "junit"),
@@ -3688,7 +5581,8 @@ def audit_stage_evidence(gate: dict) -> dict:
             "source_fingerprint": gate.get("source_fingerprint"),
             "git_revision": gate.get("git_revision"),
             "completed": gate.get("completed"), "scope_passed": scope_passed,
-            "findings": findings, "families": compact,
+            "findings": findings, "va0_findings": va0_findings,
+            "families": compact,
             "raw_artifacts": refs, "ctest": gate.get("ctest"),
             "source_inputs": gate.get("source_inputs", [])}
 
@@ -3795,6 +5689,133 @@ def _scoped_family_identity(family: str, data: object) -> object:
     return data
 
 
+def _va0_id_row(identifier: str, spec: dict, stage_audits: list[dict]) -> dict:
+    profile_rows = []
+    selected_refs = []
+    all_executed = set()
+    all_missing = set()
+    for stage in stage_audits:
+        profile = stage.get("profile", "unknown")
+        names = set(stage.get("ctest", {}).get("test_names", []))
+        applicable = _applicable_tests(spec["tests"], profile)
+        executed = sorted(applicable & names)
+        missing = sorted(applicable - names)
+        all_executed.update(executed)
+        all_missing.update(missing)
+        va0 = stage.get("families", {}).get("va0", {})
+        reference = va0.get("legacy_reference") if isinstance(va0, dict) else None
+        baseline_valid = (isinstance(reference, dict) and
+                          reference.get("status") == "verified")
+        comparisons = va0.get("comparisons", {}) if isinstance(va0, dict) else {}
+        if identifier == "VA0.1":
+            device_rows = comparisons.get("add_relu", {})
+            device_rows = [*device_rows.values(),
+                           *comparisons.get("conv_relu", {}).values(),
+                           *comparisons.get("squeezenet_v1_1", {}).values()]
+            numeric_ok = all(value is True for value in device_rows)
+            product_rows = comparisons.get("relu-product", {})
+            product_ok = bool(product_rows) and all(value is True for value in product_rows.values())
+            scope_evidence_ok = numeric_ok and product_ok
+        elif identifier == "VA0.2":
+            dependency = va0.get("dependencies") if isinstance(va0, dict) else None
+            scope_evidence_ok = isinstance(dependency, dict) and dependency.get("status") == "verified"
+        elif identifier == "VA0.3":
+            scope_evidence_ok = bool(va0.get("current_host_contract_verified")) if isinstance(va0, dict) else False
+        else:
+            coverage = va0.get("migration_coverage", {}) if isinstance(va0, dict) else {}
+            scope_evidence_ok = (
+                coverage.get("migration_status") == "pending" and
+                coverage.get("legacy_pass_is_migration_pass") is False and
+                not coverage.get("unexecuted_related_tests") and
+                set(OFFLINE_HOST_TESTS).issubset(names) and baseline_valid)
+        raw = stage.get("raw_artifacts", [])
+        def select(predicate):
+            return [{key: item[key] for key in ("path", "sha256", "role") if key in item}
+                    for item in raw if isinstance(item, dict) and predicate(item)]
+        current_cpu = select(lambda item: "vulkan-v1-cpu-baseline" in str(item.get("path", ""))
+                              or " CPU" in str(item.get("role", "")))
+        current_product = select(lambda item: "product" in str(item.get("role", "")).lower()
+                                 or "product-cli" in str(item.get("path", ""))
+                                 or "vulkan-product-offline" in str(item.get("path", "")))
+        old_reference = select(lambda item: str(item.get("role", "")).startswith("legacy-reference "))
+        small_golden = select(lambda item: "golden" in str(item.get("role", "")).lower()
+                              or "golden" in str(item.get("path", "")).lower())
+        if identifier == "VA0.2":
+            current_cpu = select(lambda item: "dependency" in str(item.get("role", "")).lower()
+                                 or "dependency" in str(item.get("path", "")).lower())
+        elif identifier == "VA0.3":
+            current_cpu = select(lambda item: any(token in str(item.get("role", "")).lower()
+                                                  for token in ("manifest", "plan", "header", "product")))
+        elif identifier == "VA0.4":
+            current_cpu = select(lambda item: any(token in str(item.get("role", "")).lower()
+                                                  for token in ("gate-state", "ctest", "no-device", "product"))
+                                 or str(item.get("path", "")).startswith(("gate-", "test/gate-tests.json")))
+        refs_complete = bool(old_reference)
+        if identifier == "VA0.1":
+            refs_complete = refs_complete and bool(current_cpu) and bool(current_product) and bool(small_golden)
+        elif identifier in {"VA0.2", "VA0.3"}:
+            refs_complete = refs_complete and bool(current_cpu)
+        else:
+            refs_complete = refs_complete and bool(current_cpu) and bool(current_product)
+        status = ("passed_for_profile_scope" if baseline_valid and
+                  stage.get("scope_passed") and not stage.get("va0_findings") and
+                  not missing and scope_evidence_ok and refs_complete
+                  else "blocked")
+        row = {"profile": profile, "tests_executed": executed,
+               "tests_missing": missing, "status": status,
+               "gpu_numeric_claim": "not-claimed" if profile == "offline" else spec["gpu_numeric"],
+               "current_cpu_or_audit_refs": current_cpu,
+               "current_legacy_product_refs": current_product,
+               "legacy_reference_refs": old_reference,
+               "small_graph_golden_refs": small_golden,
+               "comparison": comparisons,
+               "host_aot_candidate": False}
+        profile_rows.append(row)
+        selected_refs.extend(current_cpu + current_product + old_reference + small_golden)
+    overall = ("passed_for_profile_scope" if profile_rows and
+               all(row["status"] == "passed_for_profile_scope" for row in profile_rows)
+               else "blocked")
+    unique_refs = {}
+    for item in selected_refs:
+        unique_refs[(item.get("path"), item.get("sha256"), item.get("role"))] = item
+    migration = {}
+    for stage in stage_audits:
+        va0 = stage.get("families", {}).get("va0", {})
+        coverage = va0.get("migration_coverage", {}) if isinstance(va0, dict) else {}
+        if coverage:
+            migration[stage.get("profile", "unknown")] = {
+                "migration_status": "pending",
+                "legacy_pass_is_migration_pass": False,
+                "future_responsibilities": coverage.get("responsibilities", {}),
+                "current_ids": coverage.get("current_ids", {}),
+                "current_test_cases": coverage.get("current_test_cases", {}),
+                "unexecuted_related_tests": coverage.get("unexecuted_related_tests", []),
+            }
+    return {
+        "cpu_positive": {"fixture": spec["cpu_fixture"],
+                         "fresh_cpu_baseline": [
+                             {"stage": stage.get("stage"),
+                              "path": stage.get("families", {}).get("cpu_baseline", {}).get("path"),
+                              "input_sha256": stage.get("families", {}).get("cpu_baseline", {}).get("input_sha256"),
+                              "output_sha256": stage.get("families", {}).get("cpu_baseline", {}).get("output_sha256")}
+                             for stage in stage_audits
+                             if stage.get("families", {}).get("cpu_baseline")]},
+        "related_tests": spec["tests"],
+        "tests_executed": sorted(all_executed),
+        "tests_missing_from_supplied_stages": sorted(set(spec["tests"]) - all_executed),
+        "profiles": profile_rows,
+        "migration_coverage_by_profile": migration,
+        "evidence_family": "va0-legacy-baseline",
+        "evidence_profiles": sorted({row["profile"] for row in profile_rows}),
+        "gpu_numerical_claim": spec["gpu_numeric"],
+        "raw_artifacts": list(unique_refs.values()),
+        "status": overall,
+        "release_status": "not_eligible",
+        "release_eligibility_scope": "VA0 baseline only; host AOT eligibility requires VA1 and later",
+        "host_aot_release_eligible": False,
+    }
+
+
 def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
                    all_refs: list[dict]) -> dict:
     actual_tests = set().union(*(set(stage.get("ctest", {}).get("test_names", []))
@@ -3805,6 +5826,9 @@ def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
     for identifier, spec in ID_CATALOG.items():
         family = spec["evidence_family"]
         related = spec["tests"]
+        if family == "va0":
+            indexed[identifier] = _va0_id_row(identifier, spec, stage_audits)
+            continue
         executed = sorted(set(related) & actual_tests)
         missing_tests = sorted(set(related) - actual_tests)
         applicable_tests = set().union(*(_applicable_tests(related, stage.get("profile", ""))
@@ -3905,13 +5929,58 @@ def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
     return indexed
 
 
+def audit_stage_archive(stage_dir: Path, *, required: bool = False) -> dict:
+    stage = Path(stage_dir).resolve()
+    findings = []
+    receipt_path = stage / "gate-archive-receipt.json"
+    if not receipt_path.is_file():
+        if required:
+            _finding(findings, "archive-receipt-missing", "final matrix requires a verified archive receipt")
+        return {"status": "not_provided", "findings": findings}
+    try:
+        receipt = load_json(receipt_path)
+        if (not isinstance(receipt, dict) or receipt.get("schema_version") != 1 or
+                receipt.get("kind") != "ncnn.vulkan_evidence_archive_receipt"):
+            raise ValueError("invalid evidence archive receipt schema")
+        record = receipt.get("archive", {})
+        name = record.get("file") if isinstance(record, dict) else None
+        if (not isinstance(name, str) or not name or Path(name).name != name or
+                name in {".", ".."}):
+            raise ValueError("archive receipt must identify a stage-adjacent file")
+        archive = stage.parent / name
+        if not archive.is_file() or sha256_file(archive) != record.get("sha256"):
+            raise ValueError("evidence archive bytes are missing or hash-mismatched")
+        from run_gate import verify_archive
+        manifest = stage / "gate-archive-manifest.json"
+        if not manifest.is_file():
+            raise ValueError("frozen archive manifest is missing")
+        verified = verify_archive(archive, manifest_sha256=sha256_file(manifest))
+        if receipt.get("verification") != verified:
+            raise ValueError("archive verification receipt differs from actual tar members")
+        state = load_json(stage / "gate-state.json")
+        if (receipt.get("source_fingerprint") != state.get("source_fingerprint") or
+                receipt.get("profile") != state.get("profile") or
+                receipt.get("gate_completed") is not True or state.get("completed") is not True):
+            raise ValueError("archive receipt does not bind a completed same-source profile")
+        return {"status": "verified", "receipt": {"path": receipt_path.name,
+                "sha256": sha256_file(receipt_path)}, "archive": record,
+                "verification": verified, "findings": []}
+    except (OSError, ValueError, RuntimeError, TypeError, KeyError) as error:
+        _finding(findings, "archive-integrity-invalid", str(error))
+        return {"status": "invalid", "findings": findings}
+
+
 def build_report(stage_dirs: list[Path], *, require_release: bool = False,
-                 verify_fingerprint: bool = True) -> dict:
+                 verify_fingerprint: bool = True, require_archives: bool = False) -> dict:
     gates = []
     for stage_dir in stage_dirs:
         gate = audit_stage_gate(stage_dir, verify_fingerprint=verify_fingerprint)
-        gates.append(audit_stage_evidence(gate))
-    global_findings = []
+        stage = audit_stage_evidence(gate)
+        stage["archive_integrity"] = audit_stage_archive(stage_dir, required=require_archives)
+        gates.append(stage)
+    global_findings = [{"stage": stage.get("stage"), **finding}
+                       for stage in gates for finding in
+                       stage.get("archive_integrity", {}).get("findings", [])]
     seen_profiles = {}
     for stage in gates:
         profile = stage.get("profile")
@@ -3957,7 +6026,9 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
         for ref in stage.get("raw_artifacts", []):
             all_refs.append({"stage": stage.get("stage"), **ref})
     id_index = _make_id_index(gates, release_eligible=release_eligible, all_refs=all_refs)
-    if release_eligible and any(row.get("status") != "passed" for row in id_index.values()):
+    if release_eligible and any(
+            row.get("status") != "passed" for identifier, row in id_index.items()
+            if not identifier.startswith("VA0.")):
         release_eligible = False
         release_blockers.append({"code": "id-index-incomplete",
                                  "message": "one or more V0.1–V6.4 audit rows lacks CPU/test/raw evidence"})
@@ -3965,6 +6036,33 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
             row["release_status"] = "not_eligible"
             if row["status"] == "passed":
                 row["status"] = "blocked"
+    va0_required_profiles = {"release", "sanitize", "offline", "software"}
+    va0_missing_profiles = sorted(va0_required_profiles - supplied_profiles)
+    va0_findings = [{"stage": stage.get("stage"), "profile": stage.get("profile"), **item}
+                    for stage in gates for item in stage.get("va0_findings", [])]
+    va0_ids = {identifier: row for identifier, row in id_index.items()
+               if identifier.startswith("VA0.")}
+    va0_incomplete_ids = sorted(identifier for identifier, row in va0_ids.items()
+                                 if row.get("status") != "passed_for_profile_scope")
+    va0_stage_scope_passed = (
+        bool(supplied_profiles) and not va0_findings and not invalid_stages and
+        not global_findings and not va0_incomplete_ids and all(
+            all(profile_row.get("status") == "passed_for_profile_scope"
+                for profile_row in row.get("profiles", []))
+            for row in va0_ids.values()))
+    va0_baseline_eligible = (
+        va0_stage_scope_passed and not va0_missing_profiles and len(fingerprints) == 1 and
+        all(sum(stage.get("profile") == profile for stage in gates) == 1
+            for profile in va0_required_profiles))
+    va0_blockers = list(va0_findings)
+    if va0_missing_profiles:
+        va0_blockers.append({"code": "va0-required-profiles-missing",
+                             "message": "VA0 baseline eligibility requires four fresh profiles",
+                             "profiles": va0_missing_profiles})
+    if va0_incomplete_ids:
+        va0_blockers.append({"code": "va0-id-index-incomplete",
+                             "message": "VA0.1–VA0.4 lack profile-scoped legacy-reference/test/raw evidence",
+                             "ids": va0_incomplete_ids})
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": REPORT_KIND,
@@ -3973,10 +6071,27 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
         "profiles_required_for_release": sorted(required_profiles),
         "profiles_supplied": sorted(profile for profile in supplied_profiles if profile),
         "release_eligible": release_eligible,
+        "legacy_vulkan_release_eligible": release_eligible,
+        "va0_baseline_eligible": va0_baseline_eligible,
+        "va0_stage_scope_passed": va0_stage_scope_passed,
+        "va0_profiles_required": sorted(va0_required_profiles),
+        "va0_profiles_missing": va0_missing_profiles,
+        "va0_blocking_findings": va0_blockers,
+        "host_aot_release_eligible": False,
+        "baseline_scope": "VA0 legacy baseline/coverage only; host AOT eligibility is pending VA1 and later",
+        "host_aot_blockers": ["VA1 interface/planner not implemented",
+                               "VA2/3 helpers/budget/lifecycle not implemented",
+                               "VA4 fixed-run/sync not implemented",
+                               "VA5 link/clean-publish not implemented",
+                               "VA6 full matrix/faults not implemented",
+                               "VA7 profiles/inventory not implemented"],
         "release_decision": {
             "decision": "release-eligible-opt-in" if release_eligible else "no-go-or-incomplete",
+            "host_aot_release_eligible": False,
+            "scope_id": "legacy-vulkan-functional-gate",
+            "host_aot_evidence_stage": "VA0 (baseline/coverage only)",
             "default_backend": "CPU",
-            "scope": "existing static FP32 support matrix and actually tested physical devices/ICDs/drivers only",
+            "scope": "legacy static FP32 support matrix and actually tested physical devices/ICDs/drivers only",
             "blockers": release_blockers,
             "peak_memory_note": "plan bytes are not peak allocation; unmeasured peak is reported as unmeasured",
         },
@@ -3994,18 +6109,25 @@ def parse_args(argv=None):
     parser.add_argument("--output", required=True, type=Path,
                         help="JSON release-evidence report path")
     parser.add_argument("--require-release", action="store_true",
-                        help="return failure unless the complete four-profile matrix is eligible")
+                        help="return failure unless the complete legacy Vulkan four-profile matrix is eligible")
+    parser.add_argument("--require-va0-baseline", action="store_true",
+                        help="return failure unless the four-profile VA0 reference/index is complete")
+    parser.add_argument("--require-va0-stage", action="store_true",
+                        help="return failure unless each supplied stage passes its VA0 reference scope")
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     try:
-        report = build_report(args.stage, require_release=args.require_release)
+        report = build_report(args.stage, require_release=args.require_release,
+                              require_archives=args.require_va0_baseline)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         report = {"schema_version": SCHEMA_VERSION, "kind": REPORT_KIND,
                   "generated_at": datetime.now(timezone.utc).isoformat(),
-                  "release_eligible": False,
+                  "release_eligible": False, "va0_baseline_eligible": False,
+                  "host_aot_release_eligible": False,
+                  "va0_blocking_findings": [{"code": "audit-failed-closed", "message": str(error)}],
                   "blocking_findings": [{"code": "audit-failed-closed", "message": str(error)}],
                   "id_index": {identifier: {"status": "blocked"} for identifier in ID_CATALOG}}
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -4015,7 +6137,13 @@ def main(argv=None) -> int:
     errors = report.get("blocking_findings", [])
     if errors:
         print(f"blocking findings: {len(errors)}", file=sys.stderr)
-    return 1 if errors or (args.require_release and not report.get("release_eligible")) else 0
+    if args.require_va0_baseline and not report.get("va0_baseline_eligible"):
+        print("four-profile VA0 baseline is incomplete; see va0_blocking_findings", file=sys.stderr)
+    if args.require_va0_stage and not report.get("va0_stage_scope_passed"):
+        print("supplied VA0 stage is incomplete; see va0_blocking_findings", file=sys.stderr)
+    return 1 if (errors or (args.require_release and not report.get("release_eligible")) or
+                 (args.require_va0_baseline and not report.get("va0_baseline_eligible")) or
+                 (args.require_va0_stage and not report.get("va0_stage_scope_passed"))) else 0
 
 
 if __name__ == "__main__":

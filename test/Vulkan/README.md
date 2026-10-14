@@ -45,7 +45,10 @@ model `.so` as evidence for a changed compiler.
 - `VulkanRuntimeTest.*`: all five device-independent plan/package/budget,
   injected instance-creation and status-name cases run whenever the product or
   device tests are enabled, including product-only offline configurations.
-  Every gate profile and the V6.1/V6.2/V6.4 evidence mappings require them.
+  Every gate profile requires them, the ten `VulkanProductTest.*` package/host
+  contract cases and ten `VulkanExecutionPlanTest.*` cases. Required inventories
+  use test identities rather than a total-count threshold; a product-only omission
+  is not a passed gate.
 - `vulkan-v0-add-*`: `gpu_func_add_probe.mlir` supplies the 257-element FP32 Add
   kernel with StorageBuffers, local size `[64,1,1]` and tail bounds protection.
   MLIR `--test-vulkan-runner-pipeline` must produce `gpu.binary`; extraction,
@@ -71,16 +74,30 @@ model `.so` as evidence for a changed compiler.
   and post-failure CPU calls retain separate command, result and raw-stream
   records. Vulkan compilation without `--verify-execution` still validates and
   audits the package, and shader/tool/link/audit/device verification failures
-  preserve successful output. It has no GPU numerical claim.
+  preserve successful output. A second real-header native loader also opens the
+  generated Vulkan DSO under the unavailable ICD, checks explicit create failure,
+  null context, bounded diagnostics (including capacity one), and `destroy(NULL)`.
+  It publishes no GPU output and has no GPU numerical claim.
 - `ncnn-compile-vulkan-product`: real generated-header/DSO lifecycle,
   CPU/Vulkan/golden ReLU comparison, deterministic identities, export/dependency
-  audit and transactional failure paths. The configured ICD is explicit.
+  audit and transactional failure paths. The configured ICD is explicit. Release
+  repeated product artifacts must match byte-for-byte; sanitizer-instrumented DSO
+  comparison may canonicalize only the unique `ncnn-compile-*/vulkan_model_wrapper.bc`
+  path recorded by Clang's sanitizer module metadata. Headers, manifests, plans,
+  and every other DSO byte remain hash-checked; any difference beyond that
+  compiler-generated temporary path blocks the test.
 - `vulkan-v5-{multiop,pooling-softmax,squeezenet}-*`: generated multi-I/O product
   ABI and complete static-graph execution. Every trial compares newly compiled
   CPU AOT and Vulkan products against vendored ncnn and, for small fixtures,
   independent goldens; multiple contexts and destroy/recreate are checked.
   SqueezeNet retains its fixed elementwise, finite/probability-sum and top-k
-  budgets.
+  budgets. When release-package and instrumented SAN toolchains emit different
+  SPIR-V bytes for a checked graph, VA0 preserves both raw hashes and compares the
+  disassembled instructions. Only order/operand permutations of the pure
+  `OpULessThan`, `OpUGreaterThanEqual`, and commutative `OpLogicalAnd` guard
+  expressions are canonicalized; control flow, resource interfaces, other
+  instructions, and actual CPU/Vulkan/golden outputs remain exact/fully checked.
+  Any other shader semantic difference blocks the baseline.
 
 The C ABI stub test is not a substitute for loading a product DSO. Likewise,
 `--verify-execution` is a finite-output lifecycle smoke, not a numerical oracle.
@@ -103,6 +120,18 @@ python3 compiler/test/Vulkan/run_gate.py --profile offline --archive
 python3 compiler/test/Vulkan/run_gate.py --profile software --archive
 ```
 
+To qualify a frozen host-runtime baseline, add
+`--legacy-baseline-stage /path/to/frozen-release-stage` to each profile invocation.
+The snapshot preserves the old gate/source identity and the ReLU, Add→ReLU,
+Conv→ReLU and SqueezeNet product fixtures for both ICDs; old results are labelled
+`legacy-reference`, not counted as fresh current execution. Current products
+remain `generic-plan-runtime` with ABI v1. Each profile validates its own baseline
+scope; after all four fresh stages, use `--require-va0-baseline` on the composite
+checker command to require the complete baseline/coverage matrix. Without a
+reference, ordinary CI retains its existing functional-profile eligibility and
+reports the host-baseline evidence as incomplete. Functional Vulkan eligibility
+never means model-specific host AOT: `host_aot_release_eligible` is false.
+
 The `hardware` profile selects only NVIDIA; `release` selects both ICDs. The
 `sanitize` profile also selects both and requires a matching static PIC
 ASan+UBSan LLVM/MLIR installation, its actual Vulkan runner test tools and lit,
@@ -117,7 +146,16 @@ python3 compiler/test/Vulkan/run_gate.py --profile sanitize --jobs 1 --archive \
 ```
 
 The sanitizer gate audits host executables for shared ASan and absence of core
-LLVM/MLIR DSOs. Inherited sanitizer suppression/cleanup overrides are rejected.
+LLVM/MLIR DSOs. Toolchain identity `ncnn-san-toolchain-identity/v2` binds the full
+compile database, source archive, cache, installed LLVM/MLIR configs and exact
+export/manifest/archive sets. Every C/C++ command is checked for address+undefined,
+no-recover and PIC; assembly is listed separately rather than counted as
+instrumented C/C++. The staged audit revalidates the content-bound inventory and
+all copied archive/input records. Historical v1 identities retain their original
+fixed-inventory rules; v2 does not pad files or inherit a previous build's counts.
+Actual affinity-leak/unsigned-mask OpenMP patches, application records and clean
+LSan/UBSan smoke evidence are hashed and preserved. Inherited sanitizer
+suppression/cleanup overrides are rejected.
 The fixture compiler must not recover after sanitizer reports. A budget
 exception is accepted only for the two named PP OCR v5 fixtures, at the existing
 450-second authorization ceiling, and requires `--budget-evidence FIXTURE=JSON`
@@ -161,7 +199,12 @@ hardware report is not a release decision. The supported model/device scope
 remains bounded even when all gates pass.
 
 `--archive` writes a stage-adjacent evidence tarball on success or failure with a
-file-hash manifest, raw gate records and model evidence. A sanitizer archive also
+file-hash manifest, raw gate records and model evidence. Every generated tarball
+is reopened and its exact regular-file inventory and member bytes are rehashed
+before success is printed. `gate-archive-receipt.json` records the verified archive
+hash outside the archive itself to avoid recursive identity. A composite
+`--require-va0-baseline` audit requires and revalidates all four archive receipts;
+missing, altered, unlisted or duplicate members fail. A sanitizer archive also
 contains the verified toolchain identity, its configuration/build/smoke logs and
 the patch records used for the isolated OpenMP runtime. It excludes unrelated
 full numerical build trees. Logs are preserved before any CTest enumeration can

@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import importlib.util
+import io
 import json
 import struct
 from pathlib import Path
@@ -190,7 +191,7 @@ class GateTests(unittest.TestCase):
         ])
         with self.assertRaisesRegex(RuntimeError, "gate setup failed; preserved stage"):
             run_gate.Gate(args)
-        stages = [path for path in self.root.glob("ncnn-compiler-stage-v6-release-*")
+        stages = [path for path in self.root.glob("ncnn-compiler-stage-va0-release-*")
                   if path.is_dir()]
         self.assertEqual(len(stages), 1)
         state = json.loads((stages[0] / "gate-state.json").read_text())
@@ -298,6 +299,84 @@ class GateTests(unittest.TestCase):
             self.assertIn(relative, bundle.getnames())
         with self.assertRaisesRegex(ValueError, "overwrite"):
             run_gate.archive_stage(stage, archive)
+
+    def test_archive_reopen_rejects_missing_tampered_extra_and_duplicate_members(self):
+        content = b"captured tensor bytes"
+        manifest = {"schema_version": 1, "kind": "ncnn.vulkan_evidence_archive",
+                    "files": {"data.f32": hashlib.sha256(content).hexdigest()}}
+        manifest_bytes = json.dumps(manifest).encode()
+        for case in ("valid", "missing", "tampered", "extra", "duplicate"):
+            with self.subTest(case=case):
+                path = self.root / f"{case}.tar.gz"
+                entries = [("gate-archive-manifest.json", manifest_bytes)]
+                if case != "missing":
+                    entries.append(("data.f32", b"altered" if case == "tampered" else content))
+                if case == "extra":
+                    entries.append(("unlisted.bin", b"extra"))
+                if case == "duplicate":
+                    entries.append(("data.f32", content))
+                with tarfile.open(path, "w:gz") as bundle:
+                    for name, value in entries:
+                        member = tarfile.TarInfo(name)
+                        member.size = len(value)
+                        bundle.addfile(member, io.BytesIO(value))
+                if case == "valid":
+                    result = run_gate.verify_archive(path)
+                    self.assertEqual("verified", result["status"])
+                    self.assertEqual(1, result["file_count"])
+                else:
+                    with self.assertRaises(ValueError):
+                        run_gate.verify_archive(path)
+
+    def test_archive_reopen_reads_unsorted_manifest_in_tar_member_order(self):
+        path = self.root / "ordered-members.tar.gz"
+        payloads = {"z-last.bin": b"last", "a-first.bin": b"first"}
+        manifest = {"schema_version": 1, "kind": "ncnn.vulkan_evidence_archive",
+                    "files": {name: hashlib.sha256(value).hexdigest()
+                              for name, value in payloads.items()}}
+        entries = [("gate-archive-manifest.json", json.dumps(manifest).encode())]
+        entries.extend((name, payloads[name]) for name in sorted(payloads))
+        with tarfile.open(path, "w:gz") as bundle:
+            for name, value in entries:
+                member = tarfile.TarInfo(name)
+                member.size = len(value)
+                bundle.addfile(member, io.BytesIO(value))
+        result = run_gate.verify_archive(path)
+        self.assertEqual("verified", result["status"])
+        self.assertEqual(2, result["file_count"])
+
+    def test_archive_receipt_is_nonrecursive_and_binds_actual_tar_bytes(self):
+        stage = self.root / "receipt-stage"
+        stage.mkdir()
+        (stage / "gate-state.json").write_text(json.dumps({
+            "completed": True, "profile": "offline", "source_fingerprint": "a" * 64}))
+        path = self.root / "receipt.evidence.tar.gz"
+        result = run_gate.archive_stage(stage, path)
+        receipt = json.loads((stage / "gate-archive-receipt.json").read_text())
+        self.assertEqual(result["sha256"], receipt["archive"]["sha256"])
+        self.assertEqual(result["verification"], receipt["verification"])
+        self.assertEqual("a" * 64, receipt["source_fingerprint"])
+        self.assertTrue(receipt["gate_completed"])
+        with tarfile.open(path) as bundle:
+            self.assertNotIn("gate-archive-receipt.json", bundle.getnames())
+        import check_release_evidence
+        checked = check_release_evidence.audit_stage_archive(stage, required=True)
+        self.assertEqual("verified", checked["status"])
+        path.write_bytes(path.read_bytes() + b"tamper")
+        checked = check_release_evidence.audit_stage_archive(stage, required=True)
+        self.assertEqual("invalid", checked["status"])
+        self.assertTrue(checked["findings"])
+
+    def test_archive_missing_receipt_and_invalid_tar_fail_closed(self):
+        import check_release_evidence
+        stage = self.root / "missing-archive-stage"
+        stage.mkdir()
+        result = check_release_evidence.audit_stage_archive(stage, required=True)
+        self.assertEqual("archive-receipt-missing", result["findings"][0]["code"])
+        invalid = self.root / "invalid.tar.gz"
+        invalid.write_bytes(b"not a tar archive")
+        with self.assertRaises(ValueError):
+            run_gate.verify_archive(invalid)
 
     def test_archive_dereferences_only_stage_local_symlinks(self):
         stage = self.root / "stage-links"

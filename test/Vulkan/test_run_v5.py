@@ -1,5 +1,6 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+import struct
 import tempfile
 import unittest
 
@@ -194,6 +195,52 @@ GPU0:
         text = "VK_LAYER_NV_optimus NVIDIA Optimus layer\nGPU0:\n    deviceName = llvmpipe\n"
         with self.assertRaisesRegex(RuntimeError, "enumerated devices"):
             run_v5.parse_vulkan_device_summary(text, "NVIDIA", "/icd/nvidia.json")
+
+
+class V51IndependentGoldenTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix="v51-independent-golden-")
+        cls.fixtures = run_v5.fixture_definitions(
+            Path(cls.temporary.name), "v5.1"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def test_add_relu_golden_covers_normal_negative_boundary_and_multiple_outputs(self):
+        fixture = self.fixtures["add_relu"]
+        self.assertEqual(fixture["oracle"], {"kind": "add_relu"})
+        self.assertEqual(len(fixture["outputs"]), 2)
+        for case in ("normal", "negative", "boundary"):
+            inputs = [
+                run_v5.make_input(case, shape, 19 + index)
+                for index, (_, shape) in enumerate(fixture["inputs"])
+            ]
+            golden = run_v5.independent_golden(fixture, inputs)
+            self.assertEqual(len(golden), len(fixture["outputs"]))
+            self.assertEqual(golden[0], [lhs + rhs for lhs, rhs in zip(*inputs)])
+            self.assertEqual(golden[1], [max(0.0, value) for value in golden[0]])
+            for output, (_, shape) in zip(golden, fixture["outputs"]):
+                self.assertEqual(len(output), run_v5.count(shape))
+
+    def test_conv_relu_golden_matches_raw_bin_weights_biases_and_chw_outputs(self):
+        fixture = self.fixtures["conv_relu"]
+        oracle = fixture["oracle"]
+        self.assertEqual(oracle["kind"], "conv_relu")
+        binary = fixture["bin"].read_bytes()
+        self.assertEqual(struct.unpack_from("<I", binary)[0], 0)
+        raw_parameters = struct.unpack_from("<4f", binary, 4)
+        self.assertEqual(list(raw_parameters[:2]), oracle["weights"])
+        self.assertEqual(list(raw_parameters[2:]), oracle["biases"])
+
+        source = [1.0, -2.0, 0.5, -4.0]
+        observed, activated = run_v5.independent_golden(fixture, [source])
+        self.assertEqual(observed, [1.0, -2.0, 0.5, -4.0, 0.75, -0.75, 0.5, -1.75])
+        self.assertEqual(activated, [1.0, 0.0, 0.5, 0.0, 0.75, 0.0, 0.5, 0.0])
+        self.assertEqual(len(observed), run_v5.count(fixture["outputs"][0][1]))
+        self.assertEqual(len(activated), run_v5.count(fixture["outputs"][1][1]))
 
 
 class V52IndependentGoldenTest(unittest.TestCase):

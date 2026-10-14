@@ -14,10 +14,11 @@
 
 #include <dlfcn.h>
 
-#include <cerrno>
+#include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -45,13 +46,27 @@ constexpr std::size_t kDiagnosticCapacity = 1024;
 #endif
 
 struct Result {
-  std::string status = "failure";
-  std::string phase = "arguments";
-  int cpu_status = -1;
-  int vulkan_create_status = -1;
-  int vulkan_run_status = -1;
-  int vulkan_destroy_status = -1;
-  int vulkan_destroy_null_status = -1;
+  Result()
+    : status("failure"),
+      phase("arguments"),
+      cpu_status(-1),
+      vulkan_create_status(-1),
+      vulkan_run_status(-1),
+      vulkan_destroy_status(-1),
+      vulkan_destroy_null_status(-1),
+      context_null(false),
+      diagnostic_bounded(false),
+      diagnostic() {}
+
+  std::string status;
+  std::string phase;
+  int cpu_status;
+  int vulkan_create_status;
+  int vulkan_run_status;
+  int vulkan_destroy_status;
+  int vulkan_destroy_null_status;
+  bool context_null;
+  bool diagnostic_bounded;
   std::string diagnostic;
 };
 
@@ -64,6 +79,18 @@ struct DynamicLibraryCloser {
 };
 
 using DynamicLibrary = std::unique_ptr<void, DynamicLibraryCloser>;
+
+#ifndef NCNN_PRODUCT_TEST_CPU_ONLY
+auto save_loaded_modules(const std::string& path) -> bool {
+  std::ifstream input("/proc/self/maps", std::ios::binary);
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!input || !output) {
+    return false;
+  }
+  output << input.rdbuf();
+  return static_cast<bool>(output);
+}
+#endif
 
 auto json_escape(std::string_view value) -> std::string {
   std::string escaped;
@@ -118,8 +145,12 @@ auto write_result(const std::string& path, const Result& result) -> bool {
          << result.vulkan_create_status << R"(,"vulkan_run_status":)"
          << result.vulkan_run_status << R"(,"vulkan_destroy_status":)"
          << result.vulkan_destroy_status << R"(,"vulkan_destroy_null_status":)"
-         << result.vulkan_destroy_null_status << R"(,"diagnostic":")"
-         << json_escape(result.diagnostic) << R"("})" << '\n';
+         << result.vulkan_destroy_null_status << R"(,"context_null":)"
+         << (result.context_null ? "true" : "false")
+         << R"(,"diagnostic_bounded":)"
+         << (result.diagnostic_bounded ? "true" : "false")
+         << R"(,"diagnostic":")" << json_escape(result.diagnostic) << R"("})"
+         << '\n';
   if (!output) {
     std::cerr << "failed to write result JSON: " << path << '\n';
     return false;
@@ -218,16 +249,14 @@ int main(int argc, char** argv) {
   Result result;
   const std::string model_name = argv[1];
   const std::string result_path = argv[kResultArgument];
-  errno = 0;
-  char* end = nullptr;
-  const unsigned long long parsed_elements =
-    std::strtoull(argv[kElementsArgument], &end, 10);
-  if (errno != 0 || end == argv[kElementsArgument] || *end != '\0' ||
-      parsed_elements == 0 ||
-      parsed_elements > std::numeric_limits<std::size_t>::max()) {
+  const std::string_view count_text(argv[kElementsArgument]);
+  std::size_t elements = 0;
+  const auto [end, error] = std::from_chars(
+    count_text.data(), count_text.data() + count_text.size(), elements);
+  if (error != std::errc{} || end != count_text.data() + count_text.size() ||
+      elements == 0) {
     return fail(result_path, result, "arguments", "invalid element count");
   }
-  const auto elements = static_cast<std::size_t>(parsed_elements);
 
   std::vector<float> input;
   if (!read_input(argv[kInputArgument], elements, input)) {
@@ -239,6 +268,12 @@ int main(int argc, char** argv) {
   std::vector<float> vulkan_output(elements);
 #endif
 
+#ifndef NCNN_PRODUCT_TEST_CPU_ONLY
+  if (!save_loaded_modules(result_path + ".before-load.maps")) {
+    return fail(
+      result_path, result, "module-evidence", "cannot save loader maps");
+  }
+#endif
   result.phase = "cpu-dlopen";
   DynamicLibrary cpu_library(dlopen(argv[2], RTLD_NOW | RTLD_LOCAL));
   if (!cpu_library) {
@@ -258,6 +293,10 @@ int main(int argc, char** argv) {
                 result,
                 result.phase,
                 error == nullptr ? "dlopen failed" : error);
+  }
+  if (!save_loaded_modules(result_path + ".after-model-load.maps")) {
+    return fail(
+      result_path, result, "module-evidence", "cannot save model maps");
   }
 #endif
 
@@ -294,10 +333,55 @@ int main(int argc, char** argv) {
   ncnn_vk_options options{};
   ncnn_vk_options_init(&options);
   VulkanContext* context = nullptr;
-  char diagnostic[kDiagnosticCapacity]{};
+  std::array<char, kDiagnosticCapacity + 2> diagnostic_storage{};
+  diagnostic_storage.front() = '#';
+  diagnostic_storage.back() = '#';
+  char* diagnostic = diagnostic_storage.data() + 1;
   result.phase = "vulkan-create";
   result.vulkan_create_status =
-    create(&options, &context, diagnostic, sizeof(diagnostic));
+    create(&options, &context, diagnostic, kDiagnosticCapacity);
+  result.context_null = context == nullptr;
+  result.diagnostic_bounded = diagnostic_storage.front() == '#' &&
+                              diagnostic_storage.back() == '#' &&
+                              std::find(diagnostic_storage.begin() + 1,
+                                        diagnostic_storage.end() - 1,
+                                        '\0') != diagnostic_storage.end() - 1;
+  if (!save_loaded_modules(result_path + ".after-create.maps")) {
+    (void)destroy(context);
+    return fail(
+      result_path, result, "module-evidence", "cannot save device maps");
+  }
+  if (!result.diagnostic_bounded) {
+    (void)destroy(context);
+    return fail(
+      result_path, result, "diagnostic", "unbounded create diagnostic");
+  }
+#ifdef NCNN_PRODUCT_TEST_EXPECT_NO_DEVICE
+  result.vulkan_destroy_null_status = destroy(nullptr);
+  if ((result.vulkan_create_status != NCNN_VK_STATUS_API_ERROR &&
+       result.vulkan_create_status != NCNN_VK_STATUS_UNSUPPORTED_DEVICE) ||
+      !result.context_null || diagnostic[0] == '\0' ||
+      result.vulkan_destroy_null_status != NCNN_VK_STATUS_SUCCESS) {
+    (void)destroy(context);
+    return fail(
+      result_path, result, "no-device", "unexpected no-device lifecycle");
+  }
+  std::array<char, 3> tiny_diagnostic{'#', '#', '#'};
+  VulkanContext* retry_context = nullptr;
+  const auto retry_status =
+    create(&options, &retry_context, tiny_diagnostic.data() + 1, 1);
+  if (std::cmp_not_equal(retry_status, result.vulkan_create_status) ||
+      retry_context != nullptr ||
+      tiny_diagnostic != std::array<char, 3>{'#', '\0', '#'}) {
+    (void)destroy(retry_context);
+    return fail(
+      result_path, result, "diagnostic", "one-byte diagnostic overflow");
+  }
+  result.status = "success";
+  result.phase = "expected-no-device";
+  result.diagnostic = diagnostic;
+  return write_result(result_path, result) ? 0 : 1;
+#else
   if (result.vulkan_create_status != NCNN_VK_STATUS_SUCCESS) {
     if (context != nullptr) {
       result.vulkan_destroy_status = destroy(context);
@@ -316,7 +400,7 @@ int main(int argc, char** argv) {
                                  vulkan_output.data(),
                                  vulkan_output.size(),
                                  diagnostic,
-                                 sizeof(diagnostic));
+                                 kDiagnosticCapacity);
   result.vulkan_destroy_status = destroy(context);
   result.vulkan_destroy_null_status = destroy(nullptr);
   if (result.vulkan_run_status != NCNN_VK_STATUS_SUCCESS ||
@@ -336,7 +420,7 @@ int main(int argc, char** argv) {
     return fail(
       result_path, result, "vulkan-output", "failed to write raw FP32 output");
   }
-
+#endif
 #endif
 
   result.status = "success";

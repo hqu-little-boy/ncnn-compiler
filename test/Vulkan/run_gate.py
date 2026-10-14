@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import xml.etree.ElementTree as ET
 
 from gate_budget_evidence import verify_budget_evidence
 from sanitizer_toolchain import audit_and_bundle
@@ -94,6 +95,17 @@ def source_fingerprint(source):
             content = b"deleted"
         digest.update(raw + b"\0" + content + b"\0")
     return digest.hexdigest()
+
+
+def snapshot_worktree(source, stage):
+    status = git_output(source, "status", "--porcelain=v1", "--untracked-files=normal")
+    diff = git_output(source, "diff", "--binary", "HEAD", "--")
+    status_path = stage / "gate-source-status.txt"
+    diff_path = stage / "gate-source-diff.patch"
+    status_path.write_bytes(status)
+    diff_path.write_bytes(diff)
+    return {"status": artifact(stage, status_path),
+            "tracked_diff": artifact(stage, diff_path), "dirty": bool(status)}
 
 
 def cache_values(path):
@@ -343,15 +355,78 @@ def snapshot_budget_evidence(stage, records):
     return snapshots
 
 
+def _verify_archive_contents(destination, *, manifest_sha256=None):
+    """Reopen an evidence tarball and verify its exact file inventory/bytes."""
+    destination = Path(destination)
+    with tarfile.open(destination, "r:gz") as archive:
+        members = {}
+        for member in archive.getmembers():
+            name = member.name
+            parts = Path(name).parts
+            if (not member.isfile() or not name or Path(name).is_absolute() or
+                    ".." in parts or name != Path(name).as_posix() or name in members):
+                raise ValueError(f"unsafe or duplicate evidence archive member: {name}")
+            members[name] = member
+        manifest_name = "gate-archive-manifest.json"
+        if manifest_name not in members:
+            raise ValueError("evidence archive has no hash manifest")
+        stream = archive.extractfile(members[manifest_name])
+        if stream is None:
+            raise ValueError("evidence archive manifest cannot be read")
+        with stream:
+            manifest_bytes = stream.read()
+        actual_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        if manifest_sha256 is not None and actual_manifest_sha256 != manifest_sha256:
+            raise ValueError("evidence archive manifest differs from the frozen stage manifest")
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+        files = manifest.get("files") if isinstance(manifest, dict) else None
+        if (not isinstance(manifest, dict) or manifest.get("schema_version") != 1 or
+                manifest.get("kind") != "ncnn.vulkan_evidence_archive" or
+                not isinstance(files, dict) or not files):
+            raise ValueError("evidence archive manifest is empty or malformed")
+        if set(members) != set(files) | {manifest_name}:
+            raise ValueError("evidence archive member inventory differs from its manifest")
+        total_bytes = 0
+        # The tar members are written in sorted path order. Iterate in that same
+        # order: random backwards seeks in a compressed stream repeatedly
+        # decompress every earlier member and can multiply work by thousands.
+        for name in sorted(files):
+            expected = files[name]
+            if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                raise ValueError(f"evidence archive has an invalid digest for {name}")
+            stream = archive.extractfile(members[name])
+            if stream is None:
+                raise ValueError(f"evidence archive member cannot be read: {name}")
+            digest = hashlib.sha256()
+            size = 0
+            with stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+                    size += len(block)
+            if size != members[name].size or digest.hexdigest() != expected:
+                raise ValueError(f"evidence archive member hash/size differs: {name}")
+            total_bytes += size
+    return {"status": "verified", "manifest_sha256": actual_manifest_sha256,
+            "file_count": len(files), "uncompressed_file_bytes": total_bytes}
+
+
+def verify_archive(destination, *, manifest_sha256=None):
+    try:
+        return _verify_archive_contents(destination, manifest_sha256=manifest_sha256)
+    except (tarfile.TarError, EOFError) as error:
+        raise ValueError(f"evidence archive cannot be read completely: {error}") from error
+
+
 def archive_stage(stage, destination):
     """Bundle raw gate and model evidence, not unrelated numerical build products."""
     destination = Path(destination)
     if destination.exists():
         raise ValueError(f"refusing to overwrite evidence archive {destination}")
     candidates = [path for path in stage.glob("gate-*.json")
-                  if path.name != "gate-archive-manifest.json"]
+                  if path.name not in {"gate-archive-manifest.json", "gate-archive-receipt.json"}]
     candidates += list(stage.glob("gate-*.log"))
     candidates += list(stage.glob("gate-*.xml"))
+    candidates += [stage / "gate-source-status.txt", stage / "gate-source-diff.patch"]
     candidates += [stage / "release-evidence.json", stage / "CMakeCache.txt",
                    stage / "compile_commands.json", stage / "test/gate-tests.json"]
     candidates += [stage / "test/Vulkan/evidence",
@@ -359,7 +434,8 @@ def archive_stage(stage, destination):
                    stage / "test/Native/vulkan-product-offline",
                    stage / "gate-source-inputs",
                    stage / "gate-budget-evidence",
-                   stage / "toolchain-evidence"]
+                   stage / "toolchain-evidence",
+                   stage / "legacy-reference"]
     candidates += list((stage / "test/Vulkan").glob("cpu-*"))
     candidates += list((stage / "test/Native").glob("vulkan-product-cli*"))
     files = {}
@@ -386,7 +462,291 @@ def archive_stage(stage, destination):
         archive.add(manifest, arcname="gate-archive-manifest.json")
         for relative in sorted(files):
             archive.add(stage / relative, arcname=relative, recursive=False)
-    return {"path": str(destination), "sha256": sha256(destination)}
+    verified = verify_archive(destination, manifest_sha256=sha256(manifest))
+    state_path = stage / "gate-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.is_file() else {}
+    receipt = {"schema_version": 1, "kind": "ncnn.vulkan_evidence_archive_receipt",
+               "archive": {"file": destination.name, "sha256": sha256(destination)},
+               "verification": verified, "source_fingerprint": state.get("source_fingerprint"),
+               "profile": state.get("profile"), "gate_completed": state.get("completed"),
+               "verified_at": timestamp()}
+    # Keep the archive hash outside the archive itself to avoid a recursive identity.
+    receipt_path = stage / "gate-archive-receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    print(f"Archive bytes verified: {destination} ({receipt['archive']['sha256']})", flush=True)
+    return {"path": str(destination), "sha256": receipt["archive"]["sha256"],
+            "receipt": str(receipt_path), "verification": verified}
+
+
+LEGACY_REFERENCE_FINGERPRINT = (
+    "6d2f2b2ecacab5a17385ea9acdf67482f321bb85772d513739cd2186edab20d3")
+LEGACY_REFERENCE_REVISION = "310276ec49cccbcb309ddb0f002d98a5dab7fb9d"
+LEGACY_REFERENCE_METADATA = (
+    "gate-state.json", "release-evidence.json", "gate-va0-legacy-source.json",
+    "gate-ctest.xml", "gate-ctest-lasttest.log", "gate-ctest.log",
+    "test/gate-tests.json", "gate-archive-manifest.json")
+LEGACY_REFERENCE_FIXTURES = {
+    "relu-product-nvidia": {
+        "files": ("evidence.json", "model.param", "model.bin", "input.f32",
+                  "cpu-output.f32", "vulkan-output.f32", "scalar-golden.f32",
+                  "loader-result.json", "validation.log", "vulkan-verify.stdout.log",
+                  "vulkan-verify.stderr.log", "vulkan-loader.stdout.log",
+                  "vulkan-loader.stderr.log", "vulkaninfo.stdout.log",
+                  "vulkaninfo.stderr.log"),
+        "trees": ("cpu", "vulkan"),
+        "source": "test/Native/vulkan-product-cli",
+    },
+    "relu-product-llvmpipe": {
+        "files": ("evidence.json", "model.param", "model.bin", "input.f32",
+                  "cpu-output.f32", "vulkan-output.f32", "scalar-golden.f32",
+                  "loader-result.json", "validation.log", "vulkan-verify.stdout.log",
+                  "vulkan-verify.stderr.log", "vulkan-loader.stdout.log",
+                  "vulkan-loader.stderr.log", "vulkaninfo.stdout.log",
+                  "vulkaninfo.stderr.log"),
+        "trees": ("cpu", "vulkan"),
+        "source": "test/Native/vulkan-product-cli-llvmpipe",
+    },
+    "add-relu-nvidia": {
+        "source": "test/Vulkan/evidence/v5/nvidia/models/add_relu",
+        "trees": (".",),
+        "source_inputs": ("test/Vulkan/evidence/v5/nvidia/fixtures/add_relu.param",
+                          "test/Vulkan/evidence/v5/nvidia/fixtures/empty.bin"),
+    },
+    "add-relu-llvmpipe": {
+        "source": "test/Vulkan/evidence/v5/llvmpipe/models/add_relu",
+        "trees": (".",),
+        "source_inputs": ("test/Vulkan/evidence/v5/llvmpipe/fixtures/add_relu.param",
+                          "test/Vulkan/evidence/v5/llvmpipe/fixtures/empty.bin"),
+    },
+    "conv-relu-nvidia": {
+        "source": "test/Vulkan/evidence/v5/nvidia/models/conv_relu",
+        "trees": (".",),
+        "source_inputs": ("test/Vulkan/evidence/v5/nvidia/fixtures/conv_relu.param",
+                          "test/Vulkan/evidence/v5/nvidia/fixtures/conv_weights.bin"),
+    },
+    "conv-relu-llvmpipe": {
+        "source": "test/Vulkan/evidence/v5/llvmpipe/models/conv_relu",
+        "trees": (".",),
+        "source_inputs": ("test/Vulkan/evidence/v5/llvmpipe/fixtures/conv_relu.param",
+                          "test/Vulkan/evidence/v5/llvmpipe/fixtures/conv_weights.bin"),
+    },
+    "squeezenet-nvidia": {
+        "source": "test/Vulkan/evidence/v5/squeezenet-nvidia/models/squeezenet_v1_1",
+        "trees": (".",),
+    },
+    "squeezenet-llvmpipe": {
+        "source": "test/Vulkan/evidence/v5/squeezenet-llvmpipe/models/squeezenet_v1_1",
+        "trees": (".",),
+    },
+}
+LEGACY_REFERENCE_SUITE_FILES = {
+    "add-relu-nvidia": "test/Vulkan/evidence/v5/nvidia",
+    "add-relu-llvmpipe": "test/Vulkan/evidence/v5/llvmpipe",
+    "conv-relu-nvidia": "test/Vulkan/evidence/v5/nvidia",
+    "conv-relu-llvmpipe": "test/Vulkan/evidence/v5/llvmpipe",
+    "squeezenet-nvidia": "test/Vulkan/evidence/v5/squeezenet-nvidia",
+    "squeezenet-llvmpipe": "test/Vulkan/evidence/v5/squeezenet-llvmpipe",
+}
+
+
+def _copy_reference_file(source_stage, output_root, source_relative,
+                         target_relative, source_manifest, copied, label):
+    source = source_stage / source_relative
+    if not source.is_file():
+        raise ValueError(f"legacy reference is missing {source_relative}")
+    expected = source_manifest.get(source_relative)
+    actual = sha256(source)
+    if expected != actual:
+        raise ValueError(f"legacy reference archive manifest mismatch for {source_relative}")
+    target = output_root / target_relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    copied.append({"source": source_relative, "path": str(target.relative_to(output_root.parent)),
+                   "sha256": actual, "role": label})
+
+
+def _check_legacy_reference_source(source_stage):
+    source_stage = Path(source_stage).resolve()
+    try:
+        state = json.loads((source_stage / "gate-state.json").read_text(encoding="utf-8"))
+        source_status = json.loads(
+            (source_stage / "gate-va0-legacy-source.json").read_text(encoding="utf-8"))
+        report = json.loads((source_stage / "release-evidence.json").read_text(encoding="utf-8"))
+        archive_manifest = json.loads(
+            (source_stage / "gate-archive-manifest.json").read_text(encoding="utf-8"))
+        inventory = json.loads((source_stage / "test/gate-tests.json").read_text(encoding="utf-8"))
+        lasttest_text = (source_stage / "gate-ctest-lasttest.log").read_text(encoding="utf-8")
+        junit = ET.parse(source_stage / "gate-ctest.xml").getroot()
+    except (OSError, json.JSONDecodeError, ET.ParseError) as error:
+        raise ValueError(f"cannot read frozen legacy gate evidence: {error}") from error
+    if (state.get("kind") != "ncnn.vulkan_gate" or state.get("profile") != "release" or
+            state.get("completed") is not True or
+            state.get("source_fingerprint") != LEGACY_REFERENCE_FINGERPRINT or
+            state.get("git_revision") != LEGACY_REFERENCE_REVISION):
+        raise ValueError("legacy baseline is not the frozen completed VA0 Release source")
+    steps = state.get("steps")
+    if (not isinstance(steps, list) or
+            [item.get("name") for item in steps if isinstance(item, dict)] !=
+            ["configure", "format_check", "build", "numerical", "tidy", "ctest"] or
+            any(type(item.get("exit_code")) is not int or item["exit_code"] != 0
+                for item in steps if isinstance(item, dict))):
+        raise ValueError("legacy baseline gate did not complete all six steps with zero failures")
+    if (source_status.get("role") != "legacy-reference" or
+            source_status.get("stage_id") != "VA0.1" or
+            source_status.get("git_revision") != LEGACY_REFERENCE_REVISION or
+            source_status.get("source_fingerprint") != LEGACY_REFERENCE_FINGERPRINT or
+            source_status.get("worktree_porcelain") != "" or
+            source_status.get("host_aot_candidate") is not False):
+        raise ValueError("legacy baseline original source identity/status is invalid")
+    if (report.get("kind") != "ncnn.vulkan_release_evidence" or
+            report.get("source_fingerprint") != LEGACY_REFERENCE_FINGERPRINT or
+            report.get("blocking_findings")):
+        raise ValueError("legacy baseline original evidence report is invalid")
+    report_stages = report.get("stages", [])
+    release = [item for item in report_stages if item.get("profile") == "release"]
+    if len(release) != 1 or release[0].get("scope_passed") is not True or release[0].get("findings"):
+        raise ValueError("legacy baseline release report scope did not pass")
+    if (archive_manifest.get("kind") != "ncnn.vulkan_evidence_archive" or
+            archive_manifest.get("schema_version") != 1 or
+            not isinstance(archive_manifest.get("files"), dict)):
+        raise ValueError("legacy baseline archive hash manifest is invalid")
+    tests = inventory.get("tests")
+    cases = list(junit.iter("testcase"))
+    skipped = [case for case in cases if case.find("skipped") is not None]
+    failed = [case for case in cases if case.find("failure") is not None or
+              case.find("error") is not None]
+    inventory_names = {item.get("name") for item in tests if isinstance(item, dict)} \
+        if isinstance(tests, list) else set()
+    junit_names = {case.get("name") for case in cases}
+    lasttest_names = re.findall(r"^\d+/\d+ Testing: (.+)$", lasttest_text, re.MULTILINE)
+    if (not isinstance(tests, list) or len(tests) != 525 or len(cases) != 525 or
+            len(skipped) != 2 or failed or len(inventory_names) != 525 or
+            junit_names != inventory_names or len(lasttest_names) != 525 or
+            set(lasttest_names) != inventory_names or "Test Failed." in lasttest_text or
+            "Test Not Run." in lasttest_text or
+            {case.get("name") for case in skipped} != {
+                "PerformanceModel.PPLCNetDocOriInt8",
+                "PerformanceModel.PPLCNetTextlineOriInt8"}):
+        raise ValueError("legacy baseline JUnit/inventory/LastTest is not the recorded 525/523/2/0 run")
+    for key, expected_path in (("inventory", "test/gate-tests.json"),
+                               ("junit", "gate-ctest.xml"),
+                               ("lasttest", "gate-ctest-lasttest.log")):
+        record = state.get(key)
+        if (not isinstance(record, dict) or record.get("path") != expected_path or
+                record.get("sha256") != sha256(source_stage / expected_path)):
+            raise ValueError(f"legacy baseline gate-state {key} hash reference is invalid")
+    required = set(LEGACY_REFERENCE_METADATA) - {"gate-archive-manifest.json"}
+    for fixture in LEGACY_REFERENCE_FIXTURES.values():
+        fixture_root = fixture["source"]
+        required.add(f"{fixture_root}/evidence.json")
+        required.update(fixture.get("source_inputs", ()))
+        if fixture_root.startswith("test/Vulkan/"):
+            suite_root = LEGACY_REFERENCE_SUITE_FILES.get(next(
+                key for key, value in LEGACY_REFERENCE_FIXTURES.items() if value is fixture))
+            if suite_root:
+                required.add(f"{suite_root}/evidence.json")
+                required.add(f"{suite_root}/vulkaninfo-summary.txt")
+    missing = sorted(path for path in required if path not in archive_manifest["files"])
+    if missing:
+        raise ValueError(f"legacy baseline archive hash manifest omits required files: {missing}")
+    for relative in required:
+        path = source_stage / relative
+        if not path.is_file() or sha256(path) != archive_manifest["files"].get(relative):
+            raise ValueError(f"legacy baseline artifact does not match its hash manifest: {relative}")
+    return source_stage, archive_manifest["files"]
+
+
+def snapshot_legacy_baseline(source_stage, destination_stage):
+    """Snapshot the frozen V6 Release reference into a relocatable stage subtree."""
+    destination_stage = Path(destination_stage).resolve()
+    reference_root = destination_stage / "legacy-reference"
+    if reference_root.exists():
+        raise ValueError(f"refusing to overwrite legacy reference snapshot: {reference_root}")
+    source_stage, source_manifest = _check_legacy_reference_source(source_stage)
+    copied = []
+    manifest_for_copy = dict(source_manifest)
+    manifest_for_copy["gate-archive-manifest.json"] = sha256(
+        source_stage / "gate-archive-manifest.json")
+    for relative in LEGACY_REFERENCE_METADATA:
+        _copy_reference_file(source_stage, reference_root, relative,
+                             Path("source") / relative, manifest_for_copy,
+                             copied, "legacy-reference gate provenance")
+    fixtures = {}
+    for fixture, spec in LEGACY_REFERENCE_FIXTURES.items():
+        source_root = source_stage / spec["source"]
+        if not source_root.is_dir():
+            raise ValueError(f"legacy reference fixture directory is missing: {spec['source']}")
+        target_root = reference_root / "fixtures" / fixture
+        target_root.mkdir(parents=True)
+        files = list(spec.get("files", ()))
+        for name in files:
+            relative = f"{spec['source']}/{name}"
+            target = Path("fixtures") / fixture / name
+            _copy_reference_file(source_stage, reference_root, relative, target,
+                                 source_manifest, copied, f"legacy-reference {fixture}")
+        if spec.get("trees") == (".",):
+            for source_file in sorted(source_root.rglob("*")):
+                if not source_file.is_file():
+                    continue
+                relative = source_file.relative_to(source_stage).as_posix()
+                target = Path("fixtures") / fixture / source_file.relative_to(source_root)
+                _copy_reference_file(source_stage, reference_root, relative, target,
+                                     source_manifest, copied,
+                                     f"legacy-reference {fixture}")
+        else:
+            for tree in spec.get("trees", ()):
+                source_tree = source_root / tree
+                if not source_tree.is_dir():
+                    raise ValueError(f"legacy reference fixture tree is missing: {source_tree}")
+                for source_file in sorted(source_tree.rglob("*")):
+                    if source_file.is_file():
+                        relative = source_file.relative_to(source_stage).as_posix()
+                        target = Path("fixtures") / fixture / tree / source_file.relative_to(source_tree)
+                        _copy_reference_file(source_stage, reference_root, relative, target,
+                                             source_manifest, copied,
+                                             f"legacy-reference {fixture}")
+        for source_relative in spec.get("source_inputs", ()):
+            target = (Path("fixtures") / fixture / "inputs" /
+                      Path(source_relative).name)
+            _copy_reference_file(source_stage, reference_root, source_relative, target,
+                                 source_manifest, copied,
+                                 f"legacy-reference {fixture} source model input")
+        suite_root = LEGACY_REFERENCE_SUITE_FILES.get(fixture)
+        if suite_root:
+            for name in ("evidence.json", "vulkaninfo-summary.txt"):
+                relative = f"{suite_root}/{name}"
+                target = Path("fixtures") / fixture / "device" / name
+                _copy_reference_file(source_stage, reference_root, relative, target,
+                                     source_manifest, copied,
+                                     f"legacy-reference {fixture} device")
+        fixtures[fixture] = {
+            "source": spec["source"],
+            "path": str(target_root.relative_to(destination_stage)),
+            "files": [item["path"] for item in copied
+                      if item["path"].startswith(str(target_root.relative_to(destination_stage)) + "/")],
+        }
+    snapshot = {
+        "schema_version": 1,
+        "kind": "ncnn.vulkan_legacy_reference_snapshot",
+        "role": "legacy-reference",
+        "status": "captured",
+        "identity": {"profile": "release", "source_fingerprint": LEGACY_REFERENCE_FINGERPRINT,
+                     "git_revision": LEGACY_REFERENCE_REVISION,
+                     "host_aot_candidate": False},
+        "source_stage_name": source_stage.name,
+        "source_archive_manifest_sha256": sha256(source_stage / "gate-archive-manifest.json"),
+        "gate_artifacts": [item for item in copied
+                           if item["role"] == "legacy-reference gate provenance"],
+        "fixtures": fixtures,
+        "files": copied,
+    }
+    snapshot_path = reference_root / "snapshot.json"
+    snapshot_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+    return {"status": "captured", "path": str(snapshot_path.relative_to(destination_stage)),
+            "sha256": sha256(snapshot_path), "source_fingerprint": LEGACY_REFERENCE_FINGERPRINT,
+            "git_revision": LEGACY_REFERENCE_REVISION, "fixture_count": 4,
+            "fixture_profile_record_count": len(fixtures), "file_count": len(copied)}
 
 
 class Gate:
@@ -395,7 +755,7 @@ class Gate:
         self.source = args.source_dir.resolve()
         args.build_root.mkdir(parents=True, exist_ok=True)
         self.stage = Path(tempfile.mkdtemp(
-            prefix=f"ncnn-compiler-stage-v6-{args.profile}-", dir=args.build_root))
+            prefix=f"ncnn-compiler-stage-va0-{args.profile}-", dir=args.build_root))
         self.state = {
             "schema_version": 1, "kind": "ncnn.vulkan_gate",
             "profile": args.profile, "source_dir": str(self.source),
@@ -411,6 +771,10 @@ class Gate:
             self.state["source_fingerprint"] = source_fingerprint(self.source)
             self.state["git_revision"] = git_output(
                 self.source, "rev-parse", "HEAD").decode().strip()
+            self.state["worktree"] = snapshot_worktree(self.source, self.stage)
+            self.state["stage_id"] = "VA0"
+            self.state["host_execution_role"] = "legacy-product"
+            self.state["host_aot_candidate"] = False
             self.config = configuration(args, self.stage)
             self.state["configuration"] = self.config
             self.state["sanitizer_budget_evidence"] = snapshot_budget_evidence(
@@ -544,11 +908,19 @@ class Gate:
             self.check_source()
             self.state["completed"] = True
             self.state["finished_at"] = timestamp()
+            if self.args.legacy_baseline_stage:
+                self.state["legacy_reference"] = snapshot_legacy_baseline(
+                    self.args.legacy_baseline_stage, self.stage)
+            else:
+                self.state["legacy_reference"] = {"status": "not-supplied"}
             self.save()
             report = self.stage / "release-evidence.json"
-            subprocess.run([sys.executable, str(Path(__file__).with_name(
+            audit_command = [sys.executable, str(Path(__file__).with_name(
                 "check_release_evidence.py")), "--stage", str(self.stage),
-                            "--output", str(report)], check=True)
+                "--output", str(report)]
+            if self.args.legacy_baseline_stage:
+                audit_command.append("--require-va0-stage")
+            subprocess.run(audit_command, check=True)
             if self.args.archive:
                 archive = self.stage.parent / f"{self.stage.name}.evidence.tar.gz"
                 archive_stage(self.stage, archive)
@@ -589,6 +961,8 @@ def parse_args(argv=None):
     parser.add_argument("--budget-evidence", action="append", default=[],
                         metavar="FIXTURE=JSON",
                         help="prior same-source hard-budget failure evidence")
+    parser.add_argument("--legacy-baseline-stage", type=Path,
+                        help="frozen completed VA0 Release stage used as a separate legacy reference")
     parser.add_argument("--archive", action="store_true")
     args = parser.parse_args(argv)
     if args.jobs <= 0 or args.tidy_jobs <= 0:

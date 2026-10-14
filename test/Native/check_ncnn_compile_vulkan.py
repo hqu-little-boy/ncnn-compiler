@@ -18,11 +18,43 @@ import subprocess
 import sys
 
 
+_VULKAN_TEST_DIR = Path(__file__).resolve().parents[1] / "Vulkan"
+sys.path.insert(0, str(_VULKAN_TEST_DIR))
+try:
+    import model_dependency_evidence as dependency_evidence
+finally:
+    sys.path.remove(str(_VULKAN_TEST_DIR))
+
+
 EXPECTED_FAILURE_LOGS = []
 VALIDATION_ERROR_RE = re.compile(
     r"VUID-[A-Za-z0-9-]+|Validation Error|^\s*(?:ERROR|Error)\b",
     re.IGNORECASE | re.MULTILINE,
 )
+SANITIZER_TEMP_BITCODE_RE = re.compile(
+    rb"/(?:[^/\x00]+/)*ncnn-compile-[A-Za-z0-9_-]+/vulkan_model_wrapper\.bc"
+)
+
+
+def reproducible_artifact_bytes(filename, first, repeat, *, sanitizer):
+    if first == repeat:
+        return first, {"mode": "byte-identical", "normalized_temp_paths": 0}
+    if not sanitizer or filename != "libpaired_relu_vulkan.so":
+        return None, {"mode": "byte-identical", "normalized_temp_paths": 0}
+    first_paths = SANITIZER_TEMP_BITCODE_RE.findall(first)
+    repeat_paths = SANITIZER_TEMP_BITCODE_RE.findall(repeat)
+    if not first_paths or len(first_paths) != len(repeat_paths):
+        return None, {"mode": "byte-identical", "normalized_temp_paths": 0}
+
+    def normalize(data):
+        return SANITIZER_TEMP_BITCODE_RE.sub(
+            b"/ncnn-compile-XXXXXX/vulkan_model_wrapper.bc", data)
+
+    normalized_first, normalized_repeat = normalize(first), normalize(repeat)
+    if normalized_first != normalized_repeat:
+        return None, {"mode": "byte-identical", "normalized_temp_paths": 0}
+    return normalized_first, {"mode": "sanitizer-temp-path-normalized",
+                              "normalized_temp_paths": len(first_paths)}
 
 
 def validation_error_count(text):
@@ -52,6 +84,125 @@ def invoke(command, *, env=None, expect_success=True, cwd=None):
 
 def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def host_link_launcher(args):
+    return dependency_evidence.make_host_cxx_launcher(
+        args.host_cxx, args.work_dir / "link-evidence")
+
+
+def _driver_manifest_library(args, evidence_root, env):
+    if not args.icd:
+        return [], None
+    manifest = Path(args.icd).resolve()
+    if not manifest.is_file():
+        return [], None
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"cannot read selected Vulkan ICD manifest: {error}") from error
+    library = document.get("ICD", {}).get("library_path")
+    if not isinstance(library, str) or not library:
+        return [], None
+    library_path = Path(library)
+    candidates = [library_path] if library_path.is_absolute() else [manifest.parent / library_path]
+    search_path = env.get("LD_LIBRARY_PATH", "")
+    candidates.extend(Path(directory) / library_path.name
+                      for directory in search_path.split(os.pathsep) if directory)
+
+    ldconfig_record = None
+    ldconfig = shutil.which("ldconfig")
+    if not library_path.is_absolute() and ldconfig:
+        command = [ldconfig, "-p"]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        raw = evidence_root / "ldconfig-p.txt"
+        raw.write_text(result.stdout + result.stderr, encoding="utf-8")
+        ldconfig_record = {"file": "link-evidence/ldconfig-p.txt",
+                           "sha256": sha256(raw), "argv": command,
+                           "returncode": result.returncode}
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if "=>" not in line:
+                    continue
+                soname, path = line.split("=>", 1)
+                if soname.strip() == library_path.name:
+                    candidates.append(Path(path.strip()))
+    if not library_path.is_absolute():
+        candidates.extend(Path(directory) / library_path.name for directory in (
+            "/lib", "/usr/lib", "/lib64", "/usr/lib64",
+            f"/lib/{os.uname().machine}-linux-gnu",
+            f"/usr/lib/{os.uname().machine}-linux-gnu"))
+    resolved = next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
+    copy = evidence_root / "driver-manifest.json"
+    shutil.copyfile(manifest, copy)
+    manifest_record = {"file": "link-evidence/driver-manifest.json",
+                       "sha256": sha256(copy)}
+    if ldconfig_record:
+        manifest_record["system_loader_cache"] = ldconfig_record
+    return ([str(resolved)] if resolved else []), manifest_record
+
+
+def collect_build_dependencies(args, cpu_dir, vulkan_dir, loader_record_name, env):
+    link_root = args.work_dir / "link-evidence"
+    cpu_root = args.work_dir / "cpu-dependencies"
+    tools = {"readelf": args.readelf, "ldd": shutil.which("ldd") or "ldd",
+             "ar": shutil.which("ar") or "ar"}
+    sanitizers = ([args.sanitizer_runtime_dir]
+                  if args.sanitizer_runtime_dir else [])
+    llvm_mode = "shared" if args.llvm_shared else "static"
+    vulkan_path = vulkan_dir / "libpaired_relu_vulkan.so"
+    cpu_path = cpu_dir / "libpaired_relu.so"
+    vulkan_evidence = dependency_evidence.collect_model_dependencies(
+        vulkan_path, link_root, tool_paths=tools, sanitizer_dirs=sanitizers,
+        llvm_mode=llvm_mode, runtime_env=env)
+    cpu_evidence = dependency_evidence.collect_elf_dependency_closure(
+        cpu_path, cpu_root,
+        tool_paths={"readelf": args.readelf, "ldd": tools["ldd"]},
+        sanitizer_dirs=sanitizers, llvm_mode=llvm_mode, runtime_env=env)
+    loader_path = args.work_dir / loader_record_name
+    if not loader_path.is_file():
+        raise RuntimeError(f"native loader module-map record is missing: {loader_path}")
+    loader_record = json.loads(loader_path.read_text(encoding="utf-8"))
+    driver_paths, manifest_record = _driver_manifest_library(args, link_root, env)
+    phase_names = {
+        "before-load": "before-model",
+        "after-model-load": "after-dlopen",
+        "after-create": "after-create",
+    }
+    for source_phase, evidence_phase in phase_names.items():
+        entry = loader_record.get("loaded_modules", {}).get(source_phase)
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"native loader omitted {source_phase} module maps")
+        source = Path(str(entry.get("file", "")))
+        if not source.is_absolute():
+            source = args.work_dir / source
+        if not source.is_file() or sha256(source) != entry.get("sha256"):
+            raise RuntimeError(f"native loader {source_phase} module maps changed")
+        dependency_evidence.record_driver_module_snapshot(
+            link_root, evidence_phase,
+            maps_text=source.read_text(encoding="utf-8", errors="replace"),
+            driver_manifest_paths=driver_paths)
+    driver_comparison = dependency_evidence.compare_driver_module_snapshots(link_root)
+    driver_path = link_root / "driver-module-comparison.json"
+    driver = {"file": "link-evidence/driver-module-comparison.json",
+              "sha256": sha256(driver_path),
+              "status": driver_comparison["driver_origin_status"],
+              "comparison_status": driver_comparison["status"]}
+    if manifest_record:
+        driver["manifest"] = manifest_record
+    if driver["status"] != "measured":
+        driver["reason"] = (
+            "selected ICD library was not observed in the native after-create module-map delta"
+            if driver_paths else
+            "no resolvable selected ICD library path; no driver classification"
+        )
+    return {
+        "vulkan": {"file": "link-evidence/model-dependency-evidence.json",
+                    "sha256": sha256(link_root / "model-dependency-evidence.json")},
+        "cpu": {"file": "cpu-dependencies/elf-dependency-closure.json",
+                "sha256": sha256(cpu_root / "elf-dependency-closure.json")},
+        "driver": driver,
+    }, vulkan_evidence, cpu_evidence
 
 
 def assert_no_published_artifacts(path):
@@ -182,7 +333,7 @@ def make_input(elements):
 
 
 def check_cpu_artifact(args, directory):
-    required_files(directory, {"paired_relu.h", "libpaired_relu.so"})
+    required_files(directory, {"paired_relu.h", "paired_relu.json", "libpaired_relu.so"})
     needed = invoke(
         [args.readelf, "--needed-libs", str(directory / "libpaired_relu.so")]
     ).stdout
@@ -232,6 +383,11 @@ def check_vulkan_artifact(args, directory, elements):
         "kind"
     ) != "ncnn.vulkan_model_manifest":
         raise RuntimeError(f"unexpected Vulkan manifest schema: {manifest}")
+    for key, expected in (("host_implementation", "generic-plan-runtime"),
+                          ("host_codegen_version", 1),
+                          ("execution_plan_usage", "embedded-runtime-required")):
+        if manifest.get(key) != expected:
+            raise RuntimeError(f"Vulkan manifest {key} differs from the host contract")
     if manifest.get("plan_hash") != plan.get("plan_hash"):
         raise RuntimeError("Vulkan manifest plan_hash differs from its plan file")
     if manifest.get("plan_sha256") != hashlib.sha256(plan_bytes).hexdigest():
@@ -267,20 +423,24 @@ def sanitizer_diagnostics(output):
     )
 
 
-def run_product_loader(args, cpu_dir, vulkan_dir, model_name, input_data):
-    loader = args.work_dir / "vulkan-product-loader"
-    cpu_output_path = args.work_dir / "cpu-output.f32"
-    vulkan_output_path = args.work_dir / "vulkan-output.f32"
-    input_path = args.work_dir / "input.f32"
-    result_path = args.work_dir / "loader-result.json"
+def run_product_loader(args, cpu_dir, vulkan_dir, model_name, input_data,
+                       *, expect_no_device=False, env=None):
+    prefix = "no-device-" if expect_no_device else ""
+    loader = args.work_dir / f"{prefix}vulkan-product-loader"
+    cpu_output_path = args.work_dir / f"{prefix}cpu-output.f32"
+    vulkan_output_path = args.work_dir / f"{prefix}vulkan-output.f32"
+    input_path = args.work_dir / f"{prefix}input.f32"
+    result_path = args.work_dir / f"{prefix}loader-result.json"
+    env = runtime_env(args) if env is None else env
     elements = len(input_data)
     input_path.write_bytes(struct.pack(f"<{elements}f", *input_data))
 
     compile_command = [
         args.host_cxx,
-        "-std=c++20",
+        "-std=c++23",
         *args.cxx_arg,
         f"-DNCNN_PRODUCT_TEST_MODEL={model_name}",
+        *(["-DNCNN_PRODUCT_TEST_EXPECT_NO_DEVICE=1"] if expect_no_device else []),
         "-I",
         str(cpu_dir),
         "-I",
@@ -292,7 +452,7 @@ def run_product_loader(args, cpu_dir, vulkan_dir, model_name, input_data):
         "-o",
         str(loader),
     ]
-    invoke(compile_command, env=runtime_env(args))
+    compile_result = invoke(compile_command, env=env)
     command = [
         str(loader),
         model_name,
@@ -304,15 +464,17 @@ def run_product_loader(args, cpu_dir, vulkan_dir, model_name, input_data):
         str(vulkan_output_path),
         str(result_path),
     ]
-    child = subprocess.run(
-        command, capture_output=True, text=True, env=runtime_env(args)
-    )
-    (args.work_dir / "vulkan-loader.stdout.log").write_text(
-        child.stdout, encoding="utf-8"
-    )
-    (args.work_dir / "vulkan-loader.stderr.log").write_text(
-        child.stderr, encoding="utf-8"
-    )
+    child = subprocess.run(command, capture_output=True, text=True, env=env)
+    streams = {}
+    for name, text in (
+        ("compile.stdout.log", compile_result.stdout),
+        ("compile.stderr.log", compile_result.stderr),
+        ("stdout.log", child.stdout),
+        ("stderr.log", child.stderr),
+    ):
+        path = args.work_dir / f"{prefix}vulkan-loader.{name}"
+        path.write_text(text, encoding="utf-8")
+        streams[name] = {"file": path.name, "sha256": sha256(path)}
     result = None
     if result_path.is_file():
         try:
@@ -337,6 +499,45 @@ def run_product_loader(args, cpu_dir, vulkan_dir, model_name, input_data):
         )
     if not isinstance(result, dict) or result.get("status") != "success":
         raise RuntimeError(f"product loader reported failure: {result}\n{logs}")
+    if expect_no_device and (
+        result.get("phase") != "expected-no-device"
+        or result.get("vulkan_create_status") not in (2, 5)
+        or result.get("context_null") is not True
+        or result.get("diagnostic_bounded") is not True
+        or result.get("vulkan_destroy_null_status") != 0
+        or not result.get("diagnostic")
+        or vulkan_output_path.exists()
+    ):
+        raise RuntimeError(f"invalid no-device lifecycle result: {result}")
+    modules = {}
+    for phase in ("before-load", "after-model-load", "after-create"):
+        path = Path(str(result_path) + f".{phase}.maps")
+        if not path.is_file():
+            raise RuntimeError(f"loader module evidence is absent: {path}")
+        modules[phase] = {"file": path.name, "sha256": sha256(path)}
+    record = {
+        "compile_argv": [str(item) for item in compile_command],
+        "compile_returncode": compile_result.returncode,
+        "argv": [str(item) for item in command],
+        "returncode": child.returncode,
+        "loader_file": loader.name,
+        "loader_sha256": sha256(loader),
+        "result_file": result_path.name,
+        "result_sha256": sha256(result_path),
+        "streams": streams,
+        "loaded_modules": modules,
+        "icd_environment": {key: env.get(key) for key in (
+            "VK_ICD_FILENAMES", "VK_DRIVER_FILES", "VK_ADD_DRIVER_FILES")},
+        "gpu_numeric": not expect_no_device,
+    }
+    (args.work_dir / f"{prefix}loader-invocation.json").write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if expect_no_device:
+        if cpu_output_path.read_bytes() != struct.pack(
+            f"<{elements}f", *[max(value, 0.0) for value in input_data]
+        ):
+            raise RuntimeError("CPU golden failed in no-device lifecycle loader")
+        return record
 
     outputs = []
     for output_path, label in (
@@ -583,7 +784,7 @@ def run_cpu_loader(args, cpu_dir, input_values, input_path, output_path, env):
     input_path.write_bytes(struct.pack(f"<{count}f", *input_values))
     compile_command = [
         args.host_cxx,
-        "-std=c++20",
+        "-std=c++23",
         *args.cxx_arg,
         "-DNCNN_PRODUCT_TEST_MODEL=paired_relu",
         "-DNCNN_PRODUCT_TEST_CPU_ONLY=1",
@@ -674,6 +875,7 @@ def run_cpu_relu(args, cpu_dir, input_values, input_path, output_path, env):
         "--precision=f32",
         "--threads=1",
         "--vector-width=0",
+        "--emit-manifest",
         "-O0",
         "--verify-execution",
     ]
@@ -763,8 +965,19 @@ def run_offline(args):
         "--backend=vulkan",
         "--precision=f32",
     ]
-    compile_result = invoke(offline_compile_command, env=env)
+    initial_compile_command = [
+        *offline_compile_command,
+        "--vulkan-host-cxx=" + str(host_link_launcher(args)),
+    ]
+    compile_result = invoke(initial_compile_command, env=env)
     manifest = check_vulkan_artifact(args, vulkan_dir, elements)
+    no_device_lifecycle = run_product_loader(
+        args, cpu_dir, vulkan_dir, "paired_relu", input_values,
+        expect_no_device=True, env=env)
+    build_dependencies, vulkan_dependency_evidence, cpu_dependency_evidence = (
+        collect_build_dependencies(
+            args, cpu_dir, vulkan_dir, "no-device-loader-invocation.json", env)
+    )
     shader_hashes, shader_validations = reconstruct_shaders(args, args.work_dir)
     manifest_shader_hashes = {
         int(shader["kernel_id"]): shader["sha256"]
@@ -881,6 +1094,7 @@ def run_offline(args):
     evidence = {
         "schema_version": 1,
         "kind": "ncnn.vulkan_offline_evidence",
+        "build_dependencies": build_dependencies,
         "execution": {
             "mode": "offline-no-device",
             "vk_icd_filenames": str(unavailable_icd),
@@ -896,6 +1110,7 @@ def run_offline(args):
             "bin_sha256": sha256(args.work_dir / "model.bin"),
             "cpu_library_sha256": sha256(cpu_dir / "libpaired_relu.so"),
             "cpu_header_sha256": sha256(cpu_dir / "paired_relu.h"),
+            "cpu_manifest_sha256": sha256(cpu_dir / "paired_relu.json"),
             "vulkan_library_sha256": sha256(vulkan_dir / "libpaired_relu_vulkan.so"),
             "vulkan_header_sha256": sha256(vulkan_dir / "paired_relu_vulkan.h"),
             "vulkan_manifest_sha256": sha256(vulkan_dir / "paired_relu_vulkan.json"),
@@ -923,6 +1138,8 @@ def run_offline(args):
         },
         "public_io": {
             "shape": [elements],
+            "shape_chw": [1, 1, elements],
+            "host_layout": "CHW",
             "element_type": "f32",
             "input": {
                 "file": input_path.name,
@@ -963,6 +1180,7 @@ def run_offline(args):
             ),
         },
         "negative_cases": negatives,
+        "no_device_lifecycle": no_device_lifecycle,
         "shader_validations": shader_validations,
         "commands": {
             "cpu_compile": [
@@ -973,7 +1191,7 @@ def run_offline(args):
             "cpu_compile_stderr": cpu_compile.stderr,
             "cpu_loader": cpu_loader,
             "cpu_recovery_loader": recovery_loader,
-            "offline_vulkan_compile": [str(item) for item in offline_compile_command],
+            "offline_vulkan_compile": [str(item) for item in initial_compile_command],
             "offline_compile_returncode": compile_result.returncode,
             "offline_compile_stdout": compile_result.stdout,
             "offline_compile_stderr": compile_result.stderr,
@@ -1103,6 +1321,7 @@ def main():
         "--precision=f32",
         "--threads=1",
         "--vector-width=0",
+        "--emit-manifest",
         "-O0",
         "--verify-execution",
     ]
@@ -1119,6 +1338,8 @@ def main():
         args.work_dir / "model.param",
         args.work_dir / "model.bin",
     )
+    vulkan_compile_command.append(
+        "--vulkan-host-cxx=" + str(host_link_launcher(args)))
     vulkan_compile_result = subprocess.run(
         vulkan_compile_command,
         capture_output=True,
@@ -1141,6 +1362,10 @@ def main():
     manifest = check_vulkan_artifact(args, vulkan_dir, elements)
     cpu_output, vulkan_output = run_product_loader(
         args, cpu_dir, vulkan_dir, "paired_relu", input_data
+    )
+    build_dependencies, vulkan_dependency_evidence, cpu_dependency_evidence = (
+        collect_build_dependencies(
+            args, cpu_dir, vulkan_dir, "loader-invocation.json", base_env)
     )
     validation_streams = [
         "vulkaninfo.stdout.log",
@@ -1195,6 +1420,8 @@ def main():
         raise RuntimeError("manifest primary shader hash differs from regenerated SPIR-V")
 
     repeat_dir = args.work_dir / "vulkan-repeat"
+    repeat_link_launcher = dependency_evidence.make_host_cxx_launcher(
+        args.host_cxx, args.work_dir / "repeat-link-evidence")
     invoke(
         [
             args.compiler,
@@ -1207,13 +1434,28 @@ def main():
             str(repeat_dir),
             "--backend=vulkan",
             "--precision=f32",
+            "--vulkan-host-cxx=" + str(repeat_link_launcher),
         ],
         env=base_env,
     )
     required_files(vulkan_dir, {entry.name for entry in repeat_dir.iterdir()})
+    vulkan_reproducibility = {}
     for filename in sorted(entry.name for entry in repeat_dir.iterdir()):
-        if (vulkan_dir / filename).read_bytes() != (repeat_dir / filename).read_bytes():
+        first_bytes = (vulkan_dir / filename).read_bytes()
+        repeat_bytes = (repeat_dir / filename).read_bytes()
+        normalized, comparison = reproducible_artifact_bytes(
+            filename, first_bytes, repeat_bytes,
+            sanitizer=bool(args.sanitizer_runtime_dir))
+        if normalized is None:
             raise RuntimeError(f"Vulkan artifact is not reproducible: {filename}")
+        if filename in {"libpaired_relu_vulkan.so", "paired_relu_vulkan.json",
+                        "paired_relu_vulkan.plan.json", "paired_relu_vulkan.h"}:
+            vulkan_reproducibility[filename] = {
+                **comparison,
+                "first_sha256": hashlib.sha256(first_bytes).hexdigest(),
+                "repeat_sha256": hashlib.sha256(repeat_bytes).hexdigest(),
+                "canonical_sha256": hashlib.sha256(normalized).hexdigest(),
+            }
 
     invoke(
         [
@@ -1595,6 +1837,8 @@ def main():
     product_evidence = {
         "schema_version": 1,
         "kind": "ncnn.vulkan_product_evidence",
+        "build_dependencies": build_dependencies,
+        "vulkan_reproducibility": vulkan_reproducibility,
         "execution": {
             "mode": "device-execution",
             "icd_manifest": args.icd,
@@ -1613,6 +1857,7 @@ def main():
             "bin_sha256": sha256(args.work_dir / "model.bin"),
             "cpu_library_sha256": sha256(cpu_dir / "libpaired_relu.so"),
             "cpu_header_sha256": sha256(cpu_dir / "paired_relu.h"),
+            "cpu_manifest_sha256": sha256(cpu_dir / "paired_relu.json"),
             "vulkan_library_sha256": sha256(vulkan_dir / "libpaired_relu_vulkan.so"),
             "vulkan_header_sha256": sha256(vulkan_dir / "paired_relu_vulkan.h"),
             "vulkan_manifest_sha256": sha256(vulkan_dir / "paired_relu_vulkan.json"),
@@ -1640,6 +1885,8 @@ def main():
         },
         "public_io": {
             "shape": [elements],
+            "shape_chw": [1, 1, elements],
+            "host_layout": "CHW",
             "element_type": "f32",
             "input": {
                 "file": "input.f32",

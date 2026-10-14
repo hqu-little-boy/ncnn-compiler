@@ -15,6 +15,7 @@ import unittest
 import xml.etree.ElementTree as ET
 
 import check_release_evidence as audit
+from test_va0_evidence import no_device_record
 
 
 class GateEnvelopeTests(unittest.TestCase):
@@ -381,7 +382,13 @@ class GateEnvelopeTests(unittest.TestCase):
             if versioned:
                 record["version"] = "synthetic --version"
             built_tool_records.append(record)
+        status_path = self.write("gate-source-status.txt", b"")
+        diff_path = self.write("gate-source-diff.patch", b"")
         state = {
+            "stage_id": "VA0", "host_execution_role": "legacy-product", "host_aot_candidate": False,
+            "worktree": {"dirty": False,
+                         "status": {"path": status_path.name, "sha256": audit.sha256_file(status_path)},
+                         "tracked_diff": {"path": diff_path.name, "sha256": audit.sha256_file(diff_path)}},
             "schema_version": 1, "kind": audit.GATE_KIND, "profile": profile,
             "source_dir": source_dir, "source_fingerprint_algorithm": "sha256-git-files-v1",
             "source_fingerprint": "a" * 64, "git_revision": "deadbeef",
@@ -905,7 +912,7 @@ class GateEnvelopeTests(unittest.TestCase):
         source = (Path(audit.__file__).resolve().parents[1] /
                   "Native/vulkan_product_loader.cpp").resolve()
         compile_argv = [
-            "/usr/bin/c++", "-std=c++20", *sanitizer_args,
+            "/usr/bin/c++", "-std=c++23", *sanitizer_args,
             "-DNCNN_PRODUCT_TEST_MODEL=paired_relu",
             "-DNCNN_PRODUCT_TEST_CPU_ONLY=1", "-I", str(cpu_dir),
             str(source), "-ldl", "-o", str(loader),
@@ -1042,12 +1049,16 @@ class GateEnvelopeTests(unittest.TestCase):
         artifacts = {
             "cpu_library_sha256": "cpu/libpaired_relu.so",
             "cpu_header_sha256": "cpu/paired_relu.h",
+            "cpu_manifest_sha256": "cpu/paired_relu.json",
             "cpu_recovery_library_sha256": "cpu-after-negative-cases/libpaired_relu.so",
             "vulkan_library_sha256": "vulkan/libpaired_relu_vulkan.so",
             "vulkan_header_sha256": "vulkan/paired_relu_vulkan.h",
             "vulkan_manifest_sha256": "vulkan/paired_relu_vulkan.json",
             "vulkan_plan_sha256": "vulkan/paired_relu_vulkan.plan.json",
         }
+        write("vulkan/paired_relu_vulkan.json", json.dumps({
+            "host_implementation": "generic-plan-runtime", "host_codegen_version": 1,
+            "execution_plan_usage": "embedded-runtime-required"}).encode())
         for field, name in artifacts.items():
             if not (base / name).exists():
                 write(name, b"synthetic product artifact")
@@ -1104,7 +1115,8 @@ class GateEnvelopeTests(unittest.TestCase):
                        "cpu_gpu_numerical_comparison": "not_claimed"},
             "fixture": fixture,
             "public_io": {
-                "element_type": "f32", "shape": [257], "input": input_record,
+                "element_type": "f32", "shape": [257], "shape_chw": [1, 1, 257],
+                "host_layout": "CHW", "input": input_record,
                 "cpu_output": output_record, "scalar_golden": golden_record,
                 "cpu_recovery_output_sha256": recovery_record["sha256"],
                 "tolerance": {"absolute": 1e-6, "relative": 1e-6},
@@ -1118,6 +1130,7 @@ class GateEnvelopeTests(unittest.TestCase):
                                     "sha256": shader_digest,
                                     "size_bytes": len(shader_bytes)}],
             "negative_cases": negatives,
+            "no_device_lifecycle": no_device_record(self.stage),
             "commands": {"offline_compile_returncode": 0, "cpu_loader": initial,
                          "cpu_recovery_loader": recovery},
         }
@@ -1154,13 +1167,20 @@ class GateEnvelopeTests(unittest.TestCase):
                              "sha256": digest, "size_bytes": len(payload)}
                             for kernel in kernels]
         manifest_path.write_text(json.dumps({"plan_sha256": plan_hash,
+                                             "host_implementation": "generic-plan-runtime",
+                                             "host_codegen_version": 1,
+                                             "execution_plan_usage": "embedded-runtime-required",
                                              "shaders": manifest_shaders}))
         cpu_library = model_root / "cpu" / f"lib{model}.so"
         vk_library = model_root / "vulkan" / f"lib{model}_vulkan.so"
         cpu_library.write_bytes(b"cpu library")
         vk_library.write_bytes(b"vulkan library")
-        (model_root / "cpu" / f"{model}.json").write_text("{}")
-        (model_root / "vulkan" / f"{model}_vulkan.h").write_text("header")
+        cpu_manifest = model_root / "cpu" / f"{model}.json"
+        cpu_header = model_root / "cpu" / f"{model}.h"
+        vk_header = model_root / "vulkan" / f"{model}_vulkan.h"
+        cpu_manifest.write_text("{}")
+        cpu_header.write_text("CPU header")
+        vk_header.write_text("header")
         validations = []
         identity_entries = []
         for index, kernel in enumerate(kernels):
@@ -1182,6 +1202,10 @@ class GateEnvelopeTests(unittest.TestCase):
             identity_entries.append({**manifest_shaders[index],
                                      "binary_symbol": f"{model}_kernel_{kernel['id']}"})
         identity = {"cpu_library_sha256": audit.sha256_file(cpu_library),
+                    "cpu_header_sha256": audit.sha256_file(cpu_header),
+                    "cpu_manifest_sha256": audit.sha256_file(cpu_manifest),
+                    "vulkan_header_sha256": audit.sha256_file(vk_header),
+                    "vulkan_manifest_sha256": audit.sha256_file(manifest_path),
                     "vulkan_library_sha256": audit.sha256_file(vk_library),
                     "plan_sha256": plan_hash,
                     "shader_entries": identity_entries,
