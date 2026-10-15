@@ -38,6 +38,82 @@ The intermediate `weights-path` JSON has kind `ncnn.vulkan_weight_payloads`, sch
 
 The product manifest's `shaders` array records `kernel_id`, `binary_symbol`, `entry_point`, `sha256`, and `size_bytes` in plan order. Its `weights` array records `resource_id`, physical-payload `sha256`, and `size_bytes` in resource order. `shader_sha256s`/`weight_sha256s` cover all payloads; the legacy scalar shader fields describe the first shader. The plan records logical weight identities, which need not equal physical-payload hashes after a layout transform. All payloads, model bytes, host/device targets and plan identity participate in the build identity.
 
+## Compiler-only host program
+
+Product packaging derives a typed `VulkanHostProgram` from the verified plan,
+exact packaged shader words, and verified weight payloads. The separate
+`NCNNVulkanHostProgramSupport` target is linked by the compiler and its tests,
+not by `NCNNVulkanRuntime` or the model DSO. Its SPIR-V deserialization/MLIR
+requirements are compiler dependencies, not additional model deployment inputs.
+The execution-plan JSON schema and public ABI remain version 1.
+
+The program declares tensor/device/staging resources, ordered public ports,
+shader interfaces and pipelines, descriptor bindings, push constants, checked
+one-dimensional dispatch groups, initialization/destruction ownership, and
+ordered typed operations. Device buffers remain independent; read-only SSA views
+use their existing resource ID, while repeated public outputs have separate
+resources and readbacks. Weight staging is create-upload scoped; public I/O
+staging and device storage are context scoped. The program contains no Vulkan
+handles, memory-type/queue-family indices, driver identity, actual allocation
+requirements, or pipeline cache. Those decisions and actual device-limit checks
+remain late-bound. A dispatch count greater than a Vulkan minimum guaranteed
+limit is not rejected merely because of that minimum.
+
+Shader reflection consumes the actual SPIR-V words, checks their typed compute
+entry/local size, FP32 storage-buffer representation and declared range, exact
+descriptor coverage/access, and push-constant layout/ranges. The supported binary
+environment is SPIR-V 1.0, Logical GLSL450, Shader capability and the storage-buffer
+storage-class extension. Only the selected entry-point function is accepted;
+calls, additional functions, Switch and unsupported pointer/control-flow forms
+fail closed. Access analysis visits reachable CFG blocks, selecting literal
+constant true/false branches and conservatively following both successors for
+other conditions. Actual MLIR SSA storage-store types are checked, without
+assuming raw instruction and MLIR walk order coincide. The type proof covers
+both StorageBuffer and legacy Uniform/BufferBlock storage-buffer encodings.
+This interface proof is
+not a proof of arbitrary shader mathematics or every dynamic indexing predicate.
+The existing offline `spirv-val`, residual-IR and numerical gates remain required;
+diagnostic disassembly alone is not the typed interface proof.
+
+Static operations preserve the current conservative recorder semantics: weight
+and input host→transfer→compute transitions; before each kernel, compute
+write→read/write barriers for its read/write resources that have any earlier
+shader write; compute→transfer→host output readback. The source compute stage
+also orders earlier reads before a rewrite of a previously produced resource.
+Barrier offsets are zero and ranges cover the logical buffer, equivalent to the
+runtime's whole-buffer range; non-coherent flush/invalidate still use the whole
+actual mapped allocation. Fence completion, every output invalidate and mapping
+check precede any caller output publication. This is a compiler description, not
+a new inference execution path.
+
+The manifest's `host_program` object is a compiler-only diagnostic with
+`host_program_usage = "compiler-only-diagnostic"` and a matching
+`host_program_identity`. Its internal domains are
+`ncnn-vulkan-host-program/v1`, `ncnn-vulkan-host-codegen/v1`,
+`ncnn-vulkan-device-helper-contract/v1`, and `ncnn-vulkan-host-sync/v1`.
+The helper-contract domain records the compiler representation's requirement;
+it does not imply a separate device-helper deployment implementation.
+
+Program identity is SHA-256 over the length-prefixed canonical JSON encoding:
+`u64le(domain-byte-count)`, UTF-8
+`ncnn-vulkan-host-program-canonical/v1`, `u64le(json-byte-count)`, then compact
+UTF-8 JSON with sorted object keys and ordered arrays. The identity field itself
+and both source-plan hashes are excluded. Version domains, ABI/host/device target,
+fixed codegen options, resource/I/O/lifecycle/operation declarations, reflected
+shader interfaces and exact little-endian shader-byte hashes, and logical and
+physical weight identities are included. Invalid UTF-8 and invalid enum values
+are rejected before JSON construction. Generated source/object/link hashes are
+separate evidence, not recursive program-identity inputs.
+
+Both package factories bind program identity and a canonical semantic-plan hash
+in length-prefixed build-identity inputs: `ncnn-vulkan-static-plan-v3` for the
+general path and `ncnn-vulkan-product-v2` for the narrow ReLU factory. JSON
+whitespace/key order and incoming plan build/hash fields do not substitute for
+the checked host-program semantics. Changes to build identity and manifest/plan
+bytes are expected; shader bytes and the public header are not changed by host
+planning. The program diagnostic is not read by the deployed wrapper, which
+still parses its embedded execution plan and calls the generic runtime.
+
 ## Product static-graph support matrix (V5.4)
 
 This matrix is for the product `--ncnn-vulkan-graph-pipeline` and explicit `ncnn-compile --backend=vulkan` path. It does **not** widen either historical single-compute-op contract: `--ncnn-vulkan-semantic-pipeline` plus `verify-vulkan-supported-model` is the V1 copy/identity/ReLU/same-shape-Add Linalg legality path, while `--ncnn-vulkan-v2-pipeline` / `lower-ncnn-vulkan-model` lowers one V2 compute op per fixture (including its separately bounded Conv2D path). Their fixtures under `test/Pipelines/` and `test/Conversion/NCNNToVulkan/lower-*.mlir` are compatibility tests, not evidence that a whole graph uses those limits or that those commands support V5 product graphs. Product graph support is independently enforced against the TOSA-level op schedule below; no model-name dispatch or CPU fallback is used.

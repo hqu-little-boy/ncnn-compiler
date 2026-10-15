@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ncnn-mlir/Support/VulkanExecutionPlan.hpp"
+#include "ncnn-mlir/Support/VulkanHostProgram.hpp"
 #include "ncnn-mlir/Support/VulkanModelPayload.hpp"
 
 namespace ncnn_compile {
@@ -26,6 +27,7 @@ namespace ncnn_compile {
 
 struct VulkanModelPackage final {
   ncnn_mlir::vulkan::VulkanExecutionPlan plan;
+  ncnn_mlir::vulkan::VulkanHostProgram host_program;
   std::vector<std::uint32_t> shader_words;
   std::vector<ncnn_mlir::vulkan::VulkanModelShader> shaders;
   std::vector<ncnn_mlir::vulkan::VulkanModelWeight> weights;

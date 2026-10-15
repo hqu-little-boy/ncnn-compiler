@@ -145,6 +145,13 @@ class GateTests(unittest.TestCase):
         self.assertEqual(Path(python_identity["path"]).resolve(),
                          Path(sys.executable).resolve())
 
+    def test_stage_id_defaults_to_va0_and_va1_is_opt_in(self):
+        default = run_gate.parse_args(["--profile", "release"])
+        candidate = run_gate.parse_args([
+            "--profile", "release", "--stage-id", "VA1"])
+        self.assertEqual("VA0", default.stage_id)
+        self.assertEqual("VA1", candidate.stage_id)
+
     def test_profiles_request_exact_devices(self):
         for profile, devices in (("release", "nvidia;llvmpipe"),
                                  ("software", "llvmpipe"),
@@ -185,20 +192,26 @@ class GateTests(unittest.TestCase):
     def test_constructor_failure_preserves_gate_state_and_archive(self):
         source = self.root / "not-a-git-checkout"
         source.mkdir()
-        args = run_gate.parse_args([
-            "--profile", "release", "--source-dir", str(source),
-            "--build-root", str(self.root), "--archive",
-        ])
-        with self.assertRaisesRegex(RuntimeError, "gate setup failed; preserved stage"):
-            run_gate.Gate(args)
-        stages = [path for path in self.root.glob("ncnn-compiler-stage-va0-release-*")
-                  if path.is_dir()]
-        self.assertEqual(len(stages), 1)
-        state = json.loads((stages[0] / "gate-state.json").read_text())
-        self.assertFalse(state["completed"])
-        self.assertIn("gate setup failed", state["failure"])
-        archive = stages[0].with_suffix(".evidence.tar.gz")
-        self.assertTrue(archive.is_file())
+        for stage_id in ("VA0", "VA1"):
+            args = run_gate.parse_args([
+                "--profile", "release", "--stage-id", stage_id,
+                "--source-dir", str(source), "--build-root", str(self.root),
+                "--archive",
+            ])
+            with self.assertRaisesRegex(RuntimeError, "gate setup failed; preserved stage"):
+                run_gate.Gate(args)
+        for stage_id in ("va0", "va1"):
+            stages = [path for path in self.root.glob(
+                f"ncnn-compiler-stage-{stage_id}-release-*") if path.is_dir()]
+            self.assertEqual(len(stages), 1)
+            state = json.loads((stages[0] / "gate-state.json").read_text())
+            self.assertFalse(state["completed"])
+            self.assertEqual(stage_id.upper(), state["stage_id"])
+            self.assertEqual("legacy-product", state["host_execution_role"])
+            self.assertFalse(state["host_aot_candidate"])
+            self.assertIn("gate setup failed", state["failure"])
+            archive = stages[0].with_suffix(".evidence.tar.gz")
+            self.assertTrue(archive.is_file())
 
     def test_sanitize_requires_real_prerequisites(self):
         args = run_gate.parse_args(["--profile", "sanitize"])
@@ -366,6 +379,54 @@ class GateTests(unittest.TestCase):
         checked = check_release_evidence.audit_stage_archive(stage, required=True)
         self.assertEqual("invalid", checked["status"])
         self.assertTrue(checked["findings"])
+
+    def test_va1_archive_must_include_audited_native_evidence_bytes(self):
+        import check_release_evidence
+
+        stage = self.root / "archive-inventory-stage"
+        native = stage / "test/Native/vulkan-product-offline/host-program-evidence.json"
+        native.parent.mkdir(parents=True)
+        native.write_bytes(b"audited native host-program evidence")
+        unrelated = stage / "unrelated.txt"
+        unrelated.write_bytes(b"self-described archive payload")
+        state = {"completed": True, "profile": "release",
+                 "source_fingerprint": "a" * 64}
+        state_path = stage / "gate-state.json"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        archived_files = {
+            unrelated.relative_to(stage).as_posix(): run_gate.sha256(unrelated),
+            state_path.relative_to(stage).as_posix(): run_gate.sha256(state_path)}
+        archive_manifest = {"schema_version": 1,
+                            "kind": "ncnn.vulkan_evidence_archive",
+                            "files": archived_files}
+        manifest_bytes = json.dumps(archive_manifest, indent=2).encode() + bytes([10])
+        manifest_path = stage / "gate-archive-manifest.json"
+        manifest_path.write_bytes(manifest_bytes)
+        archive_path = self.root / f"{stage.name}.evidence.tar.gz"
+        with tarfile.open(archive_path, "w:gz") as bundle:
+            for name, payload in (("gate-archive-manifest.json", manifest_bytes),
+                                  ("gate-state.json", state_path.read_bytes()),
+                                  ("unrelated.txt", unrelated.read_bytes())):
+                member = tarfile.TarInfo(name)
+                member.size = len(payload)
+                bundle.addfile(member, io.BytesIO(payload))
+        verification = run_gate.verify_archive(
+            archive_path, manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest())
+        receipt = {"schema_version": 1,
+                   "kind": "ncnn.vulkan_evidence_archive_receipt",
+                   "archive": {"file": archive_path.name,
+                               "sha256": run_gate.sha256(archive_path)},
+                   "verification": verification,
+                   "source_fingerprint": state["source_fingerprint"],
+                   "profile": state["profile"], "gate_completed": True}
+        (stage / "gate-archive-receipt.json").write_text(
+            json.dumps(receipt), encoding="utf-8")
+
+        result = check_release_evidence.audit_stage_archive(stage, required=True)
+        self.assertEqual("invalid", result["status"])
+        self.assertIn("archive omits or changes audited stage artifact",
+                      result["findings"][0]["message"])
 
     def test_archive_missing_receipt_and_invalid_tar_fail_closed(self):
         import check_release_evidence

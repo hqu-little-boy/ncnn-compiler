@@ -1,4 +1,5 @@
 #include "VulkanProduct.hpp"
+#include "vulkan_shader_fixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -6,13 +7,17 @@
 #include <format>
 #include <optional>
 #include <span>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/SHA256.h"
 #include "ncnn-mlir/Support/VulkanExecutionPlan.hpp"
 
@@ -85,13 +90,122 @@ VulkanExecutionPlan makeReluPlan() {
   };
 }
 
-std::string makeSpirvBytes() {
-  const std::string bytes(
-    "\x03\x02\x23\x07\x00\x00\x01\x00"
-    "\x00\x00\x00\x00\x01\x00\x00\x00"
-    "\x00\x00\x00\x00",
-    20);
+VulkanModelShader makeTestShader(const VulkanExecutionPlan& plan,
+                                 const KernelExecution& kernel,
+                                 std::string binary_symbol) {
+  auto shader = ncnn_mlir::vulkan::test::makeTestVulkanShader(
+    plan, kernel, std::move(binary_symbol));
+  if (!shader) {
+    throw std::runtime_error("cannot build Vulkan shader test fixture: " +
+                             shader.error());
+  }
+  return std::move(*shader);
+}
+
+bool changeFixtureFloatLiteral(VulkanModelShader& shader) {
+  std::uint32_t float_type = 0;
+  for (std::size_t cursor = 5; cursor < shader.words.size();) {
+    const std::uint32_t first = shader.words[cursor];
+    const std::size_t count = first >> 16;
+    const std::uint32_t opcode = first & 0xffffU;
+    if (count == 0 || count > shader.words.size() - cursor) {
+      return false;
+    }
+    if (opcode == 22 && count == 3) {
+      float_type = shader.words[cursor + 1];
+    } else if (opcode == 43 && count == 4 && float_type != 0 &&
+               shader.words[cursor + 1] == float_type) {
+      shader.words[cursor + 3] = UINT32_C(0x3f800000);
+      return true;
+    }
+    cursor += count;
+  }
+  return false;
+}
+
+std::string encodeSpirvWords(std::span<const std::uint32_t> words) {
+  std::string bytes;
+  bytes.reserve(words.size() * sizeof(std::uint32_t));
+  for (std::uint32_t word : words) {
+    bytes.push_back(static_cast<char>(word & 0xff));
+    bytes.push_back(static_cast<char>((word >> 8) & 0xff));
+    bytes.push_back(static_cast<char>((word >> 16) & 0xff));
+    bytes.push_back(static_cast<char>((word >> 24) & 0xff));
+  }
   return bytes;
+}
+
+std::string makeSpirvBytes(const VulkanExecutionPlan& plan) {
+  const VulkanModelShader shader =
+    makeTestShader(plan, plan.kernels.front(), plan.model + "_vulkan");
+  return encodeSpirvWords(shader.words);
+}
+
+std::string sha256Hex(std::string_view bytes) {
+  llvm::SHA256 hash;
+  hash.update(llvm::StringRef(bytes.data(), bytes.size()));
+  return llvm::toHex(hash.final(), true);
+}
+
+void appendU64(std::string& output, std::uint64_t value) {
+  for (unsigned shift = 0; shift < 64; shift += 8) {
+    output.push_back(static_cast<char>((value >> shift) & 0xff));
+  }
+}
+
+void appendIdentityField(std::string& output,
+                         std::string_view tag,
+                         std::string_view value) {
+  appendU64(output, tag.size());
+  output.append(tag);
+  appendU64(output, value.size());
+  output.append(value);
+}
+
+std::string semanticPlanSHA256(VulkanExecutionPlan plan,
+                               std::string_view model,
+                               std::string_view host_triple) {
+  plan.model = model;
+  plan.host_triple = host_triple;
+  plan.build_identity = "vulkan-product-semantic-plan-v1";
+  plan.plan_hash.clear();
+  auto canonical = ncnn_mlir::vulkan::serializeExecutionPlan(plan);
+  if (!canonical) {
+    throw std::runtime_error("cannot serialize semantic plan fixture: " +
+                             canonical.error());
+  }
+  return sha256Hex(*canonical);
+}
+
+std::string reorderPlanRootKeys(std::string_view json,
+                                std::string_view first_key,
+                                std::string_view second_key) {
+  std::istringstream input{std::string(json)};
+  std::vector<std::string> lines;
+  for (std::string line; std::getline(input, line);) {
+    lines.push_back(std::move(line));
+  }
+  const auto find_line = [&lines](std::string_view key) {
+    const std::string marker = std::format("\"{}\":", key);
+    return std::ranges::find_if(lines, [&marker](const std::string& line) {
+      return line.find(marker) != std::string::npos;
+    });
+  };
+  const auto first = find_line(first_key);
+  const auto second = find_line(second_key);
+  if (first == lines.end() || second == lines.end() || first == second) {
+    throw std::runtime_error("cannot find plan keys to reorder");
+  }
+  std::iter_swap(first, second);
+  std::ostringstream output;
+  for (std::size_t index = 0; index < lines.size(); ++index) {
+    if (index != 0) {
+      output << '\n';
+    }
+    output << lines[index];
+  }
+  output << '\n';
+  return output.str();
 }
 
 VulkanExecutionPlan makeTwoKernelPlan(const VulkanModelWeight& weight) {
@@ -209,7 +323,7 @@ VulkanExecutionPlan makeTwoKernelPlan(const VulkanModelWeight& weight) {
 TEST(VulkanProductTest, PackagesReproduciblyAndEmbedsBothIdentities) {
   auto serialized = ncnn_mlir::vulkan::serializeExecutionPlan(makeReluPlan());
   ASSERT_TRUE(serialized) << serialized.error();
-  const std::string shader = makeSpirvBytes();
+  const std::string shader = makeSpirvBytes(makeReluPlan());
   auto first = makeVulkanModelPackage("tiny_relu",
                                       "x86_64-linux-gnu",
                                       *serialized,
@@ -240,12 +354,89 @@ TEST(VulkanProductTest, PackagesReproduciblyAndEmbedsBothIdentities) {
             std::string::npos);
 }
 
-TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
-  const auto hash_bytes = [](std::string_view bytes) {
-    llvm::SHA256 hash;
-    hash.update(llvm::StringRef(bytes.data(), bytes.size()));
-    return llvm::toHex(hash.final(), true);
+TEST(VulkanProductTest, SemanticPlanIdentityIgnoresJsonFormattingAndKeyOrder) {
+  const VulkanExecutionPlan relu_plan = makeReluPlan();
+  auto relu_json = ncnn_mlir::vulkan::serializeExecutionPlan(relu_plan);
+  ASSERT_TRUE(relu_json) << relu_json.error();
+  const std::string relu_shader = makeSpirvBytes(relu_plan);
+  const std::string relu_reordered =
+    reorderPlanRootKeys(*relu_json, "model", "host_triple");
+  const std::string relu_whitespace = " \n\t" + *relu_json + " \n";
+  auto legacy_base = makeVulkanModelPackage("semantic_relu",
+                                            "x86_64-linux-gnu",
+                                            *relu_json,
+                                            relu_shader,
+                                            "param",
+                                            "bin");
+  auto legacy_reordered = makeVulkanModelPackage("semantic_relu",
+                                                 "x86_64-linux-gnu",
+                                                 relu_reordered,
+                                                 relu_shader,
+                                                 "param",
+                                                 "bin");
+  auto legacy_whitespace = makeVulkanModelPackage("semantic_relu",
+                                                  "x86_64-linux-gnu",
+                                                  relu_whitespace,
+                                                  relu_shader,
+                                                  "param",
+                                                  "bin");
+  ASSERT_TRUE(legacy_base) << legacy_base.error();
+  ASSERT_TRUE(legacy_reordered) << legacy_reordered.error();
+  ASSERT_TRUE(legacy_whitespace) << legacy_whitespace.error();
+  EXPECT_EQ(legacy_base->build_identity, legacy_reordered->build_identity);
+  EXPECT_EQ(legacy_base->build_identity, legacy_whitespace->build_identity);
+  EXPECT_EQ(legacy_base->host_program.identity,
+            legacy_reordered->host_program.identity);
+  EXPECT_EQ(legacy_base->plan_json, legacy_reordered->plan_json);
+
+  const VulkanModelWeight weight{
+    .resource_id = 3,
+    .bytes = {0x00, 0x00, 0x80, 0x3f},
   };
+  const VulkanExecutionPlan general_plan = makeTwoKernelPlan(weight);
+  auto general_json = ncnn_mlir::vulkan::serializeExecutionPlan(general_plan);
+  ASSERT_TRUE(general_json) << general_json.error();
+  const std::array<VulkanModelShader, 2> shaders{
+    makeTestShader(general_plan, general_plan.kernels[1], "model_vulkan_k20"),
+    makeTestShader(general_plan, general_plan.kernels[0], "model_vulkan_k10")};
+  const std::array<VulkanModelWeight, 1> weights{weight};
+  const std::string general_reordered =
+    reorderPlanRootKeys(*general_json, "model", "host_triple");
+  const std::string general_whitespace = " \n\t" + *general_json + " \n";
+  auto general_base = makeVulkanModelPackage("semantic_general",
+                                             "x86_64-linux-gnu",
+                                             *general_json,
+                                             shaders,
+                                             weights,
+                                             "param",
+                                             "bin");
+  auto general_reordered_package = makeVulkanModelPackage("semantic_general",
+                                                          "x86_64-linux-gnu",
+                                                          general_reordered,
+                                                          shaders,
+                                                          weights,
+                                                          "param",
+                                                          "bin");
+  auto general_whitespace_package = makeVulkanModelPackage("semantic_general",
+                                                           "x86_64-linux-gnu",
+                                                           general_whitespace,
+                                                           shaders,
+                                                           weights,
+                                                           "param",
+                                                           "bin");
+  ASSERT_TRUE(general_base) << general_base.error();
+  ASSERT_TRUE(general_reordered_package) << general_reordered_package.error();
+  ASSERT_TRUE(general_whitespace_package) << general_whitespace_package.error();
+  EXPECT_EQ(general_base->build_identity,
+            general_reordered_package->build_identity);
+  EXPECT_EQ(general_base->build_identity,
+            general_whitespace_package->build_identity);
+  EXPECT_EQ(general_base->host_program.identity,
+            general_reordered_package->host_program.identity);
+  EXPECT_EQ(general_base->plan_json, general_reordered_package->plan_json);
+}
+
+TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
   const auto expect_host_contract = [](const VulkanModelPackage& package) {
     EXPECT_NE(package.manifest_json.find(
                 "\"host_implementation\": \"generic-plan-runtime\""),
@@ -255,12 +446,49 @@ TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
     EXPECT_NE(package.manifest_json.find(
                 "\"execution_plan_usage\": \"embedded-runtime-required\""),
               std::string::npos);
+    EXPECT_NE(package.manifest_json.find(
+                "\"host_program_usage\": \"compiler-only-diagnostic\""),
+              std::string::npos);
+    EXPECT_NE(package.manifest_json.find("\"host_program\": {"),
+              std::string::npos);
+    EXPECT_NE(package.manifest_json.find("\"host_program_identity\": \"" +
+                                         package.host_program.identity + "\""),
+              std::string::npos);
+    EXPECT_NE(
+      package.manifest_json.find("\"schema\": \"ncnn-vulkan-host-program/v1\""),
+      std::string::npos);
+    EXPECT_NE(package.manifest_json.find(
+                "\"codegen_version\": \"ncnn-vulkan-host-codegen/v1\""),
+              std::string::npos);
+    EXPECT_NE(
+      package.manifest_json.find("\"helper_contract\": "
+                                 "\"ncnn-vulkan-device-helper-contract/v1\""),
+      std::string::npos);
+    EXPECT_NE(package.manifest_json.find(
+                "\"synchronization_version\": \"ncnn-vulkan-host-sync/v1\""),
+              std::string::npos);
+    EXPECT_NE(
+      package.manifest_json.find("\"canonical_encoding\": "
+                                 "\"length-prefixed-canonical-json/v1\""),
+      std::string::npos);
     EXPECT_EQ(package.manifest_json.find("\"host_implementation\": \"aot\""),
               std::string::npos);
+    EXPECT_EQ(package.host_program.schema,
+              ncnn_mlir::vulkan::kHostProgramSchema);
+    EXPECT_EQ(package.host_program.codegen_version,
+              ncnn_mlir::vulkan::kHostProgramCodegenVersion);
+    EXPECT_EQ(package.host_program.helper_contract,
+              ncnn_mlir::vulkan::kHostProgramHelperContract);
+    EXPECT_EQ(package.host_program.synchronization_version,
+              ncnn_mlir::vulkan::kHostProgramSynchronizationVersion);
+    EXPECT_EQ(package.host_program.canonical_encoding,
+              ncnn_mlir::vulkan::kHostProgramCanonicalEncoding);
   };
 
-  const std::string shader = makeSpirvBytes();
-  auto legacy_plan = ncnn_mlir::vulkan::serializeExecutionPlan(makeReluPlan());
+  const VulkanExecutionPlan legacy_source_plan = makeReluPlan();
+  const std::string shader = makeSpirvBytes(legacy_source_plan);
+  auto legacy_plan =
+    ncnn_mlir::vulkan::serializeExecutionPlan(legacy_source_plan);
   ASSERT_TRUE(legacy_plan) << legacy_plan.error();
   auto legacy_first = makeVulkanModelPackage(
     "host_contract", "x86_64-linux-gnu", *legacy_plan, shader, "param", "bin");
@@ -276,15 +504,36 @@ TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
                                                "bin");
   ASSERT_TRUE(legacy_changed) << legacy_changed.error();
   expect_host_contract(*legacy_first);
-  const std::string legacy_identity_input = std::format(
-    "ncnn-vulkan-product-v1|model=host_contract|host=x86_64-linux-gnu"
-    "|param={}|bin={}|shader={}|host_implementation=generic-plan-runtime"
-    "|host_codegen_version=1",
-    hash_bytes("param"),
-    hash_bytes("bin"),
-    hash_bytes(shader));
+  std::string legacy_identity_input;
+  appendIdentityField(
+    legacy_identity_input, "domain", "ncnn-vulkan-product-v2");
+  appendIdentityField(legacy_identity_input, "model", "host_contract");
+  appendIdentityField(legacy_identity_input, "host_triple", "x86_64-linux-gnu");
+  appendIdentityField(
+    legacy_identity_input, "param_sha256", sha256Hex("param"));
+  appendIdentityField(legacy_identity_input, "bin_sha256", sha256Hex("bin"));
+  appendIdentityField(
+    legacy_identity_input,
+    "semantic_plan_sha256",
+    semanticPlanSHA256(
+      legacy_source_plan, "host_contract", "x86_64-linux-gnu"));
+  appendIdentityField(
+    legacy_identity_input, "host_implementation", "generic-plan-runtime");
+  appendIdentityField(legacy_identity_input, "host_codegen_version", "1");
+  appendIdentityField(legacy_identity_input,
+                      "host_program_identity",
+                      legacy_first->host_program.identity);
+  appendIdentityField(legacy_identity_input, "shader_count", "1");
+  appendIdentityField(legacy_identity_input,
+                      "shader_kernel_id",
+                      std::to_string(legacy_first->plan.kernels.front().id));
+  appendIdentityField(
+    legacy_identity_input, "shader_binary_symbol", legacy_first->binary_symbol);
+  appendIdentityField(
+    legacy_identity_input, "shader_sha256", sha256Hex(shader));
+  appendIdentityField(legacy_identity_input, "weight_count", "0");
   EXPECT_EQ(legacy_first->build_identity,
-            "ncnn-vulkan-product-v1-" + hash_bytes(legacy_identity_input));
+            "ncnn-vulkan-product-v2-" + sha256Hex(legacy_identity_input));
   EXPECT_EQ(legacy_first->build_identity, legacy_repeat->build_identity);
   EXPECT_NE(legacy_first->build_identity, legacy_changed->build_identity);
 
@@ -295,13 +544,9 @@ TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
   const VulkanExecutionPlan general_plan = makeTwoKernelPlan(weight);
   auto general_json = ncnn_mlir::vulkan::serializeExecutionPlan(general_plan);
   ASSERT_TRUE(general_json) << general_json.error();
-  const std::vector<std::uint32_t> words = {
-    UINT32_C(0x07230203), UINT32_C(0x00010000), 0, 1, 0};
   const std::array<VulkanModelShader, 2> shaders = {
-    VulkanModelShader{
-      .kernel_id = 10, .binary_symbol = "model_vulkan_k10", .words = words},
-    VulkanModelShader{
-      .kernel_id = 20, .binary_symbol = "model_vulkan_k20", .words = words},
+    makeTestShader(general_plan, general_plan.kernels[0], "model_vulkan_k10"),
+    makeTestShader(general_plan, general_plan.kernels[1], "model_vulkan_k20"),
   };
   const std::array<VulkanModelWeight, 1> weights = {weight};
   auto general_first = makeVulkanModelPackage("host_contract_general",
@@ -329,21 +574,89 @@ TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
                                                 "bin");
   ASSERT_TRUE(general_changed) << general_changed.error();
   expect_host_contract(*general_first);
-  const std::string general_identity_input = std::format(
-    "ncnn-vulkan-static-plan-v2|model=host_contract_general"
-    "|host=x86_64-linux-gnu|param={}|bin={}|plan={}"
-    "|host_implementation=generic-plan-runtime|host_codegen_version=1"
-    "|kernel=10:model_vulkan_k10:{}|kernel=20:model_vulkan_k20:{}|weight=3:{}",
-    hash_bytes("param"),
-    hash_bytes("bin"),
-    hash_bytes(*general_json),
-    general_first->shader_sha256s[0],
-    general_first->shader_sha256s[1],
-    hash_bytes(std::string_view("\0\0\x80\x3f", 4)));
+  std::string general_identity_input;
+  appendIdentityField(
+    general_identity_input, "domain", "ncnn-vulkan-static-plan-v3");
+  appendIdentityField(general_identity_input, "model", "host_contract_general");
+  appendIdentityField(
+    general_identity_input, "host_triple", "x86_64-linux-gnu");
+  appendIdentityField(
+    general_identity_input, "param_sha256", sha256Hex("param"));
+  appendIdentityField(general_identity_input, "bin_sha256", sha256Hex("bin"));
+  appendIdentityField(
+    general_identity_input,
+    "semantic_plan_sha256",
+    semanticPlanSHA256(
+      general_plan, "host_contract_general", "x86_64-linux-gnu"));
+  appendIdentityField(
+    general_identity_input, "host_implementation", "generic-plan-runtime");
+  appendIdentityField(general_identity_input, "host_codegen_version", "1");
+  appendIdentityField(general_identity_input,
+                      "host_program_identity",
+                      general_first->host_program.identity);
+  appendIdentityField(general_identity_input, "shader_count", "2");
+  for (std::size_t index = 0; index < general_first->shaders.size(); ++index) {
+    appendIdentityField(
+      general_identity_input,
+      "shader_kernel_id",
+      std::to_string(general_first->shaders[index].kernel_id));
+    appendIdentityField(general_identity_input,
+                        "shader_binary_symbol",
+                        general_first->shaders[index].binary_symbol);
+    appendIdentityField(general_identity_input,
+                        "shader_sha256",
+                        general_first->shader_sha256s[index]);
+  }
+  appendIdentityField(general_identity_input, "weight_count", "1");
+  appendIdentityField(general_identity_input, "weight_resource_id", "3");
+  appendIdentityField(general_identity_input,
+                      "weight_sha256",
+                      sha256Hex(std::string_view("\0\0\x80\x3f", 4)));
   EXPECT_EQ(general_first->build_identity,
-            "ncnn-vulkan-static-plan-v2-" + hash_bytes(general_identity_input));
+            "ncnn-vulkan-static-plan-v3-" + sha256Hex(general_identity_input));
   EXPECT_EQ(general_first->build_identity, general_repeat->build_identity);
   EXPECT_NE(general_first->build_identity, general_changed->build_identity);
+
+  auto changed_shader = shaders;
+  ASSERT_TRUE(changeFixtureFloatLiteral(changed_shader.front()));
+  auto shader_changed = makeVulkanModelPackage("host_contract_general",
+                                               "x86_64-linux-gnu",
+                                               *general_json,
+                                               changed_shader,
+                                               weights,
+                                               "param",
+                                               "bin");
+  ASSERT_TRUE(shader_changed) << shader_changed.error();
+  EXPECT_NE(general_first->build_identity, shader_changed->build_identity);
+  EXPECT_NE(general_first->host_program.identity,
+            shader_changed->host_program.identity);
+
+  const VulkanModelWeight changed_weight{
+    .resource_id = 3,
+    .bytes = {0x00, 0x00, 0x00, 0x3f},
+  };
+  const VulkanExecutionPlan changed_weight_plan =
+    makeTwoKernelPlan(changed_weight);
+  auto changed_weight_json =
+    ncnn_mlir::vulkan::serializeExecutionPlan(changed_weight_plan);
+  ASSERT_TRUE(changed_weight_json) << changed_weight_json.error();
+  const std::array<VulkanModelShader, 2> changed_weight_shaders{
+    makeTestShader(
+      changed_weight_plan, changed_weight_plan.kernels[0], "model_vulkan_k10"),
+    makeTestShader(
+      changed_weight_plan, changed_weight_plan.kernels[1], "model_vulkan_k20")};
+  const std::array<VulkanModelWeight, 1> changed_weights{changed_weight};
+  auto weight_changed = makeVulkanModelPackage("host_contract_general",
+                                               "x86_64-linux-gnu",
+                                               *changed_weight_json,
+                                               changed_weight_shaders,
+                                               changed_weights,
+                                               "param",
+                                               "bin");
+  ASSERT_TRUE(weight_changed) << weight_changed.error();
+  EXPECT_NE(general_first->build_identity, weight_changed->build_identity);
+  EXPECT_NE(general_first->host_program.identity,
+            weight_changed->host_program.identity);
 }
 
 TEST(VulkanProductTest, RejectsMalformedShaderAndUnsupportedGraph) {
@@ -363,7 +676,7 @@ TEST(VulkanProductTest, RejectsMalformedShaderAndUnsupportedGraph) {
   auto rejected = makeVulkanModelPackage("tiny_conv",
                                          "x86_64-linux-gnu",
                                          *unsupported_json,
-                                         makeSpirvBytes(),
+                                         makeSpirvBytes(makeReluPlan()),
                                          "param",
                                          "weights");
   EXPECT_FALSE(rejected);
@@ -424,13 +737,9 @@ TEST(VulkanProductTest, PackagesGeneralPlanByKernelAndResourceIdentity) {
   const VulkanExecutionPlan plan = makeTwoKernelPlan(weight);
   auto serialized = ncnn_mlir::vulkan::serializeExecutionPlan(plan);
   ASSERT_TRUE(serialized) << serialized.error();
-  const std::vector<std::uint32_t> words = {
-    UINT32_C(0x07230203), UINT32_C(0x00010000), 0, 1, 0};
   const std::array<VulkanModelShader, 2> shaders = {
-    VulkanModelShader{
-      .kernel_id = 20, .binary_symbol = "model_vulkan_k20", .words = words},
-    VulkanModelShader{
-      .kernel_id = 10, .binary_symbol = "model_vulkan_k10", .words = words},
+    makeTestShader(plan, plan.kernels[1], "model_vulkan_k20"),
+    makeTestShader(plan, plan.kernels[0], "model_vulkan_k10"),
   };
   const std::array<VulkanModelWeight, 1> weights = {weight};
   auto package = makeVulkanModelPackage("multi_layer",
@@ -510,13 +819,11 @@ TEST(VulkanProductTest, PackagesGeneralPlanByKernelAndResourceIdentity) {
 }
 
 TEST(VulkanProductTest, GeneralSingleTensorAbiKeepsPointerAndCountSignature) {
-  auto serialized = ncnn_mlir::vulkan::serializeExecutionPlan(makeReluPlan());
+  const VulkanExecutionPlan plan = makeReluPlan();
+  auto serialized = ncnn_mlir::vulkan::serializeExecutionPlan(plan);
   ASSERT_TRUE(serialized) << serialized.error();
   const std::array<VulkanModelShader, 1> shaders = {
-    VulkanModelShader{
-      .kernel_id = 0,
-      .binary_symbol = "model_vulkan_k0",
-      .words = {UINT32_C(0x07230203), UINT32_C(0x00010000), 0, 1, 0}},
+    makeTestShader(plan, plan.kernels.front(), "model_vulkan_k0"),
   };
   const std::array<VulkanModelWeight, 0> weights{};
   auto package = makeVulkanModelPackage("tiny_relu",
@@ -560,13 +867,9 @@ TEST(VulkanProductTest, ManifestHashesPhysicalWeightsNotLogicalLayout) {
   ASSERT_NE(*logical_hash, *physical_hash);
   auto serialized = ncnn_mlir::vulkan::serializeExecutionPlan(plan);
   ASSERT_TRUE(serialized) << serialized.error();
-  const std::vector<std::uint32_t> words{
-    UINT32_C(0x07230203), UINT32_C(0x00010000), 0, 1, 0};
   const std::array<VulkanModelShader, 2> shaders{
-    VulkanModelShader{
-      .kernel_id = 10, .binary_symbol = "model_vulkan_k10", .words = words},
-    VulkanModelShader{
-      .kernel_id = 20, .binary_symbol = "model_vulkan_k20", .words = words}};
+    makeTestShader(plan, plan.kernels[0], "model_vulkan_k10"),
+    makeTestShader(plan, plan.kernels[1], "model_vulkan_k20")};
   const std::array<VulkanModelWeight, 1> weights{weight};
   auto package = makeVulkanModelPackage("physical_weights",
                                         "x86_64-linux-gnu",
@@ -577,10 +880,23 @@ TEST(VulkanProductTest, ManifestHashesPhysicalWeightsNotLogicalLayout) {
                                         "bin");
   ASSERT_TRUE(package) << package.error();
   EXPECT_EQ(package->plan.resources[2].weight_sha256, *logical_hash);
-  EXPECT_NE(
-    package->manifest_json.find("\"sha256\": \"" + *physical_hash + "\""),
-    std::string::npos);
-  EXPECT_EQ(package->manifest_json.find(*logical_hash), std::string::npos);
+  auto manifest_json = llvm::json::parse(package->manifest_json);
+  ASSERT_TRUE(static_cast<bool>(manifest_json));
+  const llvm::json::Object* manifest = manifest_json->getAsObject();
+  ASSERT_NE(manifest, nullptr);
+  const llvm::json::Array* weight_records = manifest->getArray("weights");
+  ASSERT_NE(weight_records, nullptr);
+  ASSERT_EQ(weight_records->size(), 1);
+  const llvm::json::Object* weight_record =
+    weight_records->front().getAsObject();
+  ASSERT_NE(weight_record, nullptr);
+  const auto recorded_hash = weight_record->getString("sha256");
+  ASSERT_TRUE(recorded_hash);
+  EXPECT_EQ(*recorded_hash, *physical_hash);
+  EXPECT_EQ(weight_record->get("logical_sha256"), nullptr);
+  EXPECT_NE(package->manifest_json.find("\"logical_sha256\": \"" +
+                                        *logical_hash + "\""),
+            std::string::npos);
   EXPECT_NE(package->wrapper_source.find(
               "const std::array<VulkanResourcePayload, 1> kWeights"),
             std::string::npos);
@@ -591,10 +907,8 @@ TEST(VulkanProductTest, ManifestHashesPhysicalWeightsNotLogicalLayout) {
 
 TEST(VulkanProductTest, BuildIdentityIncludesStaticPublicPlanContract) {
   VulkanExecutionPlan plan = makeReluPlan();
-  const std::array<VulkanModelShader, 1> shaders{VulkanModelShader{
-    .kernel_id = 0,
-    .binary_symbol = "model_vulkan_k0",
-    .words = {UINT32_C(0x07230203), UINT32_C(0x00010000), 0, 1, 0}}};
+  const std::array<VulkanModelShader, 1> shaders{
+    makeTestShader(plan, plan.kernels.front(), "model_vulkan_k0")};
   auto first_json = ncnn_mlir::vulkan::serializeExecutionPlan(plan);
   ASSERT_TRUE(first_json) << first_json.error();
   auto first = makeVulkanModelPackage("plan_identity",

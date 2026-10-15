@@ -266,7 +266,14 @@ buffer 必须与头文件中的静态 `*_ELEMENTS` 数量完全一致。`--verif
 `dlopen` 临时 DSO，对每个静态输入生成确定性数据，执行 create/run/destroy 并检查所有输出有限；
 这是 ABI/生命周期 smoke 检查，不是一般模型数学 golden。必须有兼容 Vulkan ICD 和设备；
 不指定该选项时，编译仍会对每个 shader 离线执行 SPIR-V validator，但不会创建 Vulkan device。
-manifest 记录 plan/全部 shader 与常量 payload/模型输入的哈希和直接 ELF `DT_NEEDED` 依赖。
+manifest 记录 plan/全部 shader 与常量 payload/模型输入的哈希和直接 ELF `DT_NEEDED` 依赖，
+并包含受检的 `host_program` 编译器侧诊断对象、`host_program_identity` 和
+`host_program_usage="compiler-only-diagnostic"`。该对象保存资源、shader interface、固定 dispatch
+及上传/计算/读回同步操作；其 canonical identity 与同步/codegen/helper-contract 版本参与两条
+package 路径的构建 identity，不受输入 plan JSON 的空白或对象 key 顺序影响。对应构建 identity
+域是 `ncnn-vulkan-static-plan-v3` 和窄 ReLU factory 的 `ncnn-vulkan-product-v2`；详细编码与验证见
+[compiler-only host program 契约](ncnn-vulkan-backend-contract.md#compiler-only-host-program)。
+该诊断不会被 wrapper 解析或执行，不新增部署必需 sidecar，也不改变公共 header 或 shader 字节。
 宿主字段固定为 `host_implementation="generic-plan-runtime"`、整数 `host_codegen_version=1`、
 `execution_plan_usage="embedded-runtime-required"`，宿主实现与 codegen 版本参与构建 identity；
 公共 ABI v1 不变。当前 create 解析**内嵌**计划，run 调用静态编入模型库的通用执行器，

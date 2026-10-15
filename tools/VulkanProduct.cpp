@@ -51,6 +51,44 @@ std::string sha256Hex(std::string_view bytes) {
   return result;
 }
 
+void appendU64(std::string& output, std::uint64_t value) {
+  for (unsigned shift = 0; shift < 64; shift += 8) {
+    output.push_back(static_cast<char>((value >> shift) & 0xff));
+  }
+}
+
+void appendIdentityField(std::string& output,
+                         std::string_view tag,
+                         std::string_view value) {
+  appendU64(output, tag.size());
+  output.append(tag);
+  appendU64(output, value.size());
+  output.append(value);
+}
+
+std::string semanticPlanSHA256(VulkanExecutionPlan plan) {
+  // Both execution-plan hashes and the package identity are excluded from this
+  // semantic digest. The fixed nonempty build identity satisfies the plan
+  // verifier while making equivalent parsed JSON documents serialize alike.
+  plan.build_identity = "vulkan-product-semantic-plan-v1";
+  plan.plan_hash.clear();
+  auto canonical = ncnn_mlir::vulkan::serializeExecutionPlan(plan);
+  return canonical ? sha256Hex(*canonical) : std::string{};
+}
+
+std::expected<llvm::json::Value, std::string> parseHostProgramJson(
+  std::string_view json) {
+  auto parsed = llvm::json::parse(llvm::StringRef(json.data(), json.size()));
+  if (!parsed) {
+    return std::unexpected("cannot parse serialized Vulkan host program: " +
+                           llvm::toString(parsed.takeError()));
+  }
+  if (!parsed->getAsObject()) {
+    return std::unexpected("serialized Vulkan host program is not an object");
+  }
+  return std::move(*parsed);
+}
+
 std::string uppercaseIdentifier(std::string_view value) {
   std::string result(value);
   std::ranges::transform(result, result.begin(), [](unsigned char character) {
@@ -817,7 +855,9 @@ std::string makeManifest(const VulkanExecutionPlan& plan,
                          std::string_view shader_sha256,
                          std::size_t shader_size,
                          std::string_view param_sha256,
-                         std::string_view bin_sha256) {
+                         std::string_view bin_sha256,
+                         std::string_view host_program_identity,
+                         llvm::json::Value host_program) {
   llvm::json::Array inputs;
   llvm::json::Array outputs;
   for (std::uint32_t id : plan.inputs) {
@@ -847,6 +887,9 @@ std::string makeManifest(const VulkanExecutionPlan& plan,
   manifest["backend"] = "vulkan";
   manifest["host_implementation"] = std::string(kHostImplementation);
   manifest["host_codegen_version"] = kHostCodegenVersion;
+  manifest["host_program"] = std::move(host_program);
+  manifest["host_program_identity"] = std::string(host_program_identity);
+  manifest["host_program_usage"] = "compiler-only-diagnostic";
   manifest["execution_plan_usage"] = "embedded-runtime-required";
   manifest["abi_version"] = static_cast<std::int64_t>(NCNN_VK_ABI_VERSION);
   manifest["model"] = std::string(model_name);
@@ -876,7 +919,9 @@ std::string makeGeneralManifest(const VulkanExecutionPlan& plan,
                                 std::string_view bin_sha256,
                                 std::span<const VulkanModelShader> shaders,
                                 std::span<const std::string> shader_hashes,
-                                std::span<const VulkanModelWeight> weights) {
+                                std::span<const VulkanModelWeight> weights,
+                                std::string_view host_program_identity,
+                                llvm::json::Value host_program) {
   llvm::json::Array inputs;
   llvm::json::Array outputs;
   for (std::uint32_t id : plan.inputs) {
@@ -945,6 +990,9 @@ std::string makeGeneralManifest(const VulkanExecutionPlan& plan,
   manifest["backend"] = "vulkan";
   manifest["host_implementation"] = std::string(kHostImplementation);
   manifest["host_codegen_version"] = kHostCodegenVersion;
+  manifest["host_program"] = std::move(host_program);
+  manifest["host_program_identity"] = std::string(host_program_identity);
+  manifest["host_program_usage"] = "compiler-only-diagnostic";
   manifest["execution_plan_usage"] = "embedded-runtime-required";
   manifest["abi_version"] = static_cast<std::int64_t>(NCNN_VK_ABI_VERSION);
   manifest["model"] = std::string(model_name);
@@ -1238,36 +1286,77 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
   std::vector<VulkanModelWeight> ordered_weights(weights.begin(),
                                                  weights.end());
   std::ranges::sort(ordered_weights, {}, &VulkanModelWeight::resource_id);
-  const std::string param_sha256 = sha256Hex(param_bytes);
-  const std::string bin_sha256 = sha256Hex(bin_bytes);
-  std::string identity_input = std::format(
-    "ncnn-vulkan-static-plan-v2|model={}|host={}|param={}|bin={}|plan={}"
-    "|host_implementation={}|host_codegen_version={}",
-    model_name,
-    host_triple,
-    param_sha256,
-    bin_sha256,
-    sha256Hex(plan_json),
-    kHostImplementation,
-    kHostCodegenVersion);
-  for (std::size_t index = 0; index < ordered_shaders.size(); ++index) {
-    identity_input += std::format("|kernel={}:{}:{}",
-                                  ordered_shaders[index].kernel_id,
-                                  ordered_shaders[index].binary_symbol,
-                                  shader_hashes[index]);
-  }
-  for (const VulkanModelWeight& weight : ordered_weights) {
-    identity_input +=
-      std::format("|weight={}:{}",
-                  weight.resource_id,
-                  sha256Hex(std::string_view(
-                    reinterpret_cast<const char*>(weight.bytes.data()),
-                    weight.bytes.size())));
-  }
-  const std::string build_identity =
-    "ncnn-vulkan-static-plan-v2-" + sha256Hex(identity_input);
   parsed->model = model_name;
   parsed->host_triple = host_triple;
+  parsed->plan_hash.clear();
+  auto host_program = ncnn_mlir::vulkan::makeVulkanHostProgram(
+    *parsed, ordered_shaders, ordered_weights);
+  if (!host_program) {
+    return std::unexpected("cannot build Vulkan host program: " +
+                           host_program.error());
+  }
+  if (auto verified = ncnn_mlir::vulkan::verifyVulkanHostProgram(
+        *host_program, *parsed, ordered_shaders, ordered_weights);
+      !verified) {
+    return std::unexpected("invalid Vulkan host program: " + verified.error());
+  }
+  auto host_program_json =
+    ncnn_mlir::vulkan::serializeVulkanHostProgram(*host_program);
+  if (!host_program_json) {
+    return std::unexpected("cannot serialize Vulkan host program: " +
+                           host_program_json.error());
+  }
+  auto host_program_value = parseHostProgramJson(*host_program_json);
+  if (!host_program_value) {
+    return std::unexpected(host_program_value.error());
+  }
+
+  const std::string param_sha256 = sha256Hex(param_bytes);
+  const std::string bin_sha256 = sha256Hex(bin_bytes);
+  const std::string plan_sha256_semantic = semanticPlanSHA256(*parsed);
+  if (plan_sha256_semantic.empty()) {
+    return std::unexpected("cannot calculate semantic Vulkan plan identity");
+  }
+  constexpr std::string_view kIdentityDomain = "ncnn-vulkan-static-plan-v3";
+  std::string identity_input;
+  appendIdentityField(identity_input, "domain", kIdentityDomain);
+  appendIdentityField(identity_input, "model", model_name);
+  appendIdentityField(identity_input, "host_triple", host_triple);
+  appendIdentityField(identity_input, "param_sha256", param_sha256);
+  appendIdentityField(identity_input, "bin_sha256", bin_sha256);
+  appendIdentityField(
+    identity_input, "semantic_plan_sha256", plan_sha256_semantic);
+  appendIdentityField(
+    identity_input, "host_implementation", kHostImplementation);
+  appendIdentityField(identity_input,
+                      "host_codegen_version",
+                      std::to_string(kHostCodegenVersion));
+  appendIdentityField(
+    identity_input, "host_program_identity", host_program->identity);
+  appendIdentityField(
+    identity_input, "shader_count", std::to_string(ordered_shaders.size()));
+  for (std::size_t index = 0; index < ordered_shaders.size(); ++index) {
+    appendIdentityField(identity_input,
+                        "shader_kernel_id",
+                        std::to_string(ordered_shaders[index].kernel_id));
+    appendIdentityField(identity_input,
+                        "shader_binary_symbol",
+                        ordered_shaders[index].binary_symbol);
+    appendIdentityField(identity_input, "shader_sha256", shader_hashes[index]);
+  }
+  appendIdentityField(
+    identity_input, "weight_count", std::to_string(ordered_weights.size()));
+  for (const VulkanModelWeight& weight : ordered_weights) {
+    appendIdentityField(
+      identity_input, "weight_resource_id", std::to_string(weight.resource_id));
+    appendIdentityField(identity_input,
+                        "weight_sha256",
+                        sha256Hex(std::string_view(
+                          reinterpret_cast<const char*>(weight.bytes.data()),
+                          weight.bytes.size())));
+  }
+  const std::string build_identity =
+    std::string(kIdentityDomain) + "-" + sha256Hex(identity_input);
   parsed->build_identity = build_identity;
   parsed->plan_hash.clear();
   auto serialized = ncnn_mlir::vulkan::serializeExecutionPlan(*parsed);
@@ -1290,18 +1379,22 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
                              ordered_shaders,
                              ordered_weights,
                              *final_plan);
-  const std::string manifest = makeGeneralManifest(*final_plan,
-                                                   model_name,
-                                                   build_identity,
-                                                   plan_sha256,
-                                                   param_sha256,
-                                                   bin_sha256,
-                                                   ordered_shaders,
-                                                   shader_hashes,
-                                                   ordered_weights);
+  const std::string manifest =
+    makeGeneralManifest(*final_plan,
+                        model_name,
+                        build_identity,
+                        plan_sha256,
+                        param_sha256,
+                        bin_sha256,
+                        ordered_shaders,
+                        shader_hashes,
+                        ordered_weights,
+                        host_program->identity,
+                        std::move(*host_program_value));
   const std::string first_binary_symbol = ordered_shaders.front().binary_symbol;
   const std::string first_shader_hash = shader_hashes.front();
   return VulkanModelPackage{.plan = std::move(*final_plan),
+                            .host_program = std::move(*host_program),
                             .shader_words = ordered_shaders.front().words,
                             .shaders = std::move(ordered_shaders),
                             .weights = std::move(ordered_weights),
@@ -1375,23 +1468,70 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
   }
 
   const std::string binary_symbol = parsed->model + "_vulkan";
+  std::vector<VulkanModelShader> packaged_shaders{
+    VulkanModelShader{.kernel_id = parsed->kernels.front().id,
+                      .binary_symbol = binary_symbol,
+                      .words = *shader_words}};
+  const std::array<VulkanModelWeight, 0> packaged_weights{};
+  parsed->model = model_name;
+  parsed->host_triple = host_triple;
+  parsed->plan_hash.clear();
+  auto host_program = ncnn_mlir::vulkan::makeVulkanHostProgram(
+    *parsed, packaged_shaders, packaged_weights);
+  if (!host_program) {
+    return std::unexpected("cannot build Vulkan host program: " +
+                           host_program.error());
+  }
+  if (auto verified = ncnn_mlir::vulkan::verifyVulkanHostProgram(
+        *host_program, *parsed, packaged_shaders, packaged_weights);
+      !verified) {
+    return std::unexpected("invalid Vulkan host program: " + verified.error());
+  }
+  auto host_program_json =
+    ncnn_mlir::vulkan::serializeVulkanHostProgram(*host_program);
+  if (!host_program_json) {
+    return std::unexpected("cannot serialize Vulkan host program: " +
+                           host_program_json.error());
+  }
+  auto host_program_value = parseHostProgramJson(*host_program_json);
+  if (!host_program_value) {
+    return std::unexpected(host_program_value.error());
+  }
+
   const std::string shader_sha256 = sha256Hex(spirv_bytes);
   const std::string param_sha256 = sha256Hex(param_bytes);
   const std::string bin_sha256 = sha256Hex(bin_bytes);
-  const std::string identity_input = std::format(
-    "ncnn-vulkan-product-v1|model={}|host={}|param={}|bin={}|shader={}"
-    "|host_implementation={}|host_codegen_version={}",
-    model_name,
-    host_triple,
-    param_sha256,
-    bin_sha256,
-    shader_sha256,
-    kHostImplementation,
-    kHostCodegenVersion);
+  const std::string plan_sha256_semantic = semanticPlanSHA256(*parsed);
+  if (plan_sha256_semantic.empty()) {
+    return std::unexpected("cannot calculate semantic Vulkan plan identity");
+  }
+  constexpr std::string_view kIdentityDomain = "ncnn-vulkan-product-v2";
+  std::string identity_input;
+  appendIdentityField(identity_input, "domain", kIdentityDomain);
+  appendIdentityField(identity_input, "model", model_name);
+  appendIdentityField(identity_input, "host_triple", host_triple);
+  appendIdentityField(identity_input, "param_sha256", param_sha256);
+  appendIdentityField(identity_input, "bin_sha256", bin_sha256);
+  appendIdentityField(
+    identity_input, "semantic_plan_sha256", plan_sha256_semantic);
+  appendIdentityField(
+    identity_input, "host_implementation", kHostImplementation);
+  appendIdentityField(identity_input,
+                      "host_codegen_version",
+                      std::to_string(kHostCodegenVersion));
+  appendIdentityField(
+    identity_input, "host_program_identity", host_program->identity);
+  appendIdentityField(
+    identity_input, "shader_count", std::to_string(packaged_shaders.size()));
+  appendIdentityField(identity_input,
+                      "shader_kernel_id",
+                      std::to_string(packaged_shaders.front().kernel_id));
+  appendIdentityField(identity_input, "shader_binary_symbol", binary_symbol);
+  appendIdentityField(identity_input, "shader_sha256", shader_sha256);
+  appendIdentityField(
+    identity_input, "weight_count", std::to_string(packaged_weights.size()));
   const std::string build_identity =
-    "ncnn-vulkan-product-v1-" + sha256Hex(identity_input);
-  parsed->model = model_name;
-  parsed->host_triple = host_triple;
+    std::string(kIdentityDomain) + "-" + sha256Hex(identity_input);
   parsed->build_identity = build_identity;
   parsed->plan_hash.clear();
   auto serialized = ncnn_mlir::vulkan::serializeExecutionPlan(*parsed);
@@ -1422,8 +1562,11 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
                                             shader_sha256,
                                             spirv_bytes.size(),
                                             param_sha256,
-                                            bin_sha256);
+                                            bin_sha256,
+                                            host_program->identity,
+                                            std::move(*host_program_value));
   return VulkanModelPackage{.plan = std::move(*final_plan),
+                            .host_program = std::move(*host_program),
                             .shader_words = std::move(*shader_words),
                             .shaders = {},
                             .weights = {},

@@ -17,6 +17,7 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
+import host_program_evidence as host_program_audit
 import model_dependency_evidence as dependency_evidence
 
 
@@ -970,6 +971,10 @@ def audit_stage_gate(stage_dir: Path, *, source_root: Path | None = None,
         return {"stage": str(stage), "profile": None, "passed": False,
                 "findings": [{"code": "gate-state-invalid", "message": "gate-state must be a JSON object"}]}
     profile = state.get("profile")
+    # Older gate-state records predate stage_id and represent the legacy VA0
+    # product gate. Preserve that historical default without accepting an
+    # explicitly invalid stage_id as VA0.
+    stage_id = state["stage_id"] if "stage_id" in state else "VA0"
     if state.get("schema_version") != SCHEMA_VERSION or state.get("kind") != GATE_KIND:
         _finding(findings, "gate-schema", "unsupported gate-state schema/kind")
     if profile not in PROFILES:
@@ -982,9 +987,11 @@ def audit_stage_gate(stage_dir: Path, *, source_root: Path | None = None,
                  build_dir=stage_build)
     if not isinstance(state.get("git_revision"), str) or not state["git_revision"]:
         _finding(findings, "git-revision-missing", "baseline git_revision is missing")
-    if (state.get("stage_id") != "VA0" or state.get("host_execution_role") != "legacy-product" or
+    if (stage_id not in {"VA0", "VA1"} or
+            state.get("host_execution_role") != "legacy-product" or
             state.get("host_aot_candidate") is not False):
-        _finding(findings, "va0-execution-role", "VA0 validates the actual legacy product, not a host AOT candidate")
+        _finding(findings, "gate-execution-role",
+                 "VA0/VA1 validates the actual legacy product, not a host AOT candidate")
     worktree = state.get("worktree")
     if not isinstance(worktree, dict):
         _finding(findings, "source-worktree-missing", "gate must preserve worktree status and tracked diff")
@@ -1106,7 +1113,8 @@ def audit_stage_gate(stage_dir: Path, *, source_root: Path | None = None,
         ctest_result = _validate_test_execution(stage, profile, state, inventory_path,
                                                junit_path, lasttest_path,
                                                source_root or Path(state.get("source_dir", "")), findings)
-        _check_required_tests({"profile": profile, "ctest": ctest_result}, findings)
+        _check_required_tests({"profile": profile, "stage_id": stage_id,
+                               "ctest": ctest_result}, findings)
 
     diagnostics = state.get("sanitizer_diagnostics")
     if not isinstance(diagnostics, list) or diagnostics:
@@ -1175,7 +1183,9 @@ def audit_stage_gate(stage_dir: Path, *, source_root: Path | None = None,
     elif verify_fingerprint and profile in PROFILES:
         _finding(findings, "source-root-missing", "cannot locate compiler source root for fingerprint verification")
 
-    return {"stage": str(stage), "profile": profile, "source_fingerprint": fingerprint,
+    return {"stage": str(stage), "profile": profile,
+            "stage_id": stage_id,
+            "source_fingerprint": fingerprint,
             "git_revision": state.get("git_revision"), "completed": state.get("completed") is True,
             "ctest": ctest_result, "passed": not findings, "findings": findings,
             "state": state, "log_files": [str(path.relative_to(stage)) for _, path in logs],
@@ -2698,6 +2708,124 @@ def _audit_no_device_lifecycle(stage: Path, base: Path, record: object,
         _finding(findings, "no-device-lifecycle-output", "failed create must not publish a GPU output")
 
 
+def _stage_id(stage: Path) -> str | None:
+    try:
+        state = load_json(stage / "gate-state.json")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    return state.get("stage_id") if isinstance(state, dict) else None
+
+
+def _audit_native_host_program(stage: Path, base: Path, record: object,
+                              refs: list[dict], findings: list[dict], *,
+                              required: bool) -> dict | None:
+    if record is None:
+        if required:
+            _finding(findings, "host-program-evidence-missing",
+                     "VA1 native evidence has no saved host-program recorder trace")
+        return None
+    try:
+        if not isinstance(record, dict):
+            raise ValueError("host_program_evidence reference is malformed")
+        record_path = _evidence_file(stage, base, record.get("file"),
+                                     "native host-program trace", refs, findings)
+        _check_digest_claim(record.get("sha256"), record_path,
+                            "native host-program trace", findings)
+        if record_path is None:
+            return None
+        trace_record = load_json(record_path)
+        if (not isinstance(trace_record, dict) or
+                trace_record.get("schema_version") != 1 or
+                trace_record.get("kind") != "ncnn.vulkan_host_program_evidence" or
+                trace_record.get("host_execution_role") != "legacy-product" or
+                trace_record.get("host_aot_candidate") is not False):
+            raise ValueError("native host-program trace has an invalid schema or execution role")
+        for name in ("manifest", "plan"):
+            artifact_record = trace_record.get(name)
+            if not isinstance(artifact_record, dict):
+                raise ValueError(f"native host-program trace omits {name} identity")
+            artifact_path = _evidence_file(
+                stage, base, artifact_record.get("file"),
+                f"native host-program {name}", refs, findings)
+            _check_digest_claim(artifact_record.get("sha256"), artifact_path,
+                                f"native host-program {name}", findings)
+            if artifact_path is None:
+                raise ValueError(f"native host-program {name} bytes are missing")
+            if name == "manifest":
+                manifest_path = artifact_path
+            else:
+                plan_path = artifact_path
+        manifest = load_json(manifest_path)
+        plan = load_json(plan_path)
+        shader_records = trace_record.get("shader_raw_files")
+        weight_records = trace_record.get("weight_raw_files")
+        if not isinstance(shader_records, list) or not isinstance(weight_records, list):
+            raise ValueError("native host-program raw shader/weight inventory is missing")
+        shader_bytes, weight_bytes = {}, {}
+        for item in shader_records:
+            if not isinstance(item, dict):
+                raise ValueError("native host-program shader raw record is malformed")
+            kernel_id = item.get("kernel_id")
+            if type(kernel_id) is not int or kernel_id in shader_bytes:
+                raise ValueError("native host-program shader kernel ID is missing/duplicated")
+            raw_path = _evidence_file(stage, base, item.get("file"),
+                                      f"native host-program kernel {kernel_id} raw shader",
+                                      refs, findings)
+            _check_digest_claim(item.get("sha256"), raw_path,
+                                f"native host-program kernel {kernel_id} raw shader", findings)
+            if raw_path is None:
+                raise ValueError(f"native host-program kernel {kernel_id} raw shader is missing")
+            raw = raw_path.read_bytes()
+            if item.get("size_bytes") != len(raw):
+                raise ValueError(f"native host-program kernel {kernel_id} shader byte count differs")
+            shader_bytes[kernel_id] = raw
+        for item in weight_records:
+            if not isinstance(item, dict):
+                raise ValueError("native host-program weight raw record is malformed")
+            resource_id = item.get("resource_id")
+            if type(resource_id) is not int or resource_id in weight_bytes:
+                raise ValueError("native host-program weight resource ID is missing/duplicated")
+            raw_path = _evidence_file(stage, base, item.get("file"),
+                                      f"native host-program weight {resource_id} raw bytes",
+                                      refs, findings)
+            _check_digest_claim(item.get("sha256"), raw_path,
+                                f"native host-program weight {resource_id} raw bytes", findings)
+            if raw_path is None:
+                raise ValueError(f"native host-program weight {resource_id} raw bytes are missing")
+            raw = raw_path.read_bytes()
+            if item.get("size_bytes") != len(raw):
+                raise ValueError(f"native host-program weight {resource_id} byte count differs")
+            weight_bytes[resource_id] = raw
+        result = host_program_audit.validate_host_program(
+            manifest, plan, shader_bytes=shader_bytes, weight_bytes=weight_bytes,
+            manifest_sha256=sha256_file(manifest_path),
+            plan_sha256=sha256_file(plan_path))
+        if trace_record.get("host_program_identity") != result["identity_sha256"]:
+            raise ValueError("native host-program trace identity differs from manifest")
+        if record.get("host_program_identity") != result["identity_sha256"]:
+            raise ValueError("native evidence reference has a stale host-program identity")
+        if trace_record.get("legacy_symbolic_trace") != result["legacy_symbolic_trace"]:
+            raise ValueError("saved symbolic recorder trace differs from independent oracle")
+        operations = trace_record.get("recorded_operations")
+        expected_operations = {"create": manifest["host_program"]["create_operations"],
+                               "run": manifest["host_program"]["run_operations"]}
+        if operations != expected_operations:
+            raise ValueError("saved native operation trace differs from manifest operations")
+        expected_audit = {key: value for key, value in result.items()
+                          if key != "legacy_symbolic_trace"}
+        if trace_record.get("audit") != expected_audit:
+            raise ValueError("saved host-program audit summary is stale or tampered")
+        return {"path": str(record_path.relative_to(stage)),
+                "identity_sha256": result["identity_sha256"],
+                "shader_count": len(shader_bytes), "weight_count": len(weight_bytes),
+                "legacy_symbolic_trace": result["legacy_symbolic_trace"]}
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError,
+            host_program_audit.EvidenceError) as error:
+        _finding(findings, "host-program-evidence-invalid",
+                 f"native host-program evidence is invalid: {error}")
+        return None
+
+
 def _audit_offline(stage: Path, refs: list[dict], findings: list[dict]) -> dict | None:
     base = stage / "test/Native/vulkan-product-offline"
     evidence_path = _evidence_file(stage, base, "evidence.json", "V6 offline evidence", refs, findings)
@@ -2720,6 +2848,14 @@ def _audit_offline(stage: Path, refs: list[dict], findings: list[dict]) -> dict 
         if claims.get("vulkan_device_execution") != "not_run" or claims.get("cpu_gpu_numerical_comparison") != "not_claimed":
             _finding(findings, "offline-claim-overreach", "offline evidence overclaims GPU numerical validation")
         fixture = evidence.get("fixture", {})
+        native_host_program = _audit_native_host_program(
+            stage, base, evidence.get("host_program_evidence"), refs, findings,
+            required=_stage_id(stage) == "VA1")
+        if (native_host_program is not None and
+                fixture.get("host_program_identity") !=
+                native_host_program.get("identity_sha256")):
+            _finding(findings, "host-program-fixture-identity",
+                     "offline fixture identity differs from native host-program audit")
         if fixture.get("model") != "paired_relu":
             _finding(findings, "offline-fixture", "offline positive fixture is not paired ReLU")
         model_param = _evidence_file(stage, base, "model.param", "offline model .param", refs, findings)
@@ -3202,6 +3338,14 @@ def _audit_product(stage: Path, expected_devices: set[str], refs: list[dict],
             if execution.get("mode") != "device-execution" or execution.get("vulkan_execution") != "passed":
                 _finding(findings, "product-execution", f"V4 {base.name} does not record a successful device execution")
             fixture = evidence.get("fixture", {})
+            native_host_program = _audit_native_host_program(
+                stage, base, evidence.get("host_program_evidence"), refs, findings,
+                required=_stage_id(stage) == "VA1")
+            if (native_host_program is not None and
+                    fixture.get("host_program_identity") !=
+                    native_host_program.get("identity_sha256")):
+                _finding(findings, "host-program-fixture-identity",
+                         f"V4 {base.name} fixture identity differs from native host-program audit")
             io = evidence.get("public_io", {})
             if (fixture.get("model") != "paired_relu" or io.get("element_type") != "f32" or
                     io.get("shape_chw") != [1, 1, 257] or io.get("host_layout") != "CHW"):
@@ -3768,6 +3912,39 @@ def _audit_v5_artifacts(stage: Path, out_dir: Path, model_root: Path,
             _finding(findings, "v5-manifest-invalid", f"V5 {model} Vulkan manifest JSON invalid: {error}")
     manifest = manifest if isinstance(manifest, dict) else {}
     _audit_current_host_contract(manifest, f"V5 {model}", findings)
+    if manifest.get("host_program") is not None:
+        try:
+            raw_shader_files = {}
+            validation_records = identity.get("shader_validations", [])
+            validation_directory = identity.get("shader_validation_directory", "spirv-validation")
+            if not isinstance(validation_records, list):
+                raise ValueError("V5 host-program shader raw inventory is malformed")
+            for record in validation_records:
+                if not isinstance(record, dict) or type(record.get("kernel_id")) is not int:
+                    raise ValueError("V5 host-program shader raw record lacks kernel ID")
+                relative = Path(str(validation_directory)) / str(record.get("path", ""))
+                raw_path = _evidence_file(stage, model_root, relative.as_posix(),
+                                          f"V5 {model} host-program raw shader",
+                                          refs, findings)
+                if raw_path is None:
+                    raise ValueError("V5 host-program shader raw bytes are missing")
+                raw_shader_files[record["kernel_id"]] = raw_path.read_bytes()
+            host_result = host_program_audit.validate_host_program(
+                manifest, plan, shader_bytes=raw_shader_files,
+                manifest_sha256=sha256_file(manifest_path),
+                plan_sha256=sha256_file(paths["plan_sha256"]))
+            if (identity.get("weight_manifest_entries") != manifest.get("weights") or
+                    identity.get("host_program_identity") not in
+                    (None, host_result["identity_sha256"])):
+                _finding(findings, "v5-host-program-weight-identity",
+                         f"V5 {model} host-program identity/weights differ from actual manifest")
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError,
+                host_program_audit.EvidenceError) as error:
+            _finding(findings, "v5-host-program-invalid",
+                     f"V5 {model} host-program validation failed: {error}")
+    elif _stage_id(stage) == "VA1":
+        _finding(findings, "v5-host-program-missing",
+                 f"VA1 V5 {model} manifest omits the compiler-only host program")
     if plan_hash and manifest.get("plan_sha256") != plan_hash:
         _finding(findings, "v5-plan-manifest-mismatch", f"V5 {model} Vulkan manifest does not bind the audited plan bytes")
     manifest_shaders = manifest.get("shaders", [])
@@ -3995,7 +4172,45 @@ OFFLINE_PLAN_TESTS = frozenset(
 OFFLINE_HOST_TESTS = OFFLINE_RUNTIME_TESTS | OFFLINE_PRODUCT_TESTS | OFFLINE_PLAN_TESTS
 
 
-def _required_tests(profile: str) -> set[str]:
+VA1_HOST_PROGRAM_TESTS = frozenset(
+    f"VulkanHostProgramTest.{name}" for name in (
+        "ChainMatchesLegacyTrace", "BranchAndRepeatedOutputs",
+        "WeightsAndUnusedInput", "WawWarAndReadRead",
+        "RejectsReferencesLifetimesAndBindings", "RejectsDispatchAndOverflow",
+        "RejectsTamperedOperations", "IdentityIsCanonicalAndSensitive"))
+VA1_SHADER_INTERFACE_TESTS = frozenset(
+    f"VulkanShaderInterfaceTest.{name}" for name in (
+        "ReflectsTypedBindingsEntryAndPushRanges",
+        "ReflectsShaderWithoutPushConstantBlock",
+        "RejectsTruncatedWordsAndWrongTargetVersion",
+        "RejectsMismatchedEntryAndLocalSize",
+        "RejectsBindingTypeExtentAndActualAccessMismatch",
+        "RejectsUnsupportedPointerFlow",
+        "RequiresPlanCoverageForActualPushReads",
+        "RequiresKernelAndShaderIdsToMatchPlan"))
+VA1_REQUIRED_TESTS = (VA1_HOST_PROGRAM_TESTS | VA1_SHADER_INTERFACE_TESTS |
+                      {"vulkan-host-program-evidence-tests"})
+VA1_STEP_TESTS = {
+    "VA1.1": frozenset({
+        "VulkanHostProgramTest.RejectsReferencesLifetimesAndBindings",
+        "VulkanHostProgramTest.WeightsAndUnusedInput",
+        *VA1_SHADER_INTERFACE_TESTS}),
+    "VA1.2": frozenset({
+        "VulkanHostProgramTest.ChainMatchesLegacyTrace",
+        "VulkanHostProgramTest.BranchAndRepeatedOutputs",
+        "VulkanHostProgramTest.WawWarAndReadRead"}),
+    "VA1.3": frozenset({
+        "VulkanHostProgramTest.IdentityIsCanonicalAndSensitive",
+        "VulkanHostProgramTest.RejectsTamperedOperations",
+        "vulkan-host-program-evidence-tests"}),
+    "VA1.4": frozenset({
+        "VulkanHostProgramTest.RejectsDispatchAndOverflow",
+        "VulkanHostProgramTest.RejectsTamperedOperations",
+        "vulkan-host-program-evidence-tests"}),
+}
+
+
+def _required_tests(profile: str, stage_id: str = "VA0") -> set[str]:
     tests = {"vulkan-abi-c-contract", "vulkan-v1-cpu-baseline",
              "vulkan-release-evidence-validation", "vulkan-gate-validation",
              "ncnn-compile-vulkan-offline", "vulkan-v5-comparison-validation",
@@ -4020,12 +4235,20 @@ def _required_tests(profile: str) -> set[str]:
                       "ncnn-compile-vulkan-product-llvmpipe"))
     elif profile in {"software", "hardware"}:
         tests.add("ncnn-compile-vulkan-product")
+    if stage_id == "VA1":
+        tests.update(VA1_REQUIRED_TESTS)
     return tests
 
 
 def _check_required_tests(gate: dict, findings: list[dict]) -> None:
     names = set(gate.get("ctest", {}).get("test_names", []))
-    missing = sorted(_required_tests(gate.get("profile")) - names)
+    stage_id = gate["stage_id"] if "stage_id" in gate else "VA0"
+    if stage_id not in {"VA0", "VA1"}:
+        _finding(findings, "gate-execution-role",
+                 "required-test scope has an invalid or missing stage_id",
+                 stage_id=stage_id)
+        return
+    missing = sorted(_required_tests(gate.get("profile"), stage_id) - names)
     if missing:
         _finding(findings, "required-ctest-missing", "profile CTest inventory is missing required gate tests",
                  profile=gate.get("profile"), tests=missing)
@@ -4092,6 +4315,9 @@ def _make_id_catalog() -> dict[str, dict]:
         "ncnn-compile-vulkan-offline", *sorted(OFFLINE_HOST_TESTS),
         *va0_product_tests, *both_v0, *both_v2, *both_v3, *both_v4, *both_v5],
         "va0", "pending-migration-coverage-and-no-device-lifecycle")
+    for identifier, tests in VA1_STEP_TESTS.items():
+        add(identifier, "typed-host-program-and-static-planner",
+            sorted(tests), "va1", "planner-and-legacy-symbolic-trace-only")
     return catalog
 
 
@@ -4201,8 +4427,10 @@ def _va0_migration_coverage(gate: dict) -> dict:
                 "passed"),
         }
     profile = gate.get("profile", "")
+    legacy_test_rows = [row for identifier, row in id_rows.items()
+                        if ID_CATALOG[identifier]["evidence_family"] != "va1"]
     applicable = set().union(*(_applicable_tests(row["legacy_tests"], profile)
-                               for row in id_rows.values())) if id_rows else set()
+                               for row in legacy_test_rows)) if legacy_test_rows else set()
     missing = sorted(applicable - set(actual_names))
     return {
         "status": "pending",
@@ -4419,7 +4647,8 @@ def _va0_normalize_semantic_json(value: object) -> object:
 def _va0_manifest_semantics(path: Path) -> object:
     value = load_json(path)
     ignored = {"build_identity", "host_implementation", "host_codegen_version",
-               "execution_plan_usage", "dependencies", "plan_hash", "plan_sha256",
+               "execution_plan_usage", "host_program", "host_program_identity",
+               "host_program_usage", "dependencies", "plan_hash", "plan_sha256",
                "shader_sha256", "shader_sha256s"}
     if isinstance(value, dict):
         normalized = {key: item for key, item in value.items() if key not in ignored}
@@ -5420,6 +5649,36 @@ def _audit_va0_baseline(stage: Path, gate: dict, families: dict,
             "scope": "legacy generic-plan-runtime only; no current host AOT/no-LLVM claim"}
 
 
+def _audit_va1_stage(gate: dict, families: dict, refs: list[dict],
+                    findings: list[dict]) -> dict:
+    stage_id = gate.get("stage_id")
+    tests = set(gate.get("ctest", {}).get("test_names", []))
+    missing = sorted(VA1_REQUIRED_TESTS - tests)
+    if stage_id != "VA1":
+        return {"status": "not-applicable", "stage_id": stage_id,
+                "host_aot_candidate": False}
+    if missing:
+        _finding(findings, "va1-test-inventory-missing",
+                 "VA1 stage lacks required host-program/planner tests",
+                 tests=missing)
+    host_refs = [item for item in refs
+                 if "host-program" in str(item.get("role", "")).lower() or
+                 "host-program" in str(item.get("path", "")).lower()]
+    native_ok = bool(host_refs) and not any(
+        item.get("code", "").startswith("host-program") or
+        item.get("code", "").startswith("v5-host-program")
+        for item in findings)
+    if not native_ok:
+        _finding(findings, "va1-host-program-raw-evidence-missing",
+                 "VA1 lacks validated native raw host-program evidence")
+    return {"status": "verified" if not missing and native_ok else "blocked",
+            "stage_id": "VA1", "required_tests": sorted(VA1_REQUIRED_TESTS),
+            "tests_executed": sorted(tests & VA1_REQUIRED_TESTS),
+            "tests_missing": missing, "host_program_evidence": host_refs,
+            "host_execution_role": "legacy-product", "host_aot_candidate": False,
+            "claim_scope": "compiler-only planner evidence; no candidate GPU execution"}
+
+
 def audit_stage_evidence(gate: dict) -> dict:
     """Adapt this fresh stage's existing V0–V5 and offline schemas."""
     stage = Path(gate["stage"]).resolve()
@@ -5439,6 +5698,10 @@ def audit_stage_evidence(gate: dict) -> dict:
     va0_findings = []
     families["va0"] = _audit_va0_baseline(
         stage, gate, families, refs, va0_findings)
+    va1_findings = []
+    families["va1"] = _audit_va1_stage(
+        gate, families, refs, va1_findings)
+    findings.extend(va1_findings)
     compact = {}
     for name, data in families.items():
         if name == "cpu_baseline":
@@ -5511,6 +5774,8 @@ def audit_stage_evidence(gate: dict) -> dict:
                 "host_aot_status": "not-implemented-va1-and-later",
                 "scope": "legacy generic-plan-runtime only; no current host AOT/no-LLVM claim",
             }
+        elif name == "va1":
+            compact[name] = data
     gate_state = gate.get("state", {})
     for label, key in (("gate-state", None), ("CMakeCache", "cmake_cache"),
                        ("CTest inventory", "inventory"), ("CTest JUnit", "junit"),
@@ -5578,6 +5843,7 @@ def audit_stage_evidence(gate: dict) -> dict:
                              ctest_started=ctest_start.isoformat(), ctest_finished=ctest_end.isoformat())
     scope_passed = not findings
     return {"stage": gate.get("stage"), "profile": profile,
+            "stage_id": gate.get("stage_id"),
             "source_fingerprint": gate.get("source_fingerprint"),
             "git_revision": gate.get("git_revision"),
             "completed": gate.get("completed"), "scope_passed": scope_passed,
@@ -5816,23 +6082,94 @@ def _va0_id_row(identifier: str, spec: dict, stage_audits: list[dict]) -> dict:
     }
 
 
+def _va1_id_row(identifier: str, spec: dict, stage_audits: list[dict]) -> dict:
+    target_profiles = ("release", "sanitize")
+    stages = [stage for stage in stage_audits
+              if stage.get("stage_id") == "VA1" and
+              stage.get("profile") in target_profiles]
+    tests = set(spec["tests"])
+    executed = set().union(*(set(stage.get("ctest", {}).get("test_names", []))
+                             for stage in stages)) if stages else set()
+    missing_tests = sorted(tests - executed)
+    profile_rows = []
+    selected_refs = {}
+    profile_valid = {}
+    for profile in target_profiles:
+        matches = [stage for stage in stages if stage.get("profile") == profile]
+        if len(matches) != 1:
+            profile_valid[profile] = False
+            profile_rows.append({"profile": profile, "status": "missing" if not matches else "duplicate",
+                                 "stages": [stage.get("stage") for stage in matches]})
+            continue
+        stage = matches[0]
+        names = set(stage.get("ctest", {}).get("test_names", []))
+        va1 = stage.get("families", {}).get("va1", {})
+        missing = sorted(tests - names)
+        valid = (stage.get("scope_passed") is True and
+                 va1.get("status") == "verified" and not missing and
+                 stage.get("archive_integrity", {}).get("status") == "verified")
+        profile_valid[profile] = valid
+        profile_rows.append({"profile": profile,
+                             "stage": stage.get("stage"),
+                             "source_fingerprint": stage.get("source_fingerprint"),
+                             "status": "passed" if valid else "blocked",
+                             "tests_executed": sorted(names & tests),
+                             "tests_missing": missing,
+                             "host_program_evidence": va1.get("host_program_evidence", [])})
+        for ref in stage.get("raw_artifacts", []):
+            path = str(ref.get("path", ""))
+            role = str(ref.get("role", ""))
+            if ("host-program" in path.lower() or "host-program" in role.lower() or
+                    "test/Vulkan/evidence/v5/" in path):
+                key = (stage.get("stage"), path)
+                selected_refs[key] = {"stage": stage.get("stage"),
+                                      **{field: ref[field] for field in ("path", "sha256", "role")
+                                         if field in ref}}
+    fingerprints = {stage.get("source_fingerprint") for stage in stages
+                    if stage.get("source_fingerprint")}
+    passed = (all(profile_valid.get(profile) is True for profile in target_profiles) and
+              len(fingerprints) == 1)
+    return {"cpu_positive": {"fixture": spec["cpu_fixture"],
+                             "fresh_cpu_baseline": []},
+            "related_tests": spec["tests"],
+            "tests_executed": sorted(tests & executed),
+            "tests_missing_from_supplied_stages": missing_tests,
+            "tests_applicable_to_supplied_profiles": sorted(tests),
+            "tests_missing_for_supplied_profile_scopes": missing_tests,
+            "profiles": profile_rows,
+            "evidence_family": "va1-compiler-only-planner",
+            "evidence_profiles": list(target_profiles),
+            "gpu_numerical_claim": spec["gpu_numeric"],
+            "raw_artifacts": list(selected_refs.values()),
+            "status": "passed" if passed else "blocked",
+            "release_status": "not_eligible",
+            "release_eligibility_scope": "VA1 planner only; not model-specific host AOT",
+            "host_aot_release_eligible": False,
+            "source_fingerprints": sorted(fingerprints)}
+
+
 def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
                    all_refs: list[dict]) -> dict:
+    legacy_audits = [stage for stage in stage_audits
+                     if stage.get("stage_id") != "VA1"]
     actual_tests = set().union(*(set(stage.get("ctest", {}).get("test_names", []))
-                                 for stage in stage_audits)) if stage_audits else set()
-    cpu_baselines = [stage for stage in stage_audits
+                                 for stage in legacy_audits)) if legacy_audits else set()
+    cpu_baselines = [stage for stage in legacy_audits
                      if stage.get("families", {}).get("cpu_baseline")]
     indexed = {}
     for identifier, spec in ID_CATALOG.items():
         family = spec["evidence_family"]
         related = spec["tests"]
+        if family == "va1":
+            indexed[identifier] = _va1_id_row(identifier, spec, stage_audits)
+            continue
         if family == "va0":
-            indexed[identifier] = _va0_id_row(identifier, spec, stage_audits)
+            indexed[identifier] = _va0_id_row(identifier, spec, legacy_audits)
             continue
         executed = sorted(set(related) & actual_tests)
         missing_tests = sorted(set(related) - actual_tests)
         applicable_tests = set().union(*(_applicable_tests(related, stage.get("profile", ""))
-                                         for stage in stage_audits)) if stage_audits else set()
+                                         for stage in legacy_audits)) if legacy_audits else set()
         missing_applicable = sorted(applicable_tests - actual_tests)
         selected_refs = []
         cpu_hashes = []
@@ -5840,8 +6177,8 @@ def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
         failed_applicable_scope = any(
             not stage.get("scope_passed") and
             bool(_applicable_tests(related, stage.get("profile", "")) & set(related))
-            for stage in stage_audits)
-        for stage in stage_audits:
+            for stage in legacy_audits)
+        for stage in legacy_audits:
             families = stage.get("families", {})
             if family in {"v6.1", "gate", "index", "decision"}:
                 include = True
@@ -5910,7 +6247,7 @@ def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
             status = "passed_for_profile_scope"
         if (not release_eligible and any(
                 stage.get("profile") in {"release", "sanitize"} and not stage.get("scope_passed")
-                for stage in stage_audits) and status == "passed_for_profile_scope"):
+                for stage in legacy_audits) and status == "passed_for_profile_scope"):
             status = "blocked"
         indexed[identifier] = {
             "cpu_positive": cpu_ref,
@@ -5929,7 +6266,58 @@ def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
     return indexed
 
 
-def audit_stage_archive(stage_dir: Path, *, required: bool = False) -> dict:
+def _archive_captures_stage_artifact(relative: str) -> bool:
+    return (
+        relative.startswith((
+            "gate-", "test/Native/vulkan-product-cli",
+            "test/Native/vulkan-product-offline/",
+            "test/Native/vulkan-v1-cpu-baseline/",
+            "test/Vulkan/evidence/", "test/Vulkan/cpu-",
+            "gate-source-inputs/", "gate-budget-evidence/",
+            "toolchain-evidence/", "legacy-reference/")) or
+        relative in {"CMakeCache.txt", "compile_commands.json",
+                     "test/gate-tests.json", "release-evidence.json"}
+    )
+
+
+def _discover_archive_input_files(stage: Path) -> dict[str, str]:
+    """Reconstruct archive_stage's required evidence inventory from stage bytes."""
+    candidates: list[Path] = []
+    candidates.extend(path for path in stage.glob("gate-*.json")
+                      if path.name not in {"gate-archive-manifest.json",
+                                           "gate-archive-receipt.json"})
+    candidates.extend(stage.glob("gate-*.log"))
+    candidates.extend(stage.glob("gate-*.xml"))
+    candidates.extend(stage / name for name in (
+        "gate-source-status.txt", "gate-source-diff.patch", "release-evidence.json",
+        "CMakeCache.txt", "compile_commands.json", "test/gate-tests.json"))
+    candidates.extend(stage / name for name in (
+        "test/Vulkan/evidence", "test/Native/vulkan-v1-cpu-baseline",
+        "test/Native/vulkan-product-offline", "gate-source-inputs",
+        "gate-budget-evidence", "toolchain-evidence", "legacy-reference"))
+    candidates.extend((stage / "test/Native").glob("vulkan-product-cli*"))
+    candidates.extend((stage / "test/Vulkan").glob("cpu-*"))
+    files = {}
+    for candidate in candidates:
+        if candidate.is_dir():
+            paths = (path for path in candidate.rglob("*") if path.is_file())
+        elif candidate.is_file():
+            paths = (candidate,)
+        else:
+            continue
+        for path in paths:
+            resolved = path.resolve()
+            try:
+                resolved.relative_to(stage.resolve())
+            except ValueError as error:
+                raise ValueError(f"archive evidence path escapes its stage: {path}") from error
+            relative = path.relative_to(stage).as_posix()
+            files[relative] = sha256_file(resolved)
+    return files
+
+
+def audit_stage_archive(stage_dir: Path, *, required: bool = False,
+                        required_artifacts: list[dict] | None = None) -> dict:
     stage = Path(stage_dir).resolve()
     findings = []
     receipt_path = stage / "gate-archive-receipt.json"
@@ -5962,99 +6350,206 @@ def audit_stage_archive(stage_dir: Path, *, required: bool = False) -> dict:
                 receipt.get("profile") != state.get("profile") or
                 receipt.get("gate_completed") is not True or state.get("completed") is not True):
             raise ValueError("archive receipt does not bind a completed same-source profile")
+        archive_manifest = load_json(manifest)
+        archived_files = archive_manifest.get("files") if isinstance(archive_manifest, dict) else None
+        if not isinstance(archived_files, dict):
+            raise ValueError("stage archive manifest has no file inventory")
+        audited_artifacts = {}
+        if required or required_artifacts is not None:
+            audited_artifacts.update(_discover_archive_input_files(stage))
+        for artifact in required_artifacts or []:
+            if not isinstance(artifact, dict):
+                raise ValueError("required archived artifact record is malformed")
+            relative = artifact.get("path")
+            digest = artifact.get("sha256")
+            if (not isinstance(relative, str) or not relative or
+                    not SHA256_RE.fullmatch(str(digest or ""))):
+                raise ValueError("required archived artifact path/hash is malformed")
+            if not _archive_captures_stage_artifact(relative):
+                raise ValueError(f"required audited artifact is outside the frozen archive scope: {relative}")
+            previous = audited_artifacts.get(relative)
+            if previous is not None and previous != digest:
+                raise ValueError(f"audited artifact has conflicting hashes: {relative}")
+            audited_artifacts[relative] = digest
+        for relative, digest in audited_artifacts.items():
+            actual_path = safe_stage_file(stage, relative)
+            if actual_path is None or not actual_path.is_file():
+                raise ValueError(f"audited stage artifact is missing: {relative}")
+            if sha256_file(actual_path) != digest:
+                raise ValueError(f"audited stage artifact changed after evidence audit: {relative}")
+            if archived_files.get(relative) != digest:
+                raise ValueError(f"archive omits or changes audited stage artifact: {relative}")
+        audited_archived_count = len(audited_artifacts)
         return {"status": "verified", "receipt": {"path": receipt_path.name,
                 "sha256": sha256_file(receipt_path)}, "archive": record,
-                "verification": verified, "findings": []}
+                "verification": verified,
+                "audited_artifact_count": audited_archived_count,
+                "findings": []}
     except (OSError, ValueError, RuntimeError, TypeError, KeyError) as error:
         _finding(findings, "archive-integrity-invalid", str(error))
         return {"status": "invalid", "findings": findings}
 
 
 def build_report(stage_dirs: list[Path], *, require_release: bool = False,
-                 verify_fingerprint: bool = True, require_archives: bool = False) -> dict:
+                 verify_fingerprint: bool = True, require_archives: bool = False,
+                 require_va1_planner: bool = False) -> dict:
     gates = []
     for stage_dir in stage_dirs:
         gate = audit_stage_gate(stage_dir, verify_fingerprint=verify_fingerprint)
         stage = audit_stage_evidence(gate)
-        stage["archive_integrity"] = audit_stage_archive(stage_dir, required=require_archives)
+        if "stage_id" in gate:
+            stage["stage_id"] = gate["stage_id"]
+        elif "stage_id" not in stage:
+            # Historical gate/evidence rows predate stage_id and belong to VA0.
+            stage["stage_id"] = "VA0"
+        required_archive_artifacts = []
+        if stage.get("stage_id") == "VA1":
+            deduplicated = {}
+            for ref in stage.get("raw_artifacts", []):
+                relative = str(ref.get("path", ""))
+                if _archive_captures_stage_artifact(relative):
+                    deduplicated[relative] = {
+                        "path": relative, "sha256": ref.get("sha256")}
+            required_archive_artifacts = list(deduplicated.values())
+        stage["archive_integrity"] = audit_stage_archive(
+            stage_dir,
+            required=(require_archives and stage.get("stage_id") == "VA0") or
+                     (require_va1_planner and stage.get("stage_id") == "VA1"),
+            required_artifacts=required_archive_artifacts)
         gates.append(stage)
-    global_findings = [{"stage": stage.get("stage"), **finding}
+    global_findings = [{"stage": stage.get("stage"),
+                        "stage_id": stage.get("stage_id"), **finding}
                        for stage in gates for finding in
                        stage.get("archive_integrity", {}).get("findings", [])]
+    invalid_stage_ids = [stage for stage in gates
+                         if stage.get("stage_id") not in {"VA0", "VA1"}]
+    invalid_stage_id_findings = []
+    for stage in invalid_stage_ids:
+        finding = {"code": "stage-id-invalid",
+                   "message": "stage_id must be VA0 or VA1 when explicitly supplied",
+                   "stage": stage.get("stage"),
+                   "stage_id": stage.get("stage_id")}
+        global_findings.append(finding)
+        invalid_stage_id_findings.append(finding)
     seen_profiles = {}
     for stage in gates:
-        profile = stage.get("profile")
-        if profile in seen_profiles:
+        key = (stage.get("stage_id"), stage.get("profile"))
+        if key in seen_profiles:
             _finding(global_findings, "duplicate-profile-stage",
-                     f"more than one stage supplied profile {profile}",
-                     stages=[seen_profiles[profile], stage.get("stage")])
+                     f"more than one {key[0]} stage supplied profile {key[1]}",
+                     stage_id=key[0], profile=key[1],
+                     stages=[seen_profiles[key], stage.get("stage")])
         else:
-            seen_profiles[profile] = stage.get("stage")
-    fingerprints = {stage.get("source_fingerprint") for stage in gates if stage.get("source_fingerprint")}
-    if len(fingerprints) > 1:
-        _finding(global_findings, "composite-source-mismatch",
-                 "all combined stages must have exactly the same fresh source_fingerprint",
-                 fingerprints=sorted(fingerprints))
+            seen_profiles[key] = stage.get("stage")
+    grouped_fingerprints = {}
+    for stage in gates:
+        fingerprint = stage.get("source_fingerprint")
+        if fingerprint:
+            grouped_fingerprints.setdefault(stage.get("stage_id"), set()).add(fingerprint)
+    for stage_id, fingerprints in grouped_fingerprints.items():
+        if len(fingerprints) > 1:
+            _finding(global_findings, "composite-source-mismatch",
+                     f"{stage_id} stages must use the same fresh source_fingerprint",
+                     stage_id=stage_id, fingerprints=sorted(fingerprints))
+
+    all_fingerprints = (set().union(*grouped_fingerprints.values())
+                        if grouped_fingerprints else set())
+    va0_gates = [stage for stage in gates if stage.get("stage_id") == "VA0"]
+    va1_gates = [stage for stage in gates if stage.get("stage_id") == "VA1"]
     required_profiles = {"release", "sanitize", "offline", "software"}
-    supplied_profiles = {stage.get("profile") for stage in gates}
+    supplied_profiles = {stage.get("profile") for stage in va0_gates}
     missing_profiles = sorted(required_profiles - supplied_profiles)
-    invalid_stages = [stage.get("stage") for stage in gates if not stage.get("scope_passed")]
+    invalid_stages = [stage.get("stage") for stage in va0_gates
+                      if not stage.get("scope_passed")]
+    legacy_archive_findings = [{"stage": stage.get("stage"), **finding}
+                               for stage in va0_gates for finding in
+                               stage.get("archive_integrity", {}).get("findings", [])]
+    legacy_fingerprint_set = grouped_fingerprints.get("VA0", set())
+    legacy_scope_findings = [item for item in global_findings
+                             if item.get("stage_id") in (None, "VA0")]
     if invalid_stages:
-        _finding(global_findings, "stage-scope-failed", "one or more gate stages failed their evidence audit",
-                 stages=invalid_stages)
-    release_eligible = (not missing_profiles and not invalid_stages and not global_findings
-                        and len(fingerprints) == 1 and all(
-                            sum(stage.get("profile") == profile for stage in gates) == 1
-                            for profile in required_profiles))
+        _finding(global_findings, "stage-scope-failed",
+                 "one or more VA0 legacy gate stages failed their evidence audit",
+                 stages=invalid_stages, stage_id="VA0")
+    release_eligible = (
+        not missing_profiles and not invalid_stages and not invalid_stage_ids and
+        not legacy_archive_findings and not legacy_scope_findings and
+        len(legacy_fingerprint_set) == 1 and all(
+            sum(stage.get("profile") == profile for stage in va0_gates) == 1
+            for profile in required_profiles))
     release_blockers = []
     if missing_profiles:
         release_blockers.append({"code": "required-profiles-missing",
-                                 "message": "release requires release, sanitize, offline, and software stages",
+                                 "message": "legacy release requires VA0 release, sanitize, offline, and software stages",
                                  "profiles": missing_profiles})
     if invalid_stages:
         release_blockers.append({"code": "stage-scope-incomplete",
-                                 "message": "one or more complete fresh gate scopes did not pass",
+                                 "message": "one or more complete VA0 legacy gate scopes did not pass",
                                  "stages": invalid_stages})
-    if global_findings:
-        release_blockers.extend(global_findings)
+    release_blockers.extend(invalid_stage_id_findings)
+    release_blockers.extend(legacy_archive_findings)
+    release_blockers.extend(legacy_scope_findings)
     if require_release and not release_eligible and not missing_profiles:
         _finding(global_findings, "release-eligibility-required",
-                 "--require-release was requested but the complete four-profile matrix is not eligible")
+                 "--require-release was requested but the complete VA0 four-profile matrix is not eligible")
         release_blockers.extend(global_findings[-1:])
     all_refs = []
+    legacy_refs = []
     for stage in gates:
         for ref in stage.get("raw_artifacts", []):
-            all_refs.append({"stage": stage.get("stage"), **ref})
-    id_index = _make_id_index(gates, release_eligible=release_eligible, all_refs=all_refs)
+            item = {"stage": stage.get("stage"), **ref}
+            all_refs.append(item)
+            if stage.get("stage_id") == "VA0":
+                legacy_refs.append(item)
+    id_index = _make_id_index(gates, release_eligible=release_eligible,
+                              all_refs=legacy_refs)
     if release_eligible and any(
             row.get("status") != "passed" for identifier, row in id_index.items()
-            if not identifier.startswith("VA0.")):
+            if not identifier.startswith(("VA0.", "VA1."))):
         release_eligible = False
         release_blockers.append({"code": "id-index-incomplete",
                                  "message": "one or more V0.1–V6.4 audit rows lacks CPU/test/raw evidence"})
-        for row in id_index.values():
+        for identifier, row in id_index.items():
+            if identifier.startswith("VA1."):
+                continue
             row["release_status"] = "not_eligible"
             if row["status"] == "passed":
                 row["status"] = "blocked"
+
     va0_required_profiles = {"release", "sanitize", "offline", "software"}
-    va0_missing_profiles = sorted(va0_required_profiles - supplied_profiles)
+    va0_missing_profiles = sorted(va0_required_profiles -
+                                  {stage.get("profile") for stage in va0_gates})
+    va0_scope_gates = va0_gates if va0_gates else va1_gates
     va0_findings = [{"stage": stage.get("stage"), "profile": stage.get("profile"), **item}
-                    for stage in gates for item in stage.get("va0_findings", [])]
+                    for stage in va0_scope_gates for item in stage.get("va0_findings", [])]
     va0_ids = {identifier: row for identifier, row in id_index.items()
                if identifier.startswith("VA0.")}
-    va0_incomplete_ids = sorted(identifier for identifier, row in va0_ids.items()
-                                 if row.get("status") != "passed_for_profile_scope")
+    va0_incomplete_ids = (sorted(identifier for identifier, row in va0_ids.items()
+                                  if row.get("status") != "passed_for_profile_scope")
+                          if va0_gates else [])
+    va0_scope_invalid_stages = [stage.get("stage") for stage in va0_scope_gates
+                                if not stage.get("scope_passed")]
+    va0_index_complete = (not va0_gates or all(
+        all(profile_row.get("status") == "passed_for_profile_scope"
+            for profile_row in row.get("profiles", []))
+        for row in va0_ids.values()))
     va0_stage_scope_passed = (
-        bool(supplied_profiles) and not va0_findings and not invalid_stages and
-        not global_findings and not va0_incomplete_ids and all(
-            all(profile_row.get("status") == "passed_for_profile_scope"
-                for profile_row in row.get("profiles", []))
-            for row in va0_ids.values()))
+        bool(va0_scope_gates) and not va0_findings and
+        not va0_scope_invalid_stages and va0_index_complete and
+        (not va0_gates or (not legacy_archive_findings and
+                           not legacy_scope_findings)))
+    va0_baseline_stage_scope_passed = (
+        bool(va0_gates) and not any(
+            stage.get("va0_findings") or not stage.get("scope_passed")
+            for stage in va0_gates) and not legacy_archive_findings and
+        not legacy_scope_findings and not va0_incomplete_ids and va0_index_complete)
     va0_baseline_eligible = (
-        va0_stage_scope_passed and not va0_missing_profiles and len(fingerprints) == 1 and
-        all(sum(stage.get("profile") == profile for stage in gates) == 1
+        va0_baseline_stage_scope_passed and not va0_missing_profiles and
+        len(legacy_fingerprint_set) == 1 and all(
+            sum(stage.get("profile") == profile for stage in va0_gates) == 1
             for profile in va0_required_profiles))
     va0_blockers = list(va0_findings)
+    va0_blockers.extend(legacy_archive_findings)
     if va0_missing_profiles:
         va0_blockers.append({"code": "va0-required-profiles-missing",
                              "message": "VA0 baseline eligibility requires four fresh profiles",
@@ -6063,13 +6558,62 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
         va0_blockers.append({"code": "va0-id-index-incomplete",
                              "message": "VA0.1–VA0.4 lack profile-scoped legacy-reference/test/raw evidence",
                              "ids": va0_incomplete_ids})
+
+    va1_required_profiles = {"release", "sanitize"}
+    va1_missing_profiles = sorted(va1_required_profiles -
+                                  {stage.get("profile") for stage in va1_gates})
+    va1_fingerprints = grouped_fingerprints.get("VA1", set())
+    va1_invalid_stages = [stage.get("stage") for stage in va1_gates
+                          if not stage.get("scope_passed") or
+                          stage.get("archive_integrity", {}).get("status") != "verified"]
+    va1_ids = {identifier: row for identifier, row in id_index.items()
+               if identifier.startswith("VA1.")}
+    va1_incomplete_ids = sorted(identifier for identifier, row in va1_ids.items()
+                                 if row.get("status") != "passed")
+    va1_duplicate_profiles = any(
+        sum(stage.get("profile") == profile for stage in va1_gates) != 1
+        for profile in va1_required_profiles)
+    va1_planner_eligible = (
+        not va1_missing_profiles and not va1_invalid_stages and
+        not va1_duplicate_profiles and len(va1_fingerprints) == 1 and
+        not va1_incomplete_ids)
+    va1_blockers = []
+    if va1_missing_profiles:
+        va1_blockers.append({"code": "va1-required-profiles-missing",
+                             "profiles": va1_missing_profiles})
+    if va1_invalid_stages:
+        va1_blockers.append({"code": "va1-stage-incomplete",
+                             "stages": va1_invalid_stages})
+    if va1_duplicate_profiles:
+        va1_blockers.append({"code": "va1-profile-duplicate",
+                             "profiles": sorted(profile for profile in va1_required_profiles
+                                                 if sum(stage.get("profile") == profile
+                                                        for stage in va1_gates) != 1)})
+    if len(va1_fingerprints) != 1:
+        va1_blockers.append({"code": "va1-source-fingerprint-mismatch",
+                             "fingerprints": sorted(va1_fingerprints)})
+    if va1_incomplete_ids:
+        va1_blockers.append({"code": "va1-id-index-incomplete",
+                             "ids": va1_incomplete_ids})
+    if require_va1_planner and not va1_planner_eligible:
+        _finding(global_findings, "va1-planner-eligibility-required",
+                 "--require-va1-planner needs final Release and matching SAN planner stages")
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": REPORT_KIND,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "source_fingerprint": next(iter(fingerprints)) if len(fingerprints) == 1 else None,
+        "source_fingerprint": (next(iter(all_fingerprints))
+                               if len(all_fingerprints) == 1 else None),
+        "va0_source_fingerprint": (next(iter(legacy_fingerprint_set))
+                                   if len(legacy_fingerprint_set) == 1 else None),
+        "va1_source_fingerprint": (next(iter(va1_fingerprints))
+                                   if len(va1_fingerprints) == 1 else None),
+        "source_fingerprints_by_stage_id": {
+            key: sorted(value) for key, value in grouped_fingerprints.items()},
         "profiles_required_for_release": sorted(required_profiles),
         "profiles_supplied": sorted(profile for profile in supplied_profiles if profile),
+        "va1_profiles_required": sorted(va1_required_profiles),
+        "va1_profiles_missing": va1_missing_profiles,
         "release_eligible": release_eligible,
         "legacy_vulkan_release_eligible": release_eligible,
         "va0_baseline_eligible": va0_baseline_eligible,
@@ -6077,10 +6621,21 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
         "va0_profiles_required": sorted(va0_required_profiles),
         "va0_profiles_missing": va0_missing_profiles,
         "va0_blocking_findings": va0_blockers,
+        "va1_planner_eligible": va1_planner_eligible,
+        "va1_planner_required": require_va1_planner,
+        "va1_planner_stages": [
+            {"stage": stage.get("stage"), "profile": stage.get("profile"),
+             "source_fingerprint": stage.get("source_fingerprint"),
+             "scope_passed": stage.get("scope_passed"),
+             "archive_status": stage.get("archive_integrity", {}).get("status"),
+             "evidence": stage.get("families", {}).get("va1", {})}
+            for stage in va1_gates],
+        "va1_planner_blockers": va1_blockers,
         "host_aot_release_eligible": False,
-        "baseline_scope": "VA0 legacy baseline/coverage only; host AOT eligibility is pending VA1 and later",
-        "host_aot_blockers": ["VA1 interface/planner not implemented",
-                               "VA2/3 helpers/budget/lifecycle not implemented",
+        "baseline_scope": "VA0 legacy baseline plus separate compiler-only VA1 planner evidence; neither claims host AOT",
+        "host_aot_blockers": ([] if va1_planner_eligible else
+                               ["VA1 planner evidence incomplete"]) +
+                              ["VA2/3 helpers/budget/lifecycle not implemented",
                                "VA4 fixed-run/sync not implemented",
                                "VA5 link/clean-publish not implemented",
                                "VA6 full matrix/faults not implemented",
@@ -6114,18 +6669,26 @@ def parse_args(argv=None):
                         help="return failure unless the four-profile VA0 reference/index is complete")
     parser.add_argument("--require-va0-stage", action="store_true",
                         help="return failure unless each supplied stage passes its VA0 reference scope")
+    parser.add_argument("--require-va1-planner", action="store_true",
+                        help="require final Release and matching SAN compiler-only VA1.1-VA1.4 planner evidence")
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     try:
-        report = build_report(args.stage, require_release=args.require_release,
-                              require_archives=args.require_va0_baseline)
+        report = build_report(
+            args.stage, require_release=args.require_release,
+            require_archives=args.require_va0_baseline,
+            require_va1_planner=args.require_va1_planner)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         report = {"schema_version": SCHEMA_VERSION, "kind": REPORT_KIND,
                   "generated_at": datetime.now(timezone.utc).isoformat(),
                   "release_eligible": False, "va0_baseline_eligible": False,
+                  "va1_planner_eligible": False,
+                  "va1_planner_required": args.require_va1_planner,
+                  "va1_planner_blockers": [{"code": "audit-failed-closed",
+                                            "message": str(error)}],
                   "host_aot_release_eligible": False,
                   "va0_blocking_findings": [{"code": "audit-failed-closed", "message": str(error)}],
                   "blocking_findings": [{"code": "audit-failed-closed", "message": str(error)}],
@@ -6141,9 +6704,12 @@ def main(argv=None) -> int:
         print("four-profile VA0 baseline is incomplete; see va0_blocking_findings", file=sys.stderr)
     if args.require_va0_stage and not report.get("va0_stage_scope_passed"):
         print("supplied VA0 stage is incomplete; see va0_blocking_findings", file=sys.stderr)
+    if args.require_va1_planner and not report.get("va1_planner_eligible"):
+        print("VA1 planner scope is incomplete; see va1_planner_blockers", file=sys.stderr)
     return 1 if (errors or (args.require_release and not report.get("release_eligible")) or
                  (args.require_va0_baseline and not report.get("va0_baseline_eligible")) or
-                 (args.require_va0_stage and not report.get("va0_stage_scope_passed"))) else 0
+                 (args.require_va0_stage and not report.get("va0_stage_scope_passed")) or
+                 (args.require_va1_planner and not report.get("va1_planner_eligible"))) else 0
 
 
 if __name__ == "__main__":

@@ -307,6 +307,25 @@ OpBranchConditional %14 %true %false
         self.assertEqual("VA1", run_gate.parse_args(["--profile", "release"]).profile and
                          audit._va0_migration_owners("VulkanExecutionPlanTest.RoundTrips", ["V2.1"])[0])
 
+    def test_va1_test_inventory_stays_strict_and_outside_va0_coverage(self):
+        va0_tests = audit._required_tests("release")
+        va1_tests = audit._required_tests("release", stage_id="VA1")
+        self.assertEqual(audit.VA1_REQUIRED_TESTS, va1_tests - va0_tests)
+
+        findings = []
+        audit._check_required_tests({
+            "profile": "release", "stage_id": "VA1",
+            "ctest": {"test_names": sorted(va0_tests)}}, findings)
+        missing = {name for item in findings
+                   for name in item.get("details", {}).get("tests", [])}
+        self.assertEqual(audit.VA1_REQUIRED_TESTS, missing)
+
+        coverage = audit._va0_migration_coverage({
+            "profile": "release",
+            "ctest": {"test_names": sorted(va0_tests), "failed": [], "skipped": []}})
+        self.assertFalse(coverage["unexecuted_related_tests"])
+        self.assertEqual(set(audit.ID_CATALOG), set(coverage["current_ids"]))
+
     def test_va0_ids_are_profile_scoped_and_not_host_aot_eligible(self):
         profile = "release"
         tests = sorted(audit._required_tests(profile))
@@ -349,6 +368,12 @@ OpBranchConditional %14 %true %false
             self.assertFalse(row["host_aot_release_eligible"])
             self.assertEqual(["release"], [item["profile"] for item in row["profiles"]])
             self.assertTrue(row["profiles"][0]["tests_executed"])
+        for identifier in audit.VA1_STEP_TESTS:
+            row = index[identifier]
+            self.assertEqual("blocked", row["status"])
+            self.assertEqual("not_eligible", row["release_status"])
+            self.assertFalse(row["host_aot_release_eligible"])
+            self.assertEqual([], row["tests_executed"])
 
     def test_missing_legacy_reference_preserves_functional_release_scope(self):
         profiles = ("release", "sanitize", "offline", "software")
@@ -371,6 +396,34 @@ OpBranchConditional %14 %true %false
         self.assertFalse(report["host_aot_release_eligible"])
         self.assertEqual([], report["blocking_findings"])
         self.assertTrue(report["va0_blocking_findings"])
+
+    def test_explicit_invalid_stage_ids_fail_closed(self):
+        for stage_id in (None, "", "VA2"):
+            with self.subTest(stage_id=stage_id):
+                profiles = ("release", "sanitize", "offline", "software")
+                stages = [{"stage": f"/stage/{profile}", "profile": profile,
+                           "stage_id": stage_id if profile == "release" else "VA0",
+                           "source_fingerprint": "a" * 64, "scope_passed": True,
+                           "findings": [], "va0_findings": [],
+                           "ctest": {"test_names": []}, "raw_artifacts": [],
+                           "families": {}}
+                          for profile in profiles]
+                gates = [{"stage": row["stage"], "profile": row["profile"],
+                          "stage_id": row["stage_id"],
+                          "source_fingerprint": row["source_fingerprint"]}
+                         for row in stages]
+                id_index = {
+                    identifier: {"status": "passed", "release_status": "passed"}
+                    for identifier in audit.ID_CATALOG}
+                with patch.object(audit, "audit_stage_gate", side_effect=gates), \
+                        patch.object(audit, "audit_stage_evidence", side_effect=stages), \
+                        patch.object(audit, "_make_id_index", return_value=id_index):
+                    report = audit.build_report(
+                        [Path(row["stage"]) for row in stages])
+                self.assertFalse(report["release_eligible"])
+                self.assertEqual(stage_id, report["stages"][0]["stage_id"])
+                self.assertIn("stage-id-invalid",
+                              {item["code"] for item in report["blocking_findings"]})
 
 
 if __name__ == "__main__":

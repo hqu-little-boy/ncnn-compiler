@@ -4,14 +4,17 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
 import shutil
 import struct
 import subprocess
+import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 import check_release_evidence as audit
@@ -476,6 +479,66 @@ class GateEnvelopeTests(unittest.TestCase):
 
     def test_complete_gate_envelope_passes(self):
         self.assertEqual([], self.findings())
+
+    def test_va1_gate_inventory_requires_new_python_and_cpp_tests(self):
+        required = audit._required_tests("release", "VA1")
+        self.assertTrue(audit.VA1_REQUIRED_TESTS.issubset(required))
+        self.assertFalse(audit.VA1_REQUIRED_TESTS & audit._required_tests("release", "VA0"))
+        gate = {"profile": "release", "stage_id": "VA1",
+                "ctest": {"test_names": sorted(required - {
+                    "VulkanHostProgramTest.ChainMatchesLegacyTrace"})}}
+        findings = []
+        audit._check_required_tests(gate, findings)
+        missing = next(item for item in findings
+                       if item["code"] == "required-ctest-missing")
+        self.assertIn("VulkanHostProgramTest.ChainMatchesLegacyTrace",
+                      missing["details"]["tests"])
+
+    def test_va1_does_not_require_va7_profiles_or_claim_host_aot(self):
+        stage_rows = []
+        for profile in ("release", "sanitize"):
+            stage_rows.append({
+                "stage": f"synthetic-{profile}", "profile": profile,
+                "stage_id": "VA1", "source_fingerprint": "a" * 64,
+                "scope_passed": True, "findings": [], "va0_findings": [],
+                "ctest": {"test_names": sorted(audit.VA1_REQUIRED_TESTS)},
+                "families": {"va1": {"status": "verified",
+                                     "host_program_evidence": [{
+                                         "path": "test/Native/host-program-evidence.json",
+                                         "sha256": "b" * 64,
+                                         "role": "native host-program trace"}]}},
+                "raw_artifacts": [{"path": "test/Native/host-program-evidence.json",
+                                   "sha256": "b" * 64,
+                                   "role": "native host-program trace"}],
+            })
+        with patch.object(audit, "audit_stage_gate", side_effect=stage_rows), \
+                patch.object(audit, "audit_stage_evidence", side_effect=lambda gate: gate), \
+                patch.object(audit, "audit_stage_archive", return_value={
+                    "status": "verified", "findings": []}):
+            report = audit.build_report([Path("release"), Path("sanitize")],
+                                        require_va1_planner=True)
+        self.assertTrue(report["va1_planner_eligible"])
+        self.assertFalse(report["release_eligible"])
+        self.assertFalse(report["host_aot_release_eligible"])
+        self.assertEqual({"release", "sanitize"},
+                         {item["profile"] for item in report["va1_planner_stages"]})
+        self.assertTrue(all(report["id_index"][f"VA1.{index}"]["status"] == "passed"
+                            for index in range(1, 5)))
+
+    def test_va1_gate_rejects_candidate_role_claim(self):
+        self.state["stage_id"] = "VA1"
+        self.state["host_aot_candidate"] = True
+        self.save_state()
+        codes = {item["code"] for item in self.findings()}
+        self.assertIn("gate-execution-role", codes)
+
+    def test_va1_requires_native_host_program_raw_trace(self):
+        findings = []
+        result = audit._audit_native_host_program(
+            self.stage, self.stage, None, [], findings, required=True)
+        self.assertIsNone(result)
+        self.assertIn("host-program-evidence-missing",
+                      {item["code"] for item in findings})
 
     def test_missing_state_fails_closed(self):
         (self.stage / "gate-state.json").unlink()

@@ -31,7 +31,10 @@ target_compile_definitions(unit_tests PRIVATE
     NCNN_GRAPH_TEST_TEMP_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-fixtures")
 
 if(NCNN_ENABLE_VULKAN_PRODUCT)
-    target_sources(unit_tests PRIVATE vulkan_product_test.cpp)
+    target_sources(unit_tests PRIVATE
+        vulkan_product_test.cpp
+        vulkan_host_program_test.cpp
+        vulkan_shader_interface_test.cpp)
     target_include_directories(unit_tests PRIVATE ${PROJECT_SOURCE_DIR}/tools)
     target_link_libraries(unit_tests PRIVATE NCNNVulkanProductSupport)
 endif()

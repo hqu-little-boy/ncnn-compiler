@@ -132,6 +132,46 @@ reference, ordinary CI retains its existing functional-profile eligibility and
 reports the host-baseline evidence as incomplete. Functional Vulkan eligibility
 never means model-specific host AOT: `host_aot_release_eligible` is false.
 
+Compiler-only host-program qualification is explicit and separate from runtime
+qualification. `--stage-id VA1` retains `host_execution_role="legacy-product"`
+and `host_aot_candidate=false`: GPU results still execute the generic runtime,
+not the diagnostic host program. The product-only offline configuration also
+registers `VulkanHostProgramTest.*`, `VulkanShaderInterfaceTest.*`, and
+`vulkan-host-program-evidence-tests`; enabling device tests is not a prerequisite
+for their registration. Their canonical identity, typed interface, lifetime,
+RAW/WAW/WAR, repeated-output, tail/overflow and tamper tests are default CTests.
+
+```sh
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA1 \
+  --profile release --archive --legacy-baseline-stage /path/to/frozen-release-stage
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA1 \
+  --profile sanitize --jobs 1 --archive \
+  --sanitizer-install /path/to/static-asan-llvm/install \
+  --lit /path/to/llvm-source/llvm/utils/lit/lit.py \
+  --openmp-dir /path/to/libomp-only \
+  --toolchain-identity /path/to/toolchain-identity.json \
+  --legacy-baseline-stage /path/to/frozen-release-stage
+python3 compiler/test/Vulkan/check_release_evidence.py \
+  --stage /tmp/current-va1-release-stage --stage /tmp/current-va1-sanitize-stage \
+  --require-va1-planner --output /tmp/va1-planner-evidence.json
+```
+
+These gates use distinct fresh `ncnn-compiler-stage-va1-<profile>-*` directories.
+`va1_planner_eligible` requires both complete Release and matching static SAN
+profiles, equal source fingerprints, all required executed tests, validated
+native program evidence, and hash-revalidated archives. It does not require the
+four-profile host-AOT product-switch matrix and cannot make
+`host_aot_release_eligible` true. The separate `--require-release` flag retains
+its four-profile legacy VA0 release meaning; it is not the two-profile VA1
+planner qualifier, and omitting it here does not skip any Release build/test
+step. Missing, skipped, stale, altered or unexecuted planner evidence fails closed. A final source change requires new full gates.
+Native product evidence includes `host-program-evidence.json`, raw shader/weight
+bytes and a frozen plan-derived recorder trace. The independent checker binds
+those bytes and the manifest diagnostic to the same plan, reproduces canonical
+identity and fixed commands, and normalizes only ordering inside independent
+barrier batches; dispatch/copy/publication order remains checked. See the
+[host-program format contract](../../docs/ncnn-vulkan-backend-contract.md#compiler-only-host-program).
+
 The `hardware` profile selects only NVIDIA; `release` selects both ICDs. The
 `sanitize` profile also selects both and requires a matching static PIC
 ASan+UBSan LLVM/MLIR installation, its actual Vulkan runner test tools and lit,

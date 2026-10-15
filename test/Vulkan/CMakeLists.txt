@@ -33,6 +33,13 @@ if(NCNN_ENABLE_VULKAN_PRODUCT OR NCNN_ENABLE_VULKAN_V0_TESTS)
 endif()
 
 if(NCNN_ENABLE_VULKAN_PRODUCT)
+    add_test(NAME vulkan-host-program-evidence-tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_host_program_evidence.py)
+    set_tests_properties(vulkan-host-program-evidence-tests PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;host-program"
+        TIMEOUT 60)
+
     set(_ncnn_vulkan_offline_test_args)
     if(NCNN_VULKAN_USES_SHARED_LLVM)
         list(APPEND _ncnn_vulkan_offline_test_args --llvm-shared)

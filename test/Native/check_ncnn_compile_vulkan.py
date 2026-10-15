@@ -21,6 +21,7 @@ import sys
 _VULKAN_TEST_DIR = Path(__file__).resolve().parents[1] / "Vulkan"
 sys.path.insert(0, str(_VULKAN_TEST_DIR))
 try:
+    import host_program_evidence as host_program_evidence
     import model_dependency_evidence as dependency_evidence
 finally:
     sys.path.remove(str(_VULKAN_TEST_DIR))
@@ -411,8 +412,91 @@ def check_vulkan_artifact(args, directory, elements):
         raise RuntimeError("Vulkan manifest input shape differs from the fixture")
     if manifest["outputs"][0]["shape"] != [1, 1, elements]:
         raise RuntimeError("Vulkan manifest output shape differs from the fixture")
+    try:
+        host_program_evidence.validate_host_program(
+            manifest, plan, manifest_sha256=sha256(directory / "paired_relu_vulkan.json"),
+            plan_sha256=hashlib.sha256(plan_bytes).hexdigest())
+    except host_program_evidence.EvidenceError as error:
+        raise RuntimeError(f"Vulkan host-program audit failed: {error}") from error
     check_exports_and_dependencies(args, library_path, manifest)
     return manifest
+
+
+def record_host_program_evidence(args, vulkan_dir, reconstruction_dir):
+    """Audit raw shader/weight payloads and preserve the independent recorder trace."""
+    manifest_path = vulkan_dir / "paired_relu_vulkan.json"
+    plan_path = vulkan_dir / "paired_relu_vulkan.plan.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    weights_path = reconstruction_dir / "weights.json"
+    weight_document = json.loads(weights_path.read_text(encoding="utf-8"))
+    weights = weight_document.get("weights")
+    if not isinstance(weights, list):
+        raise RuntimeError("host-program audit has no raw weight inventory")
+    weight_bytes = {}
+    raw_weight_dir = args.work_dir / "host-program-raw-weights"
+    raw_weight_dir.mkdir()
+    weight_records = []
+    for item in weights:
+        if not isinstance(item, dict):
+            raise RuntimeError("host-program weight payload record is malformed")
+        resource_id = item.get("resource_id")
+        payload = item.get("bytes")
+        if (type(resource_id) is not int or resource_id in weight_bytes or
+                not isinstance(payload, str) or len(payload) % 2 or
+                re.fullmatch(r"[0-9a-f]*", payload) is None):
+            raise RuntimeError("host-program weight payload ID/bytes are malformed")
+        raw = bytes.fromhex(payload)
+        weight_bytes[resource_id] = raw
+        raw_path = raw_weight_dir / f"resource-{resource_id:08d}.bin"
+        raw_path.write_bytes(raw)
+        weight_records.append({"resource_id": resource_id,
+                               "file": raw_path.relative_to(args.work_dir).as_posix(),
+                               "sha256": hashlib.sha256(raw).hexdigest(),
+                               "size_bytes": len(raw)})
+    shader_bytes = {}
+    shader_records = []
+    pipelines = manifest["host_program"]["pipelines"]
+    for pipeline in pipelines:
+        kernel_id = pipeline["kernel_id"]
+        shader_path = reconstruction_dir / f"kernel-{kernel_id}.spv"
+        if not shader_path.is_file():
+            raise RuntimeError(f"host-program raw shader bytes are missing: {shader_path}")
+        raw = shader_path.read_bytes()
+        shader_bytes[kernel_id] = raw
+        shader_records.append({"kernel_id": kernel_id,
+                               "file": shader_path.relative_to(args.work_dir).as_posix(),
+                               "sha256": hashlib.sha256(raw).hexdigest(),
+                               "size_bytes": len(raw)})
+    try:
+        result = host_program_evidence.validate_host_program(
+            manifest, plan, shader_bytes=shader_bytes, weight_bytes=weight_bytes,
+            manifest_sha256=sha256(manifest_path), plan_sha256=sha256(plan_path))
+    except host_program_evidence.EvidenceError as error:
+        raise RuntimeError(f"Vulkan raw host-program audit failed: {error}") from error
+    record = {
+        "schema_version": 1, "kind": "ncnn.vulkan_host_program_evidence",
+        "host_execution_role": "legacy-product", "host_aot_candidate": False,
+        "host_program_identity": result["identity_sha256"],
+        "manifest": {"file": manifest_path.relative_to(args.work_dir).as_posix(),
+                     "sha256": sha256(manifest_path)},
+        "plan": {"file": plan_path.relative_to(args.work_dir).as_posix(),
+                 "sha256": sha256(plan_path)},
+        "shader_raw_files": shader_records,
+        "weight_raw_files": weight_records,
+        "legacy_symbolic_trace": result["legacy_symbolic_trace"],
+        "recorded_operations": {
+            "create": manifest["host_program"]["create_operations"],
+            "run": manifest["host_program"]["run_operations"]},
+        "audit": {key: value for key, value in result.items()
+                  if key not in {"legacy_symbolic_trace"}},
+    }
+    evidence_path = args.work_dir / "host-program-evidence.json"
+    evidence_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+    return {"file": evidence_path.relative_to(args.work_dir).as_posix(),
+            "sha256": sha256(evidence_path),
+            "host_program_identity": result["identity_sha256"]}
 
 
 def sanitizer_diagnostics(output):
@@ -1090,10 +1174,13 @@ def run_offline(args):
         args.work_dir / "shader-reconstruction",
         vulkan_dir / "shader-reconstruction",
     )
+    host_program_record = record_host_program_evidence(
+        args, vulkan_dir, vulkan_dir / "shader-reconstruction")
 
     evidence = {
         "schema_version": 1,
         "kind": "ncnn.vulkan_offline_evidence",
+        "host_program_evidence": host_program_record,
         "build_dependencies": build_dependencies,
         "execution": {
             "mode": "offline-no-device",
@@ -1115,6 +1202,7 @@ def run_offline(args):
             "vulkan_header_sha256": sha256(vulkan_dir / "paired_relu_vulkan.h"),
             "vulkan_manifest_sha256": sha256(vulkan_dir / "paired_relu_vulkan.json"),
             "vulkan_plan_sha256": sha256(vulkan_dir / "paired_relu_vulkan.plan.json"),
+            "host_program_identity": host_program_record["host_program_identity"],
             "plan_hash": manifest["plan_hash"],
             "shader_sha256": manifest["shader_sha256"],
             "reconstructed_shader_sha256": {
@@ -1821,6 +1909,8 @@ def main():
         args.work_dir / "shader-reconstruction",
         vulkan_dir / "shader-reconstruction",
     )
+    host_program_record = record_host_program_evidence(
+        args, vulkan_dir, vulkan_dir / "shader-reconstruction")
 
     max_abs_cpu_error = max(
         (abs(actual - reference) for actual, reference in zip(cpu_output, expected)),
@@ -1837,6 +1927,7 @@ def main():
     product_evidence = {
         "schema_version": 1,
         "kind": "ncnn.vulkan_product_evidence",
+        "host_program_evidence": host_program_record,
         "build_dependencies": build_dependencies,
         "vulkan_reproducibility": vulkan_reproducibility,
         "execution": {
@@ -1862,6 +1953,7 @@ def main():
             "vulkan_header_sha256": sha256(vulkan_dir / "paired_relu_vulkan.h"),
             "vulkan_manifest_sha256": sha256(vulkan_dir / "paired_relu_vulkan.json"),
             "vulkan_plan_sha256": sha256(vulkan_dir / "paired_relu_vulkan.plan.json"),
+            "host_program_identity": host_program_record["host_program_identity"],
             "plan_hash": manifest["plan_hash"],
             "shader_sha256": manifest["shader_sha256"],
             "reconstructed_shader_sha256": {

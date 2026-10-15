@@ -512,7 +512,7 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         ${PROJECT_SOURCE_DIR}/include)
     target_compile_options(NCNNVulkanProductSupport PRIVATE -fno-rtti)
     target_link_libraries(NCNNVulkanProductSupport PUBLIC
-        NCNNVulkanPlanSupport)
+        NCNNVulkanPlanSupport NCNNVulkanHostProgramSupport)
     target_link_libraries(ncnn-compile PRIVATE NCNNVulkanProductSupport)
     target_include_directories(ncnn-compile PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
     target_compile_definitions(ncnn-compile PRIVATE

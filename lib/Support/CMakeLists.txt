@@ -39,6 +39,24 @@ target_compile_definitions(NCNNDiagnosticsSupport PUBLIC ${LLVM_DEFINITIONS})
 target_compile_options(NCNNDiagnosticsSupport PRIVATE -fno-rtti)
 target_link_libraries(NCNNDiagnosticsSupport PUBLIC MLIRIR MLIRSupport)
 
+# Host planning and SPIR-V reflection are compiler-only. In particular, never
+# append these sources or dependencies to the product's plan/runtime archives.
+if(NCNN_ENABLE_VULKAN_PRODUCT)
+    add_library(NCNNVulkanHostProgramSupport STATIC
+        VulkanHostProgram.cpp
+        VulkanShaderInterface.cpp)
+    target_include_directories(NCNNVulkanHostProgramSupport PUBLIC
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_include_directories(NCNNVulkanHostProgramSupport SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
+    target_compile_definitions(NCNNVulkanHostProgramSupport PRIVATE
+        ${LLVM_DEFINITIONS})
+    target_compile_options(NCNNVulkanHostProgramSupport PRIVATE -fno-rtti)
+    target_link_libraries(NCNNVulkanHostProgramSupport PRIVATE
+        NCNNVulkanPlanSupport MLIRSPIRVDeserialization MLIRSPIRVDialect
+        MLIRIR LLVMTargetParser LLVMSupport)
+endif()
+
 # The product host DSO embeds the plan implementation with its runtime.
 add_library(NCNNVulkanPlanSupport STATIC
     VulkanExecutionPlan.cpp

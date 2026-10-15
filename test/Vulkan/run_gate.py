@@ -755,10 +755,13 @@ class Gate:
         self.source = args.source_dir.resolve()
         args.build_root.mkdir(parents=True, exist_ok=True)
         self.stage = Path(tempfile.mkdtemp(
-            prefix=f"ncnn-compiler-stage-va0-{args.profile}-", dir=args.build_root))
+            prefix=f"ncnn-compiler-stage-{args.stage_id.lower()}-{args.profile}-",
+            dir=args.build_root))
         self.state = {
             "schema_version": 1, "kind": "ncnn.vulkan_gate",
-            "profile": args.profile, "source_dir": str(self.source),
+            "profile": args.profile, "stage_id": args.stage_id,
+            "host_execution_role": "legacy-product", "host_aot_candidate": False,
+            "source_dir": str(self.source),
             "source_fingerprint_algorithm": "sha256-git-files-v1",
             "source_fingerprint": None, "git_revision": None,
             "build_dir": str(self.stage), "created_at": timestamp(),
@@ -772,7 +775,7 @@ class Gate:
             self.state["git_revision"] = git_output(
                 self.source, "rev-parse", "HEAD").decode().strip()
             self.state["worktree"] = snapshot_worktree(self.source, self.stage)
-            self.state["stage_id"] = "VA0"
+            self.state["stage_id"] = args.stage_id
             self.state["host_execution_role"] = "legacy-product"
             self.state["host_aot_candidate"] = False
             self.config = configuration(args, self.stage)
@@ -947,6 +950,7 @@ class Gate:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=PROFILES, required=True)
+    parser.add_argument("--stage-id", choices=("VA0", "VA1"), default="VA0")
     parser.add_argument("--source-dir", type=Path,
                         default=Path(__file__).resolve().parents[2])
     parser.add_argument("--build-root", type=Path, default=Path("/tmp"))
