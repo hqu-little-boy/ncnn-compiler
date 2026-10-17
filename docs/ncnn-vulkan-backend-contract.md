@@ -91,8 +91,10 @@ The manifest's `host_program` object is a compiler-only diagnostic with
 `host_program_identity`. Its internal domains are
 `ncnn-vulkan-host-program/v1`, `ncnn-vulkan-host-codegen/v1`,
 `ncnn-vulkan-device-helper-contract/v1`, and `ncnn-vulkan-host-sync/v1`.
-The helper-contract domain records the compiler representation's requirement;
-it does not imply a separate device-helper deployment implementation.
+The helper-contract domain records the compiler representation's requirement.
+`NCNNVulkanDeviceHelper` supplies private Vulkan resource primitives, not an
+interpreter for this program. Neither the domain nor linking the helper proves
+that the generic model executor has been compiled away.
 
 Program identity is SHA-256 over the length-prefixed canonical JSON encoding:
 `u64le(domain-byte-count)`, UTF-8
@@ -178,7 +180,7 @@ The product path accepts complete static FP32 graphs in the explicitly checked g
 
 The driver embeds the validated SPIR-V and deterministic schema-v1 plan in the model DSO. The manifest records plan/shader/`.param`/`.bin` hashes, host/device targets, public I/O and the DSO's actual direct `DT_NEEDED` entries. It also pins `host_implementation = "generic-plan-runtime"`, integer `host_codegen_version = 1`, and `execution_plan_usage = "embedded-runtime-required"`; host implementation and codegen version participate in both package build-identity domains. Public ABI version 1 is unchanged.
 
-The generated wrapper parses its embedded plan during `create` and calls the generic `VulkanRuntimeContext` executor during `run`; the runtime walks the fixed kernel schedule and derives inter-kernel hazards from recorded reads/writes. The graph schedule and shader/resource decisions are already compiler-produced, but the host executor has not been compiled away. `NCNNVulkanRuntime` and `NCNNVulkanPlanSupport` are static archives included in the model library; static linkage or stripped symbols do not establish absence of an executor or LLVM code. The plan/payload/hash path uses LLVM Support. Shared-LLVM builds require their actual LLVM SONAME, while static-LLVM builds can carry LLVM code without a direct LLVM `DT_NEEDED` entry. The manifest's `dependencies` array is not a transitive-closure or static-source audit. The published plan/manifest are build diagnostics; the model reads its embedded plan rather than a deployment-side plan file.
+The generated wrapper parses its embedded plan during `create` and calls the generic `VulkanRuntimeContext` executor during `run`; the runtime walks the fixed kernel schedule and derives inter-kernel hazards from recorded reads/writes. The graph schedule and shader/resource decisions are already compiler-produced, but the host executor has not been compiled away. `NCNNVulkanRuntime`, `NCNNVulkanDeviceHelper` and `NCNNVulkanPlanSupport` are static archives included in the model library; static linkage or stripped symbols do not establish absence of an executor or LLVM code. The plan/payload/hash path uses LLVM Support. Shared-LLVM builds require their actual LLVM SONAME, while static-LLVM builds can carry LLVM code without a direct LLVM `DT_NEEDED` entry. The manifest's `dependencies` array is not a transitive-closure or static-source audit. The published plan/manifest are build diagnostics; the model reads its embedded plan rather than a deployment-side plan file.
 
 The library exports only `<model>_vk_create`, `<model>_vk_run`, and `<model>_vk_destroy`; it has no RPATH/RUNPATH to the compiler build or temporary directory. Deployment must provide the manifest-listed runtime dependencies (including the configured LLVM shared runtime when that build links LLVM dynamically), Vulkan loader, system C/C++ runtime, and a compatible Vulkan 1.1 device/ICD. The generated header includes the public `ModelABI.h` contract installed by the compiler package.
 
@@ -197,6 +199,57 @@ Each context owns its Vulkan 1.1 instance, selected physical/logical device, com
 The runtime library is configured when either `NCNN_ENABLE_VULKAN_PRODUCT=ON` or `NCNN_ENABLE_VULKAN_V0_TESTS=ON`; Vulkan build dependencies remain absent from the default CPU build. The device-test option requires a Vulkan loader/headers, SPIR-V tools, `vulkaninfo`, the Khronos validation layer, and the explicitly selected ICDs. `NCNN_VULKAN_TEST_DEVICES=llvmpipe` needs no NVIDIA ICD/EGL library; `nvidia` needs no software ICD; the default device list requests both. Unknown, duplicate or empty requested device lists and missing dependencies fail configuration. A requested but unusable device fails its test, rather than becoming a skip. Product-only offline tests deliberately use an unusable ICD and still require CPU/golden and validated package/failure checks. They also load the generated Vulkan DSO with its real header, require explicit failed create with a null context and bounded diagnostics (including capacity one), and check `destroy(NULL)`; no GPU run/output is claimed. `test/Vulkan/vulkan_runtime_abi_fixture.*` remains a test-only adapter; its fault injector is an in-process test hook and is not a product runtime control.
 
 NVIDIA device CTests use a build-local manifest for the vendor-supported headless EGL frontend (`libEGL_nvidia.so.0`), retaining the installed manifest's API version and the same physical device/driver. The system manifest is not modified. Both Release and sanitizer jobs use this frontend with normal driver unloading: the GLX frontend in driver 615.71.09 leaks a libdrm device at unload, whereas the tested EGL path releases its resources. Tests do not pin the ICD or disable LeakSanitizer. This test environment selection does not add a product runtime dependency or change the application's ICD selection. See [NVIDIA's installed-components documentation](https://download.nvidia.com/XFree86/Linux-x86_64/550.40.07/README/installedcomponents.html) for the supported EGL/GLX Vulkan ICD frontends.
+
+## Private device and resource helper
+
+`NCNNVulkanDeviceHelper` is a separate static PIC archive implemented in
+`lib/VulkanDeviceHelper/`. Its private C++ interface is
+`include/ncnn-mlir/Vulkan/VulkanDeviceHelper.hpp`; the shared error, operation and
+device-info declarations in `VulkanDeviceTypes.hpp` require only standard headers
+and `ModelABI.h`. `VulkanRuntime.hpp` does not transitively include Vulkan SDK
+headers. None of these changes adds a public model ABI symbol or option.
+
+The helper depends on Vulkan and standard/platform C++ facilities, not LLVM,
+MLIR, GTest, execution-plan parsing or payload hashing. It owns device/queue,
+buffer/memory/mapping, descriptor/pipeline and command/fence primitives. Its
+inputs are explicit sizes, Vulkan bindings/ranges, shader words and entry points;
+it accepts no execution plan, host program, model-resource ID or kernel schedule.
+Copy/barrier/bind/dispatch order and hazard analysis remain in the generic
+`VulkanRuntimeContext` executor. The product manifest therefore still says
+`generic-plan-runtime` and `embedded-runtime-required`.
+
+Buffer setup is two-phase. Preparation creates a `VkBuffer`, queries its actual
+memory requirements and selects a late-bound memory type, without allocating
+`VkDeviceMemory`. The runtime prepares every device, persistent I/O staging and
+temporary weight staging buffer, checks the checked sum of requirement sizes and
+allocation count, and only then allocates, binds and maps. Default context budget
+is 512 MiB; storage-buffer size remains bounded by 128 MiB and the selected
+device's actual range. Whole-allocation mappings and `VK_WHOLE_SIZE`
+flush/invalidate preserve non-coherent atom-range correctness. Requirement-size
+accounting is not a measurement of driver-resident peak memory.
+
+Device selection preserves the existing enumeration policy: AUTO selects the
+first Vulkan 1.1 compute-capable device matching the private test filter, then
+the caller checks model limits on that device. A later limit failure does not
+retry another device. Explicit indices are enumeration ordinals. No device UUID,
+queue family, memory type or allocation size is embedded from the build machine.
+
+Resources are move-only RAII objects. The owner waits for device work and
+releases child resources before the parent device/instance; partial construction
+and repeated cleanup release only acquired handles. The helper reports stable
+Vulkan status errors; the runtime retains run serialization, retryable host
+argument errors, execution poison and all-output publication protection. Fault
+hooks and fake Vulkan entry points are private test mechanisms, not C ABI or
+environment controls.
+
+A helper-only native harness and standalone CMake subproject do not link the
+runtime, plan support, LLVM/MLIR or GTest. Default no-device tests cover synthetic
+limits, actual-requirement budgets, allocation/cleanup failures and mapped-memory
+ranges; explicitly selected llvmpipe/NVIDIA tests execute a bounded Add shader
+through the helper's resource/pipeline/command primitives. Independent evidence
+checks actual header dependencies, compile arguments, target interfaces, archive
+members and native link inputs. This helper proof is separate from the model
+DSO's still-present compiler/plan dependencies and from driver-internal LLVM.
 
 ## Qualification and evidence boundary
 

@@ -869,6 +869,9 @@ class Gate:
 
     def run(self):
         try:
+            file_api_query = self.stage / ".cmake/api/v1/query/codemodel-v2"
+            file_api_query.parent.mkdir(parents=True, exist_ok=True)
+            file_api_query.write_text("", encoding="utf-8")
             self.step("configure", self.config)
             cache = self.stage / "CMakeCache.txt"
             self.state["cmake_cache"] = artifact(self.stage, cache)
@@ -921,7 +924,8 @@ class Gate:
             audit_command = [sys.executable, str(Path(__file__).with_name(
                 "check_release_evidence.py")), "--stage", str(self.stage),
                 "--output", str(report)]
-            if self.args.legacy_baseline_stage:
+            if (self.args.legacy_baseline_stage and
+                    self.args.stage_id in {"VA0", "VA1"}):
                 audit_command.append("--require-va0-stage")
             subprocess.run(audit_command, check=True)
             if self.args.archive:
@@ -950,7 +954,7 @@ class Gate:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=PROFILES, required=True)
-    parser.add_argument("--stage-id", choices=("VA0", "VA1"), default="VA0")
+    parser.add_argument("--stage-id", choices=("VA0", "VA1", "VA2"), default="VA0")
     parser.add_argument("--source-dir", type=Path,
                         default=Path(__file__).resolve().parents[2])
     parser.add_argument("--build-root", type=Path, default=Path("/tmp"))

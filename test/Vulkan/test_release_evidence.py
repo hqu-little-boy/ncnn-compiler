@@ -1562,6 +1562,113 @@ class GateEnvelopeTests(unittest.TestCase):
                                          self.stage / "CMakeCache.txt", [], findings)
         self.assertIn("sanitizer-pic-audit", {item["code"] for item in findings})
 
+    def test_stage_id_keeps_historical_default_and_rejects_explicit_invalid_values(self):
+        self.state.pop("stage_id")
+        self.save_state()
+        gate = audit.audit_stage_gate(self.stage, verify_fingerprint=False)
+        self.assertEqual("VA0", gate["stage_id"])
+        self.assertNotIn("gate-execution-role",
+                         {item["code"] for item in gate["findings"]})
+
+        for invalid in (None, "", "VA9", []):
+            with self.subTest(stage_id=invalid):
+                self.state["stage_id"] = invalid
+                self.save_state()
+                gate = audit.audit_stage_gate(self.stage, verify_fingerprint=False)
+                self.assertIn("gate-execution-role",
+                              {item["code"] for item in gate["findings"]})
+
+    def test_va2_inventory_and_ids_are_separate_from_va0_legacy_scope(self):
+        required = audit._required_tests("release", "VA2")
+        self.assertTrue(audit.VA2_HELPER_TESTS.issubset(required))
+        self.assertTrue(audit.VA2_RUNTIME_BUDGET_TESTS.issubset(required))
+        new_va2_tests = audit.VA2_HELPER_TESTS | audit.VA2_RUNTIME_BUDGET_TESTS
+        self.assertFalse(new_va2_tests & audit._required_tests("release", "VA0"))
+        self.assertEqual({"VA2.1", "VA2.2", "VA2.3", "VA2.4"},
+                         {identifier for identifier in audit.ID_CATALOG
+                          if identifier.startswith("VA2.")})
+
+        inventory_names = (audit._required_tests("release", "VA0") |
+                           audit.VA1_REQUIRED_TESTS | audit.VA2_REQUIRED_TESTS)
+        migration = audit._va0_migration_coverage({
+            "profile": "release", "ctest": {"test_names": sorted(inventory_names)}})
+        self.assertFalse(any(identifier.startswith("VA2.")
+                             for identifier in migration["current_ids"]))
+        self.assertFalse(any(identifier.startswith("VA2.")
+                             for row in migration["current_test_cases"].values()
+                             for identifier in row["related_ids"]))
+        self.assertFalse(audit.VA2_REQUIRED_TESTS & set(migration["current_test_cases"]))
+
+    def test_va2_release_and_static_san_pair_qualifies_without_removing_va3_blocker(self):
+        reports = []
+        for profile in ("release", "sanitize"):
+            reports.append({
+                "stage": f"synthetic-va2-{profile}", "profile": profile,
+                "stage_id": "VA2", "source_fingerprint": "f" * 64,
+                "scope_passed": True, "findings": [], "va0_findings": [],
+                "ctest": {"test_names": sorted(audit.VA2_REQUIRED_TESTS),
+                          "skipped": [], "failed": []},
+                "families": {"va2_helper": {"status": "verified",
+                                              "raw_artifacts": []}},
+                "raw_artifacts": [],
+            })
+        gate_states = [
+            {"stage": row["stage"], "stage_id": "VA2", "profile": row["profile"],
+             "source_fingerprint": row["source_fingerprint"], "ctest": row["ctest"],
+             "findings": [], "passed": True}
+            for row in reports]
+        with patch.object(audit, "audit_stage_gate", side_effect=gate_states), \
+                patch.object(audit, "audit_stage_evidence", side_effect=reports), \
+                patch.object(audit, "audit_stage_archive", return_value={
+                    "status": "verified", "findings": []}) as archive_audit:
+            report = audit.build_report([Path("release"), Path("sanitize")],
+                                        require_va2_helper=True)
+        self.assertTrue(report["va2_helper_eligible"])
+        self.assertTrue(report["va2_helper_required"])
+        self.assertEqual([], report["va2_helper_blockers"])
+        self.assertFalse(report["host_aot_release_eligible"])
+        self.assertTrue(any("VA3" in blocker for blocker in report["host_aot_blockers"]))
+        self.assertEqual({"VA2.1", "VA2.2", "VA2.3", "VA2.4"},
+                         {identifier for identifier in report["id_index"]
+                          if identifier.startswith("VA2.")})
+        self.assertTrue(all(call.kwargs["required"] for call in archive_audit.call_args_list))
+
+    def test_va2_eligibility_fails_closed_on_missing_budget_test_archive_or_source(self):
+        base_names = set(audit.VA2_REQUIRED_TESTS)
+        reports = []
+        for profile, fingerprint, scope in (("release", "a" * 64, True),
+                                              ("sanitize", "b" * 64, True)):
+            names = set(base_names)
+            if profile == "release":
+                names.remove("VulkanRuntimeBudgetTest.CountsTemporaryWeightStagingBeforeAllocation")
+            reports.append({
+                "stage": f"synthetic-va2-{profile}", "profile": profile,
+                "stage_id": "VA2", "source_fingerprint": fingerprint,
+                "scope_passed": scope, "findings": [], "va0_findings": [],
+                "ctest": {"test_names": sorted(names), "skipped": [], "failed": []},
+                "families": {"va2_helper": {"status": "verified",
+                                              "raw_artifacts": []}},
+                "raw_artifacts": [],
+            })
+        gate_states = [
+            {"stage": row["stage"], "stage_id": "VA2", "profile": row["profile"],
+             "source_fingerprint": row["source_fingerprint"], "ctest": row["ctest"],
+             "findings": [], "passed": True}
+            for row in reports]
+        with patch.object(audit, "audit_stage_gate", side_effect=gate_states), \
+                patch.object(audit, "audit_stage_evidence", side_effect=reports), \
+                patch.object(audit, "audit_stage_archive", return_value={
+                    "status": "not_provided", "findings": []}):
+            report = audit.build_report([Path("release"), Path("sanitize")],
+                                        require_va2_helper=True)
+        self.assertFalse(report["va2_helper_eligible"])
+        self.assertIn("va2-source-fingerprint-mismatch",
+                      {item["code"] for item in report["va2_helper_blockers"]})
+        self.assertIn("va2-id-index-incomplete",
+                      {item["code"] for item in report["va2_helper_blockers"]})
+        self.assertIn("va2-helper-eligibility-required",
+                      {item["code"] for item in report["blocking_findings"]})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

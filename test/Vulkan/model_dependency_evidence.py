@@ -331,6 +331,8 @@ def _source_info(name: str, *, static_llvm: bool = False) -> tuple[str, str]:
     if any(key in lowered for key in ("vulkanmodelpayload", "ncnnvulkanpayload",
                                       "modelpayload", "payloadhash", "payload")):
         return "model", "payload-hash"
+    if "vulkandevicehelper" in lowered:
+        return "model", "device-helper"
     if any(key in lowered for key in ("ncnnvulkanruntime", "vulkanruntime")):
         return "model", "project-executor"
     if "vulkan" in lowered or "ncnn" in lowered:

@@ -42,6 +42,23 @@ endif()
 if(NCNN_ENABLE_VULKAN_PRODUCT OR NCNN_ENABLE_VULKAN_V0_TESTS)
     target_sources(unit_tests PRIVATE vulkan_runtime_test.cpp)
     target_link_libraries(unit_tests PRIVATE NCNNVulkanRuntime)
+
+    # Separate executor integration probe: do not inject fake Vulkan into the
+    # unrelated compiler tests or count this as helper-only link independence.
+    add_executable(vulkan_runtime_budget_tests
+        vulkan_runtime_budget_test.cpp
+        ${PROJECT_SOURCE_DIR}/test/Vulkan/native/fakeVulkan/fake_vulkan.cpp)
+    target_include_directories(vulkan_runtime_budget_tests PRIVATE
+        ${PROJECT_SOURCE_DIR})
+    target_link_libraries(vulkan_runtime_budget_tests PRIVATE
+        NCNNVulkanRuntime GTest::gtest_main)
+    target_compile_options(vulkan_runtime_budget_tests PRIVATE -fno-rtti)
+    target_compile_definitions(vulkan_runtime_budget_tests PRIVATE
+        GTEST_HAS_CXXABI_H_=0)
+    include(${PROJECT_SOURCE_DIR}/test/Vulkan/native/fakeVulkan/WrapVulkan.cmake)
+    ncnn_wrap_vulkan_for_test(vulkan_runtime_budget_tests)
+    gtest_discover_tests(vulkan_runtime_budget_tests
+        PROPERTIES LABELS "unit\\;offline\\;vulkan\\;device-helper")
 endif()
 
 gtest_discover_tests(unit_tests PROPERTIES LABELS "unit\\;offline")

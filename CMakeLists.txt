@@ -171,8 +171,8 @@ if(BUILD_TESTING)
     add_subdirectory(test)
 endif()
 
-# Apply project warnings only to first-party compiled targets. Directory-wide
-# flags would otherwise leak into the vendored ncnn targets under test/.
+# Apply project warnings only to first-party compiled targets, not vendored
+# SLEEF under third_party/ or ncnn under test/third_party/.
 function(ncnn_enable_first_party_warnings directory)
     if(NOT COMPILER_ENABLE_WARNINGS)
         return()
@@ -187,7 +187,7 @@ function(ncnn_enable_first_party_warnings directory)
         get_target_property(NCNN_TARGET_SOURCE_DIR "${NCNN_TARGET}" SOURCE_DIR)
         if(NCNN_TARGET_TYPE MATCHES "^(EXECUTABLE|STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY)$"
            AND NCNN_TARGET_SOURCE_DIR MATCHES "^${CMAKE_SOURCE_DIR}(/|$)"
-           AND NOT NCNN_TARGET_SOURCE_DIR MATCHES "^${CMAKE_SOURCE_DIR}/test/third_party(/|$)")
+           AND NOT NCNN_TARGET_SOURCE_DIR MATCHES "^${CMAKE_SOURCE_DIR}/(test/)?third_party(/|$)")
             target_compile_options("${NCNN_TARGET}" PRIVATE ${NCNN_WARNING_FLAGS})
         endif()
     endforeach()

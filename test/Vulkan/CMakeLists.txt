@@ -1,5 +1,104 @@
-if(NCNN_ENABLE_VULKAN_PRODUCT OR NCNN_ENABLE_VULKAN_V0_TESTS)
-    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+if (NCNN_ENABLE_VULKAN_PRODUCT OR NCNN_ENABLE_VULKAN_V0_TESTS)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+    if(NOT NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT)
+        set(NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT "${CMAKE_BINARY_DIR}")
+    endif()
+    if(NOT NCNN_VULKAN_DEVICE_HELPER_EVIDENCE_ROOT)
+        set(NCNN_VULKAN_DEVICE_HELPER_EVIDENCE_ROOT
+            "${NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT}/test/Vulkan/evidence/va2")
+    endif()
+    set(NCNN_VULKAN_DEVICE_HELPER_STANDALONE_ROOT
+        "${NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT}/test/Vulkan/device-helper-standalone")
+    set(NCNN_VULKAN_DEVICE_HELPER_PRODUCT_ONLY_ROOT
+        "${NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT}/test/Vulkan/device-helper-product-only")
+    add_subdirectory(native)
+
+    add_test(NAME vulkan-device-helper-unit
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_device_helper.py
+            --mode unit
+            --unit-executable $<TARGET_FILE:vulkan_device_helper_unit_test>
+            --stage-root ${NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT}
+            --evidence-root ${NCNN_VULKAN_DEVICE_HELPER_EVIDENCE_ROOT})
+    set_tests_properties(vulkan-device-helper-unit PROPERTIES
+        LABELS "vulkan;unit;offline;device-helper"
+        RUN_SERIAL TRUE
+        TIMEOUT 120)
+
+    add_test(NAME vulkan-device-helper-no-device
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_device_helper.py
+            --mode no-device
+            --runner $<TARGET_FILE:vulkan_device_helper_runner>
+            --stage-root ${NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT}
+            --evidence-root ${NCNN_VULKAN_DEVICE_HELPER_EVIDENCE_ROOT})
+    set_tests_properties(vulkan-device-helper-no-device PROPERTIES
+        LABELS "vulkan;unit;offline;device-helper;no-device"
+        RUN_SERIAL TRUE
+        TIMEOUT 60)
+
+    set(_ncnn_vulkan_device_helper_independence_args
+        --mode independence
+        --stage-root ${NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT}
+        --evidence-root ${NCNN_VULKAN_DEVICE_HELPER_EVIDENCE_ROOT}
+        --source-root ${PROJECT_SOURCE_DIR}
+        --standalone-cmake ${CMAKE_CURRENT_SOURCE_DIR}/native
+        --standalone-build-root ${NCNN_VULKAN_DEVICE_HELPER_STANDALONE_ROOT}
+        --product-only-root ${NCNN_VULKAN_DEVICE_HELPER_PRODUCT_ONLY_ROOT}
+        --cmake ${CMAKE_COMMAND}
+        --python ${Python3_EXECUTABLE}
+        --evidence-driver ${CMAKE_CURRENT_SOURCE_DIR}/device_helper_evidence.py
+        --jobs 2)
+    foreach(_cmake_arg IN ITEMS
+            "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
+            "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+            "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}"
+            "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
+            "-DCMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
+            "-DCMAKE_SHARED_LINKER_FLAGS=${CMAKE_SHARED_LINKER_FLAGS}"
+            "-DLLVM_DIR=${LLVM_DIR}"
+            "-DMLIR_DIR=${MLIR_DIR}"
+            "-DNCNN_LIT_PY=${NCNN_LIT_PY}"
+            "-DNCNN_SANITIZER_OPENMP_LIBRARY_DIR=${NCNN_SANITIZER_OPENMP_LIBRARY_DIR}"
+            "-DCOMPILER_USE_CCACHE=${COMPILER_USE_CCACHE}"
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+            "-DCOMPILER_ENABLE_FORMAT_TARGETS=OFF"
+            "-DBUILD_TESTING=ON")
+        list(APPEND _ncnn_vulkan_device_helper_independence_args
+            --cmake-arg=${_cmake_arg})
+    endforeach()
+    if(COMPILER_SANITIZERS)
+        string(JOIN "," _ncnn_helper_sanitizers_csv ${COMPILER_SANITIZERS})
+        list(APPEND _ncnn_vulkan_device_helper_independence_args
+            --sanitizers ${_ncnn_helper_sanitizers_csv})
+    endif()
+    if(NCNN_VULKAN_DEVICE_HELPER_SKIP_PRODUCT_ONLY_CHECK)
+        list(APPEND _ncnn_vulkan_device_helper_independence_args
+            --skip-product-only-check)
+    endif()
+    add_test(NAME vulkan-device-helper-independence
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_device_helper.py
+            ${_ncnn_vulkan_device_helper_independence_args})
+    set_tests_properties(vulkan-device-helper-independence PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;device-helper;independence"
+        RUN_SERIAL TRUE
+        TIMEOUT 1800)
+
+    add_test(NAME vulkan-device-helper-evidence-tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_device_helper.py
+            --mode evidence-tests
+            --stage-root ${NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT}
+            --evidence-root ${NCNN_VULKAN_DEVICE_HELPER_EVIDENCE_ROOT}
+            --evidence-test-script ${CMAKE_CURRENT_SOURCE_DIR}/test_device_helper_evidence.py)
+    set_tests_properties(vulkan-device-helper-evidence-tests PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;device-helper;evidence"
+        RUN_SERIAL TRUE
+        TIMEOUT 120)
+
     add_test(NAME vulkan-v5-comparison-validation
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_run_v5.py)
     set_tests_properties(vulkan-v5-comparison-validation PROPERTIES
@@ -117,10 +216,10 @@ if(NCNN_ENABLE_VULKAN_V0_TESTS)
         find_library(V0_NVIDIA_EGL_LIBRARY
             NAMES EGL_nvidia libEGL_nvidia.so.0
             REQUIRED)
-        # NVIDIA supports the EGL frontend as a headless Vulkan ICD. The GLX
-        # frontend in driver 615.71.09 leaks a libdrm device on unload; EGL
-        # cleans up normally. Only the explicitly requested NVIDIA layer looks
-        # up this frontend.
+#NVIDIA supports the EGL frontend as a headless Vulkan ICD.The GLX
+#frontend in driver 615.71.09 leaks a libdrm device on unload; EGL
+#cleans up normally.Only the explicitly requested NVIDIA layer looks
+#up this frontend.
         file(READ "${V0_NVIDIA_SYSTEM_ICD}" V0_NVIDIA_ICD_DOCUMENT)
         string(JSON V0_NVIDIA_ICD_DOCUMENT SET "${V0_NVIDIA_ICD_DOCUMENT}"
             ICD library_path "\"${V0_NVIDIA_EGL_LIBRARY}\"")
@@ -198,6 +297,46 @@ add_custom_target(v0_cpu_add_fixture
     DEPENDS ${V0_CPU_LIBRARY} ${V0_CPU_HEADER} ${V0_CPU_MANIFEST})
 add_custom_target(vulkan-v0-build
     DEPENDS vulkan_add_runner vulkan_v0_spirv_extract v0_cpu_add_fixture)
+
+function(ncnn_add_vulkan_device_helper_add_test device)
+    if(NOT device IN_LIST NCNN_VULKAN_TEST_DEVICES)
+        return()
+    endif()
+    if(device STREQUAL "nvidia")
+        set(device_match NVIDIA)
+        set(device_icd ${V0_NVIDIA_ICD})
+        set(device_layer hardware)
+    else()
+        set(device_match llvmpipe)
+        set(device_icd ${V0_LLVMPIPE_ICD})
+        set(device_layer software)
+    endif()
+    add_test(NAME vulkan-device-helper-add-${device}
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_device_helper.py
+            --mode add
+            --runner $<TARGET_FILE:vulkan_device_helper_runner>
+            --device ${device}
+            --device-match ${device_match}
+            --icd ${device_icd}
+            --mlir-opt ${MLIR_OPT}
+            --spirv-extract $<TARGET_FILE:vulkan_v0_spirv_extract>
+            --spirv-val ${SPIRV_VAL}
+            --spirv-dis ${SPIRV_DIS}
+            --kernel ${CMAKE_CURRENT_SOURCE_DIR}/gpu_func_add_probe.mlir
+            --cpu-library ${V0_CPU_LIBRARY}
+            --cpu-symbol v0_add
+            --stage-root ${NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT}
+            --evidence-root ${NCNN_VULKAN_DEVICE_HELPER_EVIDENCE_ROOT}
+            --validation)
+    set_tests_properties(vulkan-device-helper-add-${device} PROPERTIES
+        LABELS "vulkan;device;integration;device-helper;${device_layer}"
+        RUN_SERIAL TRUE
+        TIMEOUT 300)
+endfunction()
+
+ncnn_add_vulkan_device_helper_add_test(nvidia)
+ncnn_add_vulkan_device_helper_add_test(llvmpipe)
 
 set(V2_RELU_CPU_DIR ${CMAKE_CURRENT_BINARY_DIR}/cpu-relu)
 set(V2_RELU_CPU_LIBRARY ${V2_RELU_CPU_DIR}/libv2_relu.so)
@@ -798,8 +937,8 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         LABELS "vulkan;tooling;v5;offline"
         TIMEOUT 60)
 
-    # V5.1 product multi-I/O fixtures use the vendored CPU-only ncnn reference
-    # target directly; they deliberately do not link numerical_test_support.
+#V5.1 product multi - I / O fixtures use the vendored CPU - only ncnn reference
+#target directly; they deliberately do not link numerical_test_support.
     add_executable(vulkan_model_runner vulkan_model_runner.cpp)
     target_link_libraries(vulkan_model_runner PRIVATE ncnn)
     target_compile_options(vulkan_model_runner PRIVATE
@@ -954,4 +1093,3 @@ ncnn_add_vulkan_v5_test(
     ${V0_LLVMPIPE_ICD} v5.3)
     endif()
 endif()
-

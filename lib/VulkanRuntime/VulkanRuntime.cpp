@@ -1,20 +1,17 @@
 #include "ncnn-mlir/Vulkan/VulkanRuntime.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <expected>
-#include <functional>
 #include <limits>
 #include <mutex>
 #include <new>
 #include <optional>
 #include <ranges>
 #include <span>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -23,12 +20,15 @@
 #include <vector>
 
 #include "ncnn-mlir/Support/VulkanModelPayload.hpp"
+#include "ncnn-mlir/Vulkan/VulkanDeviceHelper.hpp"
 #include <vulkan/vulkan.h>
 
 namespace ncnn_mlir::vulkan {
 namespace {
 
-constexpr std::uint64_t kDefaultContextMemoryBytes = 512ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kDefaultContextMemoryBytes =
+  kVulkanDeviceHelperDefaultBudgetBytes;
+static_assert(kVulkanDeviceHelperMaxBufferBytes == kMinimumStorageBufferRange);
 
 class RuntimeFailure final : public std::exception {
  public:
@@ -50,40 +50,6 @@ class RuntimeFailure final : public std::exception {
 [[noreturn]] void fail(ncnn_vk_status status, std::string diagnostic) {
   throw RuntimeFailure(
     VulkanRuntimeError{.status = status, .diagnostic = std::move(diagnostic)});
-}
-
-ncnn_vk_status mapVkResult(VkResult result) noexcept {
-  if (result == VK_ERROR_OUT_OF_HOST_MEMORY ||
-      result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
-      result == VK_ERROR_OUT_OF_POOL_MEMORY ||
-      result == VK_ERROR_FRAGMENTED_POOL ||
-      result == VK_ERROR_TOO_MANY_OBJECTS) {
-    return NCNN_VK_STATUS_OUT_OF_MEMORY;
-  }
-  if (result == VK_ERROR_FEATURE_NOT_PRESENT ||
-      result == VK_ERROR_EXTENSION_NOT_PRESENT ||
-      result == VK_ERROR_INCOMPATIBLE_DRIVER) {
-    return NCNN_VK_STATUS_UNSUPPORTED_DEVICE;
-  }
-  if (result == VK_ERROR_DEVICE_LOST) {
-    return NCNN_VK_STATUS_DEVICE_LOST;
-  }
-  return NCNN_VK_STATUS_API_ERROR;
-}
-
-void checkVk(VkResult result, std::string_view operation) {
-  if (result != VK_SUCCESS) {
-    fail(mapVkResult(result),
-         std::string(operation) + " failed with VkResult " +
-           std::to_string(result));
-  }
-}
-
-template <typename Structure>
-Structure makeVkStructure(VkStructureType type) {
-  Structure structure{};
-  structure.sType = type;
-  return structure;
 }
 
 bool checkedAdd(std::uint64_t lhs,
@@ -109,28 +75,52 @@ std::uint64_t resourceElements(const TensorResource& resource) {
 
 class VulkanRuntimeContext::Impl final {
  public:
-  struct Buffer final {
-    VkBuffer handle;
-    VkDeviceMemory memory;
-    VkDeviceSize logical_size;
-    VkDeviceSize allocation_size;
-    void* mapped;
-    bool coherent;
+  using Buffer = VulkanBuffer;
+
+  class Resource final {
+   public:
+    Resource(const TensorResource& spec, Buffer device)
+      : spec_(&spec), device_(std::move(device)), staging_() {}
+
+    [[nodiscard]] const TensorResource& get_spec() const noexcept {
+      return *spec_;
+    }
+    [[nodiscard]] Buffer& get_device_buffer() noexcept { return device_; }
+    [[nodiscard]] const Buffer& get_device_buffer() const noexcept {
+      return device_;
+    }
+    [[nodiscard]] bool has_staging_buffer() const noexcept {
+      return staging_.has_value();
+    }
+    [[nodiscard]] Buffer& get_staging_buffer() { return staging_.value(); }
+    [[nodiscard]] const Buffer& get_staging_buffer() const {
+      return staging_.value();
+    }
+    void set_staging_buffer(Buffer staging) {
+      staging_.emplace(std::move(staging));
+    }
+
+   private:
+    const TensorResource* spec_;
+    Buffer device_;
+    std::optional<Buffer> staging_;
   };
 
-  struct Resource final {
-    const TensorResource* spec;
-    Buffer device;
-    Buffer staging;
-  };
+  class Kernel final {
+   public:
+    Kernel(const KernelExecution& spec, VulkanComputePipeline pipeline)
+      : spec_(&spec), pipeline_(std::move(pipeline)) {}
 
-  struct Kernel final {
-    const KernelExecution* spec;
-    VkShaderModule module;
-    VkPipelineLayout layout;
-    VkPipeline pipeline;
-    std::vector<VkDescriptorSetLayout> set_layouts;
-    std::vector<VkDescriptorSet> sets;
+    [[nodiscard]] const KernelExecution& get_spec() const noexcept {
+      return *spec_;
+    }
+    [[nodiscard]] const VulkanComputePipeline& get_pipeline() const noexcept {
+      return pipeline_;
+    }
+
+   private:
+    const KernelExecution* spec_;
+    VulkanComputePipeline pipeline_;
   };
 
   Impl(VulkanExecutionPlan plan,
@@ -141,30 +131,20 @@ class VulkanRuntimeContext::Impl final {
       options_(std::move(options)),
       kernels_(std::move(kernels)),
       weights_(std::move(weights)),
-      instance_(VK_NULL_HANDLE),
-      messenger_(VK_NULL_HANDLE),
-      physical_device_(VK_NULL_HANDLE),
-      properties_(),
-      memory_properties_(),
-      device_(VK_NULL_HANDLE),
-      queue_(VK_NULL_HANDLE),
-      queue_family_(0),
-      command_pool_(VK_NULL_HANDLE),
-      command_buffer_(VK_NULL_HANDLE),
-      fence_(VK_NULL_HANDLE),
-      descriptor_pool_(VK_NULL_HANDLE),
+      device_info_{.name = "",
+                   .api_version = 0,
+                   .driver_version = 0,
+                   .vendor_id = 0,
+                   .device_id = 0},
+      device_context_(),
+      command_resources_(),
+      descriptor_pool_(),
       kernels_state_(),
       resources_(),
-      resource_requirements_(),
-      resource_memory_types_(),
-      staging_requirements_(),
-      staging_memory_types_(),
       weight_staging_(),
-      weight_staging_requirements_(),
-      weight_staging_memory_types_(),
       peak_memory_bytes_(0),
       weight_upload_count_(0),
-      validation_errors_(0),
+      validation_error_count_(0),
       run_mutex_(),
       destroyed_(false),
       unusable_status_(NCNN_VK_STATUS_SUCCESS),
@@ -179,9 +159,7 @@ class VulkanRuntimeContext::Impl final {
            "invalid Vulkan execution plan: " + verified.error());
     }
     validatePackage();
-    createInstance();
-    selectDevice();
-    createDevice();
+    createDeviceContext();
     createCommandResources();
     createBuffers();
     allocateBuffers();
@@ -235,76 +213,51 @@ class VulkanRuntimeContext::Impl final {
       return destroy_status_;
     }
     destroyed_ = true;
-    if (device_ != VK_NULL_HANDLE) {
-      const VkResult wait_result = vkDeviceWaitIdle(device_);
-      if (wait_result != VK_SUCCESS) {
-        destroy_status_ = mapVkResult(wait_result);
-      }
-      for (Kernel& kernel : kernels_state_) {
-        if (kernel.pipeline != VK_NULL_HANDLE) {
-          vkDestroyPipeline(device_, kernel.pipeline, nullptr);
-        }
-        if (kernel.layout != VK_NULL_HANDLE) {
-          vkDestroyPipelineLayout(device_, kernel.layout, nullptr);
-        }
-        if (kernel.module != VK_NULL_HANDLE) {
-          vkDestroyShaderModule(device_, kernel.module, nullptr);
+    try {
+      if (device_context_) {
+        const auto waited = device_context_->wait_idle();
+        if (!waited) {
+          destroy_status_ = waited.error().status;
         }
       }
-      if (descriptor_pool_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(device_, descriptor_pool_, nullptr);
+      kernels_state_.clear();
+      if (descriptor_pool_) {
+        (void)descriptor_pool_->destroy();
+        descriptor_pool_.reset();
       }
-      for (const Kernel& kernel : kernels_state_) {
-        for (VkDescriptorSetLayout layout : kernel.set_layouts) {
-          if (layout != VK_NULL_HANDLE) {
-            vkDestroyDescriptorSetLayout(device_, layout, nullptr);
-          }
+      resources_.clear();
+      weight_staging_.clear();
+      if (command_resources_) {
+        const auto destroyed_commands = command_resources_->destroy();
+        if (!destroyed_commands && destroy_status_ == NCNN_VK_STATUS_SUCCESS) {
+          destroy_status_ = destroyed_commands.error().status;
         }
+        command_resources_.reset();
       }
-      for (auto& [id, resource] : resources_) {
-        (void)id;
-        destroyBuffer(resource.staging);
-        destroyBuffer(resource.device);
+      if (device_context_) {
+        if (destroy_status_ == NCNN_VK_STATUS_SUCCESS &&
+            device_context_->get_validation_error_count() != 0) {
+          destroy_status_ = NCNN_VK_STATUS_API_ERROR;
+        }
+        const auto destroyed = device_context_->destroy();
+        validation_error_count_ = device_context_->get_validation_error_count();
+        if (!destroyed && destroy_status_ == NCNN_VK_STATUS_SUCCESS) {
+          destroy_status_ = destroyed.error().status;
+        }
+        if (validation_error_count_ != 0 &&
+            destroy_status_ == NCNN_VK_STATUS_SUCCESS) {
+          destroy_status_ = NCNN_VK_STATUS_API_ERROR;
+        }
+        device_context_.reset();
       }
-      for (auto& [id, buffer] : weight_staging_) {
-        (void)id;
-        destroyBuffer(buffer);
-      }
-      if (fence_ != VK_NULL_HANDLE) {
-        vkDestroyFence(device_, fence_, nullptr);
-      }
-      if (command_pool_ != VK_NULL_HANDLE) {
-        vkDestroyCommandPool(device_, command_pool_, nullptr);
-      }
-      vkDestroyDevice(device_, nullptr);
-      device_ = VK_NULL_HANDLE;
-      if (destroy_status_ == NCNN_VK_STATUS_SUCCESS &&
-          validation_errors_.load() != 0) {
-        destroy_status_ = NCNN_VK_STATUS_API_ERROR;
-      }
-    }
-    if (messenger_ != VK_NULL_HANDLE && instance_ != VK_NULL_HANDLE) {
-      const auto destroy_messenger =
-        reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-          vkGetInstanceProcAddr(instance_, "vkDestroyDebugUtilsMessengerEXT"));
-      if (destroy_messenger != nullptr) {
-        destroy_messenger(instance_, messenger_, nullptr);
-      }
-      messenger_ = VK_NULL_HANDLE;
-    }
-    if (instance_ != VK_NULL_HANDLE) {
-      vkDestroyInstance(instance_, nullptr);
-      instance_ = VK_NULL_HANDLE;
+    } catch (...) {
+      destroy_status_ = NCNN_VK_STATUS_API_ERROR;
     }
     return destroy_status_;
   }
 
   [[nodiscard]] VulkanRuntimeDeviceInfo get_device_info() const {
-    return VulkanRuntimeDeviceInfo{.name = properties_.deviceName,
-                                   .api_version = properties_.apiVersion,
-                                   .driver_version = properties_.driverVersion,
-                                   .vendor_id = properties_.vendorID,
-                                   .device_id = properties_.deviceID};
+    return device_info_;
   }
 
   [[nodiscard]] std::uint64_t get_peak_memory_bytes() const noexcept {
@@ -316,7 +269,8 @@ class VulkanRuntimeContext::Impl final {
   }
 
   [[nodiscard]] std::uint32_t get_validation_error_count() const noexcept {
-    return validation_errors_.load();
+    return device_context_ ? device_context_->get_validation_error_count()
+                           : validation_error_count_;
   }
 
   void releasePackageViews() noexcept {
@@ -325,64 +279,6 @@ class VulkanRuntimeContext::Impl final {
   }
 
  private:
-  static VKAPI_ATTR VkBool32 VKAPI_CALL
-  validationCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
-                     VkDebugUtilsMessageTypeFlagsEXT,
-                     const VkDebugUtilsMessengerCallbackDataEXT*,
-                     void* user_data) {
-    auto* self = static_cast<Impl*>(user_data);
-    if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
-      self->validation_errors_.fetch_add(1);
-    }
-    return VK_FALSE;
-  }
-
-  void inject(VulkanRuntimeOperation operation) const {
-    if (!options_.failure_injector) {
-      return;
-    }
-    const std::optional<ncnn_vk_status> status =
-      options_.failure_injector(operation);
-    if (status) {
-      fail(*status,
-           "injected Vulkan runtime failure at " +
-             std::string(operationName(operation)));
-    }
-  }
-
-  static std::string_view operationName(
-    VulkanRuntimeOperation operation) noexcept {
-    switch (operation) {
-      case VulkanRuntimeOperation::CreateInstance:
-        return "instance creation";
-      case VulkanRuntimeOperation::SelectDevice:
-        return "device selection";
-      case VulkanRuntimeOperation::CreateDevice:
-        return "device creation";
-      case VulkanRuntimeOperation::CreateBuffer:
-        return "buffer creation";
-      case VulkanRuntimeOperation::AllocateMemory:
-        return "memory allocation";
-      case VulkanRuntimeOperation::CreateDescriptor:
-        return "descriptor creation";
-      case VulkanRuntimeOperation::CreateShaderModule:
-        return "shader module creation";
-      case VulkanRuntimeOperation::CreatePipeline:
-        return "pipeline creation";
-      case VulkanRuntimeOperation::CreateCommandResources:
-        return "command resource creation";
-      case VulkanRuntimeOperation::Submit:
-        return "queue submission";
-      case VulkanRuntimeOperation::Wait:
-        return "queue wait";
-      case VulkanRuntimeOperation::FlushMappedMemory:
-        return "mapped-memory flush";
-      case VulkanRuntimeOperation::InvalidateMappedMemory:
-        return "mapped-memory invalidate";
-    }
-    return "unknown operation";
-  }
-
   void validatePackage() {
     if (options_.max_context_memory_bytes == 0) {
       fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
@@ -460,173 +356,35 @@ class VulkanRuntimeContext::Impl final {
     return found == plan_.resources.end() ? nullptr : &*found;
   }
 
-  void createInstance() {
-    inject(VulkanRuntimeOperation::CreateInstance);
-    std::vector<const char*> layers;
-    std::vector<const char*> extensions;
-    auto debug_info = makeVkStructure<VkDebugUtilsMessengerCreateInfoEXT>(
-      VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT);
-    if (options_.enable_validation) {
-      std::uint32_t layer_count = 0;
-      checkVk(vkEnumerateInstanceLayerProperties(&layer_count, nullptr),
-              "vkEnumerateInstanceLayerProperties");
-      std::vector<VkLayerProperties> available_layers(layer_count);
-      checkVk(vkEnumerateInstanceLayerProperties(&layer_count,
-                                                 available_layers.data()),
-              "vkEnumerateInstanceLayerProperties");
-      const bool validation_available = std::ranges::any_of(
-        available_layers, [](const VkLayerProperties& layer) {
-          return std::strcmp(layer.layerName, "VK_LAYER_KHRONOS_validation") ==
-                 0;
-        });
-      if (!validation_available) {
-        fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-             "VK_LAYER_KHRONOS_validation is unavailable");
-      }
-      layers.push_back("VK_LAYER_KHRONOS_validation");
-      extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-      debug_info.messageSeverity =
-        VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-      debug_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-      debug_info.pfnUserCallback = validationCallback;
-      debug_info.pUserData = this;
+  void createDeviceContext() {
+    const VulkanDeviceOptions device_options{
+      .device_index = options_.device_index,
+      .device_name_match = options_.device_name_match,
+      .enable_validation = options_.enable_validation};
+    auto created =
+      VulkanDeviceContext::create(device_options, options_.failure_injector);
+    if (!created) {
+      fail(created.error().status, created.error().diagnostic);
     }
-
-    auto application =
-      makeVkStructure<VkApplicationInfo>(VK_STRUCTURE_TYPE_APPLICATION_INFO);
-    application.pApplicationName = "ncnn-mlir-vulkan-v0";
-    application.applicationVersion = VK_MAKE_API_VERSION(0, 0, 1, 0);
-    application.pEngineName = "ncnn-mlir-vulkan-v0";
-    application.engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
-    application.apiVersion = VK_API_VERSION_1_1;
-
-    auto create_info = makeVkStructure<VkInstanceCreateInfo>(
-      VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
-    create_info.pNext = options_.enable_validation ? &debug_info : nullptr;
-    create_info.pApplicationInfo = &application;
-    create_info.enabledLayerCount = static_cast<std::uint32_t>(layers.size());
-    create_info.ppEnabledLayerNames = layers.data();
-    create_info.enabledExtensionCount =
-      static_cast<std::uint32_t>(extensions.size());
-    create_info.ppEnabledExtensionNames = extensions.data();
-    checkVk(vkCreateInstance(&create_info, nullptr, &instance_),
-            "vkCreateInstance");
-
-    if (options_.enable_validation) {
-      const auto create_messenger =
-        reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-          vkGetInstanceProcAddr(instance_, "vkCreateDebugUtilsMessengerEXT"));
-      if (create_messenger == nullptr) {
-        fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-             "VK_EXT_debug_utils is unavailable");
-      }
-      checkVk(create_messenger(instance_, &debug_info, nullptr, &messenger_),
-              "vkCreateDebugUtilsMessengerEXT");
-    }
-  }
-
-  void selectDevice() {
-    inject(VulkanRuntimeOperation::SelectDevice);
-    std::uint32_t count = 0;
-    checkVk(vkEnumeratePhysicalDevices(instance_, &count, nullptr),
-            "vkEnumeratePhysicalDevices");
-    if (count == 0) {
-      fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-           "no Vulkan physical devices were found");
-    }
-    std::vector<VkPhysicalDevice> devices(count);
-    checkVk(vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
-            "vkEnumeratePhysicalDevices");
-    if (options_.device_index != NCNN_VK_DEVICE_AUTO &&
-        options_.device_index >= devices.size()) {
-      fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-           "requested Vulkan device index is unavailable");
-    }
-
-    std::ostringstream summary;
-    for (std::size_t device_index = 0; device_index < devices.size();
-         ++device_index) {
-      if (options_.device_index != NCNN_VK_DEVICE_AUTO &&
-          device_index != options_.device_index) {
-        continue;
-      }
-      VkPhysicalDevice candidate = devices[device_index];
-      VkPhysicalDeviceProperties properties{};
-      vkGetPhysicalDeviceProperties(candidate, &properties);
-      summary << properties.deviceName << " (Vulkan "
-              << VK_VERSION_MAJOR(properties.apiVersion) << '.'
-              << VK_VERSION_MINOR(properties.apiVersion) << ")";
-      if (VK_VERSION_MAJOR(properties.apiVersion) < 1 ||
-          (VK_VERSION_MAJOR(properties.apiVersion) == 1 &&
-           VK_VERSION_MINOR(properties.apiVersion) < 1)) {
-        summary << " below Vulkan 1.1; ";
-        continue;
-      }
-      if (!options_.device_name_match.empty() &&
-          std::string_view(properties.deviceName)
-              .find(options_.device_name_match) == std::string_view::npos) {
-        summary << " did not match '" << options_.device_name_match << "'; ";
-        continue;
-      }
-      std::uint32_t queue_count = 0;
-      vkGetPhysicalDeviceQueueFamilyProperties(
-        candidate, &queue_count, nullptr);
-      std::vector<VkQueueFamilyProperties> queues(queue_count);
-      vkGetPhysicalDeviceQueueFamilyProperties(
-        candidate, &queue_count, queues.data());
-      for (std::uint32_t family = 0; family < queue_count; ++family) {
-        if ((queues[family].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
-          physical_device_ = candidate;
-          queue_family_ = family;
-          properties_ = properties;
-          vkGetPhysicalDeviceMemoryProperties(candidate, &memory_properties_);
-          return;
-        }
-      }
-      summary << " has no compute queue; ";
-    }
-    fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-         "no compatible Vulkan 1.1 compute queue was found (devices=" +
-           std::to_string(count) + ", requested_index=" +
-           std::to_string(options_.device_index) + "): " + summary.str());
-  }
-
-  void createDevice() {
-    inject(VulkanRuntimeOperation::CreateDevice);
-    constexpr float priority = 1.0F;
-    auto queue_info = makeVkStructure<VkDeviceQueueCreateInfo>(
-      VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO);
-    queue_info.queueFamilyIndex = queue_family_;
-    queue_info.queueCount = 1;
-    queue_info.pQueuePriorities = &priority;
-    auto device_info =
-      makeVkStructure<VkDeviceCreateInfo>(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
-    device_info.queueCreateInfoCount = 1;
-    device_info.pQueueCreateInfos = &queue_info;
-    checkVk(vkCreateDevice(physical_device_, &device_info, nullptr, &device_),
-            "vkCreateDevice");
-    vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
-    if (queue_ == VK_NULL_HANDLE) {
-      fail(NCNN_VK_STATUS_API_ERROR, "vkGetDeviceQueue returned a null queue");
-    }
+    device_context_.emplace(std::move(*created));
+    device_info_ = device_context_->get_device_info();
   }
 
   void validateDeviceLimits() const {
-    if (properties_.limits.maxStorageBufferRange == 0 ||
-        properties_.limits.maxPushConstantsSize == 0) {
-      fail(
-        NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-        "Vulkan device lacks required storage-buffer or push-constant limits");
+    const VkPhysicalDeviceProperties& properties =
+      device_context_->get_properties();
+    std::uint64_t max_storage_range = 0;
+    for (const TensorResource& resource : plan_.resources) {
+      max_storage_range = std::max(
+        max_storage_range, static_cast<std::uint64_t>(resource.byte_size));
     }
+    std::vector<VulkanDeviceLimitRequirements> requirements;
+    requirements.reserve(plan_.kernels.size());
     for (const KernelExecution& kernel : plan_.kernels) {
       const auto local = kernel.local_size;
-      if (local[0] == 0 || local[1] != 1 || local[2] != 1 ||
-          local[0] > properties_.limits.maxComputeWorkGroupSize[0] ||
-          local[0] > properties_.limits.maxComputeWorkGroupInvocations) {
+      if (local[0] == 0 || local[1] != 1 || local[2] != 1) {
         fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-             "plan workgroup size is unsupported by the selected device");
+             "plan workgroup shape is unsupported by the selected device");
       }
       std::uint64_t output_elements = 0;
       for (std::uint32_t id : kernel.writes) {
@@ -639,11 +397,6 @@ class VulkanRuntimeContext::Impl final {
           std::max(output_elements, resourceElements(*resource));
       }
       const std::uint64_t groups = (output_elements + local[0] - 1U) / local[0];
-      if (groups == 0 ||
-          groups > properties_.limits.maxComputeWorkGroupCount[0]) {
-        fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-             "plan dispatch exceeds the selected device workgroup limit");
-      }
       std::uint32_t max_push_end = 0;
       for (const PushConstantBlock& block : kernel.push_constants) {
         if (block.bytes.empty() || block.offset % 4 != 0 ||
@@ -657,199 +410,76 @@ class VulkanRuntimeContext::Impl final {
           max_push_end,
           block.offset + static_cast<std::uint32_t>(block.bytes.size()));
       }
-      if (max_push_end > properties_.limits.maxPushConstantsSize) {
-        fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-             "plan push constants exceed the selected device limit");
-      }
       std::uint32_t max_set = 0;
       for (const DescriptorBinding& binding : kernel.bindings) {
+        if (binding.set == std::numeric_limits<std::uint32_t>::max() ||
+            binding.binding == std::numeric_limits<std::uint32_t>::max()) {
+          fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
+               "plan descriptor binding exceeds representable limits");
+        }
         max_set = std::max(max_set, binding.set);
       }
-      if (!kernel.bindings.empty() &&
-          max_set >= properties_.limits.maxBoundDescriptorSets) {
-        fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-             "plan descriptor sets exceed the selected device limit");
-      }
-      if (kernel.bindings.size() >
-          properties_.limits.maxPerStageDescriptorStorageBuffers) {
-        fail(
-          NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-          "plan storage-buffer descriptors exceed the selected device limit");
-      }
-      for (const TensorResource& resource : plan_.resources) {
-        if (resource.byte_size > properties_.limits.maxStorageBufferRange) {
-          fail(NCNN_VK_STATUS_UNSUPPORTED_DEVICE,
-               "plan resource exceeds selected device maxStorageBufferRange");
-        }
-      }
+      const std::uint32_t set_count =
+        kernel.bindings.empty() ? 0 : max_set + 1U;
+      requirements.push_back(VulkanDeviceLimitRequirements{
+        .local_size_x = local[0],
+        .dispatch_count_x = groups > std::numeric_limits<std::uint32_t>::max()
+                              ? std::numeric_limits<std::uint32_t>::max()
+                              : static_cast<std::uint32_t>(groups),
+        .storage_buffer_range = max_storage_range,
+        .push_constant_bytes = max_push_end,
+        .descriptor_set_count = set_count,
+        .storage_buffer_descriptor_count =
+          kernel.bindings.size() > std::numeric_limits<std::uint32_t>::max()
+            ? std::numeric_limits<std::uint32_t>::max()
+            : static_cast<std::uint32_t>(kernel.bindings.size())});
     }
-  }
-
-  std::uint32_t findMemoryType(std::uint32_t allowed,
-                               VkMemoryPropertyFlags required,
-                               VkMemoryPropertyFlags preferred,
-                               bool* coherent) const {
-    if (options_.force_mapped_memory_sync && coherent != nullptr &&
-        (required & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0) {
-      std::optional<std::uint32_t> coherent_fallback;
-      for (std::uint32_t index = 0; index < memory_properties_.memoryTypeCount;
-           ++index) {
-        if ((allowed & (1U << index)) == 0) {
-          continue;
-        }
-        const VkMemoryPropertyFlags flags =
-          memory_properties_.memoryTypes[index].propertyFlags;
-        if ((flags & required) != required) {
-          continue;
-        }
-        if ((flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0) {
-          *coherent = false;
-          return index;
-        }
-        if (!coherent_fallback) {
-          coherent_fallback = index;
-        }
-      }
-      if (coherent_fallback) {
-        *coherent = false;
-        return *coherent_fallback;
-      }
-    }
-    std::optional<std::uint32_t> fallback;
-    for (std::uint32_t index = 0; index < memory_properties_.memoryTypeCount;
-         ++index) {
-      if ((allowed & (1U << index)) == 0) {
-        continue;
-      }
-      const VkMemoryPropertyFlags flags =
-        memory_properties_.memoryTypes[index].propertyFlags;
-      if ((flags & required) != required) {
-        continue;
-      }
-      if (!fallback) {
-        fallback = index;
-      }
-      if ((flags & preferred) == preferred) {
-        if (coherent != nullptr) {
-          *coherent = (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
-        }
-        return index;
-      }
-    }
-    if (!fallback) {
-      fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
-           "no Vulkan memory type satisfies buffer requirements");
-    }
-    const VkMemoryPropertyFlags flags =
-      memory_properties_.memoryTypes[*fallback].propertyFlags;
-    if (coherent != nullptr) {
-      *coherent = (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
-    }
-    return *fallback;
-  }
-
-  Buffer createBuffer(VkDeviceSize size,
-                      VkBufferUsageFlags usage,
-                      bool host_visible,
-                      VkMemoryRequirements& requirements,
-                      std::uint32_t& memory_type) {
-    if (size == 0 || size > std::numeric_limits<VkDeviceSize>::max()) {
-      fail(NCNN_VK_STATUS_INVALID_ARGUMENT, "invalid Vulkan buffer size");
-    }
-    inject(VulkanRuntimeOperation::CreateBuffer);
-    auto buffer_info =
-      makeVkStructure<VkBufferCreateInfo>(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
-    buffer_info.size = size;
-    buffer_info.usage = usage;
-    buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    Buffer buffer{.handle = VK_NULL_HANDLE,
-                  .memory = VK_NULL_HANDLE,
-                  .logical_size = size,
-                  .allocation_size = 0,
-                  .mapped = nullptr,
-                  .coherent = false};
-    checkVk(vkCreateBuffer(device_, &buffer_info, nullptr, &buffer.handle),
-            "vkCreateBuffer");
-    try {
-      vkGetBufferMemoryRequirements(device_, buffer.handle, &requirements);
-      const VkMemoryPropertyFlags required =
-        host_visible ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-                     : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-      const VkMemoryPropertyFlags preferred =
-        host_visible ? VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-                     : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-      memory_type = findMemoryType(
-        requirements.memoryTypeBits, required, preferred, &buffer.coherent);
-      if (host_visible && options_.force_mapped_memory_sync) {
-        buffer.coherent = false;
-      }
-      buffer.allocation_size = requirements.size;
-      return buffer;
-    } catch (...) {
-      vkDestroyBuffer(device_, buffer.handle, nullptr);
-      throw;
+    const auto validated =
+      ncnn_mlir::vulkan::validateDeviceLimits(properties, requirements);
+    if (!validated) {
+      fail(validated.error().status, validated.error().diagnostic);
     }
   }
 
   void createCommandResources() {
-    inject(VulkanRuntimeOperation::CreateCommandResources);
-    auto pool_info = makeVkStructure<VkCommandPoolCreateInfo>(
-      VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
-    pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    pool_info.queueFamilyIndex = queue_family_;
-    checkVk(vkCreateCommandPool(device_, &pool_info, nullptr, &command_pool_),
-            "vkCreateCommandPool");
-    auto command_info = makeVkStructure<VkCommandBufferAllocateInfo>(
-      VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
-    command_info.commandPool = command_pool_;
-    command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    command_info.commandBufferCount = 1;
-    inject(VulkanRuntimeOperation::CreateCommandResources);
-    checkVk(vkAllocateCommandBuffers(device_, &command_info, &command_buffer_),
-            "vkAllocateCommandBuffers");
-    inject(VulkanRuntimeOperation::CreateCommandResources);
-    auto fence_info =
-      makeVkStructure<VkFenceCreateInfo>(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
-    fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    checkVk(vkCreateFence(device_, &fence_info, nullptr, &fence_),
-            "vkCreateFence");
+    auto created = VulkanCommandResources::create(*device_context_,
+                                                  options_.failure_injector);
+    if (!created) {
+      fail(created.error().status, created.error().diagnostic);
+    }
+    command_resources_.emplace(std::move(*created));
   }
 
   void createBuffers() {
     validateDeviceLimits();
+    const auto prepare_buffer =
+      [this](VkDeviceSize size, VkBufferUsageFlags usage, bool host_visible) {
+        const VulkanBufferCreateInfo create_info{
+          .size = size,
+          .usage = usage,
+          .host_visible = host_visible,
+          .force_mapped_memory_sync = options_.force_mapped_memory_sync};
+        auto prepared = VulkanBuffer::prepare(
+          *device_context_, create_info, options_.failure_injector);
+        if (!prepared) {
+          fail(prepared.error().status, prepared.error().diagnostic);
+        }
+        return std::move(*prepared);
+      };
+
     for (const TensorResource& spec : plan_.resources) {
       const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-      VkMemoryRequirements requirements{};
-      std::uint32_t memory_type = 0;
-      Buffer device_buffer =
-        createBuffer(spec.byte_size, usage, false, requirements, memory_type);
-      Resource resource{.spec = &spec,
-                        .device = device_buffer,
-                        .staging = {.handle = VK_NULL_HANDLE,
-                                    .memory = VK_NULL_HANDLE,
-                                    .logical_size = spec.byte_size,
-                                    .allocation_size = 0,
-                                    .mapped = nullptr,
-                                    .coherent = false}};
-      bool buffer_owned = false;
-      try {
-        const auto [iterator, inserted] = resources_.emplace(spec.id, resource);
-        (void)iterator;
-        if (!inserted) {
-          fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
-               "execution plan contains duplicate resource IDs");
-        }
-        buffer_owned = true;
-      } catch (...) {
-        if (!buffer_owned) {
-          vkDestroyBuffer(device_, device_buffer.handle, nullptr);
-        }
-        throw;
+      Buffer device_buffer = prepare_buffer(spec.byte_size, usage, false);
+      Resource resource(spec, std::move(device_buffer));
+      const auto [iterator, inserted] =
+        resources_.emplace(spec.id, std::move(resource));
+      (void)iterator;
+      if (!inserted) {
+        fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
+             "execution plan contains duplicate resource IDs");
       }
-      resource_memory_types_[spec.id] = memory_type;
-      resource_requirements_[spec.id] = requirements;
     }
 
     for (const TensorResource& spec : plan_.resources) {
@@ -857,137 +487,118 @@ class VulkanRuntimeContext::Impl final {
           spec.kind != ResourceKind::Output) {
         continue;
       }
-      VkMemoryRequirements requirements{};
-      std::uint32_t memory_type = 0;
-      Buffer staging = createBuffer(
+      resources_.at(spec.id).set_staging_buffer(prepare_buffer(
         spec.byte_size,
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        true,
-        requirements,
-        memory_type);
-      resources_.at(spec.id).staging = staging;
-      staging_memory_types_[spec.id] = memory_type;
-      staging_requirements_[spec.id] = requirements;
+        true));
     }
 
-    std::uint64_t total_bytes = 0;
-    std::uint64_t total_weight_staging = 0;
+    for (const TensorResource& spec : plan_.resources) {
+      if (spec.kind != ResourceKind::Weight) {
+        continue;
+      }
+      Buffer staging =
+        prepare_buffer(spec.byte_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+      const auto [iterator, inserted] =
+        weight_staging_.emplace(spec.id, std::move(staging));
+      (void)iterator;
+      if (!inserted) {
+        fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
+             "execution plan contains duplicate weight resources");
+      }
+    }
+
+    std::uint64_t persistent_bytes = 0;
+    std::uint64_t temporary_staging_bytes = 0;
+    std::uint64_t allocation_count = 0;
     for (const auto& [id, resource] : resources_) {
       (void)id;
-      if (!checkedAdd(
-            total_bytes, resource.device.allocation_size, total_bytes)) {
+      if (!checkedAdd(persistent_bytes,
+                      resource.get_device_buffer().get_allocation_size(),
+                      persistent_bytes)) {
         fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
              "Vulkan context allocation size overflows uint64");
       }
-      if (resource.staging.handle != VK_NULL_HANDLE &&
-          !checkedAdd(
-            total_bytes, resource.staging.allocation_size, total_bytes)) {
+      if (resource.has_staging_buffer() &&
+          !checkedAdd(persistent_bytes,
+                      resource.get_staging_buffer().get_allocation_size(),
+                      persistent_bytes)) {
         fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
              "Vulkan staging allocation size overflows uint64");
       }
     }
-    for (const TensorResource& spec : plan_.resources) {
-      if (spec.kind == ResourceKind::Weight) {
-        VkMemoryRequirements requirements{};
-        std::uint32_t memory_type = 0;
-        Buffer staging = createBuffer(spec.byte_size,
-                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                      true,
-                                      requirements,
-                                      memory_type);
-        bool staging_owned = false;
-        try {
-          if (!checkedAdd(total_weight_staging,
-                          requirements.size,
-                          total_weight_staging)) {
-            fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
-                 "weight staging allocation size overflows uint64");
-          }
-          const auto [iterator, inserted] =
-            weight_staging_.emplace(spec.id, staging);
-          (void)iterator;
-          if (!inserted) {
-            fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
-                 "execution plan contains duplicate weight resources");
-          }
-          staging_owned = true;
-        } catch (...) {
-          if (!staging_owned) {
-            vkDestroyBuffer(device_, staging.handle, nullptr);
-          }
-          throw;
-        }
-        weight_staging_memory_types_[spec.id] = memory_type;
-        weight_staging_requirements_[spec.id] = requirements;
+    for (const auto& [id, staging] : weight_staging_) {
+      (void)id;
+      if (!checkedAdd(temporary_staging_bytes,
+                      staging.get_allocation_size(),
+                      temporary_staging_bytes)) {
+        fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
+             "weight staging allocation size overflows uint64");
       }
     }
-    std::uint64_t allocation_count = 0;
     if (!checkedAdd(allocation_count,
                     static_cast<std::uint64_t>(resources_.size()),
-                    allocation_count) ||
-        !checkedAdd(allocation_count,
-                    static_cast<std::uint64_t>(staging_requirements_.size()),
-                    allocation_count) ||
-        !checkedAdd(allocation_count,
+                    allocation_count)) {
+      fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
+           "Vulkan context allocation count overflows uint64");
+    }
+    for (const auto& [id, resource] : resources_) {
+      (void)id;
+      if (resource.has_staging_buffer() &&
+          !checkedAdd(allocation_count, 1, allocation_count)) {
+        fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
+             "Vulkan context allocation count overflows uint64");
+      }
+    }
+    if (!checkedAdd(allocation_count,
                     static_cast<std::uint64_t>(weight_staging_.size()),
                     allocation_count)) {
       fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
            "Vulkan context allocation count overflows uint64");
     }
-    if (allocation_count > properties_.limits.maxMemoryAllocationCount) {
-      fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
-           "Vulkan context exceeds the device allocation-count limit");
-    }
     std::uint64_t peak = 0;
-    if (!checkedAdd(total_bytes, total_weight_staging, peak) ||
-        peak > options_.max_context_memory_bytes) {
-      fail(
-        NCNN_VK_STATUS_OUT_OF_MEMORY,
-        "Vulkan context exceeds configured memory budget (required at most " +
-          std::to_string(peak) + " bytes, limit " +
-          std::to_string(options_.max_context_memory_bytes) + " bytes)");
+    if (!checkedAdd(persistent_bytes, temporary_staging_bytes, peak)) {
+      fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
+           "Vulkan context allocation size overflows uint64");
+    }
+    const VulkanAllocationBudget budget{
+      .persistent_bytes = persistent_bytes,
+      .temporary_staging_bytes = temporary_staging_bytes,
+      .allocation_count = allocation_count};
+    const auto validated = validateAllocationBudget(
+      budget,
+      device_context_->get_properties().limits.maxMemoryAllocationCount,
+      options_.max_context_memory_bytes);
+    if (!validated) {
+      if (validated.error().status == NCNN_VK_STATUS_OUT_OF_MEMORY &&
+          peak > options_.max_context_memory_bytes) {
+        fail(NCNN_VK_STATUS_OUT_OF_MEMORY,
+             "Vulkan context exceeds configured memory budget (required " +
+               std::to_string(peak) + " bytes, limit " +
+               std::to_string(options_.max_context_memory_bytes) + " bytes)");
+      }
+      fail(validated.error().status, validated.error().diagnostic);
     }
     peak_memory_bytes_ = peak;
   }
 
-  void allocateOne(Buffer& buffer,
-                   VkMemoryRequirements requirements,
-                   std::uint32_t memory_type,
-                   bool map) {
-    inject(VulkanRuntimeOperation::AllocateMemory);
-    auto allocation = makeVkStructure<VkMemoryAllocateInfo>(
-      VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
-    allocation.allocationSize = requirements.size;
-    allocation.memoryTypeIndex = memory_type;
-    checkVk(vkAllocateMemory(device_, &allocation, nullptr, &buffer.memory),
-            "vkAllocateMemory");
-    checkVk(vkBindBufferMemory(device_, buffer.handle, buffer.memory, 0),
-            "vkBindBufferMemory");
-    if (map) {
-      checkVk(vkMapMemory(
-                device_, buffer.memory, 0, VK_WHOLE_SIZE, 0, &buffer.mapped),
-              "vkMapMemory");
-    }
-  }
-
   void allocateBuffers() {
+    const auto allocate_buffer = [this](Buffer& buffer, bool map) {
+      auto allocated = buffer.allocate_and_bind(map, options_.failure_injector);
+      if (!allocated) {
+        fail(allocated.error().status, allocated.error().diagnostic);
+      }
+    };
     for (auto& [id, resource] : resources_) {
-      allocateOne(resource.device,
-                  resource_requirements_.at(id),
-                  resource_memory_types_.at(id),
-                  false);
-      if (resource.staging.handle != VK_NULL_HANDLE) {
-        allocateOne(resource.staging,
-                    staging_requirements_.at(id),
-                    staging_memory_types_.at(id),
-                    true);
+      (void)id;
+      allocate_buffer(resource.get_device_buffer(), false);
+      if (resource.has_staging_buffer()) {
+        allocate_buffer(resource.get_staging_buffer(), true);
       }
     }
     for (auto& [id, buffer] : weight_staging_) {
-      allocateOne(buffer,
-                  weight_staging_requirements_.at(id),
-                  weight_staging_memory_types_.at(id),
-                  true);
+      (void)id;
+      allocate_buffer(buffer, true);
     }
   }
 
@@ -1001,13 +612,16 @@ class VulkanRuntimeContext::Impl final {
         fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
              "execution plan descriptor count overflows uint64");
       }
+      if (spec.bindings.empty()) {
+        continue;
+      }
       std::uint32_t max_set = 0;
       for (const DescriptorBinding& binding : spec.bindings) {
         max_set = std::max(max_set, binding.set);
       }
-      if (!spec.bindings.empty() &&
+      if (max_set == std::numeric_limits<std::uint32_t>::max() ||
           !checkedAdd(
-            set_count, static_cast<std::uint64_t>(max_set) + 1, set_count)) {
+            set_count, static_cast<std::uint64_t>(max_set) + 1U, set_count)) {
         fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
              "execution plan descriptor-set count overflows uint64");
       }
@@ -1017,148 +631,54 @@ class VulkanRuntimeContext::Impl final {
       fail(NCNN_VK_STATUS_INVALID_ARGUMENT,
            "execution plan descriptor counts exceed Vulkan limits");
     }
-    if (descriptor_count > 0) {
-      VkDescriptorPoolSize pool_size{
-        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        static_cast<std::uint32_t>(descriptor_count)};
-      auto pool_info = makeVkStructure<VkDescriptorPoolCreateInfo>(
-        VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO);
-      pool_info.maxSets = static_cast<std::uint32_t>(set_count);
-      pool_info.poolSizeCount = 1;
-      pool_info.pPoolSizes = &pool_size;
-      inject(VulkanRuntimeOperation::CreateDescriptor);
-      checkVk(
-        vkCreateDescriptorPool(device_, &pool_info, nullptr, &descriptor_pool_),
-        "vkCreateDescriptorPool");
+    auto pool =
+      VulkanDescriptorPool::create(*device_context_,
+                                   static_cast<std::uint32_t>(set_count),
+                                   static_cast<std::uint32_t>(descriptor_count),
+                                   options_.failure_injector);
+    if (!pool) {
+      fail(pool.error().status, pool.error().diagnostic);
     }
+    descriptor_pool_.emplace(std::move(*pool));
 
     for (const KernelExecution& spec : plan_.kernels) {
       const VulkanKernelBinary& binary = findKernelBinary(spec.id);
-      Kernel& kernel =
-        kernels_state_.emplace_back(Kernel{.spec = &spec,
-                                           .module = VK_NULL_HANDLE,
-                                           .layout = VK_NULL_HANDLE,
-                                           .pipeline = VK_NULL_HANDLE,
-                                           .set_layouts = {},
-                                           .sets = {}});
-      auto shader_info = makeVkStructure<VkShaderModuleCreateInfo>(
-        VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
-      shader_info.codeSize = binary.words.size_bytes();
-      shader_info.pCode = binary.words.data();
-      inject(VulkanRuntimeOperation::CreateShaderModule);
-      checkVk(
-        vkCreateShaderModule(device_, &shader_info, nullptr, &kernel.module),
-        "vkCreateShaderModule");
-
-      std::uint32_t max_set = 0;
-      for (const DescriptorBinding& binding : spec.bindings) {
-        max_set = std::max(max_set, binding.set);
+      std::vector<VulkanPipelineBinding> bindings;
+      bindings.reserve(spec.bindings.size());
+      for (const DescriptorBinding& descriptor : spec.bindings) {
+        const Resource& resource = resources_.at(descriptor.resource_id);
+        bindings.push_back(VulkanPipelineBinding{
+          .set = descriptor.set,
+          .binding = descriptor.binding,
+          .buffer = resource.get_device_buffer().get_handle(),
+          .buffer_size = resource.get_device_buffer().get_logical_size(),
+          .offset = 0,
+          .range = resource.get_device_buffer().get_logical_size()});
       }
-      if (!spec.bindings.empty()) {
-        kernel.set_layouts.resize(max_set + 1, VK_NULL_HANDLE);
-        for (std::uint32_t set = 0; set <= max_set; ++set) {
-          std::vector<VkDescriptorSetLayoutBinding> bindings;
-          for (const DescriptorBinding& descriptor : spec.bindings) {
-            if (descriptor.set != set) {
-              continue;
-            }
-            bindings.push_back(VkDescriptorSetLayoutBinding{
-              .binding = descriptor.binding,
-              .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-              .descriptorCount = 1,
-              .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-              .pImmutableSamplers = nullptr});
-          }
-          auto layout_info = makeVkStructure<VkDescriptorSetLayoutCreateInfo>(
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO);
-          layout_info.bindingCount =
-            static_cast<std::uint32_t>(bindings.size());
-          layout_info.pBindings = bindings.data();
-          inject(VulkanRuntimeOperation::CreateDescriptor);
-          checkVk(vkCreateDescriptorSetLayout(
-                    device_, &layout_info, nullptr, &kernel.set_layouts[set]),
-                  "vkCreateDescriptorSetLayout");
-        }
-
-        std::vector<VkDescriptorSetLayout> layout_handles = kernel.set_layouts;
-        auto set_info = makeVkStructure<VkDescriptorSetAllocateInfo>(
-          VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO);
-        set_info.descriptorPool = descriptor_pool_;
-        set_info.descriptorSetCount =
-          static_cast<std::uint32_t>(layout_handles.size());
-        set_info.pSetLayouts = layout_handles.data();
-        kernel.sets.resize(layout_handles.size(), VK_NULL_HANDLE);
-        inject(VulkanRuntimeOperation::CreateDescriptor);
-        checkVk(
-          vkAllocateDescriptorSets(device_, &set_info, kernel.sets.data()),
-          "vkAllocateDescriptorSets");
-
-        std::vector<VkDescriptorBufferInfo> buffer_infos;
-        std::vector<VkWriteDescriptorSet> writes;
-        buffer_infos.reserve(spec.bindings.size());
-        writes.reserve(spec.bindings.size());
-        for (const DescriptorBinding& descriptor : spec.bindings) {
-          const Resource& resource = resources_.at(descriptor.resource_id);
-          buffer_infos.push_back(
-            VkDescriptorBufferInfo{.buffer = resource.device.handle,
-                                   .offset = 0,
-                                   .range = resource.device.logical_size});
-          writes.push_back(VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = nullptr,
-            .dstSet = kernel.sets[descriptor.set],
-            .dstBinding = descriptor.binding,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pImageInfo = nullptr,
-            .pBufferInfo = &buffer_infos.back(),
-            .pTexelBufferView = nullptr});
-        }
-        vkUpdateDescriptorSets(device_,
-                               static_cast<std::uint32_t>(writes.size()),
-                               writes.data(),
-                               0,
-                               nullptr);
-      }
-
       std::uint32_t max_push_end = 0;
       for (const PushConstantBlock& block : spec.push_constants) {
         max_push_end = std::max(
           max_push_end,
           block.offset + static_cast<std::uint32_t>(block.bytes.size()));
       }
-      VkPushConstantRange push_range{.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-                                     .offset = 0,
-                                     .size = max_push_end};
-      auto pipeline_layout_info = makeVkStructure<VkPipelineLayoutCreateInfo>(
-        VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
-      pipeline_layout_info.setLayoutCount =
-        static_cast<std::uint32_t>(kernel.set_layouts.size());
-      pipeline_layout_info.pSetLayouts = kernel.set_layouts.data();
-      pipeline_layout_info.pushConstantRangeCount = max_push_end == 0 ? 0 : 1;
-      pipeline_layout_info.pPushConstantRanges =
-        max_push_end == 0 ? nullptr : &push_range;
-      checkVk(vkCreatePipelineLayout(
-                device_, &pipeline_layout_info, nullptr, &kernel.layout),
-              "vkCreatePipelineLayout");
-      auto stage = makeVkStructure<VkPipelineShaderStageCreateInfo>(
-        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
-      stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-      stage.module = kernel.module;
-      stage.pName = spec.entry_point.c_str();
-      auto pipeline_info = makeVkStructure<VkComputePipelineCreateInfo>(
-        VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO);
-      pipeline_info.stage = stage;
-      pipeline_info.layout = kernel.layout;
-      inject(VulkanRuntimeOperation::CreatePipeline);
-      checkVk(vkCreateComputePipelines(device_,
-                                       VK_NULL_HANDLE,
-                                       1,
-                                       &pipeline_info,
-                                       nullptr,
-                                       &kernel.pipeline),
-              "vkCreateComputePipelines");
+      std::vector<VulkanPushConstantRange> push_constants;
+      if (max_push_end != 0) {
+        push_constants.push_back(
+          VulkanPushConstantRange{.stage_flags = VK_SHADER_STAGE_COMPUTE_BIT,
+                                  .offset = 0,
+                                  .size = max_push_end});
+      }
+      auto created = VulkanComputePipeline::create(*device_context_,
+                                                   *descriptor_pool_,
+                                                   binary.words,
+                                                   spec.entry_point,
+                                                   bindings,
+                                                   push_constants,
+                                                   options_.failure_injector);
+      if (!created) {
+        fail(created.error().status, created.error().diagnostic);
+      }
+      kernels_state_.emplace_back(spec, std::move(*created));
     }
   }
 
@@ -1174,24 +694,31 @@ class VulkanRuntimeContext::Impl final {
     return *found;
   }
 
+  void checkHelper(std::expected<void, VulkanDeviceError> result) {
+    if (!result) {
+      fail(result.error().status, result.error().diagnostic);
+    }
+  }
+
   void uploadWeights() {
     if (weights_.empty()) {
       return;
     }
-    checkVk(vkResetFences(device_, 1, &fence_), "vkResetFences");
-    checkVk(vkResetCommandPool(device_, command_pool_, 0),
-            "vkResetCommandPool");
-    auto begin = makeVkStructure<VkCommandBufferBeginInfo>(
-      VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    checkVk(vkBeginCommandBuffer(command_buffer_, &begin),
-            "vkBeginCommandBuffer");
+    checkHelper(command_resources_->reset());
+    checkHelper(command_resources_->begin());
+    const VkCommandBuffer command_buffer =
+      command_resources_->get_command_buffer();
     std::vector<VkBufferMemoryBarrier> host_barriers;
     std::vector<VkBufferMemoryBarrier> device_barriers;
     for (const VulkanResourcePayload& payload : weights_) {
       Buffer& staging = weight_staging_.at(payload.resource_id);
-      std::memcpy(staging.mapped, payload.bytes.data(), payload.bytes.size());
-      flushBuffer(staging);
+      const std::span<std::byte> mapped = staging.get_mapped();
+      if (mapped.size() < payload.bytes.size()) {
+        fail(NCNN_VK_STATUS_API_ERROR,
+             "weight staging allocation is not mapped to the required size");
+      }
+      std::memcpy(mapped.data(), payload.bytes.data(), payload.bytes.size());
+      checkHelper(staging.flush(options_.failure_injector));
       host_barriers.push_back(
         VkBufferMemoryBarrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
                               .pNext = nullptr,
@@ -1199,11 +726,11 @@ class VulkanRuntimeContext::Impl final {
                               .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
                               .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                               .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .buffer = staging.handle,
+                              .buffer = staging.get_handle(),
                               .offset = 0,
                               .size = VK_WHOLE_SIZE});
     }
-    vkCmdPipelineBarrier(command_buffer_,
+    vkCmdPipelineBarrier(command_buffer,
                          VK_PIPELINE_STAGE_HOST_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT,
                          0,
@@ -1217,22 +744,27 @@ class VulkanRuntimeContext::Impl final {
       const Buffer& staging = weight_staging_.at(payload.resource_id);
       Resource& resource = resources_.at(payload.resource_id);
       const VkBufferCopy copy{
-        .srcOffset = 0, .dstOffset = 0, .size = resource.device.logical_size};
-      vkCmdCopyBuffer(
-        command_buffer_, staging.handle, resource.device.handle, 1, &copy);
-      device_barriers.push_back(
-        VkBufferMemoryBarrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                              .pNext = nullptr,
-                              .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                              .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                              .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .buffer = resource.device.handle,
-                              .offset = 0,
-                              .size = VK_WHOLE_SIZE});
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = resource.get_device_buffer().get_logical_size()};
+      vkCmdCopyBuffer(command_buffer,
+                      staging.get_handle(),
+                      resource.get_device_buffer().get_handle(),
+                      1,
+                      &copy);
+      device_barriers.push_back(VkBufferMemoryBarrier{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = resource.get_device_buffer().get_handle(),
+        .offset = 0,
+        .size = VK_WHOLE_SIZE});
     }
     if (!device_barriers.empty()) {
-      vkCmdPipelineBarrier(command_buffer_,
+      vkCmdPipelineBarrier(command_buffer,
                            VK_PIPELINE_STAGE_TRANSFER_BIT,
                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                            0,
@@ -1243,12 +775,12 @@ class VulkanRuntimeContext::Impl final {
                            0,
                            nullptr);
     }
-    checkVk(vkEndCommandBuffer(command_buffer_), "vkEndCommandBuffer");
-    submitAndWait();
+    checkHelper(command_resources_->end());
+    checkHelper(command_resources_->submit_and_wait(options_.failure_injector));
     weight_upload_count_ += weights_.size();
     for (auto& [id, buffer] : weight_staging_) {
       (void)id;
-      destroyBuffer(buffer);
+      (void)buffer.destroy();
     }
     weight_staging_.clear();
   }
@@ -1297,71 +829,51 @@ class VulkanRuntimeContext::Impl final {
   }
 
   void flushBuffer(const Buffer& buffer) {
-    if (buffer.coherent) {
-      return;
-    }
-    inject(VulkanRuntimeOperation::FlushMappedMemory);
-    auto range = makeVkStructure<VkMappedMemoryRange>(
-      VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
-    range.memory = buffer.memory;
-    range.offset = 0;
-    range.size = VK_WHOLE_SIZE;
-    checkVk(vkFlushMappedMemoryRanges(device_, 1, &range),
-            "vkFlushMappedMemoryRanges");
+    checkHelper(buffer.flush(options_.failure_injector));
   }
 
   void invalidateBuffer(const Buffer& buffer) {
-    if (buffer.coherent) {
-      return;
-    }
-    inject(VulkanRuntimeOperation::InvalidateMappedMemory);
-    auto range = makeVkStructure<VkMappedMemoryRange>(
-      VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
-    range.memory = buffer.memory;
-    range.offset = 0;
-    range.size = VK_WHOLE_SIZE;
-    checkVk(vkInvalidateMappedMemoryRanges(device_, 1, &range),
-            "vkInvalidateMappedMemoryRanges");
+    checkHelper(buffer.invalidate(options_.failure_injector));
   }
 
   void prepareInputStaging(std::span<const VulkanInputTensor> inputs) {
     for (const VulkanInputTensor& input : inputs) {
-      Buffer& staging = resources_.at(input.resource_id).staging;
-      std::memcpy(staging.mapped, input.bytes.data(), input.bytes.size());
+      Buffer& staging = resources_.at(input.resource_id).get_staging_buffer();
+      const std::span<std::byte> mapped = staging.get_mapped();
+      if (mapped.size() < input.bytes.size()) {
+        fail(NCNN_VK_STATUS_API_ERROR,
+             "input staging allocation is not mapped to the required size");
+      }
+      std::memcpy(mapped.data(), input.bytes.data(), input.bytes.size());
       flushBuffer(staging);
     }
   }
 
   void recordAndSubmit(std::span<const VulkanInputTensor> inputs,
                        std::span<const VulkanOutputTensor> outputs) {
-    checkVk(vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX),
-            "vkWaitForFences");
-    checkVk(vkResetFences(device_, 1, &fence_), "vkResetFences");
-    checkVk(vkResetCommandPool(device_, command_pool_, 0),
-            "vkResetCommandPool");
-    auto begin = makeVkStructure<VkCommandBufferBeginInfo>(
-      VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
-    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    checkVk(vkBeginCommandBuffer(command_buffer_, &begin),
-            "vkBeginCommandBuffer");
+    checkHelper(command_resources_->wait());
+    checkHelper(command_resources_->reset());
+    checkHelper(command_resources_->begin());
+    const VkCommandBuffer command_buffer =
+      command_resources_->get_command_buffer();
 
     std::vector<VkBufferMemoryBarrier> host_to_transfer;
     std::vector<VkBufferMemoryBarrier> transfer_to_compute;
     for (const VulkanInputTensor& input : inputs) {
       Resource& resource = resources_.at(input.resource_id);
-      host_to_transfer.push_back(
-        VkBufferMemoryBarrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                              .pNext = nullptr,
-                              .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
-                              .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-                              .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .buffer = resource.staging.handle,
-                              .offset = 0,
-                              .size = VK_WHOLE_SIZE});
+      host_to_transfer.push_back(VkBufferMemoryBarrier{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = resource.get_staging_buffer().get_handle(),
+        .offset = 0,
+        .size = VK_WHOLE_SIZE});
     }
     if (!host_to_transfer.empty()) {
-      vkCmdPipelineBarrier(command_buffer_,
+      vkCmdPipelineBarrier(command_buffer,
                            VK_PIPELINE_STAGE_HOST_BIT,
                            VK_PIPELINE_STAGE_TRANSFER_BIT,
                            0,
@@ -1375,26 +887,28 @@ class VulkanRuntimeContext::Impl final {
     for (const VulkanInputTensor& input : inputs) {
       Resource& resource = resources_.at(input.resource_id);
       const VkBufferCopy copy{
-        .srcOffset = 0, .dstOffset = 0, .size = resource.device.logical_size};
-      vkCmdCopyBuffer(command_buffer_,
-                      resource.staging.handle,
-                      resource.device.handle,
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = resource.get_device_buffer().get_logical_size()};
+      vkCmdCopyBuffer(command_buffer,
+                      resource.get_staging_buffer().get_handle(),
+                      resource.get_device_buffer().get_handle(),
                       1,
                       &copy);
-      transfer_to_compute.push_back(
-        VkBufferMemoryBarrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                              .pNext = nullptr,
-                              .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                              .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                              .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .buffer = resource.device.handle,
-                              .offset = 0,
-                              .size = VK_WHOLE_SIZE});
+      transfer_to_compute.push_back(VkBufferMemoryBarrier{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = resource.get_device_buffer().get_handle(),
+        .offset = 0,
+        .size = VK_WHOLE_SIZE});
     }
     if (!transfer_to_compute.empty()) {
       vkCmdPipelineBarrier(
-        command_buffer_,
+        command_buffer,
         VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         0,
@@ -1411,10 +925,10 @@ class VulkanRuntimeContext::Impl final {
          ++kernel_index) {
       const Kernel& kernel = kernels_state_[kernel_index];
       std::vector<VkBufferMemoryBarrier> barriers;
-      std::unordered_set<std::uint32_t> current_ids(kernel.spec->reads.begin(),
-                                                    kernel.spec->reads.end());
-      current_ids.insert(kernel.spec->writes.begin(),
-                         kernel.spec->writes.end());
+      std::unordered_set<std::uint32_t> current_ids(
+        kernel.get_spec().reads.begin(), kernel.get_spec().reads.end());
+      current_ids.insert(kernel.get_spec().writes.begin(),
+                         kernel.get_spec().writes.end());
       for (std::uint32_t id : current_ids) {
         if (!shader_written.contains(id)) {
           continue;
@@ -1428,12 +942,12 @@ class VulkanRuntimeContext::Impl final {
             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
           .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
           .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-          .buffer = resource.device.handle,
+          .buffer = resource.get_device_buffer().get_handle(),
           .offset = 0,
           .size = VK_WHOLE_SIZE});
       }
       if (!barriers.empty()) {
-        vkCmdPipelineBarrier(command_buffer_,
+        vkCmdPipelineBarrier(command_buffer,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              0,
@@ -1445,55 +959,58 @@ class VulkanRuntimeContext::Impl final {
                              nullptr);
       }
 
-      vkCmdBindPipeline(
-        command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE, kernel.pipeline);
-      if (!kernel.sets.empty()) {
-        vkCmdBindDescriptorSets(command_buffer_,
-                                VK_PIPELINE_BIND_POINT_COMPUTE,
-                                kernel.layout,
-                                0,
-                                static_cast<std::uint32_t>(kernel.sets.size()),
-                                kernel.sets.data(),
-                                0,
-                                nullptr);
+      vkCmdBindPipeline(command_buffer,
+                        VK_PIPELINE_BIND_POINT_COMPUTE,
+                        kernel.get_pipeline().get_pipeline());
+      if (!kernel.get_pipeline().get_descriptor_sets().empty()) {
+        vkCmdBindDescriptorSets(
+          command_buffer,
+          VK_PIPELINE_BIND_POINT_COMPUTE,
+          kernel.get_pipeline().get_layout(),
+          0,
+          static_cast<std::uint32_t>(
+            kernel.get_pipeline().get_descriptor_sets().size()),
+          kernel.get_pipeline().get_descriptor_sets().data(),
+          0,
+          nullptr);
       }
-      for (const PushConstantBlock& block : kernel.spec->push_constants) {
-        vkCmdPushConstants(command_buffer_,
-                           kernel.layout,
+      for (const PushConstantBlock& block : kernel.get_spec().push_constants) {
+        vkCmdPushConstants(command_buffer,
+                           kernel.get_pipeline().get_layout(),
                            VK_SHADER_STAGE_COMPUTE_BIT,
                            block.offset,
                            static_cast<std::uint32_t>(block.bytes.size()),
                            block.bytes.data());
       }
       std::uint64_t output_elements = 0;
-      for (std::uint32_t id : kernel.spec->writes) {
-        output_elements =
-          std::max(output_elements, resourceElements(*resources_.at(id).spec));
+      for (std::uint32_t id : kernel.get_spec().writes) {
+        output_elements = std::max(
+          output_elements, resourceElements(resources_.at(id).get_spec()));
       }
       const auto groups = static_cast<std::uint32_t>(
-        (output_elements + kernel.spec->local_size[0] - 1U) /
-        kernel.spec->local_size[0]);
-      vkCmdDispatch(command_buffer_, groups, 1, 1);
-      shader_written.insert(kernel.spec->writes.begin(),
-                            kernel.spec->writes.end());
+        (output_elements + kernel.get_spec().local_size[0] - 1U) /
+        kernel.get_spec().local_size[0]);
+      vkCmdDispatch(command_buffer, groups, 1, 1);
+      shader_written.insert(kernel.get_spec().writes.begin(),
+                            kernel.get_spec().writes.end());
       (void)kernel_index;
     }
 
     std::vector<VkBufferMemoryBarrier> compute_to_transfer;
     for (const VulkanOutputTensor& output : outputs) {
       Resource& resource = resources_.at(output.resource_id);
-      compute_to_transfer.push_back(
-        VkBufferMemoryBarrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                              .pNext = nullptr,
-                              .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                              .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-                              .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .buffer = resource.device.handle,
-                              .offset = 0,
-                              .size = VK_WHOLE_SIZE});
+      compute_to_transfer.push_back(VkBufferMemoryBarrier{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = resource.get_device_buffer().get_handle(),
+        .offset = 0,
+        .size = VK_WHOLE_SIZE});
     }
-    vkCmdPipelineBarrier(command_buffer_,
+    vkCmdPipelineBarrier(command_buffer,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT,
                          0,
@@ -1507,24 +1024,26 @@ class VulkanRuntimeContext::Impl final {
     for (const VulkanOutputTensor& output : outputs) {
       Resource& resource = resources_.at(output.resource_id);
       const VkBufferCopy copy{
-        .srcOffset = 0, .dstOffset = 0, .size = resource.device.logical_size};
-      vkCmdCopyBuffer(command_buffer_,
-                      resource.device.handle,
-                      resource.staging.handle,
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = resource.get_device_buffer().get_logical_size()};
+      vkCmdCopyBuffer(command_buffer,
+                      resource.get_device_buffer().get_handle(),
+                      resource.get_staging_buffer().get_handle(),
                       1,
                       &copy);
-      transfer_to_host.push_back(
-        VkBufferMemoryBarrier{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                              .pNext = nullptr,
-                              .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                              .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
-                              .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                              .buffer = resource.staging.handle,
-                              .offset = 0,
-                              .size = VK_WHOLE_SIZE});
+      transfer_to_host.push_back(VkBufferMemoryBarrier{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = resource.get_staging_buffer().get_handle(),
+        .offset = 0,
+        .size = VK_WHOLE_SIZE});
     }
-    vkCmdPipelineBarrier(command_buffer_,
+    vkCmdPipelineBarrier(command_buffer,
                          VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_HOST_BIT,
                          0,
@@ -1534,59 +1053,31 @@ class VulkanRuntimeContext::Impl final {
                          transfer_to_host.data(),
                          0,
                          nullptr);
-    checkVk(vkEndCommandBuffer(command_buffer_), "vkEndCommandBuffer");
-    submitAndWait();
-  }
-
-  void submitAndWait() {
-    inject(VulkanRuntimeOperation::Submit);
-    auto submit = makeVkStructure<VkSubmitInfo>(VK_STRUCTURE_TYPE_SUBMIT_INFO);
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &command_buffer_;
-    checkVk(vkQueueSubmit(queue_, 1, &submit, fence_), "vkQueueSubmit");
-    inject(VulkanRuntimeOperation::Wait);
-    checkVk(vkWaitForFences(device_, 1, &fence_, VK_TRUE, UINT64_MAX),
-            "vkWaitForFences");
+    checkHelper(command_resources_->end());
+    checkHelper(command_resources_->submit_and_wait(options_.failure_injector));
   }
 
   void invalidateOutputs(std::span<const VulkanOutputTensor> outputs) {
     for (const VulkanOutputTensor& output : outputs) {
-      invalidateBuffer(resources_.at(output.resource_id).staging);
+      invalidateBuffer(resources_.at(output.resource_id).get_staging_buffer());
     }
   }
 
   void publishOutputs(std::span<const VulkanOutputTensor> outputs) {
-    std::vector<std::reference_wrapper<const Buffer>> staging_buffers;
-    staging_buffers.reserve(outputs.size());
+    std::vector<std::span<std::byte>> mapped_outputs;
+    mapped_outputs.reserve(outputs.size());
     for (const VulkanOutputTensor& output : outputs) {
-      const Buffer& staging = resources_.at(output.resource_id).staging;
-      if (staging.mapped == nullptr) {
+      const std::span<std::byte> mapped =
+        resources_.at(output.resource_id).get_staging_buffer().get_mapped();
+      if (mapped.empty()) {
         fail(NCNN_VK_STATUS_API_ERROR, "output staging memory is not mapped");
       }
-      staging_buffers.emplace_back(staging);
+      mapped_outputs.push_back(mapped);
     }
     for (std::size_t index = 0; index < outputs.size(); ++index) {
       std::memcpy(outputs[index].bytes.data(),
-                  staging_buffers[index].get().mapped,
+                  mapped_outputs[index].data(),
                   outputs[index].bytes.size());
-    }
-  }
-
-  void destroyBuffer(Buffer& buffer) noexcept {
-    if (device_ == VK_NULL_HANDLE) {
-      return;
-    }
-    if (buffer.mapped != nullptr) {
-      vkUnmapMemory(device_, buffer.memory);
-      buffer.mapped = nullptr;
-    }
-    if (buffer.handle != VK_NULL_HANDLE) {
-      vkDestroyBuffer(device_, buffer.handle, nullptr);
-      buffer.handle = VK_NULL_HANDLE;
-    }
-    if (buffer.memory != VK_NULL_HANDLE) {
-      vkFreeMemory(device_, buffer.memory, nullptr);
-      buffer.memory = VK_NULL_HANDLE;
     }
   }
 
@@ -1594,32 +1085,16 @@ class VulkanRuntimeContext::Impl final {
   VulkanRuntimeOptions options_;
   std::vector<VulkanKernelBinary> kernels_;
   std::vector<VulkanResourcePayload> weights_;
-  VkInstance instance_;
-  VkDebugUtilsMessengerEXT messenger_;
-  VkPhysicalDevice physical_device_;
-  VkPhysicalDeviceProperties properties_;
-  VkPhysicalDeviceMemoryProperties memory_properties_;
-  VkDevice device_;
-  VkQueue queue_;
-  std::uint32_t queue_family_;
-  VkCommandPool command_pool_;
-  VkCommandBuffer command_buffer_;
-  VkFence fence_;
-  VkDescriptorPool descriptor_pool_;
+  VulkanRuntimeDeviceInfo device_info_;
+  std::optional<VulkanDeviceContext> device_context_;
+  std::optional<VulkanCommandResources> command_resources_;
+  std::optional<VulkanDescriptorPool> descriptor_pool_;
   std::vector<Kernel> kernels_state_;
   std::unordered_map<std::uint32_t, Resource> resources_;
-  std::unordered_map<std::uint32_t, VkMemoryRequirements>
-    resource_requirements_;
-  std::unordered_map<std::uint32_t, std::uint32_t> resource_memory_types_;
-  std::unordered_map<std::uint32_t, VkMemoryRequirements> staging_requirements_;
-  std::unordered_map<std::uint32_t, std::uint32_t> staging_memory_types_;
   std::unordered_map<std::uint32_t, Buffer> weight_staging_;
-  std::unordered_map<std::uint32_t, VkMemoryRequirements>
-    weight_staging_requirements_;
-  std::unordered_map<std::uint32_t, std::uint32_t> weight_staging_memory_types_;
   std::uint64_t peak_memory_bytes_;
   std::uint64_t weight_upload_count_;
-  std::atomic<std::uint32_t> validation_errors_;
+  std::uint32_t validation_error_count_;
   std::mutex run_mutex_;
   bool destroyed_;
   ncnn_vk_status unusable_status_;

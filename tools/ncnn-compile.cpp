@@ -2518,6 +2518,14 @@ int CompileSession::resolveTools(char** argv) {
       return fail(runtime_archive.error());
     }
     vulkan_runtime_archive = *runtime_archive;
+    auto helper_archive =
+      locateVulkanArchive(NCNN_VULKAN_DEVICE_HELPER_ARCHIVE,
+                          NCNN_VULKAN_DEVICE_HELPER_RELATIVE_PATH,
+                          "device-helper");
+    if (!helper_archive) {
+      return fail(helper_archive.error());
+    }
+    vulkan_device_helper_archive = *helper_archive;
     auto plan_archive = locateVulkanArchive(NCNN_VULKAN_PLAN_ARCHIVE,
                                             NCNN_VULKAN_PLAN_RELATIVE_PATH,
                                             "execution-plan");
@@ -3687,6 +3695,7 @@ int CompileSession::linkAndAudit() {
       link.push_back(vulkan_wrapper_source.string());
     }
     link.push_back(vulkan_runtime_archive.string());
+    link.push_back(vulkan_device_helper_archive.string());
     link.push_back(vulkan_plan_archive.string());
     if (ncnn_compile::vulkan_host_config::kUsesSharedLLVM) {
       link.push_back("-L" + vulkan_llvm_library_dir.string());

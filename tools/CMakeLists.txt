@@ -522,14 +522,17 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         NCNN_VULKAN_SPIRV_DIS="${NCNN_SPIRV_DIS_EXECUTABLE}"
         NCNN_VULKAN_SPIRV_EXTRACTOR="$<TARGET_FILE:ncnn-vulkan-spirv-extract>"
         NCNN_VULKAN_RUNTIME_ARCHIVE="$<TARGET_FILE:NCNNVulkanRuntime>"
+        NCNN_VULKAN_DEVICE_HELPER_ARCHIVE="$<TARGET_FILE:NCNNVulkanDeviceHelper>"
         NCNN_VULKAN_PLAN_ARCHIVE="$<TARGET_FILE:NCNNVulkanPlanSupport>"
         NCNN_VULKAN_RUNTIME_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/$<TARGET_FILE_NAME:NCNNVulkanRuntime>"
+        NCNN_VULKAN_DEVICE_HELPER_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/$<TARGET_FILE_NAME:NCNNVulkanDeviceHelper>"
         NCNN_VULKAN_PLAN_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/$<TARGET_FILE_NAME:NCNNVulkanPlanSupport>"
         NCNN_VULKAN_HOST_CXX="${CMAKE_CXX_COMPILER}"
         NCNN_VULKAN_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/include"
         NCNN_VULKAN_INCLUDE_RELATIVE_PATH="../${CMAKE_INSTALL_INCLUDEDIR}"
         NCNN_VULKAN_LLVM_LIBRARY_DIR="${LLVM_LIBRARY_DIR}")
-    add_dependencies(ncnn-compile NCNNVulkanRuntime ncnn-vulkan-spirv-extract)
+    add_dependencies(ncnn-compile
+        NCNNVulkanRuntime NCNNVulkanDeviceHelper ncnn-vulkan-spirv-extract)
 endif()
 install(TARGETS ncnn-compile RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES $<TARGET_FILE:sleef> DESTINATION ${CMAKE_INSTALL_LIBDIR})

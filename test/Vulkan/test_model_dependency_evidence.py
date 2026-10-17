@@ -79,11 +79,13 @@ class SyntheticModelLink:
              "int payload_value(void) { return 3; }\n"),
             ("llvm_fake.c", "llvm_fake.cpp.o",
              "int llvm_value(void) { return 5; }\n"),
+            ("helper.c", "VulkanDeviceHelper.cpp.o",
+             "int helper_value(void) { return 6; }\n"),
         ]
         self.archives = []
         for archive_name, (source_name, object_name, text) in zip(
                 ("libNCNNVulkanRuntime.a", "libNCNNVulkanPlanSupport.a",
-                 "libNCNNVulkanPayload.a", "libLLVM.a"),
+                 "libNCNNVulkanPayload.a", "libLLVM.a", "libNCNNVulkanDeviceHelper.a"),
                 archive_sources):
             source = self.root / source_name
             obj = self.root / object_name
@@ -99,9 +101,10 @@ class SyntheticModelLink:
             "int plan_value(void);\n"
             "int payload_value(void);\n"
             "int llvm_value(void);\n"
+            "int helper_value(void);\n"
             "int private_value(void);\n"
             "int tiny_relu_vk_create(void) {\n"
-            "  return runtime_value() + plan_value() + payload_value() + llvm_value() + private_value();\n"
+            "  return runtime_value() + plan_value() + payload_value() + llvm_value() + helper_value() + private_value();\n"
             "}\n"
             "}\n"
         )
@@ -237,6 +240,11 @@ class ModelDependencyEvidenceTest(unittest.TestCase):
         self.assertEqual("project-executor", archives["libNCNNVulkanRuntime.a"]["role"])
         self.assertEqual("plan-parser", archives["libNCNNVulkanPlanSupport.a"]["role"])
         self.assertEqual("payload-hash", archives["libNCNNVulkanPayload.a"]["role"])
+        helper_archive = archives["libNCNNVulkanDeviceHelper.a"]
+        self.assertEqual("model", helper_archive["classification"])
+        self.assertEqual("device-helper", helper_archive["role"])
+        self.assertTrue(helper_archive["selected_members_from_map"])
+        self.assertTrue(helper_archive["selected_member_hashes"])
         self.assertTrue(llvm_archive["selected_members_from_map"])
         self.assertTrue(llvm_archive["selected_member_hashes"])
         self.assertTrue(llvm_archive["ar_t"]["sha256"])

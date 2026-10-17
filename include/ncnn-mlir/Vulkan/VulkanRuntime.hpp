@@ -13,6 +13,7 @@
 
 #include "ncnn-mlir/Support/VulkanExecutionPlan.hpp"
 #include "ncnn-mlir/Vulkan/ModelABI.h"
+#include "ncnn-mlir/Vulkan/VulkanDeviceTypes.hpp"
 
 namespace ncnn_mlir::vulkan {
 
@@ -36,21 +37,7 @@ struct VulkanOutputTensor final {
   std::span<std::byte> bytes;
 };
 
-enum class VulkanRuntimeOperation : std::uint8_t {
-  CreateInstance,
-  SelectDevice,
-  CreateDevice,
-  CreateBuffer,
-  AllocateMemory,
-  CreateDescriptor,
-  CreateShaderModule,
-  CreatePipeline,
-  CreateCommandResources,
-  Submit,
-  Wait,
-  FlushMappedMemory,
-  InvalidateMappedMemory,
-};
+using VulkanRuntimeOperation = VulkanDeviceOperation;
 
 struct VulkanRuntimeOptions final {
   std::uint32_t device_index;
@@ -62,18 +49,8 @@ struct VulkanRuntimeOptions final {
     failure_injector;
 };
 
-struct VulkanRuntimeError final {
-  ncnn_vk_status status;
-  std::string diagnostic;
-};
-
-struct VulkanRuntimeDeviceInfo final {
-  std::string name;
-  std::uint32_t api_version;
-  std::uint32_t driver_version;
-  std::uint32_t vendor_id;
-  std::uint32_t device_id;
-};
+using VulkanRuntimeError = VulkanDeviceError;
+using VulkanRuntimeDeviceInfo = VulkanDeviceInfo;
 
 class VulkanRuntimeContext final {
  public:

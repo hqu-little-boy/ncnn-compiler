@@ -13,7 +13,7 @@ target_compile_options(NCNNVulkanRuntime PRIVATE
 set_target_properties(NCNNVulkanRuntime PROPERTIES
     POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(NCNNVulkanRuntime PUBLIC
-    NCNNVulkanPlanSupport Vulkan::Vulkan LLVMSupport)
+    NCNNVulkanDeviceHelper NCNNVulkanPlanSupport Vulkan::Vulkan LLVMSupport)
 if(NCNN_ENABLE_VULKAN_PRODUCT)
     install(TARGETS NCNNVulkanRuntime
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/ncnn-mlir)

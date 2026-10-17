@@ -42,6 +42,29 @@ model `.so` as evidence for a changed compiler.
 
 ## Shader, runtime and product coverage
 
+- `vulkan-device-helper-unit`, `vulkan-device-helper-no-device`,
+  `vulkan-device-helper-independence` and
+  `vulkan-device-helper-evidence-tests` are registered whenever product or device
+  support is enabled, including product-only/offline configurations. The native
+  harness and standalone subproject link the private helper and Vulkan/platform
+  libraries, not Runtime, execution-plan support, LLVM/MLIR or GTest. Synthetic
+  properties and test-only Vulkan failures cover limits, actual-requirement
+  budgets/counts, partial cleanup and whole-allocation mapped synchronization.
+  A product-only configure/inventory/execution check guards against registration
+  omissions; an unavailable ICD requires explicit create failure, not a skip.
+- `vulkan-device-helper-add-{nvidia,llvmpipe}` execute the 257-element bounded
+  Add fixture through the helper's buffer, descriptor/pipeline and command/fence
+  primitives with validation enabled. Shader generation and offline `spirv-val`
+  remain build-time compiler operations, outside the native helper's dependency
+  boundary. Same-source CPU AOT/scalar golden, raw tensors and actual device
+  identity accompany helper results. These are primitive tests, not evidence
+  that a generated model has switched away from the generic executor.
+- `VulkanRuntimeBudgetTest.*` is a separate executor-plus-fake-Vulkan GTest
+  target, not the helper-only harness. It verifies the runtime's real preparation
+  path checks all actual requirement sizes, persistent I/O staging, temporary
+  weight staging and allocation count before the first `vkAllocateMemory`, and
+  releases partial allocations after bind failure. Its legal plan/LLVM/GTest
+  dependencies are not part of the helper-independence proof.
 - `VulkanRuntimeTest.*`: all five device-independent plan/package/budget,
   injected instance-creation and status-name cases run whenever the product or
   device tests are enabled, including product-only offline configurations.
@@ -171,6 +194,42 @@ those bytes and the manifest diagnostic to the same plan, reproduces canonical
 identity and fixed commands, and normalizes only ordering inside independent
 barrier batches; dispatch/copy/publication order remains checked. See the
 [host-program format contract](../../docs/ncnn-vulkan-backend-contract.md#compiler-only-host-program).
+
+Device-helper qualification uses `--stage-id VA2` and the same fresh full
+Release and matching static sanitizer profiles. It requires the helper-only
+native tests, two explicitly selected ICD positives, no-device/product-only
+registration checks, and independent header/target/archive/link provenance.
+The root stage's production helper archive and the standalone build are both
+checked; a successful GTest or old runtime result cannot replace helper evidence.
+The default independence CTest also runs in an ordinary CMake/CTest tree without
+`gate-state.json`: it performs the same technical artifact checks but records an
+unqualified, unbound result. Existing non-VA2 stages and offline/software/hardware
+profiles retain their own identities; they do not acquire VA2 qualification just
+by executing the artifact audit. The post-CTest stage collector, not the
+independence test itself, requires the complete current test-result matrix.
+
+```sh
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA2 \
+  --profile release --archive --legacy-baseline-stage /path/to/frozen-release-stage
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA2 \
+  --profile sanitize --jobs 1 --archive \
+  --sanitizer-install /path/to/static-asan-llvm/install \
+  --lit /path/to/llvm-source/llvm/utils/lit/lit.py \
+  --openmp-dir /path/to/libomp-only \
+  --toolchain-identity /path/to/toolchain-identity.json \
+  --legacy-baseline-stage /path/to/frozen-release-stage
+python3 compiler/test/Vulkan/check_release_evidence.py \
+  --stage /tmp/current-va2-release-stage --stage /tmp/current-va2-sanitize-stage \
+  --require-va2-helper --output /tmp/va2-helper-evidence.json
+```
+
+`va2_helper_eligible` requires both same-source complete profiles and
+hash-revalidated archives. It does not change the four-profile `--require-release`
+meaning or make `host_aot_release_eligible` true. Model execution remains
+`legacy-product` / `generic-plan-runtime`; helper independence does not establish
+absence of model-side LLVM or an executor. Per-test raw records and the
+independent audit are under `test/Vulkan/evidence/va2/`; missing, skipped,
+contaminated or tampered records fail closed.
 
 The `hardware` profile selects only NVIDIA; `release` selects both ICDs. The
 `sanitize` profile also selects both and requires a matching static PIC

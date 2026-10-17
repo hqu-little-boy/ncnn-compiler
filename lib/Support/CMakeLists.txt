@@ -63,7 +63,8 @@ add_library(NCNNVulkanPlanSupport STATIC
     VulkanModelPayload.cpp)
 target_include_directories(NCNNVulkanPlanSupport PUBLIC
     ${PROJECT_SOURCE_DIR}/include
-    ${PROJECT_BINARY_DIR}/include
+    ${PROJECT_BINARY_DIR}/include)
+target_include_directories(NCNNVulkanPlanSupport SYSTEM PUBLIC
     ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(NCNNVulkanPlanSupport PUBLIC ${LLVM_DEFINITIONS})
 target_compile_options(NCNNVulkanPlanSupport PRIVATE -fno-rtti

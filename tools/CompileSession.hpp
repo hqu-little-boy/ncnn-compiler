@@ -189,6 +189,7 @@ class CompileSession final {
   std::string vulkan_spirv_extract_path;
   std::string vulkan_host_cxx_path;
   fs::path vulkan_runtime_archive;
+  fs::path vulkan_device_helper_archive;
   fs::path vulkan_plan_archive;
   fs::path vulkan_include_dir;
   fs::path vulkan_llvm_library_dir;
