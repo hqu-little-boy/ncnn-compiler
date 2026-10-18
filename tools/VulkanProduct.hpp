@@ -60,6 +60,17 @@ makeVulkanModelPackage(std::string_view model_name,
                        std::string_view param_bytes,
                        std::string_view bin_bytes);
 
+// Compiler-only lifecycle prototype. It is not a publishable model product:
+// run rejects execution until model-specific command generation is available.
+struct VulkanLifecycleSource final {
+  std::string header;
+  std::string source;
+  std::string host_program_identity;
+};
+
+[[nodiscard]] std::expected<VulkanLifecycleSource, std::string>
+makeVulkanLifecycleSource(const VulkanModelPackage& package);
+
 [[nodiscard]] std::expected<std::string, std::string>
 updateVulkanManifestDependencies(std::string_view manifest_json,
                                  std::vector<std::string> dependencies);

@@ -189,19 +189,29 @@ def _read_stage_identity(stage: Path) -> tuple[dict | None, str, str | None, boo
     if not _has_schema(state) or state.get("kind") != "ncnn.vulkan_gate":
         raise EvidenceError("gate-state schema/kind is invalid")
     stage_id = state.get("stage_id") if "stage_id" in state else "VA0"
-    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2"}:
+    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3"}:
         raise EvidenceError("gate-state has an invalid stage_id")
     profile = state.get("profile")
     if profile not in {"release", "sanitize", "offline", "software", "hardware"}:
         raise EvidenceError("gate-state has an invalid profile")
-    if stage_id == "VA2" and profile not in {"release", "sanitize"}:
-        raise EvidenceError("VA2 helper qualification requires Release or sanitize profile")
+    if stage_id in {"VA2", "VA3"} and profile not in {"release", "sanitize"}:
+        raise EvidenceError(f"{stage_id} helper evidence requires Release or sanitize profile")
+    if stage_id == "VA3" and state.get("candidate_role") != "lifecycle-only":
+        raise EvidenceError("VA3 helper evidence requires the lifecycle-only candidate role")
     source_fingerprint = state.get("source_fingerprint")
     if not isinstance(source_fingerprint, str) or not SHA256_RE.fullmatch(source_fingerprint):
         raise EvidenceError("gate-state source fingerprint is invalid")
     if state.get("host_execution_role") != "legacy-product" or state.get("host_aot_candidate") is not False:
         raise EvidenceError("helper evidence must preserve legacy-product / non-candidate host role")
     return state, profile, source_fingerprint, True
+
+
+def _require_va2_matrix_stage(state: dict | None, profile: str,
+                              gate_state_bound: bool) -> None:
+    if (not gate_state_bound or state is None or
+            state.get("stage_id", "VA0") != "VA2" or
+            profile not in {"release", "sanitize"}):
+        raise EvidenceError("full VA2 test matrix requires a bound VA2 Release/SAN gate")
 
 
 def _test_record_path(stage: Path, identity: str) -> Path:
@@ -2645,11 +2655,8 @@ def validate_independence_evidence(evidence: os.PathLike[str] | str,
             product_only.get("executed_test_names") or
             child_inventory_path.read_bytes() != audited_inventory_path.read_bytes()):
         raise EvidenceError("independence result self-report differs from actual product-only CTest evidence")
-    if require_test_matrix and (
-            not gate_state_bound or state is None or
-            state.get("stage_id", "VA0") != "VA2" or
-            profile not in {"release", "sanitize"}):
-        raise EvidenceError("full VA2 test matrix requires a bound VA2 Release/SAN gate")
+    if require_test_matrix:
+        _require_va2_matrix_stage(state, profile, gate_state_bound)
     _validate_toolchain_evidence(
         stage, profile, data.get("toolchain"), targets,
         data.get("runner_link"), data.get("unit_link"),

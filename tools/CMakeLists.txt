@@ -506,7 +506,8 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         ${CMAKE_SOURCE_DIR}/include/ncnn-mlir/Support/VulkanExecutionPlan.hpp
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ncnn-mlir/Support)
 
-    add_library(NCNNVulkanProductSupport STATIC VulkanProduct.cpp)
+    add_library(NCNNVulkanProductSupport STATIC
+        VulkanProduct.cpp VulkanLifecycleCodegen.cpp)
     target_include_directories(NCNNVulkanProductSupport PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/include)

@@ -10,10 +10,14 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from unittest.mock import patch
-from unittest.mock import patch
 
 import check_release_evidence as audit
 import run_gate
+
+
+LEGACY_ID_PREFIXES = (
+    "V0.", "V1.", "V2.", "V3.", "V4.", "V5.", "V6.", "VA0.", "VA1.",
+)
 
 
 class Va0LegacyReferenceTests(unittest.TestCase):
@@ -291,8 +295,8 @@ OpBranchConditional %14 %true %false
         names = audit._required_tests("release")
         coverage = audit._va0_migration_coverage({
             "profile": "release", "ctest": {"test_names": sorted(names), "failed": [], "skipped": []}})
-        expected_ids = set(audit.ID_CATALOG) - {
-            "VA2.1", "VA2.2", "VA2.3", "VA2.4"}
+        expected_ids = {identifier for identifier in audit.ID_CATALOG
+                        if identifier.startswith(LEGACY_ID_PREFIXES)}
         self.assertEqual(expected_ids, set(coverage["current_ids"]))
         self.assertEqual(names, set(coverage["current_test_cases"]))
         owners = {owner for rows in coverage["current_ids"].values()
@@ -325,9 +329,50 @@ OpBranchConditional %14 %true %false
             "profile": "release",
             "ctest": {"test_names": sorted(va0_tests), "failed": [], "skipped": []}})
         self.assertFalse(coverage["unexecuted_related_tests"])
-        self.assertEqual(set(audit.ID_CATALOG) - {
-            "VA2.1", "VA2.2", "VA2.3", "VA2.4"},
-            set(coverage["current_ids"]))
+        self.assertEqual({identifier for identifier in audit.ID_CATALOG
+                          if identifier.startswith(LEGACY_ID_PREFIXES)},
+                         set(coverage["current_ids"]))
+
+    def test_va3_inventory_is_strict_without_rewriting_legacy_coverage(self):
+        va0_tests = audit._required_tests("release")
+        va3_tests = audit._required_tests("release", stage_id="VA3")
+        codegen_tests = audit._va3_codegen_tests()
+        lifecycle_tests = set(audit.VA3_REQUIRED_TESTS) | codegen_tests
+        self.assertTrue(codegen_tests)
+        self.assertTrue(lifecycle_tests.issubset(va3_tests))
+
+        coverage = audit._va0_migration_coverage({
+            "profile": "release",
+            "ctest": {"test_names": sorted(va3_tests), "failed": [], "skipped": []}})
+        expected_ids = {identifier for identifier in audit.ID_CATALOG
+                        if identifier.startswith(LEGACY_ID_PREFIXES)}
+        self.assertEqual(expected_ids, set(coverage["current_ids"]))
+        self.assertTrue(lifecycle_tests.isdisjoint(coverage["current_test_cases"]))
+        self.assertFalse(coverage["unexecuted_related_tests"])
+
+        findings = []
+        audit._check_required_tests({
+            "profile": "release", "stage_id": "VA3",
+            "ctest": {"test_names": sorted(va0_tests)}}, findings)
+        missing = {name for item in findings
+                   for name in item.get("details", {}).get("tests", [])}
+        self.assertEqual(va3_tests - va0_tests, missing)
+
+        # One present case cannot stand in for the full declared codegen suite.
+        for omitted in (sorted(codegen_tests)[0], "vulkan-lifecycle-independence"):
+            findings = []
+            audit._check_required_tests({
+                "profile": "release", "stage_id": "VA3",
+                "ctest": {"test_names": sorted(va3_tests - {omitted})}}, findings)
+            missing = {name for item in findings
+                       for name in item.get("details", {}).get("tests", [])}
+            self.assertEqual({omitted}, missing)
+
+        # Historical records without stage_id keep their original VA0 scope.
+        findings = []
+        audit._check_required_tests({
+            "profile": "release", "ctest": {"test_names": sorted(va0_tests)}}, findings)
+        self.assertFalse(findings)
 
     def test_va0_ids_are_profile_scoped_and_not_host_aot_eligible(self):
         profile = "release"

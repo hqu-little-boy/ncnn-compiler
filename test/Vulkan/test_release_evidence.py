@@ -1669,6 +1669,103 @@ class GateEnvelopeTests(unittest.TestCase):
         self.assertIn("va2-helper-eligibility-required",
                       {item["code"] for item in report["blocking_findings"]})
 
+    def _make_va3_reports(self, *, missing_test=None, fingerprints=("c" * 64, "c" * 64)):
+        required = set(audit._required_tests("release", "VA3"))
+        reports = []
+        for index, profile in enumerate(("release", "sanitize")):
+            names = set(required)
+            if profile == "release" and missing_test:
+                names.discard(missing_test)
+            reports.append({
+                "stage": f"synthetic-va3-{profile}", "profile": profile,
+                "stage_id": "VA3", "source_fingerprint": fingerprints[index],
+                "scope_passed": True, "findings": [], "va0_findings": [],
+                "ctest": {"test_names": sorted(names), "skipped": [], "failed": []},
+                "families": {"va3_lifecycle": {"status": "verified",
+                                                  "path": "test/Vulkan/evidence/va3/lifecycle-evidence.json",
+                                                  "raw_artifacts": []}},
+                "raw_artifacts": [],
+            })
+        gates = [{"stage": row["stage"], "stage_id": "VA3", "profile": row["profile"],
+                  "source_fingerprint": row["source_fingerprint"], "ctest": row["ctest"],
+                  "findings": [], "passed": True}
+                 for row in reports]
+        return reports, gates
+
+    def test_va3_same_source_release_and_san_lifecycle_pair_qualifies_but_not_aot(self):
+        reports, gates = self._make_va3_reports()
+        with patch.object(audit, "audit_stage_gate", side_effect=gates), \
+                patch.object(audit, "audit_stage_evidence", side_effect=reports), \
+                patch.object(audit, "audit_stage_archive", return_value={
+                    "status": "verified", "findings": []}) as archive_audit:
+            report = audit.build_report([Path("release"), Path("sanitize")],
+                                        require_va3_lifecycle=True)
+        self.assertTrue(report["va3_lifecycle_eligible"])
+        self.assertTrue(report["va3_lifecycle_required"])
+        self.assertEqual([], report["va3_lifecycle_blockers"])
+        self.assertFalse(report["host_aot_release_eligible"])
+        self.assertTrue(all(call.kwargs["required"] for call in archive_audit.call_args_list))
+        self.assertEqual({"VA3.1", "VA3.2", "VA3.3", "VA3.4"},
+                         {identifier for identifier in report["id_index"]
+                          if identifier.startswith("VA3.")})
+
+    def test_va3_id_catalog_matches_scope_and_codegen_test_coverage(self):
+        codegen = audit._va3_codegen_tests()
+        mapped_codegen = set().union(*(
+            {name for name in tests if name.startswith("VulkanLifecycleCodegenTest.")}
+            for tests in audit.VA3_STEP_TESTS.values()))
+        self.assertEqual(codegen, mapped_codegen)
+        self.assertEqual(
+            {"vulkan-lifecycle-independence", "vulkan-lifecycle-evidence-tests"},
+            {name for name in audit.VA3_STEP_TESTS["VA3.2"]
+             if name.startswith("vulkan-lifecycle-")})
+        self.assertNotIn("vulkan-lifecycle-fake-unit", audit.VA3_STEP_TESTS["VA3.2"])
+        self.assertNotIn("vulkan-lifecycle-no-device", audit.VA3_STEP_TESTS["VA3.2"])
+        self.assertTrue({"vulkan-lifecycle-fake-unit", *audit.VA3_DEVICE_TESTS,
+                         "VulkanLifecycleCodegenTest.EmbeddedWeightsMatchVerifiedPayloadBytes"}
+                        <= audit.VA3_STEP_TESTS["VA3.3"])
+        self.assertTrue({"vulkan-lifecycle-no-device", "vulkan-lifecycle-fake-unit",
+                         "vulkan-lifecycle-independence", *audit.VA3_DEVICE_TESTS}
+                        <= audit.VA3_STEP_TESTS["VA3.4"])
+        self.assertTrue(set(audit.VA3_REQUIRED_TESTS) | codegen <=
+                        audit._required_tests("release", "VA3"))
+
+    def test_va3_id_row_requires_each_mapped_test_to_pass(self):
+        required = set(audit._required_tests("release", "VA3"))
+        reports = [{
+            "stage": f"va3-{profile}", "stage_id": "VA3", "profile": profile,
+            "source_fingerprint": "d" * 64, "scope_passed": True,
+            "ctest": {"test_names": sorted(required), "skipped": [], "failed": []},
+            "families": {"va3_lifecycle": {"status": "verified",
+                                             "path": "test/Vulkan/evidence/va3/lifecycle-evidence.json"}},
+            "archive_integrity": {"status": "verified"}, "raw_artifacts": [],
+        } for profile in ("release", "sanitize")]
+        row = audit._va3_id_row("VA3.3", audit.ID_CATALOG["VA3.3"], reports)
+        self.assertEqual("passed", row["status"])
+        changed = [dict(stage, ctest=dict(stage["ctest"])) for stage in reports]
+        skipped_test = next(iter(audit.ID_CATALOG["VA3.3"]["tests"]))
+        changed[0]["ctest"]["skipped"] = [skipped_test]
+        blocked = audit._va3_id_row("VA3.3", audit.ID_CATALOG["VA3.3"], changed)
+        self.assertEqual("blocked", blocked["status"])
+        release = next(item for item in blocked["profiles"] if item["profile"] == "release")
+        self.assertEqual([skipped_test], release["tests_not_passed"])
+        self.assertNotIn(skipped_test, release["tests_executed"])
+
+    def test_va3_missing_declared_test_or_archive_blocks_required_pair(self):
+        missing_case = sorted(audit._va3_codegen_tests())[0]
+        reports, gates = self._make_va3_reports(missing_test=missing_case)
+        with patch.object(audit, "audit_stage_gate", side_effect=gates), \
+                patch.object(audit, "audit_stage_evidence", side_effect=reports), \
+                patch.object(audit, "audit_stage_archive", return_value={
+                    "status": "not_provided", "findings": []}):
+            report = audit.build_report([Path("release"), Path("sanitize")],
+                                        require_va3_lifecycle=True)
+        self.assertFalse(report["va3_lifecycle_eligible"])
+        self.assertIn("va3-id-index-incomplete",
+                      {item["code"] for item in report["va3_lifecycle_blockers"]})
+        self.assertIn("va3-lifecycle-eligibility-required",
+                      {item["code"] for item in report["blocking_findings"]})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

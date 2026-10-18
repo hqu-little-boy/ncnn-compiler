@@ -116,6 +116,35 @@ class DeviceHelperEvidenceTests(unittest.TestCase):
                 with self.assertRaises(audit.EvidenceError):
                     audit._read_stage_identity(self.stage)
 
+    def test_va3_technical_identity_does_not_claim_va2_matrix_qualification(self) -> None:
+        for profile in ("release", "sanitize"):
+            with self.subTest(profile=profile):
+                self.write_stage_state(stage_id="VA3", profile=profile,
+                                       candidate_role="lifecycle-only")
+                state, actual_profile, fingerprint, bound = audit._read_stage_identity(self.stage)
+                self.assertTrue(bound)
+                self.assertEqual("VA3", state["stage_id"])
+                self.assertEqual(profile, actual_profile)
+                self.assertEqual("a" * 64, fingerprint)
+                with self.assertRaisesRegex(audit.EvidenceError, "bound VA2"):
+                    audit._require_va2_matrix_stage(state, actual_profile, bound)
+
+        for role in (None, "", "model-run", True):
+            with self.subTest(role=role):
+                self.write_stage_state(stage_id="VA3", candidate_role=role)
+                with self.assertRaisesRegex(audit.EvidenceError, "lifecycle-only"):
+                    audit._read_stage_identity(self.stage)
+        self.write_stage_state(stage_id="VA3", profile="offline",
+                               candidate_role="lifecycle-only")
+        with self.assertRaisesRegex(audit.EvidenceError, "Release or sanitize"):
+            audit._read_stage_identity(self.stage)
+
+        self.write_stage_state(stage_id="VA2")
+        state, profile, _, bound = audit._read_stage_identity(self.stage)
+        audit._require_va2_matrix_stage(state, profile, bound)
+        with self.assertRaises(audit.EvidenceError):
+            audit._require_va2_matrix_stage(state, profile, False)
+
     def test_unbound_development_identity_is_unqualified_not_fabricated_va2(self) -> None:
         (self.stage / "gate-state.json").unlink()
         self.write("CMakeCache.txt",

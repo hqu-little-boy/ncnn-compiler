@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ncnn_vulkan_device_helper_native LANGUAGES CXX)
+project(ncnn_vulkan_device_helper_native LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -50,6 +50,143 @@ target_compile_options(vulkan_device_helper_unit_test PRIVATE
     -Wall -Wextra -Wpedantic)
 include("${CMAKE_CURRENT_LIST_DIR}/fakeVulkan/WrapVulkan.cmake")
 ncnn_wrap_vulkan_for_test(vulkan_device_helper_unit_test)
+
+if(TARGET NCNNVulkanProductSupport)
+    find_package(GTest REQUIRED)
+    if(NOT NCNN_SPIRV_VAL_EXECUTABLE)
+        find_program(NCNN_SPIRV_VAL_EXECUTABLE NAMES spirv-val REQUIRED)
+    endif()
+    get_filename_component(_ncnn_compiler_source_dir
+        "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+
+    set(_lifecycle_root "${CMAKE_CURRENT_BINARY_DIR}/lifecycle")
+    set(_lifecycle_emitter_sources
+        "${CMAKE_CURRENT_LIST_DIR}/lifecycle_fixture_emitter.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../../Unit/vulkan_shader_interface_test.cpp")
+    add_executable(vulkan_lifecycle_fixture_emitter
+        ${_lifecycle_emitter_sources})
+    target_include_directories(vulkan_lifecycle_fixture_emitter PRIVATE
+        "${_ncnn_compiler_source_dir}/test/Unit"
+        "${_ncnn_compiler_source_dir}/tools")
+    target_link_libraries(vulkan_lifecycle_fixture_emitter PRIVATE
+        NCNNVulkanProductSupport GTest::gtest)
+    target_compile_definitions(vulkan_lifecycle_fixture_emitter PRIVATE
+        GTEST_HAS_CXXABI_H_=0)
+    target_compile_options(vulkan_lifecycle_fixture_emitter PRIVATE
+        -Wall -Wextra -Wpedantic -fno-rtti)
+
+    function(ncnn_add_vulkan_lifecycle_fixture kind)
+        set(_fixture_dir "${_lifecycle_root}/${kind}")
+        set(_fixture_source "${_fixture_dir}/candidate_source.cpp")
+        set(_fixture_header "${_fixture_dir}/lifecycle_fixture_vulkan.h")
+        set(_fixture_identity "${_fixture_dir}/host-program-identity.txt")
+        set(_fixture_shader "${_fixture_dir}/shader_0.spv")
+        set(_fixture_plan "${_fixture_dir}/plan.json")
+        set(_fixture_host_program "${_fixture_dir}/host_program.json")
+        set(_fixture_manifest "${_fixture_dir}/package_manifest.json")
+        set(_emitter_kind "${kind}")
+        if(kind STREQUAL "unweighted")
+            set(_emitter_kind relu)
+        endif()
+        add_custom_command(
+            OUTPUT "${_fixture_source}" "${_fixture_header}"
+                "${_fixture_identity}" "${_fixture_shader}" "${_fixture_plan}"
+                "${_fixture_host_program}" "${_fixture_manifest}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${_fixture_dir}"
+            COMMAND $<TARGET_FILE:vulkan_lifecycle_fixture_emitter>
+                --kind "${_emitter_kind}"
+                --output-dir "${_fixture_dir}"
+            COMMAND "${NCNN_SPIRV_VAL_EXECUTABLE}"
+                --target-env vulkan1.1 "${_fixture_shader}"
+            DEPENDS vulkan_lifecycle_fixture_emitter
+                ${_lifecycle_emitter_sources}
+                "${CMAKE_CURRENT_LIST_DIR}/lifecycle_test_hooks.hpp"
+            VERBATIM)
+        set_source_files_properties("${_fixture_source}" PROPERTIES
+            GENERATED TRUE)
+        add_custom_target(vulkan_lifecycle_fixture_${kind}
+            DEPENDS "${_fixture_source}" "${_fixture_header}"
+                "${_fixture_identity}" "${_fixture_shader}" "${_fixture_plan}"
+                "${_fixture_host_program}" "${_fixture_manifest}")
+
+        foreach(_variant IN ITEMS release validation)
+            set(_target "vulkan_lifecycle_${kind}_${_variant}")
+            set(_output_name "vulkan_lifecycle_${kind}")
+            if(_variant STREQUAL "validation")
+                string(APPEND _output_name "_validation")
+            endif()
+            set(_map "${_fixture_dir}/${_output_name}.map")
+            add_library(${_target} SHARED "${_fixture_source}")
+            add_dependencies(${_target} vulkan_lifecycle_fixture_${kind})
+            target_include_directories(${_target} PRIVATE
+                "${_fixture_dir}"
+                "${_ncnn_compiler_source_dir}/include")
+            target_link_libraries(${_target} PRIVATE
+                NCNNVulkanDeviceHelper Vulkan::Vulkan Threads::Threads)
+            target_compile_options(${_target} PRIVATE
+                -Wall -Wextra -Wpedantic)
+            target_link_options(${_target} PRIVATE
+                "-Wl,-z,defs"
+                "-Wl,--version-script=${CMAKE_CURRENT_LIST_DIR}/lifecycle.exports.map"
+                "-Wl,-Map=${_map}"
+                "-Wl,--cref")
+            set_target_properties(${_target} PROPERTIES
+                LIBRARY_OUTPUT_DIRECTORY "${_fixture_dir}"
+                OUTPUT_NAME "${_output_name}"
+                LINK_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/lifecycle.exports.map")
+            if(_variant STREQUAL "validation")
+                target_compile_definitions(${_target} PRIVATE
+                    NCNN_VULKAN_LIFECYCLE_VALIDATION=1)
+            endif()
+        endforeach()
+    endfunction()
+
+    ncnn_add_vulkan_lifecycle_fixture(unweighted)
+    ncnn_add_vulkan_lifecycle_fixture(weighted)
+
+    add_executable(vulkan_lifecycle_c_harness lifecycle_c_harness.c)
+    add_dependencies(vulkan_lifecycle_c_harness
+        vulkan_lifecycle_fixture_unweighted)
+    target_include_directories(vulkan_lifecycle_c_harness PRIVATE
+        "${_lifecycle_root}/unweighted"
+        "${_ncnn_compiler_source_dir}/include")
+    target_link_libraries(vulkan_lifecycle_c_harness PRIVATE ${CMAKE_DL_LIBS})
+    target_compile_features(vulkan_lifecycle_c_harness PRIVATE c_std_11)
+    target_compile_options(vulkan_lifecycle_c_harness PRIVATE
+        -Wall -Wextra -Wpedantic)
+
+    add_executable(vulkan_lifecycle_fake_unit_test
+        lifecycle_fake_unit_test.cpp
+        fakeVulkan/fake_vulkan.cpp)
+    add_dependencies(vulkan_lifecycle_fake_unit_test
+        vulkan_lifecycle_fixture_weighted)
+    target_include_directories(vulkan_lifecycle_fake_unit_test PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}"
+        "${_lifecycle_root}/weighted"
+        "${_ncnn_compiler_source_dir}/include")
+    target_link_libraries(vulkan_lifecycle_fake_unit_test PRIVATE
+        NCNNVulkanDeviceHelper Vulkan::Vulkan Threads::Threads)
+    target_compile_definitions(vulkan_lifecycle_fake_unit_test PRIVATE
+        NCNN_VULKAN_LIFECYCLE_TEST=1)
+    target_compile_options(vulkan_lifecycle_fake_unit_test PRIVATE
+        -Wall -Wextra -Wpedantic)
+    ncnn_wrap_vulkan_for_test(vulkan_lifecycle_fake_unit_test)
+    target_link_options(vulkan_lifecycle_fake_unit_test PRIVATE
+        -Wl,--wrap=vkCmdCopyBuffer
+        -Wl,--wrap=vkCmdPipelineBarrier)
+
+    if(BUILD_TESTING)
+        set(_lifecycle_fake_result
+            "${CMAKE_BINARY_DIR}/test/Vulkan/evidence/va3/fake/fake-result.json")
+        add_test(NAME vulkan-lifecycle-fake-unit
+            COMMAND $<TARGET_FILE:vulkan_lifecycle_fake_unit_test>
+                --result "${_lifecycle_fake_result}")
+        set_tests_properties(vulkan-lifecycle-fake-unit PROPERTIES
+            LABELS "vulkan;unit;offline;lifecycle"
+            RUN_SERIAL TRUE
+            TIMEOUT 120)
+    endif()
+endif()
 
 if(COMPILER_SANITIZERS)
     set(_ncnn_helper_sanitizers ${COMPILER_SANITIZERS})

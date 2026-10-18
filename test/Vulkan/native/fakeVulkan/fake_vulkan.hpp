@@ -16,5 +16,6 @@ void set_max_memory_allocation_count(std::uint32_t count);
 [[nodiscard]] bool saw_whole_allocation_range(std::string_view function);
 [[nodiscard]] bool saw_whole_allocation_map();
 [[nodiscard]] std::uint64_t last_mapped_allocation_size();
+[[nodiscard]] bool saw_destruction_before_wait_resolution();
 
 }  // namespace fake_vulkan

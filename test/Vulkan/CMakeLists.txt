@@ -189,6 +189,46 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         LABELS "native;integration;cli;vulkan;product;offline"
         RUN_SERIAL TRUE
         TIMEOUT 900)
+
+    set(NCNN_VULKAN_LIFECYCLE_EVIDENCE_ROOT
+        "${CMAKE_CURRENT_BINARY_DIR}/evidence/va3")
+    add_test(NAME vulkan-lifecycle-evidence-tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_lifecycle_evidence.py
+            --build-dir ${CMAKE_BINARY_DIR})
+    set_tests_properties(vulkan-lifecycle-evidence-tests PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;lifecycle;evidence"
+        RUN_SERIAL TRUE
+        TIMEOUT 120)
+
+    add_test(NAME vulkan-lifecycle-independence
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/lifecycle_evidence.py
+            --mode independence
+            --stage-root ${CMAKE_BINARY_DIR}
+            --source-root ${PROJECT_SOURCE_DIR}
+            --output ${NCNN_VULKAN_LIFECYCLE_EVIDENCE_ROOT}/independence/independence-evidence.json
+            --nm ${LLVM_NM}
+            --readelf ${LLVM_READELF}
+            --ar ${CMAKE_AR})
+    set_tests_properties(vulkan-lifecycle-independence PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;lifecycle;independence"
+        RUN_SERIAL TRUE
+        TIMEOUT 120)
+
+    add_test(NAME vulkan-lifecycle-no-device
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/lifecycle_evidence.py
+            --mode no-device
+            --stage-root ${CMAKE_BINARY_DIR}
+            --harness $<TARGET_FILE:vulkan_lifecycle_c_harness>
+            --library ${CMAKE_CURRENT_BINARY_DIR}/native/lifecycle/weighted/libvulkan_lifecycle_weighted.so
+            --result ${NCNN_VULKAN_LIFECYCLE_EVIDENCE_ROOT}/no-device/native-result.json
+            --capture ${NCNN_VULKAN_LIFECYCLE_EVIDENCE_ROOT}/no-device/capture.json)
+    set_tests_properties(vulkan-lifecycle-no-device PROPERTIES
+        LABELS "vulkan;unit;offline;integration;lifecycle;c-abi;no-device"
+        RUN_SERIAL TRUE
+        TIMEOUT 120)
 endif()
 
 if(NCNN_ENABLE_VULKAN_V0_TESTS)
@@ -230,6 +270,32 @@ if(NCNN_ENABLE_VULKAN_V0_TESTS)
     set(NCNN_VULKAN_DEVICE_NVIDIA_ICD "${V0_NVIDIA_ICD}" PARENT_SCOPE)
     set(NCNN_VULKANINFO "${VULKANINFO}" PARENT_SCOPE)
 
+    if(NCNN_ENABLE_VULKAN_PRODUCT)
+        function(ncnn_add_vulkan_lifecycle_device_test device device_match icd)
+            if(NOT device IN_LIST NCNN_VULKAN_TEST_DEVICES)
+                return()
+            endif()
+            add_test(NAME vulkan-lifecycle-${device}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/lifecycle_evidence.py
+                    --mode device
+                    --stage-root ${CMAKE_BINARY_DIR}
+                    --device-match ${device_match}
+                    --harness $<TARGET_FILE:vulkan_lifecycle_c_harness>
+                    --library ${CMAKE_CURRENT_BINARY_DIR}/native/lifecycle/weighted/libvulkan_lifecycle_weighted_validation.so
+                    --icd ${icd}
+                    --result ${NCNN_VULKAN_LIFECYCLE_EVIDENCE_ROOT}/${device}/native-result.json
+                    --capture ${NCNN_VULKAN_LIFECYCLE_EVIDENCE_ROOT}/${device}/capture.json
+                    --vulkaninfo ${VULKANINFO})
+            set_tests_properties(vulkan-lifecycle-${device} PROPERTIES
+                LABELS "vulkan;device;integration;lifecycle;c-abi;${device}"
+                RUN_SERIAL TRUE
+                TIMEOUT 300)
+        endfunction()
+        ncnn_add_vulkan_lifecycle_device_test(nvidia NVIDIA ${V0_NVIDIA_ICD})
+        ncnn_add_vulkan_lifecycle_device_test(llvmpipe llvmpipe ${V0_LLVMPIPE_ICD})
+    endif()
+
 add_executable(vulkan_add_runner vulkan_add_runner.cpp)
 target_link_libraries(vulkan_add_runner PRIVATE Vulkan::Vulkan ${CMAKE_DL_LIBS})
 target_compile_options(vulkan_add_runner PRIVATE
@@ -250,7 +316,7 @@ target_compile_options(vulkan_runtime_weight_runner PRIVATE
     -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
 
 add_executable(vulkan_v0_spirv_extract extract_vulkan_spirv.cpp)
-target_include_directories(vulkan_v0_spirv_extract PRIVATE
+target_include_directories(vulkan_v0_spirv_extract SYSTEM PRIVATE
     ${LLVM_INCLUDE_DIRS}
     ${MLIR_INCLUDE_DIRS})
 target_compile_options(vulkan_v0_spirv_extract PRIVATE -fno-rtti)

@@ -145,12 +145,13 @@ class GateTests(unittest.TestCase):
         self.assertEqual(Path(python_identity["path"]).resolve(),
                          Path(sys.executable).resolve())
 
-    def test_stage_id_defaults_to_va0_and_va1_is_opt_in(self):
+    def test_stage_id_defaults_to_va0_and_va3_is_explicit(self):
         default = run_gate.parse_args(["--profile", "release"])
-        candidate = run_gate.parse_args([
-            "--profile", "release", "--stage-id", "VA1"])
+        planner = run_gate.parse_args(["--profile", "release", "--stage-id", "VA1"])
+        lifecycle = run_gate.parse_args(["--profile", "release", "--stage-id", "VA3"])
         self.assertEqual("VA0", default.stage_id)
-        self.assertEqual("VA1", candidate.stage_id)
+        self.assertEqual("VA1", planner.stage_id)
+        self.assertEqual("VA3", lifecycle.stage_id)
 
     def test_profiles_request_exact_devices(self):
         for profile, devices in (("release", "nvidia;llvmpipe"),
@@ -192,7 +193,7 @@ class GateTests(unittest.TestCase):
     def test_constructor_failure_preserves_gate_state_and_archive(self):
         source = self.root / "not-a-git-checkout"
         source.mkdir()
-        for stage_id in ("VA0", "VA1"):
+        for stage_id in ("VA0", "VA1", "VA3"):
             args = run_gate.parse_args([
                 "--profile", "release", "--stage-id", stage_id,
                 "--source-dir", str(source), "--build-root", str(self.root),
@@ -209,6 +210,8 @@ class GateTests(unittest.TestCase):
             self.assertEqual(stage_id.upper(), state["stage_id"])
             self.assertEqual("legacy-product", state["host_execution_role"])
             self.assertFalse(state["host_aot_candidate"])
+            self.assertEqual("lifecycle-only" if stage_id == "VA3" else "none",
+                             state["candidate_role"])
             self.assertIn("gate setup failed", state["failure"])
             archive = stages[0].with_suffix(".evidence.tar.gz")
             self.assertTrue(archive.is_file())

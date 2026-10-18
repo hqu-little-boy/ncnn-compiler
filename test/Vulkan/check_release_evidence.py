@@ -20,6 +20,7 @@ import xml.etree.ElementTree as ET
 import host_program_evidence as host_program_audit
 import model_dependency_evidence as dependency_evidence
 import device_helper_evidence as device_helper_audit
+import lifecycle_evidence as lifecycle_audit
 
 
 SCHEMA_VERSION = 1
@@ -988,15 +989,21 @@ def audit_stage_gate(stage_dir: Path, *, source_root: Path | None = None,
                  build_dir=stage_build)
     if not isinstance(state.get("git_revision"), str) or not state["git_revision"]:
         _finding(findings, "git-revision-missing", "baseline git_revision is missing")
-    if (not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2"} or
+    if (not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3"} or
             state.get("host_execution_role") != "legacy-product" or
             state.get("host_aot_candidate") is not False):
         _finding(findings, "gate-execution-role",
-                 "VA0/VA1/VA2 validates the actual legacy product, not a host AOT candidate")
-    if stage_id == "VA2" and profile not in {"release", "sanitize"}:
-        _finding(findings, "va2-profile-invalid",
-                 "VA2 helper qualification accepts only Release and matching static SAN stages",
+                 "qualification stages retain the legacy product role and cannot claim host AOT")
+    if isinstance(stage_id, str) and stage_id in {"VA2", "VA3"} and profile not in {"release", "sanitize"}:
+        _finding(findings, f"{stage_id.lower()}-profile-invalid",
+                 f"{stage_id} qualification accepts only Release and matching static SAN stages",
                  profile=profile)
+    if stage_id == "VA3" and state.get("candidate_role") != "lifecycle-only":
+        _finding(findings, "va3-candidate-role",
+                 "VA3 candidate evidence must be marked lifecycle-only")
+    if stage_id != "VA3" and state.get("candidate_role", "none") != "none":
+        _finding(findings, "gate-candidate-role",
+                 "non-VA3 stages cannot claim a lifecycle candidate role")
     worktree = state.get("worktree")
     if not isinstance(worktree, dict):
         _finding(findings, "source-worktree-missing", "gate must preserve worktree status and tracked diff")
@@ -4218,6 +4225,65 @@ VA2_STEP_TESTS = {
                          "vulkan-device-helper-add-llvmpipe",
                          "vulkan-device-helper-no-device"}),
 }
+VA3_DEVICE_TESTS = frozenset({"vulkan-lifecycle-nvidia", "vulkan-lifecycle-llvmpipe"})
+VA3_REQUIRED_TESTS = frozenset({
+    "vulkan-lifecycle-fake-unit",
+    "vulkan-lifecycle-evidence-tests",
+    "vulkan-lifecycle-independence",
+    "vulkan-lifecycle-no-device",
+    *VA3_DEVICE_TESTS,
+})
+VA3_STEP_TESTS = {
+    "VA3.1": frozenset({
+        "VulkanLifecycleCodegenTest.ProducesSameHeaderAndDeterministicSource",
+        "VulkanLifecycleCodegenTest.SparseIdsBecomeDenseOwnedSlots",
+        "VulkanLifecycleCodegenTest.EmptyWeightsAndPushRangesUseStandardArrays",
+        "VulkanLifecycleCodegenTest.MultiplePublicPortsRemainDistinct",
+        "VulkanLifecycleCodegenTest.EntryPointBytesAreNotCppSourceOrCStringLengths",
+        "VulkanLifecycleCodegenTest.RejectsUnsafeOrReservedModelIdentifiers",
+        "VulkanLifecycleCodegenTest.ReservedPrefixesFailBeforeHeaderOrSourceChecks",
+        "VulkanLifecycleCodegenTest.KeywordPrefixProducesLegalSuffixedIdentifiers",
+        "VulkanLifecycleCodegenTest.HeaderGuardUsesAsciiCaseMapping",
+        "VulkanLifecycleCodegenTest.RejectsMutatedHeaderAndHostIdentity",
+        "VulkanLifecycleCodegenTest.RejectsByteAndPushRangeOverflow",
+        "VulkanLifecycleCodegenTest.PreservesOriginalSingleShaderPackagingHeader",
+        "VulkanLifecycleCodegenTest.RepeatedPublicResourceIdsAreRejected",
+    }),
+    "VA3.2": frozenset({
+        "vulkan-lifecycle-independence",
+        "vulkan-lifecycle-evidence-tests",
+        "VulkanLifecycleCodegenTest.CandidateDoesNotChangeLegacyProductSource",
+        "VulkanLifecycleCodegenTest.UsesOnlyDeviceHelperInDeploymentSource",
+        "VulkanLifecycleCodegenTest.RejectsRuntimeCommandsInCreateOperations",
+    }),
+    "VA3.3": frozenset({
+        "vulkan-lifecycle-fake-unit",
+        *VA3_DEVICE_TESTS,
+        "vulkan-lifecycle-evidence-tests",
+        "VulkanLifecycleCodegenTest.BudgetPrecedesAllBufferAllocations",
+        "VulkanLifecycleCodegenTest.MultipleWeightsHaveFixedCopiesAndRelease",
+        "VulkanLifecycleCodegenTest.UsesReversePipelineAndResourceOwnership",
+        "VulkanLifecycleCodegenTest.RejectsShaderAndWeightPayloadMutation",
+        "VulkanLifecycleCodegenTest.EmbeddedWeightsMatchVerifiedPayloadBytes",
+    }),
+    "VA3.4": frozenset({
+        "vulkan-lifecycle-no-device",
+        "vulkan-lifecycle-fake-unit",
+        "vulkan-lifecycle-independence",
+        "vulkan-lifecycle-evidence-tests",
+        *VA3_DEVICE_TESTS,
+        "VulkanLifecycleCodegenTest.UsesReversePipelineAndResourceOwnership",
+        "VulkanLifecycleCodegenTest.RejectsIllegalReferencesAndLifetimeChanges",
+    }),
+}
+VA3_CODEGEN_TEST_PREFIXES = (lifecycle_audit.CODEGEN_TEST_PREFIX,)
+
+
+def _va3_codegen_tests() -> set[str]:
+    source = Path(__file__).resolve().parents[1] / "Unit/vulkan_lifecycle_codegen_test.cpp"
+    return set(lifecycle_audit.codegen_tests_from_source(source))
+
+
 VA1_STEP_TESTS = {
     "VA1.1": frozenset({
         "VulkanHostProgramTest.RejectsReferencesLifetimesAndBindings",
@@ -4267,13 +4333,18 @@ def _required_tests(profile: str, stage_id: str = "VA0") -> set[str]:
         tests.update(VA1_REQUIRED_TESTS)
     elif stage_id == "VA2":
         tests.update(VA2_REQUIRED_TESTS)
+    elif stage_id == "VA3":
+        tests.update(VA1_REQUIRED_TESTS)
+        tests.update(VA2_REQUIRED_TESTS)
+        tests.update(VA3_REQUIRED_TESTS)
+        tests.update(_va3_codegen_tests())
     return tests
 
 
 def _check_required_tests(gate: dict, findings: list[dict]) -> None:
     names = set(gate.get("ctest", {}).get("test_names", []))
     stage_id = gate["stage_id"] if "stage_id" in gate else "VA0"
-    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2"}:
+    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3"}:
         _finding(findings, "gate-execution-role",
                  "required-test scope has an invalid or missing stage_id",
                  stage_id=stage_id)
@@ -4351,6 +4422,9 @@ def _make_id_catalog() -> dict[str, dict]:
     for identifier, tests in VA2_STEP_TESTS.items():
         add(identifier, "vulkan-device-helper",
             sorted(tests), "va2", "plan-free-helper-native-evidence")
+    for identifier, tests in VA3_STEP_TESTS.items():
+        add(identifier, "lifecycle_fixture", sorted(tests), "va3",
+            "create-destroy-only-no-model-run")
     return catalog
 
 
@@ -4434,11 +4508,13 @@ def _va0_migration_owners(test_name: str, identifiers: list[str]) -> list[str]:
 
 def _va0_migration_coverage(gate: dict) -> dict:
     actual_names = sorted(set(gate.get("ctest", {}).get("test_names", [])) -
-                          set(VA2_REQUIRED_TESTS))
+                          set(VA2_REQUIRED_TESTS) - set(VA3_REQUIRED_TESTS) -
+                          {name for name in gate.get("ctest", {}).get("test_names", [])
+                           if name.startswith(VA3_CODEGEN_TEST_PREFIXES)})
     id_rows = {}
     related_by_test: dict[str, list[str]] = {}
     for identifier, spec in ID_CATALOG.items():
-        if spec["evidence_family"] == "va2":
+        if spec["evidence_family"] in {"va2", "va3"}:
             continue
         id_rows[identifier] = {
             "legacy_tests": sorted(set(spec["tests"])),
@@ -4464,7 +4540,7 @@ def _va0_migration_coverage(gate: dict) -> dict:
         }
     profile = gate.get("profile", "")
     legacy_test_rows = [row for identifier, row in id_rows.items()
-                        if ID_CATALOG[identifier]["evidence_family"] not in {"va1", "va2"}]
+                        if ID_CATALOG[identifier]["evidence_family"] not in {"va1", "va2", "va3"}]
     applicable = set().union(*(_applicable_tests(row["legacy_tests"], profile)
                                for row in legacy_test_rows)) if legacy_test_rows else set()
     missing = sorted(applicable - set(actual_names))
@@ -5786,6 +5862,62 @@ def _audit_va2_helper(stage: Path, gate: dict, refs: list[dict],
                 "host_execution_role": "legacy-product", "host_aot_candidate": False}
 
 
+def _audit_va3_lifecycle(stage: Path, gate: dict, refs: list[dict],
+                        findings: list[dict]) -> dict:
+    if gate.get("stage_id") != "VA3":
+        return {"status": "not-applicable", "stage_id": gate.get("stage_id"),
+                "role": "none", "host_aot_release_eligible": False}
+    ctest = gate.get("ctest", {})
+    names = ctest.get("test_names", []) if isinstance(ctest, dict) else []
+    skipped = ctest.get("skipped", []) if isinstance(ctest, dict) else []
+    failed = ctest.get("failed", []) if isinstance(ctest, dict) else []
+    try:
+        if (not isinstance(names, list) or any(not isinstance(name, str) for name in names) or
+                not isinstance(skipped, list) or not isinstance(failed, list)):
+            raise lifecycle_audit.EvidenceError("VA3 CTest execution inventory is malformed")
+        aggregate, raw = lifecycle_audit.aggregate_stage_evidence(
+            stage, gate.get("profile"), gate.get("source_fingerprint"),
+            names, skipped, failed)
+        if (aggregate.get("stage_id") != "VA3" or
+                aggregate.get("profile") != gate.get("profile") or
+                aggregate.get("source_fingerprint") != gate.get("source_fingerprint") or
+                aggregate.get("role") != "lifecycle-only" or
+                aggregate.get("candidate_run") != "not_run" or
+                aggregate.get("host_aot_release_eligible") is not False):
+            raise lifecycle_audit.EvidenceError("VA3 aggregate identity or claim scope is invalid")
+        for item in raw:
+            path = lifecycle_audit._safe_file(stage, item.get("path"), "VA3 raw artifact")
+            digest = item.get("sha256")
+            if (not isinstance(digest, str) or not SHA256_RE.fullmatch(digest) or
+                    sha256_file(path) != digest):
+                raise lifecycle_audit.EvidenceError("VA3 raw artifact hash changed during aggregation")
+            refs.append({"path": item["path"], "sha256": digest,
+                         "role": item["role"]})
+        aggregate_path = stage / "test/Vulkan/evidence/va3/lifecycle-evidence.json"
+        result = {"status": "verified", "stage_id": "VA3", "role": "lifecycle-only",
+                  "path": str(aggregate_path.relative_to(stage)),
+                  "sha256": sha256_file(aggregate_path),
+                  "source_fingerprint": aggregate["source_fingerprint"],
+                  "required_tests": aggregate["required_tests"],
+                  "codegen_tests": aggregate["codegen_tests"],
+                  "devices": aggregate["devices"],
+                  "fake": aggregate["fake"],
+                  "raw_artifacts": raw,
+                  "candidate_run": "not_run",
+                  "host_aot_release_eligible": False,
+                  "claim_scope": "private lifecycle-only candidate; no model run or release product"}
+        refs.append({"path": result["path"], "sha256": result["sha256"],
+                     "role": "VA3 post-CTest lifecycle aggregate"})
+        return result
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError,
+            subprocess.SubprocessError) as error:
+        _finding(findings, "va3-lifecycle-evidence-invalid",
+                 f"VA3 lifecycle candidate evidence is missing or invalid: {error}")
+        return {"status": "blocked", "stage_id": "VA3", "role": "lifecycle-only",
+                "path": None, "raw_artifacts": [],
+                "candidate_run": "not_run", "host_aot_release_eligible": False}
+
+
 def audit_stage_evidence(gate: dict) -> dict:
     """Adapt this fresh stage's existing V0–V5 and offline schemas."""
     stage = Path(gate["stage"]).resolve()
@@ -5810,6 +5942,7 @@ def audit_stage_evidence(gate: dict) -> dict:
         gate, families, refs, va1_findings)
     findings.extend(va1_findings)
     families["va2_helper"] = _audit_va2_helper(stage, gate, refs, findings)
+    families["va3_lifecycle"] = _audit_va3_lifecycle(stage, gate, refs, findings)
     compact = {}
     for name, data in families.items():
         if name == "cpu_baseline":
@@ -5886,6 +6019,8 @@ def audit_stage_evidence(gate: dict) -> dict:
             compact[name] = data
         elif name == "va2_helper":
             compact[name] = data
+        elif name == "va3_lifecycle":
+            compact[name] = data
     gate_state = gate.get("state", {})
     for label, key in (("gate-state", None), ("CMakeCache", "cmake_cache"),
                        ("CTest inventory", "inventory"), ("CTest JUnit", "junit"),
@@ -5934,6 +6069,9 @@ def audit_stage_evidence(gate: dict) -> dict:
                 "test/Vulkan/evidence/", "test/Native/vulkan-v1-cpu-baseline/",
                 "test/Native/vulkan-product-offline/", "test/Native/vulkan-product-cli"))
             role = str(ref.get("role", "")).lower()
+            if relative == "test/Vulkan/evidence/va3/lifecycle-evidence.json" and \
+                    role == "va3 post-ctest lifecycle aggregate":
+                continue
             # Model source snapshots and copied CMake-built baseline artifacts preserve
             # source/build mtimes; their byte hashes and current source/build identities
             # are checked separately.
@@ -6321,6 +6459,79 @@ def _va2_id_row(identifier: str, spec: dict,
             "source_fingerprints": sorted(fingerprints)}
 
 
+def _va3_id_row(identifier: str, spec: dict,
+                stage_audits: list[dict]) -> dict:
+    target_profiles = ("release", "sanitize")
+    stages = [stage for stage in stage_audits
+              if stage.get("stage_id") == "VA3" and
+              stage.get("profile") in target_profiles]
+    tests = set(spec["tests"])
+    profile_rows = []
+    selected_refs = {}
+    profile_valid = {}
+    executed = set()
+    for profile in target_profiles:
+        matches = [stage for stage in stages if stage.get("profile") == profile]
+        if len(matches) != 1:
+            profile_valid[profile] = False
+            profile_rows.append({"profile": profile,
+                                 "status": "missing" if not matches else "duplicate",
+                                 "stages": [stage.get("stage") for stage in matches]})
+            continue
+        stage = matches[0]
+        ctest = stage.get("ctest", {})
+        names = set(ctest.get("test_names", []))
+        skipped = set(ctest.get("skipped", []))
+        failed = set(ctest.get("failed", []))
+        passed_tests = names - skipped - failed
+        executed.update(passed_tests)
+        family = stage.get("families", {}).get("va3_lifecycle", {})
+        missing = sorted(tests - names)
+        not_passed = sorted(tests & (skipped | failed))
+        valid = (stage.get("scope_passed") is True and
+                 family.get("status") == "verified" and not missing and
+                 not not_passed and
+                 stage.get("archive_integrity", {}).get("status") == "verified")
+        profile_valid[profile] = valid
+        profile_rows.append({"profile": profile, "stage": stage.get("stage"),
+                             "source_fingerprint": stage.get("source_fingerprint"),
+                             "status": "passed" if valid else "blocked",
+                             "tests_executed": sorted(passed_tests & tests),
+                             "tests_missing": missing,
+                             "tests_not_passed": not_passed,
+                             "lifecycle_evidence": family.get("path"),
+                             "candidate_run": "not_run"})
+        for ref in stage.get("raw_artifacts", []):
+            path = str(ref.get("path", ""))
+            if path.startswith("test/Vulkan/evidence/va3/"):
+                key = (stage.get("stage"), path)
+                selected_refs[key] = {"stage": stage.get("stage"),
+                                      **{field: ref[field] for field in
+                                         ("path", "sha256", "role") if field in ref}}
+    fingerprints = {stage.get("source_fingerprint") for stage in stages
+                    if isinstance(stage.get("source_fingerprint"), str)}
+    missing_tests = sorted(tests - executed)
+    passed = (all(profile_valid.get(profile) is True for profile in target_profiles) and
+              len(fingerprints) == 1)
+    return {"cpu_positive": {"fixture": spec["cpu_fixture"],
+                             "fresh_cpu_baseline": []},
+            "related_tests": spec["tests"],
+            "tests_executed": sorted(tests & executed),
+            "tests_missing_from_supplied_stages": missing_tests,
+            "tests_applicable_to_supplied_profiles": sorted(tests),
+            "tests_missing_for_supplied_profile_scopes": missing_tests,
+            "profiles": profile_rows,
+            "evidence_family": "va3-lifecycle-only-candidate",
+            "evidence_profiles": list(target_profiles),
+            "gpu_numerical_claim": "create-destroy-only-no-model-run",
+            "raw_artifacts": list(selected_refs.values()),
+            "status": "passed" if passed else "blocked",
+            "release_status": "not_eligible",
+            "release_eligibility_scope": "private lifecycle candidate only; no model run/release product",
+            "host_aot_release_eligible": False,
+            "source_fingerprints": sorted(fingerprints)}
+
+
 def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
                    all_refs: list[dict]) -> dict:
     legacy_audits = [stage for stage in stage_audits
@@ -6338,6 +6549,9 @@ def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
             continue
         if family == "va2":
             indexed[identifier] = _va2_id_row(identifier, spec, stage_audits)
+            continue
+        if family == "va3":
+            indexed[identifier] = _va3_id_row(identifier, spec, stage_audits)
             continue
         if family == "va0":
             indexed[identifier] = _va0_id_row(identifier, spec, legacy_audits)
@@ -6569,7 +6783,8 @@ def audit_stage_archive(stage_dir: Path, *, required: bool = False,
 def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                  verify_fingerprint: bool = True, require_archives: bool = False,
                  require_va1_planner: bool = False,
-                 require_va2_helper: bool = False) -> dict:
+                 require_va2_helper: bool = False,
+                 require_va3_lifecycle: bool = False) -> dict:
     gates = []
     for stage_dir in stage_dirs:
         gate = audit_stage_gate(stage_dir, verify_fingerprint=verify_fingerprint)
@@ -6581,7 +6796,7 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
             stage["stage_id"] = "VA0"
         stage_id = stage.get("stage_id")
         required_archive_artifacts = []
-        if isinstance(stage_id, str) and stage_id in {"VA1", "VA2"}:
+        if isinstance(stage_id, str) and stage_id in {"VA1", "VA2", "VA3"}:
             deduplicated = {}
             for ref in stage.get("raw_artifacts", []):
                 relative = str(ref.get("path", ""))
@@ -6593,7 +6808,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
             stage_dir,
             required=(require_archives and stage_id == "VA0") or
                      (require_va1_planner and stage_id == "VA1") or
-                     (require_va2_helper and stage_id == "VA2"),
+                     (require_va2_helper and stage_id == "VA2") or
+                     (require_va3_lifecycle and stage_id == "VA3"),
             required_artifacts=required_archive_artifacts)
         gates.append(stage)
     global_findings = [{"stage": stage.get("stage"),
@@ -6602,11 +6818,11 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                        stage.get("archive_integrity", {}).get("findings", [])]
     invalid_stage_ids = [stage for stage in gates
                          if not isinstance(stage.get("stage_id"), str) or
-                         stage.get("stage_id") not in {"VA0", "VA1", "VA2"}]
+                         stage.get("stage_id") not in {"VA0", "VA1", "VA2", "VA3"}]
     invalid_stage_id_findings = []
     for stage in invalid_stage_ids:
         finding = {"code": "stage-id-invalid",
-                   "message": "stage_id must be VA0, VA1, or VA2 when explicitly supplied",
+                   "message": "stage_id must be VA0, VA1, VA2, or VA3 when explicitly supplied",
                    "stage": stage.get("stage"),
                    "stage_id": stage.get("stage_id")}
         global_findings.append(finding)
@@ -6628,7 +6844,7 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
     for stage in gates:
         stage_id = stage.get("stage_id")
         fingerprint = stage.get("source_fingerprint")
-        if (isinstance(stage_id, str) and stage_id in {"VA0", "VA1", "VA2"} and
+        if (isinstance(stage_id, str) and stage_id in {"VA0", "VA1", "VA2", "VA3"} and
                 isinstance(fingerprint, str) and SHA256_RE.fullmatch(fingerprint)):
             grouped_fingerprints.setdefault(stage_id, set()).add(fingerprint)
     for stage_id, fingerprints in grouped_fingerprints.items():
@@ -6642,6 +6858,7 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
     va0_gates = [stage for stage in gates if stage.get("stage_id") == "VA0"]
     va1_gates = [stage for stage in gates if stage.get("stage_id") == "VA1"]
     va2_gates = [stage for stage in gates if stage.get("stage_id") == "VA2"]
+    va3_gates = [stage for stage in gates if stage.get("stage_id") == "VA3"]
     required_profiles = {"release", "sanitize", "offline", "software"}
     supplied_profiles = {stage.get("profile") for stage in va0_gates
                          if isinstance(stage.get("profile"), str)}
@@ -6692,12 +6909,12 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                               all_refs=legacy_refs)
     if release_eligible and any(
             row.get("status") != "passed" for identifier, row in id_index.items()
-            if not identifier.startswith(("VA0.", "VA1.", "VA2."))):
+            if not identifier.startswith(("VA0.", "VA1.", "VA2.", "VA3."))):
         release_eligible = False
         release_blockers.append({"code": "id-index-incomplete",
                                  "message": "one or more V0.1–V6.4 audit rows lacks CPU/test/raw evidence"})
         for identifier, row in id_index.items():
-            if identifier.startswith(("VA1.", "VA2.")):
+            if identifier.startswith(("VA1.", "VA2.", "VA3.")):
                 continue
             row["release_status"] = "not_eligible"
             if row["status"] == "passed":
@@ -6825,6 +7042,47 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
     if require_va2_helper and not va2_helper_eligible:
         _finding(global_findings, "va2-helper-eligibility-required",
                  "--require-va2-helper needs final Release and matching static SAN VA2.1-VA2.4 evidence")
+
+    va3_required_profiles = {"release", "sanitize"}
+    va3_missing_profiles = sorted(va3_required_profiles -
+                                  {stage.get("profile") for stage in va3_gates})
+    va3_fingerprints = grouped_fingerprints.get("VA3", set())
+    va3_invalid_stages = [stage.get("stage") for stage in va3_gates
+                          if not stage.get("scope_passed") or
+                          stage.get("archive_integrity", {}).get("status") != "verified"]
+    va3_ids = {identifier: row for identifier, row in id_index.items()
+               if identifier.startswith("VA3.")}
+    va3_incomplete_ids = sorted(identifier for identifier, row in va3_ids.items()
+                                 if row.get("status") != "passed")
+    va3_duplicate_profiles = any(
+        sum(stage.get("profile") == profile for stage in va3_gates) != 1
+        for profile in va3_required_profiles)
+    va3_lifecycle_eligible = (
+        not va3_missing_profiles and not va3_invalid_stages and
+        not va3_duplicate_profiles and len(va3_fingerprints) == 1 and
+        not va3_incomplete_ids)
+    va3_lifecycle_blockers = []
+    if va3_missing_profiles:
+        va3_lifecycle_blockers.append({"code": "va3-required-profiles-missing",
+                                       "profiles": va3_missing_profiles})
+    if va3_invalid_stages:
+        va3_lifecycle_blockers.append({"code": "va3-stage-incomplete",
+                                       "stages": va3_invalid_stages})
+    if va3_duplicate_profiles:
+        va3_lifecycle_blockers.append({"code": "va3-profile-duplicate",
+                                       "profiles": sorted(
+                                           profile for profile in va3_required_profiles
+                                           if sum(stage.get("profile") == profile
+                                                  for stage in va3_gates) != 1)})
+    if len(va3_fingerprints) != 1:
+        va3_lifecycle_blockers.append({"code": "va3-source-fingerprint-mismatch",
+                                       "fingerprints": sorted(va3_fingerprints)})
+    if va3_incomplete_ids:
+        va3_lifecycle_blockers.append({"code": "va3-id-index-incomplete",
+                                       "ids": va3_incomplete_ids})
+    if require_va3_lifecycle and not va3_lifecycle_eligible:
+        _finding(global_findings, "va3-lifecycle-eligibility-required",
+                 "--require-va3-lifecycle needs final same-source Release and static SAN VA3.1-VA3.4 evidence and verified archives")
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": REPORT_KIND,
@@ -6837,6 +7095,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                                    if len(va1_fingerprints) == 1 else None),
         "va2_source_fingerprint": (next(iter(va2_fingerprints))
                                    if len(va2_fingerprints) == 1 else None),
+        "va3_source_fingerprint": (next(iter(va3_fingerprints))
+                                   if len(va3_fingerprints) == 1 else None),
         "source_fingerprints_by_stage_id": {
             key: sorted(value) for key, value in grouped_fingerprints.items()},
         "profiles_required_for_release": sorted(required_profiles),
@@ -6845,6 +7105,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
         "va1_profiles_missing": va1_missing_profiles,
         "va2_profiles_required": sorted(va2_required_profiles),
         "va2_profiles_missing": va2_missing_profiles,
+        "va3_profiles_required": sorted(va3_required_profiles),
+        "va3_profiles_missing": va3_missing_profiles,
         "release_eligible": release_eligible,
         "legacy_vulkan_release_eligible": release_eligible,
         "va0_baseline_eligible": va0_baseline_eligible,
@@ -6872,13 +7134,25 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
              "evidence": stage.get("families", {}).get("va2_helper", {})}
             for stage in va2_gates],
         "va2_helper_blockers": va2_helper_blockers,
+        "va3_lifecycle_eligible": va3_lifecycle_eligible,
+        "va3_lifecycle_required": require_va3_lifecycle,
+        "va3_lifecycle_stages": [
+            {"stage": stage.get("stage"), "profile": stage.get("profile"),
+             "source_fingerprint": stage.get("source_fingerprint"),
+             "scope_passed": stage.get("scope_passed"),
+             "archive_status": stage.get("archive_integrity", {}).get("status"),
+             "evidence": stage.get("families", {}).get("va3_lifecycle", {})}
+            for stage in va3_gates],
+        "va3_lifecycle_blockers": va3_lifecycle_blockers,
         "host_aot_release_eligible": False,
-        "baseline_scope": "VA0 legacy baseline, separate VA1 planner, and VA2 plan-free helper evidence; none claims host AOT",
+        "baseline_scope": "VA0 legacy baseline, VA1 planner, VA2 helper, and VA3 private lifecycle candidate; none claims a deployable model run",
         "host_aot_blockers": ([] if va1_planner_eligible else
                                ["VA1 planner evidence incomplete"]) +
                               ([] if va2_helper_eligible else
                                ["VA2 helper qualification incomplete"]) +
-                              ["VA3 helper-backed model lifecycle and generated host create/run not implemented",
+                              ([] if va3_lifecycle_eligible else
+                               ["VA3 lifecycle candidate qualification incomplete"]) +
+                              ["VA3 model run is not implemented; lifecycle candidate is not a release product",
                                "VA4 fixed-run/sync not implemented",
                                "VA5 link/clean-publish not implemented",
                                "VA6 full matrix/faults not implemented",
@@ -6916,6 +7190,8 @@ def parse_args(argv=None):
                         help="require final Release and matching SAN compiler-only VA1.1-VA1.4 planner evidence")
     parser.add_argument("--require-va2-helper", action="store_true",
                         help="require final Release and matching static SAN VA2.1-VA2.4 helper evidence")
+    parser.add_argument("--require-va3-lifecycle", action="store_true",
+                        help="require final same-source Release and static SAN private VA3.1-VA3.4 lifecycle evidence and verified archives")
     return parser.parse_args(argv)
 
 
@@ -6926,7 +7202,8 @@ def main(argv=None) -> int:
             args.stage, require_release=args.require_release,
             require_archives=args.require_va0_baseline,
             require_va1_planner=args.require_va1_planner,
-            require_va2_helper=args.require_va2_helper)
+            require_va2_helper=args.require_va2_helper,
+            require_va3_lifecycle=args.require_va3_lifecycle)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         report = {"schema_version": SCHEMA_VERSION, "kind": REPORT_KIND,
                   "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -6939,6 +7216,10 @@ def main(argv=None) -> int:
                   "va2_helper_required": args.require_va2_helper,
                   "va2_helper_blockers": [{"code": "audit-failed-closed",
                                            "message": str(error)}],
+                  "va3_lifecycle_eligible": False,
+                  "va3_lifecycle_required": args.require_va3_lifecycle,
+                  "va3_lifecycle_blockers": [{"code": "audit-failed-closed",
+                                               "message": str(error)}],
                   "host_aot_release_eligible": False,
                   "va0_blocking_findings": [{"code": "audit-failed-closed", "message": str(error)}],
                   "blocking_findings": [{"code": "audit-failed-closed", "message": str(error)}],
@@ -6958,11 +7239,14 @@ def main(argv=None) -> int:
         print("VA1 planner scope is incomplete; see va1_planner_blockers", file=sys.stderr)
     if args.require_va2_helper and not report.get("va2_helper_eligible"):
         print("VA2 helper scope is incomplete; see va2_helper_blockers", file=sys.stderr)
+    if args.require_va3_lifecycle and not report.get("va3_lifecycle_eligible"):
+        print("VA3 lifecycle scope is incomplete; see va3_lifecycle_blockers", file=sys.stderr)
     return 1 if (errors or (args.require_release and not report.get("release_eligible")) or
                  (args.require_va0_baseline and not report.get("va0_baseline_eligible")) or
                  (args.require_va0_stage and not report.get("va0_stage_scope_passed")) or
                  (args.require_va1_planner and not report.get("va1_planner_eligible")) or
-                 (args.require_va2_helper and not report.get("va2_helper_eligible"))) else 0
+                 (args.require_va2_helper and not report.get("va2_helper_eligible")) or
+                 (args.require_va3_lifecycle and not report.get("va3_lifecycle_eligible"))) else 0
 
 
 if __name__ == "__main__":

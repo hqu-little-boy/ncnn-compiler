@@ -761,6 +761,7 @@ class Gate:
             "schema_version": 1, "kind": "ncnn.vulkan_gate",
             "profile": args.profile, "stage_id": args.stage_id,
             "host_execution_role": "legacy-product", "host_aot_candidate": False,
+            "candidate_role": "lifecycle-only" if args.stage_id == "VA3" else "none",
             "source_dir": str(self.source),
             "source_fingerprint_algorithm": "sha256-git-files-v1",
             "source_fingerprint": None, "git_revision": None,
@@ -954,7 +955,7 @@ class Gate:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=PROFILES, required=True)
-    parser.add_argument("--stage-id", choices=("VA0", "VA1", "VA2"), default="VA0")
+    parser.add_argument("--stage-id", choices=("VA0", "VA1", "VA2", "VA3"), default="VA0")
     parser.add_argument("--source-dir", type=Path,
                         default=Path(__file__).resolve().parents[2])
     parser.add_argument("--build-root", type=Path, default=Path("/tmp"))

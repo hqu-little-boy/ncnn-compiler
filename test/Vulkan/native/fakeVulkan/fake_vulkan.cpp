@@ -57,6 +57,8 @@ struct State final {
   bool whole_map = false;
   VkDeviceSize last_map_offset = 0;
   VkDeviceSize last_map_size = 0;
+  bool wait_idle_retry_pending = false;
+  bool destruction_before_wait_resolution = false;
 };
 
 State state;
@@ -67,11 +69,19 @@ std::uintptr_t next_handle() {
 
 VkResult called(std::string_view function) {
   ++state.calls[std::string(function)];
+  VkResult result = VK_SUCCESS;
   if (state.fail_function == function) {
     state.fail_function.clear();
-    return std::exchange(state.fail_result, VK_SUCCESS);
+    result = std::exchange(state.fail_result, VK_SUCCESS);
   }
-  return VK_SUCCESS;
+  if (function == "vkDeviceWaitIdle") {
+    if (result == VK_SUCCESS || result == VK_ERROR_DEVICE_LOST) {
+      state.wait_idle_retry_pending = false;
+    } else {
+      state.wait_idle_retry_pending = true;
+    }
+  }
+  return result;
 }
 
 void created(std::string_view object_type) {
@@ -79,6 +89,9 @@ void created(std::string_view object_type) {
 }
 
 void destroyed(std::string_view object_type) {
+  if (state.wait_idle_retry_pending) {
+    state.destruction_before_wait_resolution = true;
+  }
   ++state.destroyed[std::string(object_type)];
 }
 
@@ -137,6 +150,10 @@ bool saw_whole_allocation_map() {
 
 std::uint64_t last_mapped_allocation_size() {
   return state.last_map_size;
+}
+
+bool saw_destruction_before_wait_resolution() {
+  return state.destruction_before_wait_resolution;
 }
 
 }  // namespace fake_vulkan

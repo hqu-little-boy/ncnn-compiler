@@ -116,6 +116,73 @@ bytes are expected; shader bytes and the public header are not changed by host
 planning. The program diagnostic is not read by the deployed wrapper, which
 still parses its embedded execution plan and calls the generic runtime.
 
+## Private model lifecycle code generation
+
+`tools/VulkanProduct.hpp` exposes the compiler-only
+`makeVulkanLifecycleSource(const VulkanModelPackage&)` fixture API. It returns a
+model header, generated C++ source and the verified host-program identity. It is
+not selected by `ncnn-compile`, installed as a model runtime, or passed through
+the product publication transaction. The public Vulkan product path and its
+`generic-plan-runtime` manifest retain their existing meaning.
+
+The generator rechecks the execution plan, shader/interface and weight bytes,
+host-program identity and source agreement, and the exact generated public
+header before emitting code. Both general packages and the narrow single-ReLU
+package representation are accepted. This private API requires x86-64 Linux and
+Vulkan 1.1 / SPIR-V 1.0. Its model prefix must match
+`[A-Za-z][A-Za-z0-9_]*`, contain no double underscore, and not end in an
+underscore: generated `_vk_*` suffixes must not create reserved identifiers.
+Header guards use locale-independent ASCII case mapping. Resource and
+pipeline slots use compiler-assigned numeric indices; raw model-resource names
+and binary symbols are not pasted into C++ expressions. Entry points are numeric
+character arrays with an explicit byte length, and weights and SPIR-V are numeric
+arrays. The generated terminator, UTF-8 bytes, quotes, backslashes and hexadecimal
+adjacency cannot change C++ token boundaries. Unresolved template tokens are
+rejected by the compiler-side generator.
+
+The emitted context owns a late-bound `VulkanDeviceContext`, command resources,
+independent device/I/O/temporary-weight buffers, a shared descriptor pool and
+per-pipeline objects. Buffer preparation, allocation, descriptor construction and
+pipeline calls refer to the verified host-program slots and ordering. Actual
+memory requirements and allocation counts are checked before any memory
+allocation, including temporary weight staging. The per-buffer and context
+limits, device-selection policy and whole-allocation mapped synchronization are
+those of `NCNNVulkanDeviceHelper`; no build-machine device handles or memory
+indices are embedded.
+
+Create emits each fixed weight upload, flush, transfer barrier and copy, followed
+by submission/fence completion and temporary staging release. Each context owns
+its upload and resources independently. The generated source includes no JSON,
+execution-plan/parser/payload types, LLVM/MLIR headers, generic context create or
+model executor. Shader, weight and host-program verification and diagnostic
+serialization remain compiler-side operations.
+
+Cleanup waits for device completion before releasing pipelines, descriptor pool,
+buffers, command resources and the parent device. Partial construction retains
+ownership of acquired objects, including upload-scoped buffers. The first error
+is preserved; non-device-lost idle-wait errors are retried rather than used as
+permission to free in-flight resources. A persistent non-device-lost driver error
+can therefore block cleanup. Device loss permits ordered teardown and remains an
+error status. Bounded diagnostics, exception containment, null-on-create-failure,
+externally synchronized destruction and `destroy(NULL)` follow ABI v1.
+
+The private fixture keeps the same three lifecycle declarations and exports, but
+its `run` is deliberately non-computational: pointer and static-count errors are
+reported normally, and a valid invocation returns `API_ERROR` without modifying
+caller output. It does not call a legacy executor. These fixtures establish
+initialization/destruction behavior, not model inference or host-AOT product
+release eligibility.
+
+`test/Vulkan/native/` builds unweighted and weighted fixture sources and headers,
+validates their SPIR-V with `spirv-val`, and compiles ordinary and
+validation-enabled private DSOs. Their strict links use the generated object,
+`NCNNVulkanDeviceHelper`, Vulkan and standard/platform libraries, not the compiler
+fixture emitter's LLVM/MLIR/GTest dependencies. Test-only operation hooks and
+budget/synchronization controls are absent from the ordinary DSOs and do not add
+C ABI exports or CLI options. Private allocation-requirement accounting and fake
+copy/upload counters are not device-resident peak-memory measurements or public
+telemetry queries.
+
 ## Product static-graph support matrix (V5.4)
 
 This matrix is for the product `--ncnn-vulkan-graph-pipeline` and explicit `ncnn-compile --backend=vulkan` path. It does **not** widen either historical single-compute-op contract: `--ncnn-vulkan-semantic-pipeline` plus `verify-vulkan-supported-model` is the V1 copy/identity/ReLU/same-shape-Add Linalg legality path, while `--ncnn-vulkan-v2-pipeline` / `lower-ncnn-vulkan-model` lowers one V2 compute op per fixture (including its separately bounded Conv2D path). Their fixtures under `test/Pipelines/` and `test/Conversion/NCNNToVulkan/lower-*.mlir` are compatibility tests, not evidence that a whole graph uses those limits or that those commands support V5 product graphs. Product graph support is independently enforced against the TOSA-level op schedule below; no model-name dispatch or CPU fallback is used.
@@ -214,9 +281,10 @@ MLIR, GTest, execution-plan parsing or payload hashing. It owns device/queue,
 buffer/memory/mapping, descriptor/pipeline and command/fence primitives. Its
 inputs are explicit sizes, Vulkan bindings/ranges, shader words and entry points;
 it accepts no execution plan, host program, model-resource ID or kernel schedule.
-Copy/barrier/bind/dispatch order and hazard analysis remain in the generic
-`VulkanRuntimeContext` executor. The product manifest therefore still says
-`generic-plan-runtime` and `embedded-runtime-required`.
+The owner, not the helper, determines copy/barrier/bind/dispatch order and
+hazards. Published models use the generic `VulkanRuntimeContext` executor; the
+private lifecycle fixture emits its fixed weight-upload calls. The product
+manifest still says `generic-plan-runtime` and `embedded-runtime-required`.
 
 Buffer setup is two-phase. Preparation creates a `VkBuffer`, queries its actual
 memory requirements and selects a late-bound memory type, without allocating

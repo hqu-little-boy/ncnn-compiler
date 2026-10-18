@@ -1,0 +1,7 @@
+{
+  global:
+    lifecycle_fixture_vk_create;
+    lifecycle_fixture_vk_run;
+    lifecycle_fixture_vk_destroy;
+  local: *;
+};

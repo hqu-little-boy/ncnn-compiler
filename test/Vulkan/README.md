@@ -231,6 +231,80 @@ absence of model-side LLVM or an executor. Per-test raw records and the
 independent audit are under `test/Vulkan/evidence/va2/`; missing, skipped,
 contaminated or tampered records fail closed.
 
+### Private lifecycle fixtures and VA3 qualification
+
+The compiler-only `makeVulkanLifecycleSource` API emits private model-specific
+initialization/destruction fixtures; it does not replace the public
+`--backend=vulkan` product. `run` keeps its ABI declaration but rejects a valid
+call with `API_ERROR` and leaves caller output unchanged. No legacy executor is
+used for candidate computation, and these tests produce no candidate inference
+results. See the [lifecycle contract](../../docs/ncnn-vulkan-backend-contract.md#private-model-lifecycle-code-generation).
+
+With `BUILD_TESTING=ON` and `NCNN_ENABLE_VULKAN_PRODUCT=ON`, the build emits
+unweighted and weighted fixture sources/headers under
+`test/Vulkan/native/lifecycle/{unweighted,weighted}/`, validates their
+`shader_0.spv`, and builds ordinary and validation-enabled DSOs. The compiler-side
+emitter may link LLVM/MLIR/GTest; the candidate libraries instead link their
+emitted object, the device helper, Vulkan and standard/platform libraries. They
+are test artifacts, not installed or transactionally published products.
+
+Default non-device coverage includes every `VulkanLifecycleCodegenTest.*` case,
+`vulkan-lifecycle-fake-unit`, `vulkan-lifecycle-no-device`,
+`vulkan-lifecycle-independence`, and `vulkan-lifecycle-evidence-tests`. Product-only
+configurations retain these tests when `NCNN_ENABLE_VULKAN_V0_TESTS=OFF`. The
+selected device matrix additionally registers `vulkan-lifecycle-nvidia` and/or
+`vulkan-lifecycle-llvmpipe`. A C11 loader uses the generated header and only the
+three C ABI symbols. The same validation-enabled candidate DSO bytes are used on
+both selected ICDs within a profile. The C ABI selects AUTO or an enumeration
+ordinal, not a device-name string. The harness's `--device-match` value records an
+expectation only; the capture runner binds the selected ICD, actual `vulkaninfo`
+identity and ordinal passed to the harness, and checks its recorded
+`requested_device_index`. A label alone is not device-selection evidence.
+
+Codegen cases cover deterministic source/header identity, sparse slots and
+bindings, exact embedded weight bytes, string/UTF-8 escaping, multiple ports and
+weights, standard zero-length arrays, budget/cleanup ordering, and malformed
+program/header/shader/weight rejection. Fake Vulkan records allocation-before-
+budget failures, partial-create cleanup, actual copy recording and completed
+upload counts, temporary staging release, and safe cleanup after a recoverable
+idle-wait failure. Requirement-byte accounting is not device-resident memory
+telemetry. The real C harness records `candidate_execution="not_run"` and
+`upload_count="not_measured"`; fake counters and legacy numerical outputs must
+not be relabelled as real candidate inference or device telemetry.
+
+```sh
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA3 \
+  --profile release --build-root /tmp --jobs 4 --tidy-jobs 4 --archive \
+  --legacy-baseline-stage /path/to/frozen-release-stage
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA3 \
+  --profile sanitize --build-root /tmp --jobs 1 --tidy-jobs 4 --archive \
+  --sanitizer-install /path/to/static-asan-llvm/install \
+  --lit /path/to/llvm-source/llvm/utils/lit/lit.py \
+  --openmp-dir /path/to/libomp-only \
+  --toolchain-identity /path/to/toolchain-identity.json \
+  --legacy-baseline-stage /path/to/frozen-release-stage
+python3 compiler/test/Vulkan/check_release_evidence.py \
+  --stage /tmp/current-va3-release-stage --stage /tmp/current-va3-sanitize-stage \
+  --require-va3-lifecycle --output /tmp/va3-lifecycle-evidence.json
+```
+
+`--stage-id VA3` uses fresh `ncnn-compiler-stage-va3-<profile>-*` directories and
+retains the full configure/format/build/three-numerical-target/tidy/unfiltered-
+CTest gate. The composite lifecycle qualifier requires same-source complete
+Release and matching static ASan+UBSan profiles, both ICD lifecycle positives,
+all source-declared codegen cases and native tests, actual source/object/archive/
+compile/link/ELF evidence, and hash-revalidated archives. Per-test records and the
+post-CTest aggregate live under `test/Vulkan/evidence/va3/`. Missing, skipped,
+stale or altered observations fail closed. Ordinary CMake/CTest artifact audits
+remain usable without `gate-state.json`, but do not by themselves qualify a
+stage.
+
+The qualifier covers VA3.1–VA3.4, not model execution or product release.
+`host_aot_release_eligible` remains false, and the four-profile legacy
+`--require-release` meaning is unchanged. Any final source change requires new
+full gates rather than promotion of a failed or superseded stage by rerunning
+only an individual test or audit.
+
 The `hardware` profile selects only NVIDIA; `release` selects both ICDs. The
 `sanitize` profile also selects both and requires a matching static PIC
 ASan+UBSan LLVM/MLIR installation, its actual Vulkan runner test tools and lit,

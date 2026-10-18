@@ -1,5 +1,7 @@
 #include "VulkanProduct.hpp"
 
+#include "VulkanLifecycleCodegen.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -92,7 +94,8 @@ std::expected<llvm::json::Value, std::string> parseHostProgramJson(
 std::string uppercaseIdentifier(std::string_view value) {
   std::string result(value);
   std::ranges::transform(result, result.begin(), [](unsigned char character) {
-    return static_cast<char>(std::toupper(character));
+    return static_cast<char>(
+      character >= 'a' && character <= 'z' ? character - 'a' + 'A' : character);
   });
   return result;
 }
@@ -1579,6 +1582,83 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
                             .build_identity = build_identity,
                             .shader_sha256 = shader_sha256,
                             .plan_sha256 = plan_sha256};
+}
+
+std::expected<VulkanLifecycleSource, std::string> makeVulkanLifecycleSource(
+  const VulkanModelPackage& package) {
+  const VulkanExecutionPlan& plan = package.plan;
+  if (!isCIdentifier(plan.model) || plan.model.front() == '_' ||
+      plan.model.back() == '_' || plan.model.find("__") != std::string::npos) {
+    return std::unexpected(
+      "lifecycle model name must be a non-reserved identifier prefix");
+  }
+  if (auto checked = ncnn_mlir::vulkan::verifyExecutionPlan(plan); !checked) {
+    return std::unexpected("invalid lifecycle execution plan: " +
+                           checked.error());
+  }
+  if (!plan.host_triple.starts_with("x86_64-") ||
+      plan.host_triple.find("linux") == std::string::npos ||
+      plan.device_target != "vulkan1.1-spirv1.0") {
+    return std::unexpected(
+      "lifecycle source requires x86-64 Linux and Vulkan 1.1");
+  }
+  for (const TensorResource& resource : plan.resources) {
+    if (resource.byte_size == 0 || resource.byte_size % sizeof(float) != 0 ||
+        !std::in_range<std::uint32_t>(resource.shape.size()) ||
+        ((resource.kind == ResourceKind::Input ||
+          resource.kind == ResourceKind::Output) &&
+         resource.host_layout != resource.physical_layout)) {
+      return std::unexpected(
+        "lifecycle requires nonempty static FP32 public I/O");
+    }
+  }
+  for (std::size_t count : {package.host_program.buffers.size(),
+                            package.host_program.pipelines.size(),
+                            plan.inputs.size(),
+                            plan.outputs.size()}) {
+    if (!std::in_range<std::uint32_t>(count)) {
+      return std::unexpected("lifecycle object or I/O count exceeds uint32");
+    }
+  }
+  std::vector<VulkanModelShader> single_shader;
+  std::span<const VulkanModelShader> shaders = package.shaders;
+  std::string header;
+  if (shaders.empty()) {
+    // The original single-ReLU packaging overload retains its payload in
+    // shader_words rather than shaders. Normalize it only on the compiler side.
+    if (plan.kernels.size() != 1 || plan.inputs.size() != 1 ||
+        plan.outputs.size() != 1 || !package.weights.empty()) {
+      return std::unexpected("lifecycle package has no shader payloads");
+    }
+    single_shader.push_back({.kernel_id = plan.kernels.front().id,
+                             .binary_symbol = package.binary_symbol,
+                             .words = package.shader_words});
+    shaders = single_shader;
+    header = makeHeader(plan.model,
+                        *findResource(plan, plan.inputs.front()),
+                        *findResource(plan, plan.outputs.front()));
+  } else {
+    header = makeGeneralHeader(plan.model, plan);
+  }
+  if (header != package.header) {
+    return std::unexpected(
+      "lifecycle header does not match verified public I/O");
+  }
+  if (auto verified = ncnn_mlir::vulkan::verifyVulkanHostProgram(
+        package.host_program, plan, shaders, package.weights);
+      !verified) {
+    return std::unexpected("invalid lifecycle host program: " +
+                           verified.error());
+  }
+  auto source = generateVulkanLifecycleImplementation(
+    package.host_program, shaders, package.weights);
+  if (!source) {
+    return std::unexpected(source.error());
+  }
+  return VulkanLifecycleSource{
+    .header = std::move(header),
+    .source = std::move(*source),
+    .host_program_identity = package.host_program.identity};
 }
 
 std::expected<std::string, std::string> updateVulkanManifestDependencies(
