@@ -534,6 +534,31 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         NCNN_VULKAN_LLVM_LIBRARY_DIR="${LLVM_LIBRARY_DIR}")
     add_dependencies(ncnn-compile
         NCNNVulkanRuntime NCNNVulkanDeviceHelper ncnn-vulkan-spirv-extract)
+
+    if(BUILD_TESTING)
+        add_executable(ncnn-vulkan-fixedrun-capture
+            ncnn-compile.cpp CompileSession.cpp)
+        get_target_property(_ncnn_compile_includes ncnn-compile INCLUDE_DIRECTORIES)
+        get_target_property(_ncnn_compile_definitions ncnn-compile COMPILE_DEFINITIONS)
+        get_target_property(_ncnn_compile_options ncnn-compile COMPILE_OPTIONS)
+        get_target_property(_ncnn_compile_links ncnn-compile LINK_LIBRARIES)
+        target_include_directories(ncnn-vulkan-fixedrun-capture PRIVATE
+            ${_ncnn_compile_includes})
+        target_include_directories(ncnn-vulkan-fixedrun-capture SYSTEM PRIVATE
+            ${LLVM_INCLUDE_DIRS})
+        target_compile_definitions(ncnn-vulkan-fixedrun-capture PRIVATE
+            ${_ncnn_compile_definitions}
+            NCNN_VULKAN_FIXEDRUN_CAPTURE_TOOL=1)
+        target_compile_options(ncnn-vulkan-fixedrun-capture PRIVATE
+            ${_ncnn_compile_options})
+        target_link_libraries(ncnn-vulkan-fixedrun-capture PRIVATE
+            ${_ncnn_compile_links})
+        target_link_options(ncnn-vulkan-fixedrun-capture PRIVATE
+            ${NCNN_VULKAN_HOST_SANITIZER_ARGS})
+        add_dependencies(ncnn-vulkan-fixedrun-capture
+            sleef NCNNVulkanRuntime NCNNVulkanDeviceHelper
+            ncnn-vulkan-spirv-extract)
+    endif()
 endif()
 install(TARGETS ncnn-compile RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES $<TARGET_FILE:sleef> DESTINATION ${CMAKE_INSTALL_LIBDIR})

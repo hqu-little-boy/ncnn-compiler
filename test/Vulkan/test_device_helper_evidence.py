@@ -145,6 +145,28 @@ class DeviceHelperEvidenceTests(unittest.TestCase):
         with self.assertRaises(audit.EvidenceError):
             audit._require_va2_matrix_stage(state, profile, False)
 
+    def test_va4_technical_identity_does_not_qualify_va2_matrix(self) -> None:
+        for profile in ("release", "sanitize"):
+            with self.subTest(profile=profile):
+                self.write_stage_state(stage_id="VA4", profile=profile,
+                                       candidate_role="fixed-run")
+                state, actual_profile, fingerprint, bound = audit._read_stage_identity(self.stage)
+                self.assertTrue(bound)
+                self.assertEqual("VA4", state["stage_id"])
+                self.assertEqual(profile, actual_profile)
+                self.assertEqual("a" * 64, fingerprint)
+                with self.assertRaisesRegex(audit.EvidenceError, "bound VA2"):
+                    audit._require_va2_matrix_stage(state, actual_profile, bound)
+        for role in (None, "lifecycle-only", "model-run", True):
+            with self.subTest(role=role):
+                self.write_stage_state(stage_id="VA4", candidate_role=role)
+                with self.assertRaisesRegex(audit.EvidenceError, "fixed-run"):
+                    audit._read_stage_identity(self.stage)
+        self.write_stage_state(stage_id="VA4", profile="offline",
+                               candidate_role="fixed-run")
+        with self.assertRaisesRegex(audit.EvidenceError, "Release or sanitize"):
+            audit._read_stage_identity(self.stage)
+
     def test_unbound_development_identity_is_unqualified_not_fabricated_va2(self) -> None:
         (self.stage / "gate-state.json").unlink()
         self.write("CMakeCache.txt",

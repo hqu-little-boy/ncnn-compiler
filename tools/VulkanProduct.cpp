@@ -1584,8 +1584,10 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
                             .plan_sha256 = plan_sha256};
 }
 
-std::expected<VulkanLifecycleSource, std::string> makeVulkanLifecycleSource(
-  const VulkanModelPackage& package) {
+namespace {
+
+std::expected<VulkanLifecycleSource, std::string> makeVulkanSource(
+  const VulkanModelPackage& package, bool fixed_run) {
   const VulkanExecutionPlan& plan = package.plan;
   if (!isCIdentifier(plan.model) || plan.model.front() == '_' ||
       plan.model.back() == '_' || plan.model.find("__") != std::string::npos) {
@@ -1650,8 +1652,10 @@ std::expected<VulkanLifecycleSource, std::string> makeVulkanLifecycleSource(
     return std::unexpected("invalid lifecycle host program: " +
                            verified.error());
   }
-  auto source = generateVulkanLifecycleImplementation(
-    package.host_program, shaders, package.weights);
+  auto source = fixed_run ? generateVulkanHostImplementation(
+                              package.host_program, shaders, package.weights)
+                          : generateVulkanLifecycleImplementation(
+                              package.host_program, shaders, package.weights);
   if (!source) {
     return std::unexpected(source.error());
   }
@@ -1659,6 +1663,43 @@ std::expected<VulkanLifecycleSource, std::string> makeVulkanLifecycleSource(
     .header = std::move(header),
     .source = std::move(*source),
     .host_program_identity = package.host_program.identity};
+}
+
+}  // namespace
+
+std::expected<VulkanLifecycleSource, std::string> makeVulkanLifecycleSource(
+  const VulkanModelPackage& package) {
+  return makeVulkanSource(package, false);
+}
+
+std::expected<VulkanHostSource, std::string> makeVulkanHostSource(
+  const VulkanModelPackage& package) {
+  auto generated = makeVulkanSource(package, true);
+  if (!generated) {
+    return std::unexpected(generated.error());
+  }
+  std::string identity;
+  appendIdentityField(
+    identity, "domain", "ncnn-vulkan-host-source-identity/v1");
+  appendIdentityField(identity, "execution-mode", "fixed-run");
+  appendIdentityField(
+    identity, "codegen-version", kVulkanHostSourceCodegenVersion);
+  appendIdentityField(
+    identity, "host-program", generated->host_program_identity);
+  const std::string codegen_identity = sha256Hex(identity);
+  generated->source.insert(
+    0,
+    std::format("// Fixed-run codegen: {}\n// Host program: {}\n"
+                "// Codegen identity: {}\n",
+                kVulkanHostSourceCodegenVersion,
+                generated->host_program_identity,
+                codegen_identity));
+  return VulkanHostSource{
+    .header = std::move(generated->header),
+    .source = std::move(generated->source),
+    .host_program_identity = std::move(generated->host_program_identity),
+    .codegen_identity = codegen_identity,
+    .codegen_version = std::string(kVulkanHostSourceCodegenVersion)};
 }
 
 std::expected<std::string, std::string> updateVulkanManifestDependencies(

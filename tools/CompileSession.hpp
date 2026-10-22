@@ -246,6 +246,8 @@ class CompileSession final {
   bool uses_openmp;
   bool uses_sleef;
   bool use_vulkan_backend = false;
+  bool capture_fixedrun_source = false;
+  std::vector<fs::path> fixedrun_capture_files;
   fs::path llvm_bitcode;
   std::string optimization;
   std::expected<Manifest, std::string> manifest;

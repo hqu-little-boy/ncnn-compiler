@@ -17,4 +17,10 @@ generateVulkanLifecycleImplementation(
   std::span<const ncnn_mlir::vulkan::VulkanModelShader> shaders,
   std::span<const ncnn_mlir::vulkan::VulkanModelWeight> weights);
 
+[[nodiscard]] std::expected<std::string, std::string>
+generateVulkanHostImplementation(
+  const ncnn_mlir::vulkan::VulkanHostProgram& program,
+  std::span<const ncnn_mlir::vulkan::VulkanModelShader> shaders,
+  std::span<const ncnn_mlir::vulkan::VulkanModelWeight> weights);
+
 }  // namespace ncnn_compile

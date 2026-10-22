@@ -35,7 +35,8 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         vulkan_product_test.cpp
         vulkan_host_program_test.cpp
         vulkan_shader_interface_test.cpp
-        vulkan_lifecycle_codegen_test.cpp)
+        vulkan_lifecycle_codegen_test.cpp
+        vulkan_host_codegen_test.cpp)
     target_include_directories(unit_tests PRIVATE ${PROJECT_SOURCE_DIR}/tools)
     target_link_libraries(unit_tests PRIVATE NCNNVulkanProductSupport)
 endif()

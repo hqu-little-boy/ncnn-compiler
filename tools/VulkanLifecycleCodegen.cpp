@@ -81,6 +81,65 @@ std::string emitPorts(std::string_view name,
   return result;
 }
 
+std::string emitCopyOperation(const vk::HostCopyOp& op) {
+  return std::format(
+    "    {{\n"
+    "      const VkBufferCopy copy{{.srcOffset = UINT64_C({0}), "
+    ".dstOffset = UINT64_C({1}), .size = UINT64_C({2})}};\n"
+    "      vkCmdCopyBuffer(commands_->get_command_buffer(), "
+    "buffers_[{3}]->get_handle(), buffers_[{4}]->get_handle(), "
+    "1, &copy);\n"
+    "    }}\n",
+    op.source_offset,
+    op.destination_offset,
+    op.byte_size,
+    op.source.value,
+    op.destination.value);
+}
+
+std::expected<std::string, std::string> emitBarrierOperation(
+  const vk::HostBarrierOp& op) {
+  const std::string_view source = stageToken(op.source_stage);
+  const std::string_view destination = stageToken(op.destination_stage);
+  if (source.empty() || destination.empty() || op.buffers.empty() ||
+      !std::in_range<std::uint32_t>(op.buffers.size())) {
+    return std::unexpected("invalid host barrier stage or count");
+  }
+  std::string text = std::format(
+    "    {{\n      const std::array<VkBufferMemoryBarrier, {}> "
+    "barriers{{{{\n",
+    op.buffers.size());
+  for (const auto& barrier : op.buffers) {
+    const auto source_access = accessToken(barrier.source_access);
+    const auto destination_access = accessToken(barrier.destination_access);
+    if (source_access.empty() || destination_access.empty()) {
+      return std::unexpected("invalid host barrier access");
+    }
+    text += std::format(
+      "        VkBufferMemoryBarrier{{.sType = "
+      "VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, .pNext = nullptr, "
+      ".srcAccessMask = {0}, .dstAccessMask = {1}, "
+      ".srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, "
+      ".dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, "
+      ".buffer = buffers_[{2}]->get_handle(), "
+      ".offset = UINT64_C({3}), .size = UINT64_C({4})}},\n",
+      source_access,
+      destination_access,
+      barrier.buffer.value,
+      barrier.offset,
+      barrier.byte_size);
+  }
+  text += std::format(
+    "      }}}};\n"
+    "      vkCmdPipelineBarrier(commands_->get_command_buffer(), "
+    "{}, {}, 0, 0, nullptr, {}, barriers.data(), 0, nullptr);\n"
+    "    }}\n",
+    source,
+    destination,
+    op.buffers.size());
+  return text;
+}
+
 std::expected<std::string, std::string> emitCreateOperations(
   const vk::VulkanHostProgram& program,
   const std::map<std::uint32_t, std::size_t>& weight_slots) {
@@ -159,60 +218,9 @@ std::expected<std::string, std::string> emitCreateOperations(
             return std::unexpected("lifecycle copy must upload a weight");
           }
           ++pending_uploads;
-          return std::format(
-            "    {{\n"
-            "      const VkBufferCopy copy{{.srcOffset = UINT64_C({0}), "
-            ".dstOffset = UINT64_C({1}), .size = UINT64_C({2})}};\n"
-            "      vkCmdCopyBuffer(commands_->get_command_buffer(), "
-            "buffers_[{3}]->get_handle(), buffers_[{4}]->get_handle(), "
-            "1, &copy);\n"
-            "    }}\n",
-            op.source_offset,
-            op.destination_offset,
-            op.byte_size,
-            op.source.value,
-            op.destination.value);
+          return emitCopyOperation(op);
         } else if constexpr (std::is_same_v<T, vk::HostBarrierOp>) {
-          const std::string_view source = stageToken(op.source_stage);
-          const std::string_view destination = stageToken(op.destination_stage);
-          if (source.empty() || destination.empty() ||
-              !std::in_range<std::uint32_t>(op.buffers.size())) {
-            return std::unexpected("invalid lifecycle barrier stage or count");
-          }
-          std::string text = std::format(
-            "    {{\n      const std::array<VkBufferMemoryBarrier, {}> "
-            "barriers{{{{\n",
-            op.buffers.size());
-          for (const auto& barrier : op.buffers) {
-            const auto source_access = accessToken(barrier.source_access);
-            const auto destination_access =
-              accessToken(barrier.destination_access);
-            if (source_access.empty() || destination_access.empty()) {
-              return std::unexpected("invalid lifecycle barrier access");
-            }
-            text += std::format(
-              "        VkBufferMemoryBarrier{{.sType = "
-              "VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER, .pNext = nullptr, "
-              ".srcAccessMask = {0}, .dstAccessMask = {1}, "
-              ".srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, "
-              ".dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, "
-              ".buffer = buffers_[{2}]->get_handle(), "
-              ".offset = UINT64_C({3}), .size = UINT64_C({4})}},\n",
-              source_access,
-              destination_access,
-              barrier.buffer.value,
-              barrier.offset,
-              barrier.byte_size);
-          }
-          text += std::format(
-            "      }}}};\n"
-            "      vkCmdPipelineBarrier(commands_->get_command_buffer(), "
-            "{}, {}, 0, 0, nullptr, {}, barriers.data(), 0, nullptr);\n"
-            "    }}\n",
-            source,
-            destination,
-            op.buffers.size());
-          return text;
+          return emitBarrierOperation(op);
         } else if constexpr (std::is_same_v<T, vk::HostReleaseBufferOp>) {
           return std::format(
             "    require(buffers_[{0}]->destroy());\n"
@@ -235,12 +243,167 @@ std::expected<std::string, std::string> emitCreateOperations(
   return result;
 }
 
-}  // namespace
+std::expected<std::string, std::string> emitRunOperations(
+  const vk::VulkanHostProgram& program,
+  const std::map<std::uint32_t, std::size_t>& pipeline_slots) {
+  std::string result;
+  for (std::size_t index = 0; index < program.run_operations.size(); ++index) {
+    const auto* control =
+      std::get_if<vk::HostControlOp>(&program.run_operations[index]);
+    if (control != nullptr) {
+      const auto nextControlIs = [&](vk::HostControl action) {
+        if (index + 1 >= program.run_operations.size()) {
+          return false;
+        }
+        const auto* next =
+          std::get_if<vk::HostControlOp>(&program.run_operations[index + 1]);
+        return next != nullptr && next->action == action;
+      };
+      switch (control->action) {
+        case vk::HostControl::WaitFence:
+          result += "    require(commands_->wait(settings_.operation_hook));\n";
+          break;
+        case vk::HostControl::ResetFence:
+          if (!nextControlIs(vk::HostControl::ResetCommandPool)) {
+            return std::unexpected("run reset must reset fence and pool");
+          }
+          result += "    require(commands_->reset());\n";
+          ++index;
+          break;
+        case vk::HostControl::BeginCommands:
+          result += "    require(commands_->begin());\n";
+          break;
+        case vk::HostControl::EndCommands:
+          result += "    require(commands_->end());\n";
+          break;
+        case vk::HostControl::Submit:
+          if (!nextControlIs(vk::HostControl::WaitFence)) {
+            return std::unexpected("run submission must wait for fence");
+          }
+          result +=
+            "    "
+            "require(commands_->submit_and_wait(settings_.operation_hook));\n";
+          ++index;
+          break;
+        case vk::HostControl::ResetCommandPool:
+          return std::unexpected("run pool reset has no preceding fence reset");
+      }
+      continue;
+    }
+    auto emitted = std::visit(
+      [&](const auto& op) -> std::expected<std::string, std::string> {
+        using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, vk::HostUploadOp>) {
+          if (op.source != vk::HostUploadSource::Input ||
+              op.source_id >= program.inputs.size()) {
+            return std::unexpected("run upload has no public input");
+          }
+          return std::format(
+            "    std::memcpy(mappedBuffer({}, UINT64_C({})).data(), "
+            "inputs[{}].data(), UINT64_C({}));\n",
+            op.staging_buffer.value,
+            op.byte_size,
+            op.source_id,
+            op.byte_size);
+        } else if constexpr (std::is_same_v<T, vk::HostMappedSyncOp>) {
+          return std::format(
+            "    require(buffers_[{}]->{}(settings_.operation_hook));\n",
+            op.buffer.value,
+            op.action == vk::HostMappedSync::Flush ? "flush" : "invalidate");
+        } else if constexpr (std::is_same_v<T, vk::HostCopyOp>) {
+          return emitCopyOperation(op);
+        } else if constexpr (std::is_same_v<T, vk::HostBarrierOp>) {
+          return emitBarrierOperation(op);
+        } else if constexpr (std::is_same_v<T, vk::HostBindPipelineOp>) {
+          return std::format(
+            "    vkCmdBindPipeline(commands_->get_command_buffer(), "
+            "VK_PIPELINE_BIND_POINT_COMPUTE, "
+            "pipelines_[{}]->get_pipeline());\n",
+            pipeline_slots.at(op.pipeline.value));
+        } else if constexpr (std::is_same_v<T, vk::HostBindDescriptorsOp>) {
+          const auto slot = pipeline_slots.at(op.pipeline.value);
+          std::uint32_t set_count = 0;
+          for (const auto& binding : program.pipelines[slot].bindings) {
+            set_count = std::max(set_count, binding.set + 1);
+          }
+          if (op.set_count == 0 || op.first_set > set_count ||
+              op.set_count > set_count - op.first_set) {
+            return std::unexpected("run descriptor set range is invalid");
+          }
+          return std::format(
+            "    vkCmdBindDescriptorSets(commands_->get_command_buffer(), "
+            "VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_[{0}]->get_layout(), "
+            "{1}, {2}, pipelines_[{0}]->get_descriptor_sets().data() + {1}, "
+            "0, nullptr);\n",
+            slot,
+            op.first_set,
+            op.set_count);
+        } else if constexpr (std::is_same_v<T, vk::HostPushConstantsOp>) {
+          if (op.bytes.empty() ||
+              !std::in_range<std::uint32_t>(op.bytes.size())) {
+            return std::unexpected("run push constant size is invalid");
+          }
+          std::string text = std::format(
+            "    {{\n      alignas(std::uint32_t) constexpr "
+            "std::array<std::uint8_t, {}> push_constants{{{{\n",
+            op.bytes.size());
+          for (std::uint8_t byte : op.bytes) {
+            text += std::format("        UINT8_C(0x{:02x}),\n", byte);
+          }
+          text += std::format(
+            "      }}}};\n"
+            "      vkCmdPushConstants(commands_->get_command_buffer(), "
+            "pipelines_[{}]->get_layout(), VK_SHADER_STAGE_COMPUTE_BIT, "
+            "{}, {}, push_constants.data());\n    }}\n",
+            pipeline_slots.at(op.pipeline.value),
+            op.offset,
+            op.bytes.size());
+          return text;
+        } else if constexpr (std::is_same_v<T, vk::HostDispatchOp>) {
+          return std::format(
+            "    vkCmdDispatch(commands_->get_command_buffer(), {}, {}, {});\n",
+            op.groups[0],
+            op.groups[1],
+            op.groups[2]);
+        } else if constexpr (std::is_same_v<T, vk::HostPrepareOutputsOp>) {
+          if (op.buffers.size() != program.outputs.size()) {
+            return std::unexpected("run output preparation count is invalid");
+          }
+          std::string text = std::format(
+            "    const std::array<std::span<std::byte>, {}> readbacks{{{{\n",
+            op.buffers.size());
+          for (std::size_t port = 0; port < op.buffers.size(); ++port) {
+            text +=
+              std::format("      mappedBuffer({}, UINT64_C({})),\n",
+                          op.buffers[port].value,
+                          program.buffers[op.buffers[port].value].byte_size);
+          }
+          text += "    }};\n    checkValidation();\n";
+          return text;
+        } else if constexpr (std::is_same_v<T, vk::HostPublishOp>) {
+          return std::format(
+            "    std::memcpy(outputs[{0}].data(), readbacks[{0}].data(), "
+            "UINT64_C({1}));\n",
+            op.output_index,
+            op.byte_size);
+        } else {
+          return std::unexpected("non-run operation in run program");
+        }
+      },
+      program.run_operations[index]);
+    if (!emitted) {
+      return std::unexpected(emitted.error());
+    }
+    result += *emitted;
+  }
+  return result;
+}
 
-std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
+std::expected<std::string, std::string> generateVulkanImplementation(
   const vk::VulkanHostProgram& program,
   std::span<const vk::VulkanModelShader> shaders,
-  std::span<const vk::VulkanModelWeight> weights) {
+  std::span<const vk::VulkanModelWeight> weights,
+  bool fixed_run) {
   std::map<std::uint32_t, std::size_t> pipeline_slots;
   std::map<std::uint32_t, std::size_t> weight_slots;
   std::string constants;
@@ -349,6 +512,84 @@ std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
   if (!create_operations) {
     return std::unexpected(create_operations.error());
   }
+  std::string run_operations;
+  if (fixed_run) {
+    auto emitted = emitRunOperations(program, pipeline_slots);
+    if (!emitted) {
+      return std::unexpected(emitted.error());
+    }
+    run_operations = std::move(*emitted);
+  }
+  const std::string_view run_method = fixed_run ? R"run(
+            ncnn_vk_status run(
+              const std::array<std::span<const float>, @INPUT_COUNT@>& inputs,
+              const std::array<std::span<float>, @OUTPUT_COUNT@>& outputs,
+              char* diagnostic,
+              std::size_t capacity) {
+              const std::scoped_lock lock(run_mutex_);
+              if (unusable_status_ != NCNN_VK_STATUS_SUCCESS) {
+                return report(
+                  unusable_status_, diagnostic, capacity,
+                  "Vulkan context cannot run after a previous execution failure");
+              }
+              try {
+                @RUN_OPERATIONS@
+                return NCNN_VK_STATUS_SUCCESS;
+              } catch (const LifecycleFailure& failure) {
+                unusable_status_ = failure.get_error().status;
+                return report(unusable_status_, diagnostic, capacity,
+                              failure.get_error().diagnostic);
+              } catch (const std::bad_alloc&) {
+                unusable_status_ = NCNN_VK_STATUS_OUT_OF_MEMORY;
+                return report(unusable_status_, diagnostic, capacity,
+                              "host allocation failed during Vulkan run");
+              } catch (const std::exception& failure) {
+                unusable_status_ = NCNN_VK_STATUS_API_ERROR;
+                return report(unusable_status_, diagnostic, capacity,
+                              failure.what());
+              } catch (...) {
+                unusable_status_ = NCNN_VK_STATUS_API_ERROR;
+                return report(unusable_status_, diagnostic, capacity,
+                              "unknown Vulkan run failure");
+              }
+            }
+    )run"
+                                                : R"run(
+            ncnn_vk_status rejectRun(char* diagnostic, std::size_t capacity) {
+              const std::scoped_lock lock(run_mutex_);
+              return report(
+                NCNN_VK_STATUS_API_ERROR,
+                diagnostic,
+                capacity,
+                "private lifecycle prototype does not implement model run");
+            }
+    )run";
+  const std::string_view run_helpers = !fixed_run ? "" : R"run(
+            std::span<std::byte> mappedBuffer(std::size_t slot,
+                                               std::uint64_t bytes) {
+              if (slot >= buffers_.size() || !buffers_[slot] ||
+                  bytes > std::numeric_limits<std::size_t>::max()) {
+                throw LifecycleFailure(
+                  {.status = NCNN_VK_STATUS_API_ERROR,
+                   .diagnostic = "invalid Vulkan staging buffer extent"});
+              }
+              auto mapped = buffers_[slot]->get_mapped();
+              if (mapped.data() == nullptr || bytes > mapped.size()) {
+                throw LifecycleFailure(
+                  {.status = NCNN_VK_STATUS_API_ERROR,
+                   .diagnostic = "Vulkan staging buffer is not fully mapped"});
+              }
+              return mapped.first(static_cast<std::size_t>(bytes));
+            }
+
+            void checkValidation() const {
+              if (device_->get_validation_error_count() != 0) {
+                throw LifecycleFailure(
+                  {.status = NCNN_VK_STATUS_API_ERROR,
+                   .diagnostic = "Vulkan run validation failed"});
+              }
+            }
+    )run";
 
   // Raw templates keep the emitted implementation reviewable as C++, while
   // model-derived text is restricted to checked numeric values and identifiers.
@@ -478,7 +719,7 @@ std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
                 validation_error_count_(0),
                 destroyed_(false),
                 destroy_status_(NCNN_VK_STATUS_SUCCESS),
-                run_mutex_() {}
+                run_mutex_()@RUN_STATE_INITIALIZER@ {}
             @CONTEXT@ (const @CONTEXT@ &) = delete;
             @CONTEXT@ & operator=(const @CONTEXT@ &) = delete;
             ~@CONTEXT@ () {
@@ -514,14 +755,7 @@ std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
               }
             }
 
-            ncnn_vk_status rejectRun(char* diagnostic, std::size_t capacity) {
-              const std::scoped_lock lock(run_mutex_);
-              return report(
-                NCNN_VK_STATUS_API_ERROR,
-                diagnostic,
-                capacity,
-                "private lifecycle prototype does not implement model run");
-            }
+            @RUN_METHOD@
 
             ncnn_vk_status destroy() noexcept {
               if (destroyed_) {
@@ -584,6 +818,7 @@ std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
             }
 
            private:
+            @RUN_HELPERS@
             void prepareBuffer(std::size_t slot,
                                VkDeviceSize size,
                                VkBufferUsageFlags usage,
@@ -657,6 +892,7 @@ std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
             bool destroyed_;
             ncnn_vk_status destroy_status_;
             std::mutex run_mutex_;
+            @RUN_STATE@
           };
 
           namespace {
@@ -777,12 +1013,22 @@ std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
                             "element count does not match static shape");
             }
             try {
-              return context->rejectRun(diagnostic, diagnostic_capacity);
+              @RUN_INVOKE@
+            } catch (const std::bad_alloc&) {
+              return report(NCNN_VK_STATUS_OUT_OF_MEMORY,
+                            diagnostic,
+                            diagnostic_capacity,
+                            "host allocation failed before Vulkan run");
+            } catch (const std::exception& failure) {
+              return report(NCNN_VK_STATUS_API_ERROR,
+                            diagnostic,
+                            diagnostic_capacity,
+                            failure.what());
             } catch (...) {
               return report(NCNN_VK_STATUS_API_ERROR,
                             diagnostic,
                             diagnostic_capacity,
-                            "private lifecycle run rejected");
+                            "unknown failure before Vulkan run");
             }
           }
 
@@ -910,6 +1156,41 @@ std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
     }
   }
   arguments += ", char* diagnostic, std::size_t diagnostic_capacity";
+  std::string run_invoke =
+    "return context->rejectRun(diagnostic, diagnostic_capacity);";
+  if (fixed_run) {
+    run_invoke.clear();
+    for (const bool input : {true, false}) {
+      const auto& ports = input ? program.inputs : program.outputs;
+      const std::string_view name = input ? "inputs" : "outputs";
+      const std::string_view type = input ? "const float" : "float";
+      run_invoke += std::format("const std::array<std::span<{}>, {}> {}{{{{\n",
+                                type,
+                                ports.size(),
+                                name);
+      for (std::size_t index = 0; index < ports.size(); ++index) {
+        const auto parameter =
+          std::format("{}{}", input ? "input" : "output", index + 1);
+        run_invoke += std::format(
+          "  std::span<{0}>({1}, {1}_elements),\n", type, parameter);
+      }
+      run_invoke += "}};\n";
+    }
+    run_invoke +=
+      "return context->run(inputs, outputs, diagnostic, diagnostic_capacity);";
+  }
+  replaceToken(source, "@RUN_METHOD@", run_method);
+  replaceToken(source, "@RUN_HELPERS@", run_helpers);
+  replaceToken(source, "@RUN_OPERATIONS@", run_operations);
+  replaceToken(source, "@RUN_INVOKE@", run_invoke);
+  replaceToken(source, "@INPUT_COUNT@", std::to_string(program.inputs.size()));
+  replaceToken(
+    source, "@OUTPUT_COUNT@", std::to_string(program.outputs.size()));
+  replaceToken(source,
+               "@RUN_STATE_INITIALIZER@",
+               fixed_run ? ", unusable_status_(NCNN_VK_STATUS_SUCCESS)" : "");
+  replaceToken(
+    source, "@RUN_STATE@", fixed_run ? "ncnn_vk_status unusable_status_;" : "");
   replaceToken(source, "@HEADER@", program.model + "_vulkan.h");
   replaceToken(source, "@CONSTANTS@", constants);
   replaceToken(source, "@PREPARE_BUFFERS@", prepare);
@@ -937,6 +1218,22 @@ std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
     return std::unexpected("unresolved lifecycle code generation token");
   }
   return source;
+}
+
+}  // namespace
+
+std::expected<std::string, std::string> generateVulkanLifecycleImplementation(
+  const vk::VulkanHostProgram& program,
+  std::span<const vk::VulkanModelShader> shaders,
+  std::span<const vk::VulkanModelWeight> weights) {
+  return generateVulkanImplementation(program, shaders, weights, false);
+}
+
+std::expected<std::string, std::string> generateVulkanHostImplementation(
+  const vk::VulkanHostProgram& program,
+  std::span<const vk::VulkanModelShader> shaders,
+  std::span<const vk::VulkanModelWeight> weights) {
+  return generateVulkanImplementation(program, shaders, weights, true);
 }
 
 }  // namespace ncnn_compile

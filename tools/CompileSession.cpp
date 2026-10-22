@@ -21,6 +21,9 @@ int CompileSession::run(int argc, char** argv) {
   if (int status = emitABI()) {
     return status;
   }
+  if (capture_fixedrun_source) {
+    return publishOutputs();
+  }
   if (int status = linkAndAudit()) {
     return status;
   }

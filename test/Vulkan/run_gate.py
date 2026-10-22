@@ -141,6 +141,12 @@ def configuration(args, stage):
             args.profile, "nvidia;llvmpipe")
         command.extend(["-DNCNN_ENABLE_VULKAN_V0_TESTS=ON",
                         f"-DNCNN_VULKAN_TEST_DEVICES={devices}"])
+    if args.stage_id == "VA4" and args.fixedrun_legacy_root is not None:
+        legacy_root = args.fixedrun_legacy_root.resolve()
+        legacy_manifest = legacy_root / "legacy-reference.json"
+        if not legacy_manifest.is_file():
+            raise ValueError(f"VA4 fresh legacy reference manifest is missing: {legacy_manifest}")
+        command.append(f"-DNCNN_VULKAN_FIXEDRUN_LEGACY_ROOT={legacy_root}")
     if args.profile == "sanitize":
         required = (args.sanitizer_install, args.lit, args.openmp_dir,
                     args.toolchain_identity)
@@ -761,7 +767,8 @@ class Gate:
             "schema_version": 1, "kind": "ncnn.vulkan_gate",
             "profile": args.profile, "stage_id": args.stage_id,
             "host_execution_role": "legacy-product", "host_aot_candidate": False,
-            "candidate_role": "lifecycle-only" if args.stage_id == "VA3" else "none",
+            "candidate_role": ("lifecycle-only" if args.stage_id == "VA3" else
+                               "fixed-run" if args.stage_id == "VA4" else "none"),
             "source_dir": str(self.source),
             "source_fingerprint_algorithm": "sha256-git-files-v1",
             "source_fingerprint": None, "git_revision": None,
@@ -955,7 +962,7 @@ class Gate:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=PROFILES, required=True)
-    parser.add_argument("--stage-id", choices=("VA0", "VA1", "VA2", "VA3"), default="VA0")
+    parser.add_argument("--stage-id", choices=("VA0", "VA1", "VA2", "VA3", "VA4"), default="VA0")
     parser.add_argument("--source-dir", type=Path,
                         default=Path(__file__).resolve().parents[2])
     parser.add_argument("--build-root", type=Path, default=Path("/tmp"))
@@ -971,7 +978,9 @@ def parse_args(argv=None):
                         metavar="FIXTURE=JSON",
                         help="prior same-source hard-budget failure evidence")
     parser.add_argument("--legacy-baseline-stage", type=Path,
-                        help="frozen completed VA0 Release stage used as a separate legacy reference")
+                        help="frozen completed VA0 Release stage used for VA0/VA1 reference evidence")
+    parser.add_argument("--fixedrun-legacy-root", type=Path,
+                        help="fresh independently built pre-VA4 generic Vulkan compiler reference root")
     parser.add_argument("--archive", action="store_true")
     args = parser.parse_args(argv)
     if args.jobs <= 0 or args.tidy_jobs <= 0:

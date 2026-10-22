@@ -71,6 +71,23 @@ struct VulkanLifecycleSource final {
 [[nodiscard]] std::expected<VulkanLifecycleSource, std::string>
 makeVulkanLifecycleSource(const VulkanModelPackage& package);
 
+inline constexpr std::string_view kVulkanHostSourceCodegenVersion =
+  "ncnn-vulkan-fixed-run-codegen/v1";
+
+// Compiler-only fixed-run candidate. The public product path is independent.
+// Its codegen identity distinguishes executable run from lifecycle-only source;
+// generated-source/object/link hashes are separately recorded build evidence.
+struct VulkanHostSource final {
+  std::string header;
+  std::string source;
+  std::string host_program_identity;
+  std::string codegen_identity;
+  std::string codegen_version;
+};
+
+[[nodiscard]] std::expected<VulkanHostSource, std::string> makeVulkanHostSource(
+  const VulkanModelPackage& package);
+
 [[nodiscard]] std::expected<std::string, std::string>
 updateVulkanManifestDependencies(std::string_view manifest_json,
                                  std::vector<std::string> dependencies);

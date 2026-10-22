@@ -61,6 +61,12 @@ llvm::cl::opt<std::string> g_backend(
   llvm::cl::desc("Compilation backend: cpu or vulkan"),
   llvm::cl::init("cpu"),
   llvm::cl::cat(g_category));
+#ifdef NCNN_VULKAN_FIXEDRUN_CAPTURE_TOOL
+llvm::cl::opt<bool> g_capture_fixedrun_source("capture-vulkan-host-source",
+                                              llvm::cl::Hidden,
+                                              llvm::cl::init(false),
+                                              llvm::cl::cat(g_category));
+#endif
 
 llvm::cl::opt<std::string> g_input(llvm::cl::Positional,
                                    llvm::cl::desc("<input .param file>"),
@@ -1660,6 +1666,91 @@ validate_output_directory(const fs::path& output_dir,
   return OutputDirectoryState{.exists = true, .identity = identity};
 }
 
+#ifdef NCNN_VULKAN_FIXEDRUN_CAPTURE_TOOL
+[[nodiscard]] std::expected<OutputDirectoryState, std::string>
+validate_fixedrun_capture_directory(const fs::path& output_dir,
+                                    std::string_view model_name) {
+  std::error_code error;
+  const bool exists = fs::exists(output_dir, error);
+  if (error) {
+    return std::unexpected(
+      std::format("cannot inspect capture directory '{}': {}",
+                  output_dir.string(),
+                  error.message()));
+  }
+  if (!exists) {
+    return OutputDirectoryState{.exists = false, .identity = std::nullopt};
+  }
+  if (!fs::is_directory(output_dir, error)) {
+    if (error) {
+      return std::unexpected(
+        std::format("cannot inspect capture directory '{}': {}",
+                    output_dir.string(),
+                    error.message()));
+    }
+    return std::unexpected(std::format(
+      "fixed-run capture output is not a directory: {}", output_dir.string()));
+  }
+  llvm::sys::fs::UniqueID identity;
+  if (std::error_code identity_error =
+        llvm::sys::fs::getUniqueID(output_dir.string(), identity)) {
+    return std::unexpected(
+      std::format("cannot identify capture directory '{}': {}",
+                  output_dir.string(),
+                  identity_error.message()));
+  }
+  static const std::regex shader_name_pattern(R"(shader_[0-9]+\.spv)");
+  const std::set<std::string> exact_names{
+    "candidate_source.cpp",
+    "candidate_tosa.mlir",
+    "metadata.json",
+    "plan.json",
+    "host_program.json",
+    std::string(model_name) + "_vulkan.h"};
+  fs::directory_iterator iterator(output_dir, error);
+  if (error) {
+    return std::unexpected(
+      std::format("cannot iterate capture directory '{}': {}",
+                  output_dir.string(),
+                  error.message()));
+  }
+  const fs::directory_iterator end;
+  while (iterator != end) {
+    error.clear();
+    const bool is_symlink = iterator->is_symlink(error);
+    if (error) {
+      return std::unexpected(
+        std::format("cannot inspect capture entry '{}': {}",
+                    iterator->path().string(),
+                    error.message()));
+    }
+    error.clear();
+    const bool is_regular_file = iterator->is_regular_file(error);
+    if (error) {
+      return std::unexpected(
+        std::format("cannot inspect capture entry '{}': {}",
+                    iterator->path().string(),
+                    error.message()));
+    }
+    const std::string name = iterator->path().filename().string();
+    if (is_symlink || !is_regular_file ||
+        (!exact_names.contains(name) &&
+         !std::regex_match(name, shader_name_pattern))) {
+      return std::unexpected(std::format(
+        "fixed-run capture directory contains an unowned file: {}", name));
+    }
+    iterator.increment(error);
+    if (error) {
+      return std::unexpected(
+        std::format("cannot continue iterating capture directory '{}': {}",
+                    output_dir.string(),
+                    error.message()));
+    }
+  }
+  return OutputDirectoryState{.exists = true, .identity = identity};
+}
+#endif
+
 [[nodiscard]] std::expected<fs::path, std::string> unique_sibling_path(
   const fs::path& output_dir, std::string_view purpose, bool create) {
   fs::path parent = output_dir.parent_path();
@@ -2204,6 +2295,12 @@ int CompileSession::parseArguments(int argc, char** argv) {
     return fail("--backend must be either cpu or vulkan");
   }
   use_vulkan_backend = g_backend == "vulkan";
+#ifdef NCNN_VULKAN_FIXEDRUN_CAPTURE_TOOL
+  capture_fixedrun_source = g_capture_fixedrun_source;
+  if (capture_fixedrun_source && !use_vulkan_backend) {
+    return fail("fixed-run source capture requires the Vulkan backend");
+  }
+#endif
 #ifndef NCNN_HAS_VULKAN_PRODUCT
   if (use_vulkan_backend) {
     return fail(
@@ -2360,7 +2457,14 @@ int CompileSession::parseArguments(int argc, char** argv) {
       output_dir.filename() == "..") {
     return fail("output directory must name a non-root directory");
   }
+#ifdef NCNN_VULKAN_FIXEDRUN_CAPTURE_TOOL
+  output_exists =
+    capture_fixedrun_source
+      ? validate_fixedrun_capture_directory(output_dir, model_name)
+      : validate_output_directory(output_dir, model_name);
+#else
   output_exists = validate_output_directory(output_dir, model_name);
+#endif
   if (!output_exists) {
     return fail(output_exists.error());
   }
@@ -3578,6 +3682,101 @@ int CompileSession::emitABI() {
     if (!package) {
       return fail(package.error());
     }
+    if (capture_fixedrun_source) {
+      auto host_source = ncnn_compile::makeVulkanHostSource(*package);
+      if (!host_source) {
+        return fail(host_source.error());
+      }
+      fixedrun_capture_files.clear();
+      const auto write_capture =
+        [&](std::string_view name,
+            std::string_view contents) -> std::expected<void, std::string> {
+        const fs::path path = staging.path() / name;
+        if (auto result = write_file(path, contents); !result) {
+          return result;
+        }
+        fixedrun_capture_files.push_back(path);
+        return {};
+      };
+      const std::string source_name = "candidate_source.cpp";
+      const std::string header_name = model_name + "_vulkan.h";
+      if (auto result = write_capture(source_name, host_source->source);
+          !result) {
+        return fail(result.error());
+      }
+      if (auto result = write_capture(header_name, host_source->header);
+          !result) {
+        return fail(result.error());
+      }
+      if (auto result = write_capture("plan.json", package->plan_json);
+          !result) {
+        return fail(result.error());
+      }
+      auto tosa_contents = read_text(tosa_ir);
+      if (!tosa_contents) {
+        return fail(tosa_contents.error());
+      }
+      if (auto result = write_capture("candidate_tosa.mlir", *tosa_contents);
+          !result) {
+        return fail(result.error());
+      }
+      llvm::SHA256 tosa_hasher;
+      tosa_hasher.update(
+        llvm::StringRef(tosa_contents->data(), tosa_contents->size()));
+      const auto tosa_digest = tosa_hasher.final();
+      constexpr char hex_digits[] = "0123456789abcdef";
+      std::string tosa_sha256;
+      tosa_sha256.reserve(tosa_digest.size() * 2);
+      for (std::uint8_t byte : tosa_digest) {
+        tosa_sha256.push_back(hex_digits[byte >> 4]);
+        tosa_sha256.push_back(hex_digits[byte & 0x0f]);
+      }
+      auto host_program =
+        ncnn_mlir::vulkan::serializeVulkanHostProgram(package->host_program);
+      if (!host_program) {
+        return fail(host_program.error());
+      }
+      if (auto result = write_capture("host_program.json", *host_program);
+          !result) {
+        return fail(result.error());
+      }
+      for (std::size_t index = 0; index < package->shaders.size(); ++index) {
+        std::string shader_bytes;
+        shader_bytes.reserve(package->shaders[index].words.size() *
+                             sizeof(std::uint32_t));
+        for (std::uint32_t word : package->shaders[index].words) {
+          for (unsigned shift = 0; shift < 32; shift += 8) {
+            shader_bytes.push_back(static_cast<char>((word >> shift) & 0xff));
+          }
+        }
+        if (auto result =
+              write_capture(std::format("shader_{}.spv", index), shader_bytes);
+            !result) {
+          return fail(result.error());
+        }
+      }
+      llvm::json::Object metadata;
+      metadata["schema"] = "ncnn-vulkan-fixedrun-candidate/v1";
+      metadata["model"] = model_name;
+      metadata["host_program_identity"] = host_source->host_program_identity;
+      metadata["codegen_identity"] = host_source->codegen_identity;
+      metadata["codegen_version"] = host_source->codegen_version;
+      metadata["source"] = source_name;
+      metadata["header"] = header_name;
+      metadata["plan"] = "plan.json";
+      metadata["host_program"] = "host_program.json";
+      metadata["tosa_ir"] = "candidate_tosa.mlir";
+      metadata["tosa_ir_sha256"] = tosa_sha256;
+      metadata["shader_count"] =
+        static_cast<std::int64_t>(package->shaders.size());
+      const std::string metadata_json =
+        llvm::formatv("{0:2}\n", llvm::json::Value(std::move(metadata))).str();
+      if (auto result = write_capture("metadata.json", metadata_json);
+          !result) {
+        return fail(result.error());
+      }
+      return 0;
+    }
     if (auto result = write_file(execution_plan_path, package->plan_json);
         !result) {
       return fail(result.error());
@@ -4403,54 +4602,72 @@ int CompileSession::publishOutputs() {
     }
     return {};
   };
-  if (auto result = publish(header); !result) {
-    return fail(result.error());
-  }
-  if (auto result = publish(library); !result) {
-    return fail(result.error());
-  }
-#ifdef NCNN_HAS_VULKAN_PRODUCT
-  if (use_vulkan_backend) {
-    if (auto result = publish(manifest_path); !result) {
-      return fail(result.error());
+  if (capture_fixedrun_source) {
+    if (fixedrun_capture_files.empty()) {
+      return fail("fixed-run capture has no staged artifacts");
     }
-    if (auto result = publish(execution_plan_path); !result) {
-      return fail(result.error());
-    }
-  } else
-#endif
-  {
-    if (g_emit_manifest) {
-      if (auto result = publish(manifest_path); !result) {
-        return fail(result.error());
-      }
-    }
-    if (emit_execution_plan) {
-      if (auto result = publish(execution_plan_path); !result) {
-        return fail(result.error());
-      }
-    }
-  }
-  const std::vector<std::pair<std::string, fs::path>> stages = {
-    {"ncnn", ncnn_ir},
-    {"tosa", tosa_ir},
-    {"linalg", linalg_ir},
-    {"memref", memref_ir},
-    {"capi", capi_ir},
-    {"llvm", llvm_dialect_ir},
-    {"llvm-ir", llvm_ir},
-    {"object", object},
-    {"assembly", assembly}};
-  for (const auto& [stage, path] : stages) {
-    if (emitted.contains(stage)) {
+    for (const fs::path& path : fixedrun_capture_files) {
       if (auto result = publish(path); !result) {
         return fail(result.error());
       }
     }
+  } else {
+    if (auto result = publish(header); !result) {
+      return fail(result.error());
+    }
+    if (auto result = publish(library); !result) {
+      return fail(result.error());
+    }
+#ifdef NCNN_HAS_VULKAN_PRODUCT
+    if (use_vulkan_backend) {
+      if (auto result = publish(manifest_path); !result) {
+        return fail(result.error());
+      }
+      if (auto result = publish(execution_plan_path); !result) {
+        return fail(result.error());
+      }
+    } else
+#endif
+    {
+      if (g_emit_manifest) {
+        if (auto result = publish(manifest_path); !result) {
+          return fail(result.error());
+        }
+      }
+      if (emit_execution_plan) {
+        if (auto result = publish(execution_plan_path); !result) {
+          return fail(result.error());
+        }
+      }
+    }
+    const std::vector<std::pair<std::string, fs::path>> stages = {
+      {"ncnn", ncnn_ir},
+      {"tosa", tosa_ir},
+      {"linalg", linalg_ir},
+      {"memref", memref_ir},
+      {"capi", capi_ir},
+      {"llvm", llvm_dialect_ir},
+      {"llvm-ir", llvm_ir},
+      {"object", object},
+      {"assembly", assembly}};
+    for (const auto& [stage, path] : stages) {
+      if (emitted.contains(stage)) {
+        if (auto result = publish(path); !result) {
+          return fail(result.error());
+        }
+      }
+    }
   }
 
+#ifdef NCNN_VULKAN_FIXEDRUN_CAPTURE_TOOL
+  auto current_output_exists =
+    capture_fixedrun_source
+      ? validate_fixedrun_capture_directory(output_dir, model_name)
+      : validate_output_directory(output_dir, model_name);
+#else
   auto current_output_exists =
     validate_output_directory(output_dir, model_name);
+#endif
   if (!current_output_exists) {
     return fail(current_output_exists.error());
   }

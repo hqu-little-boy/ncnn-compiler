@@ -305,6 +305,143 @@ The qualifier covers VA3.1–VA3.4, not model execution or product release.
 full gates rather than promotion of a failed or superseded stage by rerunning
 only an individual test or audit.
 
+### Private fixed-run fixtures and VA4 qualification
+
+`makeVulkanLifecycleSource` remains the VA3 lifecycle-only fixture API: its
+valid `run` returns `API_ERROR`, does not write outputs, and its historical
+`candidate_execution="not_run"` evidence is unchanged. The separate
+compiler-only `makeVulkanHostSource` API emits a private fixed-run implementation
+from the verified package `run_operations`; it is not selected by the public CLI
+and does not change the product manifest's `generic-plan-runtime` identity.
+
+With product support and testing enabled, `ncnn-vulkan-fixedrun-capture` is a
+separate, non-installed test tool. It reuses the real `.param/.bin → Vulkan
+pipeline → verified package` path; it does not change the public `ncnn-compile`
+backend or publish a product model. Capture source/header/diagnostic files have
+their own checked ownership list and staged directory replacement. Candidate
+libraries and linker maps are outside that source-package directory, so a repeated
+or changed-input build does not bypass product ownership checks.
+`vulkan-fixedrun-capture-publish` is an offline, product-only regression for
+repeat publication, stale-shader replacement and publish-time ownership/directory
+identity revalidation; preparation or revalidation failure preserves prior capture
+bytes. Publication copies into an output-filesystem sibling before the existing
+directory replacement transaction, so system temporary storage need not share
+that filesystem.
+
+The native CMake targets cover seven small graphs:
+
+| Fixture key | Coverage |
+|---|---|
+| `relu` | ReLU and a partial final workgroup |
+| `add_relu` | Multiple inputs and dependent Add→ReLU dispatches |
+| `conv_relu` | Constant-weight/bias Conv→ReLU and create-scoped weight upload |
+| `add_split_relu` | Split aliases and two distinct public output buffers |
+| `split_concat` | Three-way Split followed by two channel concatenations |
+| `reshape` | Compiler-produced rank 3↔4 batch/layout reshape views around a nontrivial spatial convolution |
+| `transpose` | Materialized rank-three permutation and changed row-major indexing |
+
+The `reshape` case covers existing TOSA shape/view handling inside the CHW↔NHWC
+convolution scaffold, not a new public NCNN Reshape capability. Its captured TOSA
+IR binds the actual rank-three/rank-four reshapes to the same model package.
+Standalone NCNN Reshape imports that produce nonzero dense index-tensor metadata
+remain rejected by the graph backend; an explicit rejection regression preserves
+that boundary. See the [shape-metadata contract](../../docs/ncnn-vulkan-backend-contract.md#product-static-graph-support-matrix-v54).
+
+The model-specific run contains fixed command/barrier calls, not an interpreted
+operation table or generic runtime call. Its context serializes runs, checks
+pointers/counts before execution, poisons after execution failures, and publishes
+no outputs until every readback invalidate, mapping and validation check succeeds.
+`VulkanFixedRunCodegenTest.*` in `test/Unit/vulkan_host_codegen_test.cpp` checks
+emission and malformed-program rejection. `vulkan-fixedrun-fake-unit` exercises
+execution failures and output protection using the generated source and actual
+helper error paths. Its synthetic fixture and command recorder are not a GPU
+numerical oracle; fake copies/dispatches must not be reported as real transfers or
+kernel computation.
+
+`vulkan-fixedrun-independence` and the fixed-run evidence consumer check source
+structure and bind the actual source/object, compile and link commands, DSO,
+linker map, helper archive and ELF observations. Symbol-name scans or a stripped
+binary alone do not prove that a model executor is absent. Pure codegen, fake,
+independence and evidence self-tests remain registered with product support when
+device tests are disabled; they cannot replace a requested device run.
+
+Each selected ICD CTest (`vulkan-fixedrun-nvidia` and
+`vulkan-fixedrun-llvmpipe`) executes the candidate through a native C++
+`dlopen`/`dlsym` loader with validation enabled. A single fixture's DSO bytes must
+match across the two ICDs. The raw producer records deterministic repeats,
+different inputs, start-synchronized native threads on one context, A/B/A/B
+interleaving of independent contexts, per-call lifecycle statuses/counts, and
+per-output FP32 tensors. Native loader executables, actual argv/exit codes and
+stdout/stderr are hash-bound observations; Python does not `ctypes`-load a model
+DSO. Current candidate, CPU AOT and loader builds use the matching sanitizer
+configuration in SAN profiles. The separately frozen legacy comparator remains a
+Release reference, not an instrumented candidate.
+
+The independent consumer hashes and decodes the tensors, checks finiteness/shapes,
+and recomputes CPU AOT / legacy Vulkan / candidate versus scalar-golden errors at
+the unchanged `atol=1e-6, rtol=1e-6` budget. It does not trust reported pass
+flags or aggregate metrics. If no independent legacy root is configured, ordinary
+CTest can still test the private candidate against CPU/golden, but marks the
+legacy comparison unqualified; that result cannot qualify VA4.
+
+The VA4 gate requires a freshly built, clean pinned generic-runtime reference,
+passed as `--fixedrun-legacy-root`. Reproduce that comparator without a historical
+build directory or a developer-local setup script:
+
+```sh
+python3 compiler/test/Vulkan/build_fixedrun_legacy_reference.py \
+  --source-dir compiler --build-root /tmp --jobs 4
+```
+
+The tool clones the locally available pinned commit and local populated
+submodules into a unique directory; it performs no fetch, worktree operation,
+install or source-repository modification. LLVM/MLIR CMake directories can be
+supplied together with `--llvm-dir` and `--mlir-dir`. Every build uses
+`--parallel`. A successful build writes `legacy-reference.json` only after
+binding the clean source snapshot/inventory, real configure/build exit codes and
+logs, compile database, all compiled objects, linker inputs and tool hashes.
+Actual linker tracing records SDK archives outside the build tree and archives
+selected by `-l` or the compiler runtime; the inventory is not just a build-tree
+`*.a` scan. Link response files and missing or ambiguous trace paths fail closed.
+Failed directories are preserved and receive no qualified reference manifest;
+a published manifest cannot be overwritten. The default
+`vulkan-fixedrun-legacy-reference-tests` CTest checks these preparation rules
+without rebuilding an SDK. This reference tool build is not a completed VA4
+engineering gate or VA0 baseline profile.
+
+Set `LEGACY_ROOT` to the directory printed after `LEGACY REFERENCE READY`. The
+actual qualification uses separate fresh Release and matching static ASan+UBSan
+gates. The full build, three numerical targets, global `format_check`, global
+`tidy`, and unfiltered complete CTest remain required. All four VA4 IDs need
+Release/SAN evidence and verified archives:
+
+```sh
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA4 \
+  --profile release --build-root /tmp --jobs 4 --tidy-jobs 4 --archive \
+  --fixedrun-legacy-root "$LEGACY_ROOT"
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA4 \
+  --profile sanitize --build-root /tmp --jobs 1 --tidy-jobs 4 --archive \
+  --fixedrun-legacy-root "$LEGACY_ROOT" \
+  --sanitizer-install /path/to/static-asan-llvm/install \
+  --lit /path/to/llvm-source/llvm/utils/lit/lit.py \
+  --openmp-dir /path/to/libomp-only \
+  --toolchain-identity /path/to/toolchain-identity.json
+python3 compiler/test/Vulkan/check_release_evidence.py \
+  --stage /tmp/current-va4-release-stage \
+  --stage /tmp/current-va4-sanitize-stage \
+  --require-va4-fixedrun --output /tmp/va4-fixedrun-evidence.json
+```
+
+`va4_fixedrun_eligible` requires one Release and one matching-source SAN stage,
+complete executed VA4.1–VA4.4 inventory, real NVIDIA and llvmpipe records, an
+independently rebuilt old generic Vulkan comparison, recomputed raw numerical
+checks, and hash-revalidated archives. The separate legacy-root proof is not
+VA0 frozen-baseline qualification; it does not change `--require-release`,
+`--require-va0-baseline`, or earlier VA0–VA3 scopes. VA4 proves only a private
+small-graph fixed-run prototype. `host_aot_release_eligible` remains false until
+the separate product-link/dependency, full support-matrix, and product-switch
+requirements are completed.
+
 The `hardware` profile selects only NVIDIA; `release` selects both ICDs. The
 `sanitize` profile also selects both and requires a matching static PIC
 ASan+UBSan LLVM/MLIR installation, its actual Vulkan runner test tools and lit,

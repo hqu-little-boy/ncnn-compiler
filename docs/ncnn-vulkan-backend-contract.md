@@ -83,8 +83,9 @@ also orders earlier reads before a rewrite of a previously produced resource.
 Barrier offsets are zero and ranges cover the logical buffer, equivalent to the
 runtime's whole-buffer range; non-coherent flush/invalidate still use the whole
 actual mapped allocation. Fence completion, every output invalidate and mapping
-check precede any caller output publication. This is a compiler description, not
-a new inference execution path.
+check precede any caller output publication. The DTO itself is not an inference
+API: private source generation consumes it at compile time, never as a deployed
+operation interpreter.
 
 The manifest's `host_program` object is a compiler-only diagnostic with
 `host_program_usage = "compiler-only-diagnostic"` and a matching
@@ -113,8 +114,8 @@ general path and `ncnn-vulkan-product-v2` for the narrow ReLU factory. JSON
 whitespace/key order and incoming plan build/hash fields do not substitute for
 the checked host-program semantics. Changes to build identity and manifest/plan
 bytes are expected; shader bytes and the public header are not changed by host
-planning. The program diagnostic is not read by the deployed wrapper, which
-still parses its embedded execution plan and calls the generic runtime.
+planning. The program diagnostic is not read by the published product wrapper,
+which still parses its embedded execution plan and calls the generic runtime.
 
 ## Private model lifecycle code generation
 
@@ -166,12 +167,13 @@ can therefore block cleanup. Device loss permits ordered teardown and remains an
 error status. Bounded diagnostics, exception containment, null-on-create-failure,
 externally synchronized destruction and `destroy(NULL)` follow ABI v1.
 
-The private fixture keeps the same three lifecycle declarations and exports, but
-its `run` is deliberately non-computational: pointer and static-count errors are
-reported normally, and a valid invocation returns `API_ERROR` without modifying
-caller output. It does not call a legacy executor. These fixtures establish
-initialization/destruction behavior, not model inference or host-AOT product
-release eligibility.
+The `makeVulkanLifecycleSource` fixture keeps the same three lifecycle
+declarations and exports, but its `run` is deliberately non-computational:
+pointer and static-count errors are reported normally, and a valid invocation
+returns `API_ERROR` without modifying caller output. It does not call a legacy
+executor. The separate `makeVulkanHostSource` API below emits a private fixed-run
+candidate; the lifecycle-only fixtures and their `not_run` evidence remain
+unchanged. Neither private API selects or publishes a product DSO.
 
 `test/Vulkan/native/` builds unweighted and weighted fixture sources and headers,
 validates their SPIR-V with `spirv-val`, and compiles ordinary and
@@ -182,6 +184,63 @@ budget/synchronization controls are absent from the ordinary DSOs and do not add
 C ABI exports or CLI options. Private allocation-requirement accounting and fake
 copy/upload counters are not device-resident peak-memory measurements or public
 telemetry queries.
+
+## Private model fixed-run code generation
+
+`tools/VulkanProduct.hpp` also exposes the compiler-only
+`makeVulkanHostSource(const VulkanModelPackage&)` API. It verifies the same plan,
+shader interface, weights, public header, and `VulkanHostProgram` identity as the
+lifecycle generator. `VulkanHostSource` contains `header`, `source`,
+`host_program_identity`, `codegen_identity` and `codegen_version`. Public I/O must
+already have matching host/physical layouts; this API adds no implicit layout
+conversion. Like the lifecycle API, it requires nonempty static FP32 I/O,
+x86-64 Linux and Vulkan 1.1 / SPIR-V 1.0.
+
+`codegen_version` is `ncnn-vulkan-fixed-run-codegen/v1`. The lowercase SHA-256
+`codegen_identity` hashes four ordered tag/value fields: `domain` =
+`ncnn-vulkan-host-source-identity/v1`, `execution-mode` = `fixed-run`,
+`codegen-version` = the codegen version, and `host-program` = the verified program
+identity. Each field is encoded as `u64le(tag-byte-count)`, UTF-8 tag,
+`u64le(value-byte-count)`, UTF-8 value. This distinguishes executable fixed-run
+source from the lifecycle-only fixture without changing the public ABI or
+host-program schema. Generated source/object/DSO hashes and actual compiler/linker
+arguments separately bind the compiled artifact and its test/validation options;
+codegen identity alone is not a loaded-binary identity.
+
+The API is not selected by the public `ncnn-compile` command, installed, or
+published, and does not change the product manifest's `generic-plan-runtime` /
+`embedded-runtime-required` contract. A separate test-only capture executable
+reuses the real import/lowering/package boundary to produce fixture source.
+
+The emitter consumes the already verified `run_operations` sequence at compile
+time. Generated C++ contains direct input staging/flush, static barrier/copy,
+pipeline/descriptor binding, push-constant, dispatch and readback calls; it does
+not store an operation list, iterate a kernel schedule, or derive hazards from
+runtime read/write sets. Buffer and pipeline handles are looked up only through
+the per-context slots created at runtime. The command buffer is reset and
+re-recorded on each call; command pre-recording, asynchronous submission, multiple
+queues, synchronization minimization and resource aliasing are not part of this
+private path.
+
+The C ABI remains version 1. Invalid pointers/counts are rejected before device
+execution and do not poison the context. Runs on one context are guarded by its
+mutex. A failure after execution begins poisons that context, so it must be
+recreated. The generated path completes submission/fence wait, every output
+invalidate and mapping check, and validation-error check before copying any output
+to caller memory. Thus a reported execution/readback failure leaves all valid,
+non-overlapping caller output buffers unchanged. Destruction remains externally
+synchronized with all context uses.
+
+The native `fixedrun` fixtures use the real `.param/.bin` import, lowering, shader
+validation and package path. Their candidate DSOs link the emitted model object,
+the Vulkan device helper, Vulkan and platform libraries; the compiler-side
+capture tool is not linked into the DSOs. Two selected ICDs execute the same
+per-fixture candidate DSO bytes with validation enabled, alongside CPU AOT,
+the independently built legacy generic Vulkan compiler and scalar golden
+references. The evidence checker reopens the recorded FP32 tensors and
+recomputes tolerance results rather than trusting producer status or claimed
+metrics. These private small-graph results do not switch the public product path
+or establish full support-matrix/release eligibility.
 
 ## Product static-graph support matrix (V5.4)
 
@@ -282,9 +341,10 @@ buffer/memory/mapping, descriptor/pipeline and command/fence primitives. Its
 inputs are explicit sizes, Vulkan bindings/ranges, shader words and entry points;
 it accepts no execution plan, host program, model-resource ID or kernel schedule.
 The owner, not the helper, determines copy/barrier/bind/dispatch order and
-hazards. Published models use the generic `VulkanRuntimeContext` executor; the
-private lifecycle fixture emits its fixed weight-upload calls. The product
-manifest still says `generic-plan-runtime` and `embedded-runtime-required`.
+hazards. Published models use the generic `VulkanRuntimeContext` executor; private
+lifecycle fixtures emit fixed weight uploads, and private fixed-run fixtures emit
+their model-specific command sequences. The product manifest still says
+`generic-plan-runtime` and `embedded-runtime-required`.
 
 Buffer setup is two-phase. Preparation creates a `VkBuffer`, queries its actual
 memory requirements and selects a late-bound memory type, without allocating

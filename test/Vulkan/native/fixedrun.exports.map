@@ -1,0 +1,25 @@
+{
+  global:
+    relu_vk_create;
+    relu_vk_run;
+    relu_vk_destroy;
+    add_relu_vk_create;
+    add_relu_vk_run;
+    add_relu_vk_destroy;
+    conv_relu_vk_create;
+    conv_relu_vk_run;
+    conv_relu_vk_destroy;
+    add_split_relu_vk_create;
+    add_split_relu_vk_run;
+    add_split_relu_vk_destroy;
+    split_concat_vk_create;
+    split_concat_vk_run;
+    split_concat_vk_destroy;
+    reshape_vk_create;
+    reshape_vk_run;
+    reshape_vk_destroy;
+    transpose_vk_create;
+    transpose_vk_run;
+    transpose_vk_destroy;
+  local: *;
+};

@@ -188,6 +188,240 @@ if(TARGET NCNNVulkanProductSupport)
     endif()
 endif()
 
+if(TARGET NCNNVulkanProductSupport)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    find_program(NCNN_FIXEDRUN_SPIRV_VAL NAMES spirv-val REQUIRED)
+    get_filename_component(_ncnn_compiler_source_dir
+        "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+    set(_fixedrun_root "${CMAKE_BINARY_DIR}/test/Vulkan/fixedrun-candidates")
+    set(_fixedrun_empty_bin "${_fixedrun_root}/empty.bin")
+    file(MAKE_DIRECTORY "${_fixedrun_root}")
+    file(WRITE "${_fixedrun_empty_bin}" "")
+
+    set(_fixedrun_fixtures relu add_relu conv_relu add_split_relu
+        split_concat reshape transpose)
+    set(_fixedrun_params
+        relu "${_ncnn_compiler_source_dir}/test/Vulkan/relu.param"
+        add_relu "${_ncnn_compiler_source_dir}/test/Vulkan/add_relu.param"
+        conv_relu "${_ncnn_compiler_source_dir}/test/Vulkan/fixedrun_conv_relu.param"
+        add_split_relu "${_ncnn_compiler_source_dir}/test/Vulkan/add_split_relu.param"
+        split_concat "${_ncnn_compiler_source_dir}/test/Numerical/fixtures/split_three.param"
+        reshape "${_ncnn_compiler_source_dir}/test/Vulkan/fixedrun_reshape_conv.param"
+        transpose "${_ncnn_compiler_source_dir}/test/Vulkan/fixedrun_transpose.param")
+    set(_fixedrun_exports
+        "${_ncnn_compiler_source_dir}/test/Vulkan/native/fixedrun.exports.map")
+    function(ncnn_add_vulkan_fixedrun_fixture fixture param_path)
+        set(_fixture_dir "${_fixedrun_root}/${fixture}")
+        set(_source "${_fixture_dir}/candidate_source.cpp")
+        set(_header "${_fixture_dir}/${fixture}_vulkan.h")
+        set(_metadata "${_fixture_dir}/metadata.json")
+        set(_plan "${_fixture_dir}/plan.json")
+        set(_host_program "${_fixture_dir}/host_program.json")
+        set(_bin "${_fixedrun_empty_bin}")
+        if(fixture STREQUAL "conv_relu" OR fixture STREQUAL "reshape")
+            set(_bin "${_fixedrun_root}/${fixture}.bin")
+            add_custom_command(
+                OUTPUT "${_bin}"
+                COMMAND "${CMAKE_COMMAND}" -E make_directory "${_fixedrun_root}"
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${_ncnn_compiler_source_dir}/test/Vulkan/generate_fixedrun_conv_bin.py"
+                    "${_bin}"
+                DEPENDS
+                    "${_ncnn_compiler_source_dir}/test/Vulkan/generate_fixedrun_conv_bin.py"
+                VERBATIM)
+        endif()
+        add_custom_command(
+            OUTPUT "${_source}" "${_header}" "${_metadata}" "${_plan}"
+                "${_host_program}" "${_fixture_dir}/candidate_tosa.mlir"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${_fixture_dir}"
+            COMMAND $<TARGET_FILE:ncnn-vulkan-fixedrun-capture>
+                "${param_path}"
+                --bin "${_bin}"
+                --model-name "${fixture}"
+                --output-dir "${_fixture_dir}"
+                --backend=vulkan
+                --precision=f32
+                --driver $<TARGET_FILE:ncnn-mlir-driver>
+                --opt $<TARGET_FILE:ncnn-mlir-opt>
+                --translate ${MLIR_TRANSLATE}
+                --clang ${CLANG}
+                --nm ${LLVM_NM}
+                --readelf ${LLVM_READELF}
+                --llvm-as ${LLVM_AS}
+                --vulkan-mlir-opt ${NCNN_MLIR_OPT_EXECUTABLE}
+                --vulkan-spirv-val ${NCNN_SPIRV_VAL_EXECUTABLE}
+                --vulkan-spirv-dis ${NCNN_SPIRV_DIS_EXECUTABLE}
+                --vulkan-spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
+                --vulkan-host-cxx ${CMAKE_CXX_COMPILER}
+                --capture-vulkan-host-source
+            COMMAND "${NCNN_FIXEDRUN_SPIRV_VAL}"
+                --target-env vulkan1.1 "${_fixture_dir}/shader_0.spv"
+            DEPENDS ncnn-vulkan-fixedrun-capture
+                "${param_path}" "${_bin}"
+            VERBATIM)
+        set_source_files_properties("${_source}" PROPERTIES GENERATED TRUE)
+        add_custom_target(vulkan_fixedrun_fixture_${fixture}
+            DEPENDS "${_source}" "${_header}" "${_metadata}" "${_plan}"
+                "${_host_program}" "${_fixture_dir}/candidate_tosa.mlir")
+        set(_target "vulkan_fixedrun_${fixture}_validation")
+        set(_library_dir "${_fixedrun_root}/libraries/${fixture}")
+        set(_audit_dir "${_fixedrun_root}/audit/${fixture}")
+        file(MAKE_DIRECTORY "${_library_dir}" "${_audit_dir}")
+        set(_map "${_audit_dir}/${_target}.map")
+        add_library(${_target} SHARED "${_source}")
+        add_dependencies(${_target} vulkan_fixedrun_fixture_${fixture})
+        target_include_directories(${_target} PRIVATE
+            "${_fixture_dir}"
+            "${_ncnn_compiler_source_dir}/include")
+        target_link_libraries(${_target} PRIVATE
+            NCNNVulkanDeviceHelper Vulkan::Vulkan Threads::Threads)
+        target_compile_options(${_target} PRIVATE
+            ${NCNN_VULKAN_HOST_SANITIZER_ARGS})
+        target_link_options(${_target} PRIVATE
+            ${NCNN_VULKAN_HOST_SANITIZER_ARGS}
+            "-Wl,-z,defs"
+            "-Wl,--version-script=${_fixedrun_exports}"
+            "-Wl,-Map=${_map}"
+            "-Wl,--cref")
+        if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+            target_link_options(${_target} PRIVATE
+                "-Wl,-rpath,${NCNN_VULKAN_SANITIZER_RUNTIME_DIR}")
+        endif()
+        set_target_properties(${_target} PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY "${_library_dir}"
+            OUTPUT_NAME "${fixture}_fixedrun_validation"
+            LINK_DEPENDS "${_fixedrun_exports}")
+        target_compile_definitions(${_target} PRIVATE
+            NCNN_VULKAN_LIFECYCLE_VALIDATION=1)
+
+        string(TOUPPER "${fixture}" _fixture_upper)
+        set(_loader_target "vulkan_fixedrun_loader_${fixture}")
+        add_executable(${_loader_target} fixedrun_native_loader.cpp)
+        add_dependencies(${_loader_target} ${_target})
+        target_include_directories(${_loader_target} PRIVATE
+            "${_fixture_dir}"
+            "${_ncnn_compiler_source_dir}/include")
+        target_compile_definitions(${_loader_target} PRIVATE
+            NCNN_FIXEDRUN_MODEL=${fixture}
+            NCNN_FIXEDRUN_MODEL_UPPER=${_fixture_upper}
+            NCNN_FIXEDRUN_MODEL_HEADER="${fixture}_vulkan.h"
+            NCNN_FIXEDRUN_BACKEND_VULKAN=1)
+        target_compile_options(${_loader_target} PRIVATE
+            -Wall -Wextra -Wpedantic
+            ${NCNN_VULKAN_HOST_SANITIZER_ARGS})
+        target_link_libraries(${_loader_target} PRIVATE
+            ${CMAKE_DL_LIBS} Threads::Threads)
+        target_link_options(${_loader_target} PRIVATE
+            ${NCNN_VULKAN_HOST_SANITIZER_ARGS})
+        if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+            target_link_options(${_loader_target} PRIVATE
+                "-Wl,-rpath,${NCNN_VULKAN_SANITIZER_RUNTIME_DIR}")
+        endif()
+        set_property(GLOBAL APPEND PROPERTY NCNN_VULKAN_FIXEDRUN_TARGETS
+            "${_target}" "${_loader_target}")
+    endfunction()
+    foreach(_fixture IN LISTS _fixedrun_fixtures)
+        list(FIND _fixedrun_params "${_fixture}" _fixture_index)
+        math(EXPR _param_index "${_fixture_index} + 1")
+        list(GET _fixedrun_params ${_param_index} _fixture_param)
+        ncnn_add_vulkan_fixedrun_fixture("${_fixture}" "${_fixture_param}")
+    endforeach()
+    set(NCNN_VULKAN_FIXEDRUN_ROOT "${_fixedrun_root}" PARENT_SCOPE)
+    set(NCNN_VULKAN_FIXEDRUN_CAPTURE "$<TARGET_FILE:ncnn-vulkan-fixedrun-capture>"
+        PARENT_SCOPE)
+
+    set(_fixedrun_fake_dir "${CMAKE_BINARY_DIR}/test/Vulkan/fixedrun-fake")
+    set(_fixedrun_fake_source "${_fixedrun_fake_dir}/candidate_source.cpp")
+    set(_fixedrun_fake_header "${_fixedrun_fake_dir}/va4_fixedrun_vulkan.h")
+    set(_fixedrun_fake_plan "${_fixedrun_fake_dir}/plan.json")
+    set(_fixedrun_fake_program "${_fixedrun_fake_dir}/host_program.json")
+    set(_fixedrun_fake_expectations
+        "${_fixedrun_fake_dir}/fixture_expectations.hpp")
+    set(_fixedrun_fake_manifest "${_fixedrun_fake_dir}/package_manifest.json")
+    set(_fixedrun_fake_metadata "${_fixedrun_fake_dir}/metadata.json")
+    set(_fixedrun_fake_host_identity
+        "${_fixedrun_fake_dir}/host-program-identity.txt")
+    set(_fixedrun_fake_codegen_identity
+        "${_fixedrun_fake_dir}/codegen-identity.txt")
+    set(_fixedrun_fake_codegen_version
+        "${_fixedrun_fake_dir}/codegen-version.txt")
+    set(_fixedrun_fake_shader0 "${_fixedrun_fake_dir}/shader_0.spv")
+    set(_fixedrun_fake_shader1 "${_fixedrun_fake_dir}/shader_1.spv")
+    add_executable(vulkan_fixedrun_fake_fixture_emitter
+        fixedrun_fixture_emitter.cpp
+        "${_ncnn_compiler_source_dir}/test/Unit/vulkan_shader_interface_test.cpp")
+    target_include_directories(vulkan_fixedrun_fake_fixture_emitter PRIVATE
+        "${_ncnn_compiler_source_dir}/test/Unit"
+        "${_ncnn_compiler_source_dir}/tools")
+    target_compile_options(vulkan_fixedrun_fake_fixture_emitter PRIVATE
+        -Wall -Wextra -Wpedantic -fno-rtti)
+    target_compile_definitions(vulkan_fixedrun_fake_fixture_emitter PRIVATE
+        GTEST_HAS_CXXABI_H_=0)
+    target_link_libraries(vulkan_fixedrun_fake_fixture_emitter PRIVATE
+        NCNNVulkanProductSupport GTest::gtest)
+    add_custom_command(
+        OUTPUT "${_fixedrun_fake_source}" "${_fixedrun_fake_header}"
+            "${_fixedrun_fake_plan}" "${_fixedrun_fake_program}"
+            "${_fixedrun_fake_manifest}" "${_fixedrun_fake_metadata}"
+            "${_fixedrun_fake_expectations}" "${_fixedrun_fake_host_identity}"
+            "${_fixedrun_fake_codegen_identity}"
+            "${_fixedrun_fake_codegen_version}" "${_fixedrun_fake_shader0}"
+            "${_fixedrun_fake_shader1}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${_fixedrun_fake_dir}"
+        COMMAND $<TARGET_FILE:vulkan_fixedrun_fake_fixture_emitter>
+            --output-dir "${_fixedrun_fake_dir}"
+        COMMAND "${NCNN_FIXEDRUN_SPIRV_VAL}"
+            --target-env vulkan1.1 "${_fixedrun_fake_shader0}"
+        COMMAND "${NCNN_FIXEDRUN_SPIRV_VAL}"
+            --target-env vulkan1.1 "${_fixedrun_fake_shader1}"
+        DEPENDS vulkan_fixedrun_fake_fixture_emitter
+            fixedrun_fixture_emitter.cpp
+            "${_ncnn_compiler_source_dir}/test/Unit/vulkan_shader_interface_test.cpp"
+        VERBATIM)
+    set_source_files_properties("${_fixedrun_fake_source}" PROPERTIES
+        GENERATED TRUE)
+    add_custom_target(vulkan_fixedrun_fake_fixture
+        DEPENDS "${_fixedrun_fake_source}" "${_fixedrun_fake_header}"
+            "${_fixedrun_fake_plan}" "${_fixedrun_fake_program}"
+            "${_fixedrun_fake_manifest}" "${_fixedrun_fake_metadata}"
+            "${_fixedrun_fake_expectations}" "${_fixedrun_fake_host_identity}"
+            "${_fixedrun_fake_codegen_identity}"
+            "${_fixedrun_fake_codegen_version}" "${_fixedrun_fake_shader0}"
+            "${_fixedrun_fake_shader1}")
+    add_executable(vulkan_fixedrun_fake_unit_test
+        fixedrun_fake_unit_test.cpp
+        fakeVulkan/fake_vulkan.cpp)
+    add_dependencies(vulkan_fixedrun_fake_unit_test
+        vulkan_fixedrun_fake_fixture)
+    target_include_directories(vulkan_fixedrun_fake_unit_test PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}"
+        "${_fixedrun_fake_dir}"
+        "${_ncnn_compiler_source_dir}/include")
+    target_link_libraries(vulkan_fixedrun_fake_unit_test PRIVATE
+        NCNNVulkanDeviceHelper Vulkan::Vulkan Threads::Threads)
+    target_compile_definitions(vulkan_fixedrun_fake_unit_test PRIVATE
+        NCNN_VULKAN_LIFECYCLE_TEST=1)
+    target_compile_options(vulkan_fixedrun_fake_unit_test PRIVATE
+        -Wall -Wextra -Wpedantic)
+    ncnn_wrap_vulkan_for_test(vulkan_fixedrun_fake_unit_test)
+    target_link_options(vulkan_fixedrun_fake_unit_test PRIVATE
+        -Wl,--wrap=vkCmdDispatch
+        -Wl,--wrap=vkCmdBindPipeline
+        -Wl,--wrap=vkCmdBindDescriptorSets
+        -Wl,--wrap=vkCmdPushConstants
+        -Wl,--wrap=vkCmdCopyBuffer
+        -Wl,--wrap=vkCmdPipelineBarrier
+        -Wl,--wrap=vkGetInstanceProcAddr)
+    if(BUILD_TESTING)
+        add_test(NAME vulkan-fixedrun-fake-unit
+            COMMAND $<TARGET_FILE:vulkan_fixedrun_fake_unit_test>)
+        set_tests_properties(vulkan-fixedrun-fake-unit PROPERTIES
+            LABELS "vulkan;unit;offline;fixedrun"
+            RUN_SERIAL TRUE
+            TIMEOUT 120)
+    endif()
+endif()
+
 if(COMPILER_SANITIZERS)
     set(_ncnn_helper_sanitizers ${COMPILER_SANITIZERS})
     list(REMOVE_DUPLICATES _ncnn_helper_sanitizers)

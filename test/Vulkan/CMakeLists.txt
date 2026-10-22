@@ -1,6 +1,8 @@
 if (NCNN_ENABLE_VULKAN_PRODUCT OR NCNN_ENABLE_VULKAN_V0_TESTS)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+    set(NCNN_VULKAN_FIXEDRUN_LEGACY_ROOT "" CACHE PATH
+        "Fresh independently built pre-VA4 Vulkan compiler reference root")
     if(NOT NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT)
         set(NCNN_VULKAN_DEVICE_HELPER_STAGE_ROOT "${CMAKE_BINARY_DIR}")
     endif()
@@ -190,6 +192,84 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         RUN_SERIAL TRUE
         TIMEOUT 900)
 
+    add_test(NAME vulkan-fixedrun-capture-publish
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_fixedrun_capture_publish.py
+            --capture-tool ${NCNN_VULKAN_FIXEDRUN_CAPTURE}
+            --param ${CMAKE_CURRENT_SOURCE_DIR}/relu.param
+            --bin ${NCNN_VULKAN_FIXEDRUN_ROOT}/empty.bin
+            --driver $<TARGET_FILE:ncnn-mlir-driver>
+            --opt $<TARGET_FILE:ncnn-mlir-opt>
+            --translate ${MLIR_TRANSLATE}
+            --clang ${CLANG}
+            --nm ${LLVM_NM}
+            --readelf ${LLVM_READELF}
+            --llvm-as ${LLVM_AS}
+            --mlir-opt ${NCNN_MLIR_OPT_EXECUTABLE}
+            --spirv-val ${NCNN_SPIRV_VAL_EXECUTABLE}
+            --spirv-dis ${NCNN_SPIRV_DIS_EXECUTABLE}
+            --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
+            --host-cxx ${CMAKE_CXX_COMPILER}
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR}/fixedrun-capture-publish)
+    set_tests_properties(vulkan-fixedrun-capture-publish PROPERTIES
+        LABELS "vulkan;unit;offline;integration;fixedrun;capture"
+        RUN_SERIAL TRUE
+        TIMEOUT 900)
+    set(_ncnn_fixedrun_capture_publish_library_dirs)
+    if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+        list(APPEND _ncnn_fixedrun_capture_publish_library_dirs
+            ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+    endif()
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND _ncnn_fixedrun_capture_publish_library_dirs
+            ${LLVM_LIBRARY_DIR})
+    endif()
+    if(DEFINED ENV{LD_LIBRARY_PATH} AND NOT "$ENV{LD_LIBRARY_PATH}" STREQUAL "")
+        list(APPEND _ncnn_fixedrun_capture_publish_library_dirs
+            "$ENV{LD_LIBRARY_PATH}")
+    endif()
+    if(_ncnn_fixedrun_capture_publish_library_dirs)
+        string(JOIN ":" _ncnn_fixedrun_capture_publish_library_path
+            ${_ncnn_fixedrun_capture_publish_library_dirs})
+        set_tests_properties(vulkan-fixedrun-capture-publish PROPERTIES
+            ENVIRONMENT
+                "LD_LIBRARY_PATH=${_ncnn_fixedrun_capture_publish_library_path}")
+    endif()
+
+    set(NCNN_VULKAN_FIXEDRUN_EVIDENCE_ROOT
+        "${CMAKE_CURRENT_BINARY_DIR}/evidence/va4")
+    add_test(NAME vulkan-fixedrun-evidence-validation
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_fixedrun_evidence.py)
+    set_tests_properties(vulkan-fixedrun-evidence-validation PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;fixedrun;evidence"
+        TIMEOUT 120)
+
+    add_test(NAME vulkan-fixedrun-legacy-reference-tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_fixedrun_legacy_reference.py)
+    set_tests_properties(vulkan-fixedrun-legacy-reference-tests PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;fixedrun;legacy-reference"
+        TIMEOUT 120)
+
+    add_test(NAME vulkan-fixedrun-producer-tool-role-validation
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_run_fixedrun.py)
+    set_tests_properties(vulkan-fixedrun-producer-tool-role-validation PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;fixedrun;producer"
+        TIMEOUT 60)
+
+    add_test(NAME vulkan-fixedrun-independence
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/fixedrun_evidence.py
+            --mode independence
+            --stage-root ${CMAKE_BINARY_DIR}
+            --source-root ${PROJECT_SOURCE_DIR})
+    set_tests_properties(vulkan-fixedrun-independence PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;fixedrun;independence"
+        RUN_SERIAL TRUE
+        TIMEOUT 180)
+
     set(NCNN_VULKAN_LIFECYCLE_EVIDENCE_ROOT
         "${CMAKE_CURRENT_BINARY_DIR}/evidence/va3")
     add_test(NAME vulkan-lifecycle-evidence-tests
@@ -294,6 +374,72 @@ if(NCNN_ENABLE_VULKAN_V0_TESTS)
         endfunction()
         ncnn_add_vulkan_lifecycle_device_test(nvidia NVIDIA ${V0_NVIDIA_ICD})
         ncnn_add_vulkan_lifecycle_device_test(llvmpipe llvmpipe ${V0_LLVMPIPE_ICD})
+
+        if(COMPILER_SANITIZERS MATCHES "(^|;)(address|undefined)(;|$)")
+            set(_ncnn_fixedrun_profile sanitize)
+        else()
+            set(_ncnn_fixedrun_profile release)
+        endif()
+        function(ncnn_add_vulkan_fixedrun_device_test device device_match icd)
+            if(NOT device IN_LIST NCNN_VULKAN_TEST_DEVICES)
+                return()
+            endif()
+            if(device STREQUAL "nvidia")
+                set(device_layer hardware)
+            else()
+                set(device_layer software)
+            endif()
+            set(test_args
+                --output ${NCNN_VULKAN_FIXEDRUN_EVIDENCE_ROOT}/${device}/fixedrun-raw.json
+                --icd ${device}
+                --profile ${_ncnn_fixedrun_profile}
+                --icd-manifest ${icd}
+                --source-root ${PROJECT_SOURCE_DIR}
+                --build-root ${CMAKE_BINARY_DIR}
+                --candidate-root ${NCNN_VULKAN_FIXEDRUN_ROOT}
+                --capture-tool ${NCNN_VULKAN_FIXEDRUN_CAPTURE}
+                --compiler $<TARGET_FILE:ncnn-compile>
+                --loader-relu $<TARGET_FILE:vulkan_fixedrun_loader_relu>
+                --loader-add-relu $<TARGET_FILE:vulkan_fixedrun_loader_add_relu>
+                --loader-conv-relu $<TARGET_FILE:vulkan_fixedrun_loader_conv_relu>
+                --loader-add-split-relu $<TARGET_FILE:vulkan_fixedrun_loader_add_split_relu>
+                --loader-split-concat $<TARGET_FILE:vulkan_fixedrun_loader_split_concat>
+                --loader-reshape $<TARGET_FILE:vulkan_fixedrun_loader_reshape>
+                --loader-transpose $<TARGET_FILE:vulkan_fixedrun_loader_transpose>
+                --driver $<TARGET_FILE:ncnn-mlir-driver>
+                --opt $<TARGET_FILE:ncnn-mlir-opt>
+                --translate ${MLIR_TRANSLATE}
+                --clang ${CLANG}
+                --nm ${LLVM_NM}
+                --readelf ${LLVM_READELF}
+                --llvm-as ${LLVM_AS}
+                --mlir-opt ${NCNN_MLIR_OPT_EXECUTABLE}
+                --spirv-val ${NCNN_SPIRV_VAL_EXECUTABLE}
+                --spirv-dis ${NCNN_SPIRV_DIS_EXECUTABLE}
+                --spirv-extract $<TARGET_FILE:ncnn-vulkan-spirv-extract>
+                --host-cxx ${CMAKE_CXX_COMPILER}
+                --vulkaninfo ${VULKANINFO})
+            if(NCNN_VULKAN_FIXEDRUN_LEGACY_ROOT)
+                list(APPEND test_args --legacy-root ${NCNN_VULKAN_FIXEDRUN_LEGACY_ROOT})
+            endif()
+            foreach(_cxx_arg IN LISTS NCNN_VULKAN_HOST_SANITIZER_ARGS)
+                list(APPEND test_args --cxx-arg=${_cxx_arg})
+            endforeach()
+            if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+                list(APPEND test_args
+                    --sanitizer-runtime-dir ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+            endif()
+            add_test(NAME vulkan-fixedrun-${device}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/run_fixedrun.py
+                    ${test_args})
+            set_tests_properties(vulkan-fixedrun-${device} PROPERTIES
+                LABELS "vulkan;device;integration;fixedrun;${device_layer}"
+                RUN_SERIAL TRUE
+                TIMEOUT 900)
+        endfunction()
+        ncnn_add_vulkan_fixedrun_device_test(nvidia NVIDIA ${V0_NVIDIA_ICD})
+        ncnn_add_vulkan_fixedrun_device_test(llvmpipe llvmpipe ${V0_LLVMPIPE_ICD})
     endif()
 
 add_executable(vulkan_add_runner vulkan_add_runner.cpp)

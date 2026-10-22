@@ -149,9 +149,26 @@ class GateTests(unittest.TestCase):
         default = run_gate.parse_args(["--profile", "release"])
         planner = run_gate.parse_args(["--profile", "release", "--stage-id", "VA1"])
         lifecycle = run_gate.parse_args(["--profile", "release", "--stage-id", "VA3"])
+        fixed_run = run_gate.parse_args(["--profile", "release", "--stage-id", "VA4"])
         self.assertEqual("VA0", default.stage_id)
         self.assertEqual("VA1", planner.stage_id)
         self.assertEqual("VA3", lifecycle.stage_id)
+        self.assertEqual("VA4", fixed_run.stage_id)
+
+    def test_va4_allows_unqualified_technical_run_and_binds_optional_legacy_root(self):
+        args = run_gate.parse_args(["--profile", "release", "--stage-id", "VA4"])
+        command = run_gate.configuration(args, self.root)
+        self.assertFalse(any(item.startswith(
+            "-DNCNN_VULKAN_FIXEDRUN_LEGACY_ROOT=") for item in command))
+        legacy = self.root / "legacy"
+        legacy.mkdir()
+        (legacy / "legacy-reference.json").write_text("{}", encoding="utf-8")
+        args = run_gate.parse_args([
+            "--profile", "release", "--stage-id", "VA4",
+            "--fixedrun-legacy-root", str(legacy)])
+        command = run_gate.configuration(args, self.root)
+        self.assertIn(f"-DNCNN_VULKAN_FIXEDRUN_LEGACY_ROOT={legacy.resolve()}",
+                      command)
 
     def test_profiles_request_exact_devices(self):
         for profile, devices in (("release", "nvidia;llvmpipe"),
@@ -193,7 +210,7 @@ class GateTests(unittest.TestCase):
     def test_constructor_failure_preserves_gate_state_and_archive(self):
         source = self.root / "not-a-git-checkout"
         source.mkdir()
-        for stage_id in ("VA0", "VA1", "VA3"):
+        for stage_id in ("VA0", "VA1", "VA3", "VA4"):
             args = run_gate.parse_args([
                 "--profile", "release", "--stage-id", stage_id,
                 "--source-dir", str(source), "--build-root", str(self.root),
@@ -210,8 +227,9 @@ class GateTests(unittest.TestCase):
             self.assertEqual(stage_id.upper(), state["stage_id"])
             self.assertEqual("legacy-product", state["host_execution_role"])
             self.assertFalse(state["host_aot_candidate"])
-            self.assertEqual("lifecycle-only" if stage_id == "VA3" else "none",
-                             state["candidate_role"])
+            expected_role = {"VA3": "lifecycle-only", "VA4": "fixed-run"}.get(
+                stage_id, "none")
+            self.assertEqual(expected_role, state["candidate_role"])
             self.assertIn("gate setup failed", state["failure"])
             archive = stages[0].with_suffix(".evidence.tar.gz")
             self.assertTrue(archive.is_file())

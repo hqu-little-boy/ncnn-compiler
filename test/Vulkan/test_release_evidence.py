@@ -14,6 +14,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
@@ -1708,6 +1709,216 @@ class GateEnvelopeTests(unittest.TestCase):
         self.assertEqual({"VA3.1", "VA3.2", "VA3.3", "VA3.4"},
                          {identifier for identifier in report["id_index"]
                           if identifier.startswith("VA3.")})
+
+    def _make_va4_reports(self, *, unqualified=False, missing_test=None,
+                          fingerprints=("e" * 64, "e" * 64)):
+        required = set(audit._required_tests("release", "VA4"))
+        reports = []
+        for index, profile in enumerate(("release", "sanitize")):
+            names = set(required)
+            if profile == "release" and missing_test:
+                names.discard(missing_test)
+            family = {"status": "unqualified" if unqualified else "verified",
+                      "path": "test/Vulkan/evidence/va4/fixedrun-evidence.json",
+                      "candidate_dso_sha256": {fixture: str(index) * 64
+                                                for fixture in audit.fixedrun_evidence.FIXTURES}}
+            reports.append({
+                "stage": f"synthetic-va4-{profile}", "profile": profile,
+                "stage_id": "VA4", "source_fingerprint": fingerprints[index],
+                "scope_passed": True, "findings": [], "va0_findings": [],
+                "ctest": {"test_names": sorted(names), "skipped": [], "failed": []},
+                "families": {"va4_fixedrun": family}, "raw_artifacts": [],
+            })
+        gates = [{"stage": row["stage"], "stage_id": "VA4", "profile": row["profile"],
+                  "source_fingerprint": row["source_fingerprint"], "ctest": row["ctest"],
+                  "findings": [], "passed": True}
+                 for row in reports]
+        return reports, gates
+
+    def test_va4_real_stage_adapter_projects_evidence_into_composite_qualification(self):
+        now = datetime.now(timezone.utc)
+        fingerprint = "f" * 64
+        required = sorted(audit._required_tests("release", "VA4") |
+                          audit._va4_codegen_tests())
+        stage_dirs, gates = [], []
+        aggregates, aggregate_bytes = {}, {}
+        for profile in ("release", "sanitize"):
+            stage = self.root / f"adapter-{profile}"
+            stage.mkdir()
+            stage_dirs.append(stage)
+            (stage / "CMakeCache.txt").write_text("", encoding="utf-8")
+            evidence_path = stage / "test/Vulkan/evidence/va4/fixedrun-evidence.json"
+            aggregate = {
+                "schema": "ncnn-vulkan-fixedrun-aggregate/v1",
+                "stage_id": "VA4", "profile": profile,
+                "source_fingerprint": fingerprint,
+                "role": "fixed-run-candidate",
+                "devices": {device: {"legacy_reference": {"qualified": True}}
+                            for device in audit.fixedrun_evidence.DEVICES},
+                "legacy_reference_qualified": True,
+                "candidate_dso_sha256s": {
+                    fixture: hashlib.sha256(fixture.encode()).hexdigest()
+                    for fixture in audit.fixedrun_evidence.FIXTURES},
+                "claim_scope": "private seven-small-graph fixed-run prototype; public product remains generic-plan-runtime",
+                "host_aot_release_eligible": False,
+            }
+            evidence_path.parent.mkdir(parents=True)
+            evidence_path.write_text(json.dumps(aggregate, indent=2, sort_keys=True) + "\n",
+                                     encoding="utf-8")
+            aggregate_bytes[str(stage)] = evidence_path.read_bytes()
+            aggregates[str(stage)] = (aggregate, [])
+            log = stage / "ctest.log"
+            log.write_text("CTest completed\n", encoding="utf-8")
+            step = {"name": "ctest",
+                    "started_at": (now - timedelta(seconds=30)).isoformat(),
+                    "finished_at": (now + timedelta(seconds=30)).isoformat(),
+                    "log": "ctest.log", "sha256": audit.sha256_file(log)}
+            state = {"steps": [step]}
+            (stage / "gate-state.json").write_text(json.dumps(state), encoding="utf-8")
+            gates.append({"stage": str(stage), "stage_id": "VA4", "profile": profile,
+                          "source_fingerprint": fingerprint, "findings": [],
+                          "ctest": {"test_names": required, "skipped": [], "failed": []},
+                          "state": state})
+
+        gate_by_stage = {gate["stage"]: gate for gate in gates}
+        empty = {}
+        with patch.object(audit, "_audit_cpu_baseline", return_value=empty), \
+                patch.object(audit, "_audit_offline", return_value=empty), \
+                patch.object(audit, "_audit_v0", return_value=empty), \
+                patch.object(audit, "_audit_v2", return_value=empty), \
+                patch.object(audit, "_audit_v3", return_value=empty), \
+                patch.object(audit, "_audit_product", return_value=empty), \
+                patch.object(audit, "_audit_v5", return_value=empty), \
+                patch.object(audit, "_audit_va0_baseline", return_value=empty), \
+                patch.object(audit, "_audit_va1_stage", return_value=empty), \
+                patch.object(audit, "_audit_va2_helper", return_value=empty), \
+                patch.object(audit, "_audit_va3_lifecycle", return_value=empty), \
+                patch.object(audit.fixedrun_evidence, "aggregate_stage_evidence",
+                             side_effect=lambda stage, *args, **kwargs: aggregates[str(Path(stage))]) as aggregate_audit, \
+                patch.object(audit, "audit_stage_gate",
+                             side_effect=lambda stage, **kwargs: gate_by_stage[str(Path(stage))]), \
+                patch.object(audit, "audit_stage_archive", return_value={
+                    "status": "verified", "findings": []}) as archive_audit:
+            report = audit.build_report(stage_dirs, require_va4_fixedrun=True)
+            for stage in stage_dirs:
+                (stage / "test/Vulkan/evidence/va4/fixedrun-evidence.json").unlink()
+            absent_report = audit.build_report(stage_dirs, require_va4_fixedrun=True)
+
+            def omit_fixture_aggregate(stage, *args, **kwargs):
+                aggregate, raw = aggregates[str(Path(stage))]
+                malformed = dict(aggregate)
+                malformed["candidate_dso_sha256s"] = dict(
+                    aggregate["candidate_dso_sha256s"])
+                malformed["candidate_dso_sha256s"].pop("transpose")
+                output = Path(stage) / "test/Vulkan/evidence/va4/fixedrun-evidence.json"
+                output.write_text(json.dumps(malformed, indent=2, sort_keys=True) + "\n",
+                                  encoding="utf-8")
+                return malformed, raw
+
+            aggregate_audit.side_effect = omit_fixture_aggregate
+            missing_fixture_report = audit.build_report(stage_dirs, require_va4_fixedrun=True)
+            for stage in stage_dirs:
+                (stage / "test/Vulkan/evidence/va4/fixedrun-evidence.json").write_bytes(
+                    aggregate_bytes[str(stage)])
+
+            def reject_malformed_aggregate(*args, **kwargs):
+                raise audit.fixedrun_evidence.EvidenceError("malformed raw VA4 evidence")
+
+            aggregate_audit.side_effect = reject_malformed_aggregate
+            malformed_report = audit.build_report(stage_dirs, require_va4_fixedrun=True)
+
+        self.assertTrue(report["va4_fixedrun_eligible"],
+                        (report["va4_fixedrun_blockers"],
+                         report["va4_fixedrun_stages"],
+                         [stage["findings"] for stage in report["stages"]],
+                         {key: value["status"] for key, value in report["id_index"].items()
+                          if key.startswith("VA4.")}))
+        self.assertEqual([], report["va4_fixedrun_blockers"])
+        self.assertFalse(report["host_aot_release_eligible"])
+        self.assertFalse(absent_report["va4_fixedrun_eligible"])
+        self.assertFalse(missing_fixture_report["va4_fixedrun_eligible"])
+        self.assertFalse(malformed_report["va4_fixedrun_eligible"])
+        self.assertTrue(all(call.kwargs["required"] for call in archive_audit.call_args_list))
+        for row in report["va4_fixedrun_stages"]:
+            self.assertEqual("verified", row["evidence"]["status"])
+            self.assertTrue(row["evidence"]["legacy_reference_qualified"])
+            self.assertEqual(fingerprint, row["evidence"]["source_fingerprint"])
+            self.assertEqual(set(audit.fixedrun_evidence.FIXTURES),
+                             set(row["evidence"]["candidate_dso_sha256"]))
+            self.assertFalse(row["evidence"]["host_aot_release_eligible"])
+
+    def test_va4_same_source_release_san_pair_qualifies_private_only(self):
+        reports, gates = self._make_va4_reports()
+        with patch.object(audit, "audit_stage_gate", side_effect=gates), \
+                patch.object(audit, "audit_stage_evidence", side_effect=reports), \
+                patch.object(audit, "audit_stage_archive", return_value={
+                    "status": "verified", "findings": []}) as archive_audit:
+            report = audit.build_report([Path("release"), Path("sanitize")],
+                                        require_va4_fixedrun=True)
+        self.assertTrue(report["va4_fixedrun_eligible"])
+        self.assertTrue(report["va4_fixedrun_required"])
+        self.assertEqual([], report["va4_fixedrun_blockers"])
+        self.assertFalse(report["host_aot_release_eligible"])
+        self.assertTrue(all(call.kwargs["required"] for call in archive_audit.call_args_list))
+        self.assertEqual({"VA4.1", "VA4.2", "VA4.3", "VA4.4"},
+                         {identifier for identifier in report["id_index"]
+                          if identifier.startswith("VA4.")})
+        self.assertTrue(all(report["id_index"][identifier]["status"] == "passed"
+                            for identifier in ("VA4.1", "VA4.2", "VA4.3", "VA4.4")))
+        self.assertIn("vulkan-fixedrun-capture-publish",
+                      audit.VA4_STEP_TESTS["VA4.1"])
+
+    def test_va4_fixedrun_requires_all_seven_fixtures_and_independent_legacy(self):
+        required = set(audit._required_tests("release", "VA4"))
+        device_test = next(iter(audit.VA4_DEVICE_TESTS))
+        for reports, gates in (
+                self._make_va4_reports(missing_test=device_test),
+                self._make_va4_reports(
+                    missing_test="vulkan-fixedrun-capture-publish"),
+                self._make_va4_reports(unqualified=True),
+                self._make_va4_reports(fingerprints=("a" * 64, "b" * 64))):
+            with self.subTest(stage_states=[row["families"]["va4_fixedrun"]["status"]
+                                            for row in reports]), \
+                    patch.object(audit, "audit_stage_gate", side_effect=gates), \
+                    patch.object(audit, "audit_stage_evidence", side_effect=reports), \
+                    patch.object(audit, "audit_stage_archive", return_value={
+                        "status": "verified", "findings": []}):
+                report = audit.build_report([Path("release"), Path("sanitize")],
+                                            require_va4_fixedrun=True)
+            self.assertFalse(report["va4_fixedrun_eligible"])
+            self.assertIn("va4-fixedrun-eligibility-required",
+                          {item["code"] for item in report["blocking_findings"]})
+            self.assertTrue(any(row["status"] == "blocked"
+                                for key, row in report["id_index"].items()
+                                if key.startswith("VA4.")))
+        failed_reports, failed_gates = self._make_va4_reports()
+        failed_reports[0]["scope_passed"] = False
+        with patch.object(audit, "audit_stage_gate", side_effect=failed_gates), \
+                patch.object(audit, "audit_stage_evidence", side_effect=failed_reports), \
+                patch.object(audit, "audit_stage_archive", return_value={
+                    "status": "verified", "findings": []}):
+            failed_gate_report = audit.build_report(
+                [Path("release"), Path("sanitize")], require_va4_fixedrun=True)
+        self.assertFalse(failed_gate_report["va4_fixedrun_eligible"])
+
+        archive_reports, archive_gates = self._make_va4_reports()
+        with patch.object(audit, "audit_stage_gate", side_effect=archive_gates), \
+                patch.object(audit, "audit_stage_evidence", side_effect=archive_reports), \
+                patch.object(audit, "audit_stage_archive", return_value={
+                    "status": "invalid", "findings": [{"code": "archive-integrity-invalid"}]}):
+            bad_archive_report = audit.build_report(
+                [Path("release"), Path("sanitize")], require_va4_fixedrun=True)
+        self.assertFalse(bad_archive_report["va4_fixedrun_eligible"])
+
+        self.assertIn("vulkan-fixedrun-capture-publish", required)
+        self.assertIn("vulkan-fixedrun-legacy-reference-tests", required)
+        legacy_coverage = audit._va0_migration_coverage({
+            "profile": "release", "ctest": {"test_names": sorted(required)}})
+        self.assertFalse(any(identifier.startswith("VA4.")
+                             for identifier in legacy_coverage["current_ids"]))
+        self.assertFalse({"vulkan-fixedrun-capture-publish",
+                          "vulkan-fixedrun-fake-unit", *audit.VA4_DEVICE_TESTS} &
+                         set(legacy_coverage["current_test_cases"]))
 
     def test_va3_id_catalog_matches_scope_and_codegen_test_coverage(self):
         codegen = audit._va3_codegen_tests()
