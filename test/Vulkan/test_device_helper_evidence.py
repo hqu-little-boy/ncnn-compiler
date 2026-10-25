@@ -167,6 +167,22 @@ class DeviceHelperEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(audit.EvidenceError, "Release or sanitize"):
             audit._read_stage_identity(self.stage)
 
+    def test_va5_published_identity_is_technical_and_not_va2_qualified(self) -> None:
+        for profile in ("release", "sanitize"):
+            with self.subTest(profile=profile):
+                self.write_stage_state(stage_id="VA5", profile=profile,
+                                       candidate_role="none")
+                state, actual_profile, fingerprint, bound = audit._read_stage_identity(self.stage)
+                self.assertTrue(bound)
+                self.assertEqual("VA5", state["stage_id"])
+                self.assertEqual("a" * 64, fingerprint)
+                with self.assertRaisesRegex(audit.EvidenceError, "bound VA2"):
+                    audit._require_va2_matrix_stage(state, actual_profile, bound)
+        self.write_stage_state(stage_id="VA5", profile="offline",
+                               candidate_role="none")
+        with self.assertRaisesRegex(audit.EvidenceError, "Release or sanitize"):
+            audit._read_stage_identity(self.stage)
+
     def test_unbound_development_identity_is_unqualified_not_fabricated_va2(self) -> None:
         (self.stage / "gate-state.json").unlink()
         self.write("CMakeCache.txt",

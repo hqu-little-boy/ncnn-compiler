@@ -189,17 +189,19 @@ def _read_stage_identity(stage: Path) -> tuple[dict | None, str, str | None, boo
     if not _has_schema(state) or state.get("kind") != "ncnn.vulkan_gate":
         raise EvidenceError("gate-state schema/kind is invalid")
     stage_id = state.get("stage_id") if "stage_id" in state else "VA0"
-    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4"}:
+    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5"}:
         raise EvidenceError("gate-state has an invalid stage_id")
     profile = state.get("profile")
     if profile not in {"release", "sanitize", "offline", "software", "hardware"}:
         raise EvidenceError("gate-state has an invalid profile")
-    if stage_id in {"VA2", "VA3", "VA4"} and profile not in {"release", "sanitize"}:
+    if stage_id in {"VA2", "VA3", "VA4", "VA5"} and profile not in {"release", "sanitize"}:
         raise EvidenceError(f"{stage_id} helper evidence requires Release or sanitize profile")
     if stage_id == "VA3" and state.get("candidate_role") != "lifecycle-only":
         raise EvidenceError("VA3 helper evidence requires the lifecycle-only candidate role")
     if stage_id == "VA4" and state.get("candidate_role") != "fixed-run":
         raise EvidenceError("VA4 technical identity requires the fixed-run candidate role")
+    # VA5 publishes the fixed-run product; the helper identity stays technical
+    # and never grants the old full VA2 matrix qualification (see below).
     source_fingerprint = state.get("source_fingerprint")
     if not isinstance(source_fingerprint, str) or not SHA256_RE.fullmatch(source_fingerprint):
         raise EvidenceError("gate-state source fingerprint is invalid")

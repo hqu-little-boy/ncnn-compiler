@@ -169,9 +169,12 @@ class HostProgramEvidenceTests(unittest.TestCase):
         manifest = {"model": "fixture", "abi_version": 1,
                     "schema_version": 1, "kind": "ncnn.vulkan_model_manifest",
                     "host_program_usage": "compiler-only-diagnostic",
-                    "host_implementation": "generic-plan-runtime",
-                    "host_codegen_version": 1,
-                    "execution_plan_usage": "embedded-runtime-required",
+                    "host_implementation": "model-fixed-run",
+                    "host_codegen_version": 2,
+                    "host_source_codegen_version":
+                        "ncnn-vulkan-fixed-run-codegen/v1",
+                    "host_codegen_identity": "f" * 64,
+                    "execution_plan_usage": "build-evidence-only",
                     "weights": [{"resource_id": 3, "sha256": weight_hash,
                                  "size_bytes": len(weight)}],
                     "shaders": [
@@ -280,6 +283,25 @@ class HostProgramEvidenceTests(unittest.TestCase):
         manifest["host_aot_candidate"] = True
         with self.assertRaises(evidence.EvidenceError):
             evidence.validate_host_program(manifest, plan, shader_bytes=shaders,
+                                           weight_bytes=weights)
+
+    def test_legacy_generic_runtime_contract_is_rejected(self):
+        manifest, plan, shaders, weights = self.fixture()
+        manifest["host_implementation"] = "generic-plan-runtime"
+        manifest["host_codegen_version"] = 1
+        manifest["execution_plan_usage"] = "embedded-runtime-required"
+        with self.assertRaisesRegex(evidence.EvidenceError, "model-fixed-run"):
+            evidence.validate_host_program(manifest, plan,
+                                           shader_bytes=shaders,
+                                           weight_bytes=weights)
+
+    def test_missing_codegen_identity_is_rejected(self):
+        manifest, plan, shaders, weights = self.fixture()
+        del manifest["host_codegen_identity"]
+        with self.assertRaisesRegex(evidence.EvidenceError,
+                                    "host_codegen_identity"):
+            evidence.validate_host_program(manifest, plan,
+                                           shader_bytes=shaders,
                                            weight_bytes=weights)
 
     def test_shader_hash_dispatch_hazard_resource_and_identity_mutations_fail(self):

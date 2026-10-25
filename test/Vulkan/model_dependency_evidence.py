@@ -779,8 +779,9 @@ def collect_elf_dependency_closure(
     target = Path(library).resolve()
     if not target.is_file():
         raise EvidenceError(f"ELF library is missing: {target}")
-    if llvm_mode not in {"shared", "static", "not_measured"}:
-        raise ValueError("llvm_mode must be shared, static, or not_measured")
+    if llvm_mode not in {"shared", "static", "forbidden", "not_measured"}:
+        raise ValueError(
+            "llvm_mode must be shared, static, forbidden, or not_measured")
     tools = _read_elf_tools(tool_paths)
     expected = ([Path(item).resolve() for item in expected_generated_dsos]
                 if expected_generated_dsos is not None else [target])
@@ -867,6 +868,8 @@ def collect_elf_dependency_closure(
         "absence_claim": ("presence_observed" if has_compiler_dso else
                           "not_measured" if llvm_mode == "not_measured" else
                           "none_observed_in_runtime_closure_static_archives_not_measured"),
+        "blockers": (["shared_llvm_dso_in_runtime_closure"]
+                     if llvm_mode == "forbidden" and has_compiler_dso else []),
     }
     evidence = {
         "schema_version": SCHEMA_VERSION, "kind": ELF_EVIDENCE_KIND,
@@ -948,6 +951,19 @@ def validate_elf_dependency_closure(
     llvm = data.get("llvm", {})
     if llvm.get("static_archive_status") != "not_measured":
         raise EvidenceError("generic ELF API must not claim static archive coverage")
+    if llvm.get("mode") == "forbidden":
+        if llvm.get("blockers") != []:
+            raise EvidenceError(
+                "generic ELF forbidden-LLVM closure observed compiler DSOs: "
+                f"{llvm.get('blockers')}")
+        if llvm.get("status") not in {"measured_no_presence_observed",
+                                      "measured_presence",
+                                      "forbidden_presence_observed"}:
+            raise EvidenceError(
+                "generic ELF forbidden-LLVM closure has an unexpected status")
+        if llvm["status"] != "measured_no_presence_observed":
+            raise EvidenceError(
+                "generic ELF forbidden-LLVM closure observed compiler DSOs")
     if llvm.get("status") == "measured_presence" and llvm.get("absence_claim") != "presence_observed":
         raise EvidenceError("generic ELF LLVM presence/absence fields contradict")
     if llvm.get("status") == "not_measured" and llvm.get("absence_claim") != "not_measured":
@@ -974,8 +990,9 @@ def collect_model_dependencies(library: os.PathLike[str] | str,
     target = Path(library).resolve()
     if not target.is_file():
         raise EvidenceError(f"model library is missing: {target}")
-    if llvm_mode not in {"shared", "static", "not_measured"}:
-        raise ValueError("llvm_mode must be shared, static, or not_measured")
+    if llvm_mode not in {"shared", "static", "forbidden", "not_measured"}:
+        raise ValueError(
+            "llvm_mode must be shared, static, forbidden, or not_measured")
     tools = _read_tool_paths(tool_paths)
     records = _link_records(root)
     if not records:
@@ -1124,7 +1141,9 @@ def collect_model_dependencies(library: os.PathLike[str] | str,
     if not closure:
         raise EvidenceError("runtime dependency closure is empty")
 
-    # Report possible legacy LLVM blockers explicitly; this is not a gate.
+    # Report possible legacy LLVM blockers explicitly.  Under the VA5
+    # `forbidden` mode any observed compiler member or DSO is a hard blocker
+    # that consumers must reject; legacy modes only report.
     compiler_members = [
         origin["member"]
         for archive in archive_inputs
@@ -1177,7 +1196,11 @@ def collect_model_dependencies(library: os.PathLike[str] | str,
                               "not_measured" if llvm_mode == "not_measured" else
                               "none_observed_in_captured_link_and_runtime_closure"),
             "legacy_blockers": llvm_legacy_blockers,
-            "policy": "reported_only_legacy_blocker_not_rejected",
+            "blockers": (list(llvm_legacy_blockers)
+                         if llvm_mode == "forbidden" else []),
+            "policy": ("forbidden_model_side_compiler_dependency"
+                       if llvm_mode == "forbidden" else
+                       "reported_only_legacy_blocker_not_rejected"),
         },
         "tool_paths": tools,
     }
@@ -1496,7 +1519,27 @@ def validate_dependency_evidence(evidence: os.PathLike[str] | str,
            for item in closure):
         raise EvidenceError("runtime closure has an unknown classification")
     llvm = data.get("llvm", {})
-    if llvm.get("policy") != "reported_only_legacy_blocker_not_rejected" or not llvm.get("status") or not llvm.get("absence_claim"):
+    if llvm.get("mode") == "forbidden":
+        if llvm.get("policy") != "forbidden_model_side_compiler_dependency" or \
+                not llvm.get("status") or not llvm.get("absence_claim") or \
+                not isinstance(llvm.get("legacy_blockers"), list) or \
+                not isinstance(llvm.get("blockers"), list):
+            raise EvidenceError(
+                "forbidden-LLVM evidence lacks a complete status/policy claim")
+        if llvm["status"] in {"measured_presence", "forbidden_presence_observed"}:
+            raise EvidenceError(
+                "forbidden-LLVM mode observed compiler artifacts in the "
+                "captured link or runtime closure")
+        if llvm["status"] == "not_measured":
+            raise EvidenceError(
+                "forbidden-LLVM mode must measure the captured closure, not "
+                "report an unmeasured status")
+        if llvm["legacy_blockers"]:
+            raise EvidenceError(
+                "forbidden-LLVM evidence recorded legacy blockers: "
+                f"{llvm['legacy_blockers']}")
+    elif llvm.get("policy") != "reported_only_legacy_blocker_not_rejected" or \
+            not llvm.get("status") or not llvm.get("absence_claim"):
         raise EvidenceError("LLVM status/policy is missing; no absence claim is permitted")
     if llvm["status"] == "measured_presence" and llvm["absence_claim"] != "presence_observed":
         raise EvidenceError("LLVM presence and absence claim contradict each other")

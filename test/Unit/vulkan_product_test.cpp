@@ -439,38 +439,32 @@ TEST(VulkanProductTest, SemanticPlanIdentityIgnoresJsonFormattingAndKeyOrder) {
 TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
   const auto expect_host_contract = [](const VulkanModelPackage& package) {
     EXPECT_NE(package.manifest_json.find(
-                "\"host_implementation\": \"generic-plan-runtime\""),
+                "\"host_implementation\": \"model-fixed-run\""),
               std::string::npos);
-    EXPECT_NE(package.manifest_json.find("\"host_codegen_version\": 1"),
+    EXPECT_NE(package.manifest_json.find("\"host_codegen_version\": 2"),
               std::string::npos);
-    EXPECT_NE(package.manifest_json.find(
-                "\"execution_plan_usage\": \"embedded-runtime-required\""),
+    EXPECT_NE(
+      package.manifest_json.find("\"host_source_codegen_version\": "
+                                 "\"ncnn-vulkan-fixed-run-codegen/v1\""),
+      std::string::npos);
+    EXPECT_NE(package.manifest_json.find("\"execution_plan_usage\": "
+                                         "\"build-evidence-only\""),
               std::string::npos);
-    EXPECT_NE(package.manifest_json.find(
-                "\"host_program_usage\": \"compiler-only-diagnostic\""),
+    EXPECT_NE(package.manifest_json.find("\"host_program_usage\": "
+                                         "\"compiler-only-diagnostic\""),
               std::string::npos);
     EXPECT_NE(package.manifest_json.find("\"host_program\": {"),
               std::string::npos);
     EXPECT_NE(package.manifest_json.find("\"host_program_identity\": \"" +
                                          package.host_program.identity + "\""),
               std::string::npos);
-    EXPECT_NE(
-      package.manifest_json.find("\"schema\": \"ncnn-vulkan-host-program/v1\""),
-      std::string::npos);
     EXPECT_NE(package.manifest_json.find(
-                "\"codegen_version\": \"ncnn-vulkan-host-codegen/v1\""),
+                "\"dependencies\": [\n    \"libvulkan.so.1\"\n  ]"),
               std::string::npos);
-    EXPECT_NE(
-      package.manifest_json.find("\"helper_contract\": "
-                                 "\"ncnn-vulkan-device-helper-contract/v1\""),
-      std::string::npos);
-    EXPECT_NE(package.manifest_json.find(
-                "\"synchronization_version\": \"ncnn-vulkan-host-sync/v1\""),
+    EXPECT_EQ(package.manifest_json.find("libLLVM"), std::string::npos);
+    EXPECT_EQ(package.manifest_json.find(
+                "\"host_implementation\": \"generic-plan-runtime\""),
               std::string::npos);
-    EXPECT_NE(
-      package.manifest_json.find("\"canonical_encoding\": "
-                                 "\"length-prefixed-canonical-json/v1\""),
-      std::string::npos);
     EXPECT_EQ(package.manifest_json.find("\"host_implementation\": \"aot\""),
               std::string::npos);
     EXPECT_EQ(package.host_program.schema,
@@ -504,6 +498,19 @@ TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
                                                "bin");
   ASSERT_TRUE(legacy_changed) << legacy_changed.error();
   expect_host_contract(*legacy_first);
+  const auto codegen_identity_for = [](std::string_view host_program_identity) {
+    std::string identity;
+    appendIdentityField(
+      identity, "domain", "ncnn-vulkan-host-source-identity/v1");
+    appendIdentityField(identity, "execution-mode", "fixed-run");
+    appendIdentityField(identity,
+                        "codegen-version",
+                        std::string(kVulkanHostSourceCodegenVersion));
+    appendIdentityField(identity, "host-program", host_program_identity);
+    return sha256Hex(identity);
+  };
+  const std::string legacy_codegen_identity =
+    codegen_identity_for(legacy_first->host_program.identity);
   std::string legacy_identity_input;
   appendIdentityField(
     legacy_identity_input, "domain", "ncnn-vulkan-product-v2");
@@ -518,8 +525,13 @@ TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
     semanticPlanSHA256(
       legacy_source_plan, "host_contract", "x86_64-linux-gnu"));
   appendIdentityField(
-    legacy_identity_input, "host_implementation", "generic-plan-runtime");
-  appendIdentityField(legacy_identity_input, "host_codegen_version", "1");
+    legacy_identity_input, "host_implementation", "model-fixed-run");
+  appendIdentityField(legacy_identity_input, "host_codegen_version", "2");
+  appendIdentityField(legacy_identity_input,
+                      "host_source_codegen_version",
+                      std::string(kVulkanHostSourceCodegenVersion));
+  appendIdentityField(
+    legacy_identity_input, "host_codegen_identity", legacy_codegen_identity);
   appendIdentityField(legacy_identity_input,
                       "host_program_identity",
                       legacy_first->host_program.identity);
@@ -574,6 +586,8 @@ TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
                                                 "bin");
   ASSERT_TRUE(general_changed) << general_changed.error();
   expect_host_contract(*general_first);
+  const std::string general_codegen_identity =
+    codegen_identity_for(general_first->host_program.identity);
   std::string general_identity_input;
   appendIdentityField(
     general_identity_input, "domain", "ncnn-vulkan-static-plan-v3");
@@ -589,8 +603,13 @@ TEST(VulkanProductTest, ManifestPinsHostExecutionContractAndIdentityDomain) {
     semanticPlanSHA256(
       general_plan, "host_contract_general", "x86_64-linux-gnu"));
   appendIdentityField(
-    general_identity_input, "host_implementation", "generic-plan-runtime");
-  appendIdentityField(general_identity_input, "host_codegen_version", "1");
+    general_identity_input, "host_implementation", "model-fixed-run");
+  appendIdentityField(general_identity_input, "host_codegen_version", "2");
+  appendIdentityField(general_identity_input,
+                      "host_source_codegen_version",
+                      std::string(kVulkanHostSourceCodegenVersion));
+  appendIdentityField(
+    general_identity_input, "host_codegen_identity", general_codegen_identity);
   appendIdentityField(general_identity_input,
                       "host_program_identity",
                       general_first->host_program.identity);
@@ -955,7 +974,33 @@ TEST(VulkanProductTest, WeightSidecarIsStrictAndVerifiesEveryPayload) {
   EXPECT_TRUE(ncnn_mlir::vulkan::verifyVulkanModelWeights(plan, *decoded));
 
   EXPECT_FALSE(ncnn_mlir::vulkan::deserializeVulkanModelWeights("not-json"));
-  EXPECT_FALSE(updateVulkanManifestDependencies("{", {}));
+  EXPECT_FALSE(updateVulkanManifestDependencies("{", {}, {}));
+  // VA5 dependency classification: platform list rejects compiler runtimes,
+  // sanitizer list stays disjoint, and the manifest carries both fields.
+  const std::string manifest_with_deps = R"({
+  "kind": "ncnn.vulkan_model_manifest",
+  "schema_version": 1
+})";
+  auto classified = updateVulkanManifestDependencies(
+    manifest_with_deps,
+    {"libvulkan.so.1", "libc.so.6", "libvulkan.so.1"},
+    {"libclang_rt.asan-x86_64.so"});
+  ASSERT_TRUE(classified) << classified.error();
+  EXPECT_NE(classified->find("\"dependencies\": [\n"
+                             "    \"libc.so.6\",\n"
+                             "    \"libvulkan.so.1\"\n"
+                             "  ]"),
+            std::string::npos);
+  EXPECT_NE(classified->find("\"sanitizer_dependencies\": [\n"
+                             "    \"libclang_rt.asan-x86_64.so\"\n"
+                             "  ]"),
+            std::string::npos);
+  EXPECT_FALSE(updateVulkanManifestDependencies(
+    manifest_with_deps, {"libLLVM.so.21.1", "libc.so.6"}, {}));
+  EXPECT_FALSE(updateVulkanManifestDependencies(
+    manifest_with_deps, {"libc.so.6"}, {"libLLVM.so.21.1"}));
+  EXPECT_FALSE(updateVulkanManifestDependencies(
+    manifest_with_deps, {"libc.so.6"}, {"libc.so.6"}));
   std::array<VulkanModelWeight, 2> duplicate = {weight, weight};
   EXPECT_FALSE(ncnn_mlir::vulkan::serializeVulkanModelWeights(duplicate));
   EXPECT_FALSE(ncnn_mlir::vulkan::deserializeVulkanModelWeights(

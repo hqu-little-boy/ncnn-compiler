@@ -188,11 +188,10 @@ class CompileSession final {
   std::string vulkan_spirv_dis_path;
   std::string vulkan_spirv_extract_path;
   std::string vulkan_host_cxx_path;
-  fs::path vulkan_runtime_archive;
+  // VA5 deployment link inputs: only the device helper archive; the generic
+  // runtime/plan archives and compiler LLVM paths never enter the model link.
   fs::path vulkan_device_helper_archive;
-  fs::path vulkan_plan_archive;
   fs::path vulkan_include_dir;
-  fs::path vulkan_llvm_library_dir;
   llvm::SmallString<256> staging_storage;
   ScopedDirectory staging;
   std::string effective_target_triple;

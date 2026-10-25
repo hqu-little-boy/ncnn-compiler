@@ -88,8 +88,15 @@ struct VulkanHostSource final {
 [[nodiscard]] std::expected<VulkanHostSource, std::string> makeVulkanHostSource(
   const VulkanModelPackage& package);
 
+// Rewrites the post-link dependency contract of a generated Vulkan manifest.
+// Platform libraries land in "dependencies"; instrumented-profile runtime
+// libraries land separately in "sanitizer_dependencies" and never extend the
+// Release allowlist. Compiler runtimes (LLVM/MLIR/Clang) are rejected here so
+// the deployment boundary cannot silently reappear through the manifest.
 [[nodiscard]] std::expected<std::string, std::string>
-updateVulkanManifestDependencies(std::string_view manifest_json,
-                                 std::vector<std::string> dependencies);
+updateVulkanManifestDependencies(
+  std::string_view manifest_json,
+  std::vector<std::string> dependencies,
+  std::vector<std::string> sanitizer_dependencies);
 
 }  // namespace ncnn_compile

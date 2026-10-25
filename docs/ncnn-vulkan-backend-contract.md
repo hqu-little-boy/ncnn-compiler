@@ -123,8 +123,9 @@ which still parses its embedded execution plan and calls the generic runtime.
 `makeVulkanLifecycleSource(const VulkanModelPackage&)` fixture API. It returns a
 model header, generated C++ source and the verified host-program identity. It is
 not selected by `ncnn-compile`, installed as a model runtime, or passed through
-the product publication transaction. The public Vulkan product path and its
-`generic-plan-runtime` manifest retain their existing meaning.
+the product publication transaction. The public Vulkan product path switched to
+the fixed-run host source in VA5; this lifecycle-only generator remains the
+run-rejecting fixture contract.
 
 The generator rechecks the execution plan, shader/interface and weight bytes,
 host-program identity and source agreement, and the exact generated public
@@ -207,10 +208,10 @@ host-program schema. Generated source/object/DSO hashes and actual compiler/link
 arguments separately bind the compiled artifact and its test/validation options;
 codegen identity alone is not a loaded-binary identity.
 
-The API is not selected by the public `ncnn-compile` command, installed, or
-published, and does not change the product manifest's `generic-plan-runtime` /
-`embedded-runtime-required` contract. A separate test-only capture executable
-reuses the real import/lowering/package boundary to produce fixture source.
+The API was used by the private fixed-run candidate path until VA5 switched the
+public `ncnn-compile` product to the same fixed-run host source; the test-only
+capture executable still reuses the real import/lowering/package boundary to
+produce fixture source.
 
 The emitter consumes the already verified `run_operations` sequence at compile
 time. Generated C++ contains direct input staging/flush, static barrier/copy,
@@ -304,11 +305,11 @@ The CTest `vulkan-abi-c-contract` remains a generated-header-shaped C contract t
 
 The product path accepts complete static FP32 graphs in the explicitly checked graph subset above, including multiple compute operations, fan-out/Concat, constant-weight convolution, and multiple public inputs/outputs. It does not select kernels by model name. Ranks 1–4, positive static extents, layouts, operation parameters and the 128 MiB per-buffer limit are checked. Unsupported operations, dynamic extents, non-FP32 data and unsupported layouts fail before publication. There is no CPU fallback.
 
-The driver embeds the validated SPIR-V and deterministic schema-v1 plan in the model DSO. The manifest records plan/shader/`.param`/`.bin` hashes, host/device targets, public I/O and the DSO's actual direct `DT_NEEDED` entries. It also pins `host_implementation = "generic-plan-runtime"`, integer `host_codegen_version = 1`, and `execution_plan_usage = "embedded-runtime-required"`; host implementation and codegen version participate in both package build-identity domains. Public ABI version 1 is unchanged.
+The driver embeds the validated SPIR-V and deterministic schema-v1 plan in the model DSO. The manifest records plan/shader/`.param`/`.bin` hashes, host/device targets, public I/O and the DSO's actual direct `DT_NEEDED` entries. Since VA5 it also pins `host_implementation = "model-fixed-run"`, integer `host_codegen_version = 2`, `host_source_codegen_version = "ncnn-vulkan-fixed-run-codegen/v1"`, and `execution_plan_usage = "build-evidence-only"`; the host implementation, both codegen versions and the derived `host_codegen_identity` participate in both package build-identity domains. Public ABI version 1 is unchanged.
 
-The generated wrapper parses its embedded plan during `create` and calls the generic `VulkanRuntimeContext` executor during `run`; the runtime walks the fixed kernel schedule and derives inter-kernel hazards from recorded reads/writes. The graph schedule and shader/resource decisions are already compiler-produced, but the host executor has not been compiled away. `NCNNVulkanRuntime`, `NCNNVulkanDeviceHelper` and `NCNNVulkanPlanSupport` are static archives included in the model library; static linkage or stripped symbols do not establish absence of an executor or LLVM code. The plan/payload/hash path uses LLVM Support. Shared-LLVM builds require their actual LLVM SONAME, while static-LLVM builds can carry LLVM code without a direct LLVM `DT_NEEDED` entry. The manifest's `dependencies` array is not a transitive-closure or static-source audit. The published plan/manifest are build diagnostics; the model reads its embedded plan rather than a deployment-side plan file.
+Since VA5 the published wrapper is the model-dedicated fixed-run code generated from the verified host program: `create`/`run`/`destroy` never parse an execution plan, walk a kernel schedule, derive hazards from read/write sets, or call a generic `run(plan)` entry. The model library links only the generated host object, the `NCNNVulkanDeviceHelper` static archive, and platform/Vulkan libraries; the former `NCNNVulkanRuntime` and `NCNNVulkanPlanSupport` link inputs and all LLVM arguments were removed from the deployment link line regardless of how the compiler itself links LLVM. The link is audited in three layers at publication: dynamic (`DT_NEEDED` allowlist without any `libLLVM`/`libclang`/`libMLIR` entry; sanitizer runtimes recorded separately in `sanitizer_dependencies`), static (captured link argv/map with runtime/plan/LLVM inputs rejected), and structural (`nm -D --undefined-only` rejecting `llvm`/`mlir`-namespace, `ExecutionPlan`, `HostProgram`, and `VulkanRuntimeContext` references). The `.plan.json` sidecar is build evidence only and is not read at runtime.
 
-The library exports only `<model>_vk_create`, `<model>_vk_run`, and `<model>_vk_destroy`; it has no RPATH/RUNPATH to the compiler build or temporary directory. Deployment must provide the manifest-listed runtime dependencies (including the configured LLVM shared runtime when that build links LLVM dynamically), Vulkan loader, system C/C++ runtime, and a compatible Vulkan 1.1 device/ICD. The generated header includes the public `ModelABI.h` contract installed by the compiler package.
+The library exports only `<model>_vk_create`, `<model>_vk_run`, and `<model>_vk_destroy`; it has no RPATH/RUNPATH to the compiler build or temporary directory. Deployment must provide the manifest-listed platform dependencies, Vulkan loader, system C/C++ runtime, and a compatible Vulkan 1.1 device/ICD; the model DSO needs no compiler-provided runtime library. The generated header includes the public `ModelABI.h` contract installed by the compiler package. A failed compile/link/audit/verify leaves previously published artifacts untouched via the staged sibling-directory replacement and rollback transaction.
 
 `--verify-execution` makes `ncnn-compile` `dlopen` the staged DSO, create a Vulkan context, run deterministic buffers for every static input, check all output values are finite, and destroy the context before publication. This is a general ABI/lifecycle smoke check, not a mathematical oracle; independent CPU/Vulkan/golden tests establish numerical correctness. Device absence or runtime failure fails the requested verification and leaves prior output intact. Without this flag, compilation performs offline SPIR-V validation but does not require creating a device. CPU and Vulkan default output directories are separate; explicit output directories containing artifacts from the other backend are refused. Publication of header, plan, manifest and library uses the same staged sibling-directory replacement and rollback transaction as CPU artifacts.
 
@@ -341,10 +342,11 @@ buffer/memory/mapping, descriptor/pipeline and command/fence primitives. Its
 inputs are explicit sizes, Vulkan bindings/ranges, shader words and entry points;
 it accepts no execution plan, host program, model-resource ID or kernel schedule.
 The owner, not the helper, determines copy/barrier/bind/dispatch order and
-hazards. Published models use the generic `VulkanRuntimeContext` executor; private
-lifecycle fixtures emit fixed weight uploads, and private fixed-run fixtures emit
-their model-specific command sequences. The product manifest still says
-`generic-plan-runtime` and `embedded-runtime-required`.
+hazards. Since VA5 published models emit their model-specific fixed command
+sequences through the fixed-run host source; private lifecycle fixtures emit
+fixed weight uploads, and private fixed-run fixtures keep their model-specific
+command sequences. The product manifest says `model-fixed-run` and
+`build-evidence-only`.
 
 Buffer setup is two-phase. Preparation creates a `VkBuffer`, queries its actual
 memory requirements and selects a late-bound memory type, without allocating

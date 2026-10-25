@@ -756,15 +756,16 @@ def collect_build_dependencies(args, model, cpu_dir, vk_dir, model_root, env):
              "ar": shutil.which("ar") or "ar"}
     sanitizers = ([args.sanitizer_runtime_dir]
                   if args.sanitizer_runtime_dir else [])
-    llvm_mode = "shared" if args.shared_llvm else "static"
+    # VA5: the deployment boundary forbids model-side LLVM regardless of how
+    # the compiler itself links LLVM; the audit records the absence claim.
     dependency_evidence.collect_model_dependencies(
         vk_dir / f"lib{model}_vulkan.so", link_root,
         tool_paths=tools, sanitizer_dirs=sanitizers,
-        llvm_mode=llvm_mode, runtime_env=env)
+        llvm_mode="forbidden", runtime_env=env)
     dependency_evidence.collect_elf_dependency_closure(
         cpu_dir / f"lib{model}.so", cpu_root,
         tool_paths={"readelf": args.readelf, "ldd": tools["ldd"]},
-        sanitizer_dirs=sanitizers, llvm_mode=llvm_mode, runtime_env=env)
+        sanitizer_dirs=sanitizers, llvm_mode="forbidden", runtime_env=env)
     driver = {
         "status": "not_measured",
         "reference": "v5-runtime-process",
@@ -846,11 +847,15 @@ def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
     ) != "ncnn.vulkan_model_manifest":
         raise RuntimeError(f"unexpected Vulkan manifest: {vk_manifest}")
     if (
-        vk_manifest.get("host_implementation") != "generic-plan-runtime"
-        or vk_manifest.get("host_codegen_version") != 1
-        or vk_manifest.get("execution_plan_usage") != "embedded-runtime-required"
+        vk_manifest.get("host_implementation") != "model-fixed-run"
+        or vk_manifest.get("host_codegen_version") != 2
+        or vk_manifest.get("host_source_codegen_version")
+        != "ncnn-vulkan-fixed-run-codegen/v1"
+        or vk_manifest.get("execution_plan_usage") != "build-evidence-only"
     ):
         raise RuntimeError("Vulkan manifest host execution contract is incorrect")
+    if not vk_manifest.get("host_codegen_identity"):
+        raise RuntimeError("Vulkan manifest host_codegen_identity is missing")
     if vk_manifest.get("plan_hash") != plan.get("plan_hash"):
         raise RuntimeError("Vulkan manifest plan_hash differs from plan JSON")
     if vk_manifest.get("plan_sha256") != sha256_bytes(plan_bytes):
@@ -1046,11 +1051,16 @@ def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
         )
 
     actual_dependencies = needed_dependencies(vk_library)
-    manifest_dependencies = sorted(set(vk_manifest.get("dependencies", [])))
+    # VA5: sanitizer runtimes are classified separately in the manifest; the
+    # platform list plus the sanitizer list must cover every DT_NEEDED entry.
+    manifest_dependencies = sorted(
+        set(vk_manifest.get("dependencies", [])) |
+        set(vk_manifest.get("sanitizer_dependencies", [])))
     if actual_dependencies != manifest_dependencies:
         raise RuntimeError(
             "Vulkan manifest dependencies differ from ELF DT_NEEDED: "
-            f"actual={actual_dependencies} manifest={manifest_dependencies}"
+            f"actual={actual_dependencies} "
+            f"manifest={manifest_dependencies}"
         )
     base_dependencies = {
         "libvulkan.so.1",
@@ -1060,27 +1070,15 @@ def validate_artifacts(args, fixture, cpu_dir, vk_dir, env):
         "libc.so.6",
     }
     allowed_dependencies = base_dependencies | set(args.allowed_dependency)
+    # VA5: no compiler runtime dependency is acceptable in the model DSO in
+    # any compiler LLVM linkage mode.
     llvm_dependencies = [
         name for name in actual_dependencies
         if name.startswith("libLLVM")
     ]
-    if args.shared_llvm:
-        llvm_prefixes = (
-            f"libLLVM.so.{args.llvm_major}",
-            f"libLLVM-{args.llvm_major}.so.",
-        )
-        if not llvm_dependencies or any(
-            not any(name == prefix or name.startswith(prefix) for prefix in llvm_prefixes)
-            for name in llvm_dependencies
-        ):
-            raise RuntimeError(
-                f"shared LLVM dependency does not match configured LLVM {args.llvm_major}: "
-                f"{llvm_dependencies}"
-            )
-        allowed_dependencies.update(llvm_dependencies)
-    elif llvm_dependencies:
+    if llvm_dependencies:
         raise RuntimeError(
-            f"static LLVM product unexpectedly depends on shared LLVM: {llvm_dependencies}"
+            f"model DSO must not depend on LLVM: {llvm_dependencies}"
         )
     unexpected_dependencies = sorted(set(actual_dependencies) - allowed_dependencies)
     if unexpected_dependencies:
@@ -2082,12 +2080,12 @@ def run_fixture(args, fixture, device_info, env, evidence_root):
 
 
 def configured_library_path(
-    llvm_shared, llvm_lib_dir, sanitizer_runtime_dir, inherited_library_path
+    llvm_lib_dir, sanitizer_runtime_dir, inherited_library_path
 ):
     paths = []
-    if llvm_shared:
-        if not llvm_lib_dir:
-            raise RuntimeError("shared LLVM mode requires --llvm-lib-dir")
+    # The compiler binary itself may need the shared LLVM directory; the
+    # model DSO never does under the VA5 deployment boundary.
+    if llvm_lib_dir:
         paths.append(str(llvm_lib_dir))
     if sanitizer_runtime_dir:
         paths.append(str(Path(sanitizer_runtime_dir).resolve()))
@@ -2111,7 +2109,6 @@ def parse_args():
     parser.add_argument("--llvm-lib-dir")
     parser.add_argument("--cxx-arg", action="append", default=[])
     parser.add_argument("--sanitizer-runtime-dir")
-    parser.add_argument("--shared-llvm", action="store_true")
     parser.add_argument("--allowed-dependency", action="append", default=[])
     parser.add_argument("--sanitizer-dependency", action="append", default=[])
     return parser.parse_args()
@@ -2127,7 +2124,6 @@ def main():
     env["VK_ICD_FILENAMES"] = args.icd
     env["VK_INSTANCE_LAYERS"] = "VK_LAYER_KHRONOS_validation"
     library_path = configured_library_path(
-        args.shared_llvm,
         args.llvm_lib_dir,
         args.sanitizer_runtime_dir,
         env.get("LD_LIBRARY_PATH", ""),

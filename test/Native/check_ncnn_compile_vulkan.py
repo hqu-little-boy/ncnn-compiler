@@ -150,16 +150,22 @@ def collect_build_dependencies(args, cpu_dir, vulkan_dir, loader_record_name, en
              "ar": shutil.which("ar") or "ar"}
     sanitizers = ([args.sanitizer_runtime_dir]
                   if args.sanitizer_runtime_dir else [])
-    llvm_mode = "shared" if args.llvm_shared else "static"
+    # VA5: the deployment boundary forbids model-side LLVM in every compiler
+    # build mode; the evidence records the absence claim explicitly.
     vulkan_path = vulkan_dir / "libpaired_relu_vulkan.so"
     cpu_path = cpu_dir / "libpaired_relu.so"
     vulkan_evidence = dependency_evidence.collect_model_dependencies(
         vulkan_path, link_root, tool_paths=tools, sanitizer_dirs=sanitizers,
-        llvm_mode=llvm_mode, runtime_env=env)
+        llvm_mode="forbidden", runtime_env=env)
+    blockers = vulkan_evidence["llvm"]["legacy_blockers"]
+    if blockers:
+        raise RuntimeError(
+            "VA5 model DSO dependency audit found compiler artifacts in the "
+            f"captured link/runtime closure: {sorted(blockers)}")
     cpu_evidence = dependency_evidence.collect_elf_dependency_closure(
         cpu_path, cpu_root,
         tool_paths={"readelf": args.readelf, "ldd": tools["ldd"]},
-        sanitizer_dirs=sanitizers, llvm_mode=llvm_mode, runtime_env=env)
+        sanitizer_dirs=sanitizers, llvm_mode="forbidden", runtime_env=env)
     loader_path = args.work_dir / loader_record_name
     if not loader_path.is_file():
         raise RuntimeError(f"native loader module-map record is missing: {loader_path}")
@@ -269,10 +275,19 @@ def check_exports_and_dependencies(args, library_path, manifest):
     dependencies = sorted(
         set(re.findall(r"^\s*(lib[^\s]+\.so(?:\.\d+)*)\s*$", needed, re.MULTILINE))
     )
-    if dependencies != sorted(manifest["dependencies"]):
+    # VA5: sanitizer instrumentation runtimes live in a separate manifest
+    # classification; the platform list and the sanitizer list together must
+    # cover every DT_NEEDED entry exactly once.
+    manifest_dependencies = sorted(
+        set(manifest.get("dependencies", [])) |
+        set(manifest.get("sanitizer_dependencies", []))
+    )
+    if dependencies != manifest_dependencies:
         raise RuntimeError(
             f"manifest dependencies differ from ELF DT_NEEDED: "
-            f"actual={dependencies} manifest={manifest['dependencies']}"
+            f"actual={dependencies} "
+            f"manifest={manifest['dependencies']}+"
+            f"{manifest.get('sanitizer_dependencies', [])}"
         )
     allowed = {
         "libvulkan.so.1",
@@ -282,35 +297,15 @@ def check_exports_and_dependencies(args, library_path, manifest):
         "libc.so.6",
         *args.allowed_dependency,
     }
-    llvm_prefix = "libLLVM.so." + args.llvm_major
-    llvm_versioned_prefix = "libLLVM-" + args.llvm_major + ".so."
-
-    def is_llvm(name):
-        return name.startswith("libLLVM")
-
-    def is_expected_llvm(name):
-        return (
-            name == llvm_prefix
-            or name.startswith(llvm_prefix + ".")
-            or name.startswith(llvm_versioned_prefix)
-        )
-
-    llvm_dependencies = [name for name in dependencies if is_llvm(name)]
-    if args.llvm_shared:
-        if not any(is_expected_llvm(name) for name in llvm_dependencies):
-            raise RuntimeError(
-                f"shared LLVM dependency is missing or has the wrong version: "
-                f"{dependencies}"
-            )
-    elif llvm_dependencies:
+    # VA5: no compiler runtime may appear in the model DSO dependencies,
+    # regardless of the compiler's own shared/static LLVM linkage.
+    llvm_dependencies = [name for name in dependencies
+                         if name.startswith("libLLVM")]
+    if llvm_dependencies:
         raise RuntimeError(
-            f"static LLVM product unexpectedly needs libLLVM: {dependencies}"
-        )
+            f"model DSO must not depend on LLVM: {llvm_dependencies}")
 
-    if any(
-        name not in allowed and not (args.llvm_shared and is_expected_llvm(name))
-        for name in dependencies
-    ):
+    if any(name not in allowed for name in dependencies):
         raise RuntimeError(f"unexpected Vulkan DSO dependencies: {dependencies}")
     missing_sanitizers = set(args.sanitizer_dependency) - set(dependencies)
     if missing_sanitizers:
@@ -384,11 +379,21 @@ def check_vulkan_artifact(args, directory, elements):
         "kind"
     ) != "ncnn.vulkan_model_manifest":
         raise RuntimeError(f"unexpected Vulkan manifest schema: {manifest}")
-    for key, expected in (("host_implementation", "generic-plan-runtime"),
-                          ("host_codegen_version", 1),
-                          ("execution_plan_usage", "embedded-runtime-required")):
+    for key, expected in (("host_implementation", "model-fixed-run"),
+                          ("host_codegen_version", 2),
+                          ("host_source_codegen_version",
+                           "ncnn-vulkan-fixed-run-codegen/v1"),
+                          ("execution_plan_usage", "build-evidence-only")):
         if manifest.get(key) != expected:
             raise RuntimeError(f"Vulkan manifest {key} differs from the host contract")
+    if manifest.get("host_codegen_identity") != manifest.get(
+        "host_program", {}
+    ).get("identity", None) and not manifest.get("host_codegen_identity"):
+        raise RuntimeError(
+            "Vulkan manifest host_codegen_identity is missing or empty")
+    if manifest.get("sanitizer_dependencies") is None:
+        raise RuntimeError(
+            "Vulkan manifest is missing the sanitizer dependency classification")
     if manifest.get("plan_hash") != plan.get("plan_hash"):
         raise RuntimeError("Vulkan manifest plan_hash differs from its plan file")
     if manifest.get("plan_sha256") != hashlib.sha256(plan_bytes).hexdigest():
@@ -647,9 +652,9 @@ def runtime_env(args):
     library_dirs = []
     if args.sanitizer_runtime_dir:
         library_dirs.append(str(args.sanitizer_runtime_dir))
-    if args.llvm_shared:
-        if args.llvm_lib_dir is None:
-            raise RuntimeError("shared LLVM mode requires --llvm-lib-dir")
+    # The compiler binary itself may need the shared LLVM directory; the model
+    # DSO never does under the VA5 deployment boundary.
+    if args.llvm_lib_dir is not None:
         library_dirs.append(str(args.llvm_lib_dir))
     if args.icd:
         env["VK_ICD_FILENAMES"] = str(args.icd)
@@ -1342,7 +1347,6 @@ def main():
     parser.add_argument("--loader-source", type=Path, required=True)
     parser.add_argument("--cxx-arg", action="append", default=[])
     parser.add_argument("--sanitizer-runtime-dir", type=Path)
-    parser.add_argument("--llvm-shared", action="store_true")
     parser.add_argument("--allowed-dependency", action="append", default=[])
     parser.add_argument("--sanitizer-dependency", action="append", default=[])
     parser.add_argument("--llvm-major", required=True)
@@ -1527,6 +1531,8 @@ def main():
         env=base_env,
     )
     required_files(vulkan_dir, {entry.name for entry in repeat_dir.iterdir()})
+    # VA5: reproducibility covers every published artifact byte; the manifest
+    # additionally pins the four contract-relevant identities.
     vulkan_reproducibility = {}
     for filename in sorted(entry.name for entry in repeat_dir.iterdir()):
         first_bytes = (vulkan_dir / filename).read_bytes()
@@ -1536,14 +1542,12 @@ def main():
             sanitizer=bool(args.sanitizer_runtime_dir))
         if normalized is None:
             raise RuntimeError(f"Vulkan artifact is not reproducible: {filename}")
-        if filename in {"libpaired_relu_vulkan.so", "paired_relu_vulkan.json",
-                        "paired_relu_vulkan.plan.json", "paired_relu_vulkan.h"}:
-            vulkan_reproducibility[filename] = {
-                **comparison,
-                "first_sha256": hashlib.sha256(first_bytes).hexdigest(),
-                "repeat_sha256": hashlib.sha256(repeat_bytes).hexdigest(),
-                "canonical_sha256": hashlib.sha256(normalized).hexdigest(),
-            }
+        vulkan_reproducibility[filename] = {
+            **comparison,
+            "first_sha256": hashlib.sha256(first_bytes).hexdigest(),
+            "repeat_sha256": hashlib.sha256(repeat_bytes).hexdigest(),
+            "canonical_sha256": hashlib.sha256(normalized).hexdigest(),
+        }
 
     invoke(
         [

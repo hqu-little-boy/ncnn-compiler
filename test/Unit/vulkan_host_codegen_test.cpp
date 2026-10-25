@@ -349,7 +349,8 @@ TEST(VulkanFixedRunCodegenTest,
   EXPECT_EQ(package->manifest_json, legacy_manifest);
   EXPECT_NE(legacy_wrapper.find("VulkanRuntimeContext::create"),
             std::string::npos);
-  EXPECT_NE(legacy_manifest.find("generic-plan-runtime"), std::string::npos);
+  EXPECT_NE(legacy_manifest.find("model-fixed-run"), std::string::npos);
+  EXPECT_EQ(legacy_manifest.find("generic-plan-runtime"), std::string::npos);
 }
 
 }  // namespace

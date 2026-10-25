@@ -28,18 +28,8 @@ class CompareOutputsTest(unittest.TestCase):
 
 
 class RuntimeLibraryPathTest(unittest.TestCase):
-    def test_static_llvm_does_not_prepend_helper_library_directory(self):
+    def test_inherited_paths_come_after_configured_runtimes(self):
         path = run_v5.configured_library_path(
-            False,
-            "/opt/static-llvm/lib",
-            "/opt/sanitizer/lib",
-            "/opt/application/lib",
-        )
-        self.assertEqual(path, "/opt/sanitizer/lib:/opt/application/lib")
-
-    def test_shared_llvm_retains_its_runtime_library_directory(self):
-        path = run_v5.configured_library_path(
-            True,
             "/opt/shared-llvm/lib",
             "/opt/sanitizer/lib",
             "/opt/application/lib",
@@ -48,6 +38,14 @@ class RuntimeLibraryPathTest(unittest.TestCase):
             path,
             "/opt/shared-llvm/lib:/opt/sanitizer/lib:/opt/application/lib",
         )
+
+    def test_no_configured_dirs_leaves_inherited_path_only(self):
+        path = run_v5.configured_library_path(
+            None,
+            None,
+            "/opt/application/lib",
+        )
+        self.assertEqual(path, "/opt/application/lib")
 
 
 class V53ModelDefinitionTest(unittest.TestCase):

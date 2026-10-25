@@ -905,11 +905,17 @@ def validate_host_program(manifest: dict[str, Any], plan: dict[str, Any], *,
         _fail("manifest host_program_usage is not compiler-only-diagnostic")
     candidate_claim = manifest.get("host_aot_candidate", False)
     if (type(candidate_claim) is not bool or candidate_claim or
-            manifest.get("host_implementation") != "generic-plan-runtime" or
+            manifest.get("host_implementation") != "model-fixed-run" or
             type(manifest.get("host_codegen_version")) is not int or
-            manifest.get("host_codegen_version") != 1 or
-            manifest.get("execution_plan_usage") != "embedded-runtime-required"):
-        _fail("host-program diagnostic must not upgrade the legacy product execution contract")
+            manifest.get("host_codegen_version") != 2 or
+            manifest.get("host_source_codegen_version") !=
+            "ncnn-vulkan-fixed-run-codegen/v1" or
+            manifest.get("execution_plan_usage") != "build-evidence-only"):
+        _fail("manifest must identify the model-fixed-run product contract, "
+              "not a generic plan runtime or an unclaimed host AOT")
+    if not isinstance(manifest.get("host_codegen_identity"), str) or \
+            not manifest["host_codegen_identity"]:
+        _fail("manifest host_codegen_identity must be a nonempty string")
     for field, expected in (("schema", SCHEMA), ("codegen_version", CODEGEN),
                             ("helper_contract", HELPER_CONTRACT),
                             ("synchronization_version", SYNC_VERSION),

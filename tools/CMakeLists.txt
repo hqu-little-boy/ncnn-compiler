@@ -41,8 +41,13 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     find_program(NCNN_VULKAN_READELF NAMES llvm-readelf-${LLVM_VERSION_MAJOR} readelf REQUIRED)
 
     set(NCNN_VULKAN_USES_SHARED_LLVM TRUE)
-    set(NCNN_VULKAN_STATIC_LLVM_LINK_ARGS)
-    set(NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES)
+    # VA5: the deployment model link never includes LLVM, shared or static.
+    # The historical static-LLVM link-argument/SONAME walk existed only to
+    # support the old model-side LLVM dependency and is intentionally gone;
+    # the compiler binary itself keeps linking LLVM through its own targets.
+    if(NOT LLVM_LINK_LLVM_DYLIB)
+        set(NCNN_VULKAN_USES_SHARED_LLVM FALSE)
+    endif()
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         set(NCNN_VULKAN_HOST_CXX_COMPILER_IS_CLANG true)
     else()
@@ -83,207 +88,6 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     if(NOT NCNN_VULKAN_HOST_CXX_RUNTIME_ARGS)
         message(FATAL_ERROR
             "Cannot determine the configured C++ runtime for Vulkan host linking")
-    endif()
-    if(NOT LLVM_LINK_LLVM_DYLIB)
-        set(NCNN_VULKAN_USES_SHARED_LLVM FALSE)
-        foreach(_target IN ITEMS LLVMSupport LLVMDemangle)
-            set(_location "")
-            if(NOT TARGET ${_target})
-                message(FATAL_ERROR
-                    "Static LLVM Vulkan product linking requires target ${_target}")
-            endif()
-            get_target_property(_type ${_target} TYPE)
-            if(NOT _type STREQUAL "STATIC_LIBRARY")
-                message(FATAL_ERROR
-                    "Static LLVM mode requires ${_target} to be a static library")
-            endif()
-            get_target_property(_location ${_target} IMPORTED_LOCATION)
-            if(NOT _location)
-                get_target_property(_configs ${_target} IMPORTED_CONFIGURATIONS)
-                foreach(_config IN LISTS _configs CMAKE_CONFIGURATION_TYPES)
-                    string(TOUPPER "${_config}" _config_upper)
-                    get_target_property(_location ${_target}
-                        "IMPORTED_LOCATION_${_config_upper}")
-                    if(_location)
-                        break()
-                    endif()
-                endforeach()
-            endif()
-            if(NOT _location OR NOT EXISTS "${_location}")
-                message(FATAL_ERROR
-                    "Cannot resolve the static archive location for ${_target}")
-            endif()
-            list(APPEND NCNN_VULKAN_STATIC_LLVM_LINK_ARGS "${_location}")
-        endforeach()
-
-        function(_ncnn_vulkan_add_static_dep item args_var needed_var visited_var)
-            set(_args "${${args_var}}")
-            set(_needed "${${needed_var}}")
-            set(_visited "${${visited_var}}")
-            string(REGEX REPLACE "^\\$<LINK_ONLY:(.*)>$" "\\1" _item "${item}")
-            if(_item IN_LIST _visited)
-                set(${args_var} "${_args}" PARENT_SCOPE)
-                set(${needed_var} "${_needed}" PARENT_SCOPE)
-                set(${visited_var} "${_visited}" PARENT_SCOPE)
-                return()
-            endif()
-            list(APPEND _visited "${_item}")
-            if(TARGET "${_item}")
-                get_target_property(_type "${_item}" TYPE)
-                if(_type STREQUAL "INTERFACE_LIBRARY")
-                    get_target_property(_deps "${_item}" INTERFACE_LINK_LIBRARIES)
-                    if(_deps)
-                        foreach(_dep IN LISTS _deps)
-                            _ncnn_vulkan_add_static_dep(
-                                "${_dep}" _args _needed _visited)
-                        endforeach()
-                    endif()
-                elseif(_type STREQUAL "STATIC_LIBRARY")
-                    if(NOT _item STREQUAL "LLVMSupport" AND
-                       NOT _item STREQUAL "LLVMDemangle")
-                        message(FATAL_ERROR
-                            "Static LLVM support has an unexpected static dependency: ${_item}")
-                    endif()
-                    get_target_property(_deps "${_item}" INTERFACE_LINK_LIBRARIES)
-                    if(_deps)
-                        foreach(_dep IN LISTS _deps)
-                            _ncnn_vulkan_add_static_dep(
-                                "${_dep}" _args _needed _visited)
-                        endforeach()
-                    endif()
-                elseif(_type STREQUAL "SHARED_LIBRARY" OR
-                       _type STREQUAL "MODULE_LIBRARY" OR
-                       _type STREQUAL "UNKNOWN_LIBRARY")
-                    set(_location "")
-                    get_target_property(_location "${_item}" IMPORTED_LOCATION)
-                    if(NOT _location)
-                        get_target_property(_configs "${_item}" IMPORTED_CONFIGURATIONS)
-                        foreach(_config IN LISTS _configs CMAKE_CONFIGURATION_TYPES)
-                            string(TOUPPER "${_config}" _config_upper)
-                            get_target_property(_location "${_item}"
-                                "IMPORTED_LOCATION_${_config_upper}")
-                            if(_location)
-                                break()
-                            endif()
-                        endforeach()
-                    endif()
-                    if(NOT _location OR NOT EXISTS "${_location}")
-                        message(FATAL_ERROR
-                            "Cannot resolve static LLVM system dependency ${_item}")
-                    endif()
-                    list(APPEND _args "${_location}")
-                    get_target_property(_soname "${_item}" IMPORTED_SONAME)
-                    if(NOT _soname)
-                        execute_process(
-                            COMMAND "${NCNN_VULKAN_READELF}" -d "${_location}"
-                            RESULT_VARIABLE _readelf_status
-                            OUTPUT_VARIABLE _dynamic
-                            ERROR_QUIET)
-                        if(_readelf_status EQUAL 0)
-                            string(REGEX MATCH "\\(SONAME\\).*\\[([A-Za-z0-9_.+-]+)\\]"
-                                _soname_match "${_dynamic}")
-                            if(_soname_match)
-                                set(_soname "${CMAKE_MATCH_1}")
-                            endif()
-                        endif()
-                    endif()
-                    if(NOT _soname)
-                        get_filename_component(_soname "${_location}" NAME)
-                    endif()
-                    list(APPEND _needed "${_soname}")
-                    get_target_property(_deps "${_item}" INTERFACE_LINK_LIBRARIES)
-                    if(_deps)
-                        foreach(_dep IN LISTS _deps)
-                            _ncnn_vulkan_add_static_dep(
-                                "${_dep}" _args _needed _visited)
-                        endforeach()
-                    endif()
-                else()
-                    message(FATAL_ERROR
-                        "Unsupported LLVM static link dependency target ${_item} (${_type})")
-                endif()
-            elseif(_item MATCHES "^-l(.+)$")
-                list(APPEND _args "${_item}")
-                set(_library_name "${CMAKE_MATCH_1}")
-                unset(_library_path CACHE)
-                unset(_library_path)
-                find_library(_library_path NAMES "${_library_name}")
-                if(_library_path)
-                    execute_process(
-                        COMMAND "${NCNN_VULKAN_READELF}" -d "${_library_path}"
-                        RESULT_VARIABLE _readelf_status
-                        OUTPUT_VARIABLE _dynamic
-                        ERROR_QUIET)
-                    if(_readelf_status EQUAL 0)
-                        string(REGEX MATCH "\\(SONAME\\).*\\[([A-Za-z0-9_.+-]+)\\]"
-                            _soname_match "${_dynamic}")
-                        if(_soname_match)
-                            list(APPEND _needed "${CMAKE_MATCH_1}")
-                        endif()
-                    endif()
-                endif()
-            elseif(IS_ABSOLUTE "${_item}" AND EXISTS "${_item}")
-                list(APPEND _args "${_item}")
-                if(_item MATCHES "\\.so(\\.|$)")
-                    execute_process(
-                        COMMAND "${NCNN_VULKAN_READELF}" -d "${_item}"
-                        RESULT_VARIABLE _readelf_status
-                        OUTPUT_VARIABLE _dynamic
-                        ERROR_QUIET)
-                    if(_readelf_status EQUAL 0)
-                        string(REGEX MATCH "\\(SONAME\\).*\\[([A-Za-z0-9_.+-]+)\\]"
-                            _soname_match "${_dynamic}")
-                        if(_soname_match)
-                            list(APPEND _needed "${CMAKE_MATCH_1}")
-                        endif()
-                    endif()
-                endif()
-            elseif(_item MATCHES "^[A-Za-z0-9_+-]+$")
-                list(APPEND _args "-l${_item}")
-                unset(_library_path CACHE)
-                unset(_library_path)
-                find_library(_library_path NAMES "${_item}")
-                if(_library_path)
-                    execute_process(
-                        COMMAND "${NCNN_VULKAN_READELF}" -d "${_library_path}"
-                        RESULT_VARIABLE _readelf_status
-                        OUTPUT_VARIABLE _dynamic
-                        ERROR_QUIET)
-                    if(_readelf_status EQUAL 0)
-                        string(REGEX MATCH "\\(SONAME\\).*\\[([A-Za-z0-9_.+-]+)\\]"
-                            _soname_match "${_dynamic}")
-                        if(_soname_match)
-                            list(APPEND _needed "${CMAKE_MATCH_1}")
-                        endif()
-                    endif()
-                endif()
-            else()
-                list(APPEND _args "${_item}")
-            endif()
-            set(${args_var} "${_args}" PARENT_SCOPE)
-            set(${needed_var} "${_needed}" PARENT_SCOPE)
-            set(${visited_var} "${_visited}" PARENT_SCOPE)
-        endfunction()
-
-        get_target_property(_support_deps LLVMSupport INTERFACE_LINK_LIBRARIES)
-        if(_support_deps)
-            set(_visited)
-            foreach(_dep IN LISTS _support_deps)
-                _ncnn_vulkan_add_static_dep(
-                    "${_dep}" NCNN_VULKAN_STATIC_LLVM_LINK_ARGS
-                    NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES _visited)
-            endforeach()
-        endif()
-        get_target_property(_demangle_deps LLVMDemangle INTERFACE_LINK_LIBRARIES)
-        if(_demangle_deps)
-            set(_visited)
-            foreach(_dep IN LISTS _demangle_deps)
-                _ncnn_vulkan_add_static_dep(
-                    "${_dep}" NCNN_VULKAN_STATIC_LLVM_LINK_ARGS
-                    NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES _visited)
-            endforeach()
-        endif()
-        list(REMOVE_DUPLICATES NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES)
     endif()
 
     set(NCNN_VULKAN_HOST_SANITIZER_ARGS)
@@ -443,12 +247,6 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     _ncnn_vulkan_cpp_array(NCNN_VULKAN_HOST_CXX_RUNTIME_ARGS
         NCNN_VULKAN_HOST_CXX_RUNTIME_ARGS_COUNT
         NCNN_VULKAN_HOST_CXX_RUNTIME_ARGS_CPP)
-    _ncnn_vulkan_cpp_array(NCNN_VULKAN_STATIC_LLVM_LINK_ARGS
-        NCNN_VULKAN_STATIC_LLVM_LINK_ARGS_COUNT
-        NCNN_VULKAN_STATIC_LLVM_LINK_ARGS_CPP)
-    _ncnn_vulkan_cpp_array(NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES
-        NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES_COUNT
-        NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES_CPP)
     _ncnn_vulkan_cpp_array(NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES
         NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES_COUNT
         NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES_CPP)
@@ -459,11 +257,6 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         NCNN_VULKAN_SANITIZER_RUNTIME_DIR_CPP)
     _ncnn_vulkan_cpp_string(NCNN_VULKAN_ASAN_RUNTIME_PATH
         NCNN_VULKAN_ASAN_RUNTIME_CPP)
-    if(NCNN_VULKAN_USES_SHARED_LLVM)
-        set(NCNN_VULKAN_USES_SHARED_LLVM "true")
-    else()
-        set(NCNN_VULKAN_USES_SHARED_LLVM "false")
-    endif()
     configure_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/VulkanHostConfig.hpp.in
         ${CMAKE_CURRENT_BINARY_DIR}/VulkanHostConfig.hpp
@@ -474,8 +267,6 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     set(NCNN_VULKAN_ASAN_RUNTIME_PATH "${NCNN_VULKAN_ASAN_RUNTIME_PATH}" PARENT_SCOPE)
     set(NCNN_VULKAN_HOST_SANITIZER_ARGS "${NCNN_VULKAN_HOST_SANITIZER_ARGS}" PARENT_SCOPE)
     set(NCNN_VULKAN_USES_SHARED_LLVM "${NCNN_VULKAN_USES_SHARED_LLVM}" PARENT_SCOPE)
-    set(NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES
-        "${NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES}" PARENT_SCOPE)
     set(NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES
         "${NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES}" PARENT_SCOPE)
 
@@ -522,18 +313,13 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         NCNN_VULKAN_SPIRV_VAL="${NCNN_SPIRV_VAL_EXECUTABLE}"
         NCNN_VULKAN_SPIRV_DIS="${NCNN_SPIRV_DIS_EXECUTABLE}"
         NCNN_VULKAN_SPIRV_EXTRACTOR="$<TARGET_FILE:ncnn-vulkan-spirv-extract>"
-        NCNN_VULKAN_RUNTIME_ARCHIVE="$<TARGET_FILE:NCNNVulkanRuntime>"
         NCNN_VULKAN_DEVICE_HELPER_ARCHIVE="$<TARGET_FILE:NCNNVulkanDeviceHelper>"
-        NCNN_VULKAN_PLAN_ARCHIVE="$<TARGET_FILE:NCNNVulkanPlanSupport>"
-        NCNN_VULKAN_RUNTIME_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/$<TARGET_FILE_NAME:NCNNVulkanRuntime>"
         NCNN_VULKAN_DEVICE_HELPER_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/$<TARGET_FILE_NAME:NCNNVulkanDeviceHelper>"
-        NCNN_VULKAN_PLAN_RELATIVE_PATH="../${CMAKE_INSTALL_LIBDIR}/ncnn-mlir/$<TARGET_FILE_NAME:NCNNVulkanPlanSupport>"
         NCNN_VULKAN_HOST_CXX="${CMAKE_CXX_COMPILER}"
         NCNN_VULKAN_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/include"
-        NCNN_VULKAN_INCLUDE_RELATIVE_PATH="../${CMAKE_INSTALL_INCLUDEDIR}"
-        NCNN_VULKAN_LLVM_LIBRARY_DIR="${LLVM_LIBRARY_DIR}")
+        NCNN_VULKAN_INCLUDE_RELATIVE_PATH="../${CMAKE_INSTALL_INCLUDEDIR}")
     add_dependencies(ncnn-compile
-        NCNNVulkanRuntime NCNNVulkanDeviceHelper ncnn-vulkan-spirv-extract)
+        NCNNVulkanDeviceHelper ncnn-vulkan-spirv-extract)
 
     if(BUILD_TESTING)
         add_executable(ncnn-vulkan-fixedrun-capture

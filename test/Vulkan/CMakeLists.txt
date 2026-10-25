@@ -142,12 +142,7 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         TIMEOUT 60)
 
     set(_ncnn_vulkan_offline_test_args)
-    if(NCNN_VULKAN_USES_SHARED_LLVM)
-        list(APPEND _ncnn_vulkan_offline_test_args --llvm-shared)
-    endif()
-    foreach(_dependency IN LISTS
-            NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES
-            NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
+    foreach(_dependency IN LISTS NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
         list(APPEND _ncnn_vulkan_offline_test_args
             --allowed-dependency=${_dependency})
     endforeach()
@@ -269,6 +264,62 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         LABELS "vulkan;unit;offline;tooling;fixedrun;independence"
         RUN_SERIAL TRUE
         TIMEOUT 180)
+
+    # ── VA5: clean-directory deployment, reproducibility, failed-compile
+    # protection.  The device profiles run the deployment loader against each
+    # configured ICD; the offline profile proves loadability plus an explicit
+    # create failure without a device.
+    set(VA5_CONV_BIN ${CMAKE_CURRENT_BINARY_DIR}/va5-conv-weights.bin)
+    add_custom_command(
+        OUTPUT ${VA5_CONV_BIN}
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/generate_fixedrun_conv_bin.py"
+            "${VA5_CONV_BIN}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generate_fixedrun_conv_bin.py"
+        VERBATIM)
+    # Built with ALL so a plain `cmake --build` produces the weights before
+    # the deployment tests run; CTest has no target-level dependency here.
+    add_custom_target(va5_conv_weights_fixture ALL DEPENDS ${VA5_CONV_BIN})
+
+    set(VA5_DEPLOYMENT_ARGS
+        --compiler $<TARGET_FILE:ncnn-compile>
+        --host-cxx ${CMAKE_CXX_COMPILER}
+        --loader-source ${CMAKE_CURRENT_SOURCE_DIR}/../Native/vulkan_product_loader.cpp
+        --vulkan-include-dir ${PROJECT_SOURCE_DIR}/include
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/relu.param
+        --conv-param ${CMAKE_CURRENT_SOURCE_DIR}/fixedrun_conv_relu.param
+        --empty-bin ${NCNN_VULKAN_FIXEDRUN_ROOT}/empty.bin
+        --conv-bin ${VA5_CONV_BIN})
+    # The deployment loader must match the model instrumentation profile so
+    # the sanitizer runtime initializes before the dlopen'd DSO pulls it in.
+    foreach(_va5_cxx_arg IN LISTS NCNN_VULKAN_HOST_SANITIZER_ARGS)
+        list(APPEND VA5_DEPLOYMENT_ARGS --cxx-arg=${_va5_cxx_arg})
+    endforeach()
+    if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+        list(APPEND VA5_DEPLOYMENT_ARGS
+            --sanitizer-runtime-dir ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+    endif()
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND VA5_DEPLOYMENT_ARGS --llvm-lib-dir ${LLVM_LIBRARY_DIR})
+    endif()
+
+    add_test(NAME vulkan-va5-deployment-no-device
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_va5_deployment.py
+            ${VA5_DEPLOYMENT_ARGS}
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/va5/no-device-work
+            --output ${CMAKE_CURRENT_BINARY_DIR}/evidence/va5/no-device/deployment-evidence.json)
+    set_tests_properties(vulkan-va5-deployment-no-device PROPERTIES
+        LABELS "vulkan;integration;va5;deployment;no-device"
+        RUN_SERIAL TRUE
+        TIMEOUT 900)
+
+    add_test(NAME vulkan-va5-deployment-tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_va5_deployment.py)
+    set_tests_properties(vulkan-va5-deployment-tests PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;va5;deployment"
+        TIMEOUT 120)
 
     set(NCNN_VULKAN_LIFECYCLE_EVIDENCE_ROOT
         "${CMAKE_CURRENT_BINARY_DIR}/evidence/va3")
@@ -440,6 +491,26 @@ if(NCNN_ENABLE_VULKAN_V0_TESTS)
         endfunction()
         ncnn_add_vulkan_fixedrun_device_test(nvidia NVIDIA ${V0_NVIDIA_ICD})
         ncnn_add_vulkan_fixedrun_device_test(llvmpipe llvmpipe ${V0_LLVMPIPE_ICD})
+
+        function(ncnn_add_va5_deployment_device_test device icd)
+            if(NOT device IN_LIST NCNN_VULKAN_TEST_DEVICES)
+                return()
+            endif()
+            add_test(NAME vulkan-va5-deployment-${device}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/run_va5_deployment.py
+                    ${VA5_DEPLOYMENT_ARGS}
+                    --device
+                    --icd ${icd}
+                    --work-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/va5/${device}-work
+                    --output ${CMAKE_CURRENT_BINARY_DIR}/evidence/va5/${device}/deployment-evidence.json)
+            set_tests_properties(vulkan-va5-deployment-${device} PROPERTIES
+                LABELS "vulkan;device;integration;va5;deployment;${device}"
+                RUN_SERIAL TRUE
+                TIMEOUT 900)
+        endfunction()
+        ncnn_add_va5_deployment_device_test(nvidia ${V0_NVIDIA_ICD})
+        ncnn_add_va5_deployment_device_test(llvmpipe ${V0_LLVMPIPE_ICD})
     endif()
 
 add_executable(vulkan_add_runner vulkan_add_runner.cpp)
@@ -1196,15 +1267,8 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         endif()
     endif()
     set(V5_CONFIGURED_DEPENDENCY_ARGS)
-    if(NCNN_VULKAN_USES_SHARED_LLVM)
-        list(APPEND V5_CONFIGURED_DEPENDENCY_ARGS
-            --shared-llvm
-            --llvm-lib-dir ${LLVM_LIBRARY_DIR})
-    endif()
-    foreach(dependency IN LISTS NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES)
-        list(APPEND V5_CONFIGURED_DEPENDENCY_ARGS
-            --allowed-dependency=${dependency})
-    endforeach()
+    # VA5: the model DSO must not carry an LLVM dependency in any compiler
+    # build mode; only sanitizer SONAMEs extend the configured allowlist.
     foreach(dependency IN LISTS NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
         list(APPEND V5_CONFIGURED_DEPENDENCY_ARGS
             --allowed-dependency=${dependency}

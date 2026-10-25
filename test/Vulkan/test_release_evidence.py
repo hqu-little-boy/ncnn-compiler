@@ -1121,8 +1121,9 @@ class GateEnvelopeTests(unittest.TestCase):
             "vulkan_plan_sha256": "vulkan/paired_relu_vulkan.plan.json",
         }
         write("vulkan/paired_relu_vulkan.json", json.dumps({
-            "host_implementation": "generic-plan-runtime", "host_codegen_version": 1,
-            "execution_plan_usage": "embedded-runtime-required"}).encode())
+            "host_implementation": "model-fixed-run", "host_codegen_version": 2,
+            "host_source_codegen_version": "ncnn-vulkan-fixed-run-codegen/v1",
+            "execution_plan_usage": "build-evidence-only"}).encode())
         for field, name in artifacts.items():
             if not (base / name).exists():
                 write(name, b"synthetic product artifact")
@@ -1231,9 +1232,11 @@ class GateEnvelopeTests(unittest.TestCase):
                              "sha256": digest, "size_bytes": len(payload)}
                             for kernel in kernels]
         manifest_path.write_text(json.dumps({"plan_sha256": plan_hash,
-                                             "host_implementation": "generic-plan-runtime",
-                                             "host_codegen_version": 1,
-                                             "execution_plan_usage": "embedded-runtime-required",
+                                             "host_implementation": "model-fixed-run",
+                                             "host_codegen_version": 2,
+                                             "host_source_codegen_version":
+                                                 "ncnn-vulkan-fixed-run-codegen/v1",
+                                             "execution_plan_usage": "build-evidence-only",
                                              "shaders": manifest_shaders}))
         cpu_library = model_root / "cpu" / f"lib{model}.so"
         vk_library = model_root / "vulkan" / f"lib{model}_vulkan.so"
@@ -1759,7 +1762,7 @@ class GateEnvelopeTests(unittest.TestCase):
                 "candidate_dso_sha256s": {
                     fixture: hashlib.sha256(fixture.encode()).hexdigest()
                     for fixture in audit.fixedrun_evidence.FIXTURES},
-                "claim_scope": "private seven-small-graph fixed-run prototype; public product remains generic-plan-runtime",
+                "claim_scope": "private seven-small-graph fixed-run candidate evidence; product-scope claims are audited separately from this aggregate",
                 "host_aot_release_eligible": False,
             }
             evidence_path.parent.mkdir(parents=True)

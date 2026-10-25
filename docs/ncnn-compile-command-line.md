@@ -274,14 +274,20 @@ package 路径的构建 identity，不受输入 plan JSON 的空白或对象 key
 域是 `ncnn-vulkan-static-plan-v3` 和窄 ReLU factory 的 `ncnn-vulkan-product-v2`；详细编码与验证见
 [compiler-only host program 契约](ncnn-vulkan-backend-contract.md#compiler-only-host-program)。
 该诊断不会被 wrapper 解析或执行，不新增部署必需 sidecar，也不改变公共 header 或 shader 字节。
-宿主字段固定为 `host_implementation="generic-plan-runtime"`、整数 `host_codegen_version=1`、
-`execution_plan_usage="embedded-runtime-required"`，宿主实现与 codegen 版本参与构建 identity；
-公共 ABI v1 不变。当前 create 解析**内嵌**计划，run 调用静态编入模型库的通用执行器，
-不等于模型专用宿主 AOT。`dependencies` 不是传递依赖或静态代码来源清单；共享 LLVM 配置下
-调用方须提供实际列出的 LLVM 21 SONAME，静态 LLVM 配置也可能把 LLVM Support 代码带入模型。
+宿主字段固定为 `host_implementation="model-fixed-run"`、整数 `host_codegen_version=2`、
+`host_source_codegen_version="ncnn-vulkan-fixed-run-codegen/v1"`、
+`execution_plan_usage="build-evidence-only"`，宿主实现与两个 codegen 版本及
+`host_codegen_identity` 参与构建 identity；公共 ABI v1 不变。自 VA5 起产品 wrapper 是从受检
+host program 生成的模型专用固定执行代码：create/run/destroy 不解析任何执行计划，不包含通用
+kernel schedule 解释、运行时依赖推导或通用 `run(plan)` 入口。模型 DSO 的链接输入只有生成宿主
+object、`NCNNVulkanDeviceHelper` 静态档案与平台/Vulkan 库；`dependencies` 是实际 `DT_NEEDED`
+的平台库清单（含系统 Vulkan loader），**不允许出现 LLVM/MLIR/Clang 组件**，与编译器自身的
+shared/static LLVM 构建模式无关；instrumented 构建的 sanitizer runtime 单列在
+`sanitizer_dependencies`，不扩展 Release 允许集。发布事务保留 `-Wl,-z,defs`、无 RPATH/RUNPATH、
+三符号导出 allowlist 与失败不覆盖既有产物的 staging/rollback。
 部署还需要系统 Vulkan loader、兼容设备/ICD 和必要 C/C++ 平台库。全部 shader、plan 和常量
 数据嵌入 DSO，不读取诊断 `.plan.json` sidecar，不依赖编译临时目录或旁置 `.spv`、权重文件。
-软件 ICD 自身使用的 LLVM 属于驱动实现，应与模型的 LLVM 依赖分开审计。
+软件 ICD 自身使用的 LLVM 属于驱动实现，应与模型侧（已为无）的编译器依赖分开审计。
 
 Vulkan 模式不接受 CPU 专用的线程、SIMD/target-ISA、INT8、tuning、动态输入 shape、CPU 中间
 阶段、debug-info、CPU profile、定制 clang/linker 和 undefined-symbol expectation 参数；

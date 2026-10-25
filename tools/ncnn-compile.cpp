@@ -2614,14 +2614,10 @@ int CompileSession::resolveTools(char** argv) {
         "compiler installation",
         description));
     };
-    auto runtime_archive =
-      locateVulkanArchive(NCNN_VULKAN_RUNTIME_ARCHIVE,
-                          NCNN_VULKAN_RUNTIME_RELATIVE_PATH,
-                          "runtime");
-    if (!runtime_archive) {
-      return fail(runtime_archive.error());
-    }
-    vulkan_runtime_archive = *runtime_archive;
+    // VA5 tightened link inputs: the model DSO links only the generated
+    // fixed-run host object, the minimal device helper archive, and
+    // platform/Vulkan libraries.  The generic runtime and plan archives stay
+    // compiler/test-side and never enter the deployment link line.
     auto helper_archive =
       locateVulkanArchive(NCNN_VULKAN_DEVICE_HELPER_ARCHIVE,
                           NCNN_VULKAN_DEVICE_HELPER_RELATIVE_PATH,
@@ -2630,13 +2626,6 @@ int CompileSession::resolveTools(char** argv) {
       return fail(helper_archive.error());
     }
     vulkan_device_helper_archive = *helper_archive;
-    auto plan_archive = locateVulkanArchive(NCNN_VULKAN_PLAN_ARCHIVE,
-                                            NCNN_VULKAN_PLAN_RELATIVE_PATH,
-                                            "execution-plan");
-    if (!plan_archive) {
-      return fail(plan_archive.error());
-    }
-    vulkan_plan_archive = *plan_archive;
     vulkan_include_dir = NCNN_VULKAN_INCLUDE_DIR;
     if (!fs::is_directory(vulkan_include_dir)) {
       vulkan_include_dir =
@@ -2648,7 +2637,6 @@ int CompileSession::resolveTools(char** argv) {
         "Vulkan public headers are missing from the compiler "
         "installation");
     }
-    vulkan_llvm_library_dir = NCNN_VULKAN_LLVM_LIBRARY_DIR;
   }
 #endif
 
@@ -3784,8 +3772,15 @@ int CompileSession::emitABI() {
     if (auto result = write_file(header, package->header); !result) {
       return fail(result.error());
     }
-    if (auto result =
-          write_file(vulkan_wrapper_source, package->wrapper_source);
+    // VA5: the deployment source is the model-dedicated fixed-run host code
+    // generated from the verified host program.  The staging filename is kept
+    // so dependency evidence keeps binding the wrapper object; the generic
+    // plan-runtime wrapper stays a compiler-side diagnostic only.
+    auto host_source = ncnn_compile::makeVulkanHostSource(*package);
+    if (!host_source) {
+      return fail(host_source.error());
+    }
+    if (auto result = write_file(vulkan_wrapper_source, host_source->source);
         !result) {
       return fail(result.error());
     }
@@ -3893,20 +3888,7 @@ int CompileSession::linkAndAudit() {
     } else {
       link.push_back(vulkan_wrapper_source.string());
     }
-    link.push_back(vulkan_runtime_archive.string());
     link.push_back(vulkan_device_helper_archive.string());
-    link.push_back(vulkan_plan_archive.string());
-    if (ncnn_compile::vulkan_host_config::kUsesSharedLLVM) {
-      link.push_back("-L" + vulkan_llvm_library_dir.string());
-      link.push_back(
-        "-lLLVM-" +
-        std::string(ncnn_compile::vulkan_host_config::kLLVMVersionMajor));
-    } else {
-      for (std::string_view argument :
-           ncnn_compile::vulkan_host_config::kStaticLLVMLinkArgs) {
-        link.emplace_back(argument);
-      }
-    }
     for (std::string_view argument :
          ncnn_compile::vulkan_host_config::kHostCxxRuntimeArgs) {
       link.emplace_back(argument);
@@ -3919,10 +3901,30 @@ int CompileSession::linkAndAudit() {
                  "-Wl,--exclude-libs,ALL",
                  "-Wl,--version-script=" + exports.string(),
                  "-Wl,--build-id=none",
+                 "-Wl,-Map=" + (staging.path() / "vulkan-link.map").string(),
+                 "-Wl,--cref",
                  "-lvulkan",
                  "-pthread",
                  "-o",
                  library.string()});
+    // Static-layer audit: the deployment link line may only reference the
+    // generated fixed-run host object, the device helper archive, and
+    // platform libraries.  Any runtime/plan/LLVM/MLIR input fails closed.
+    static constexpr std::array<std::string_view, 5> kForbiddenLinkInputs = {
+      "NCNNVulkanRuntime",
+      "NCNNVulkanPlanSupport",
+      "NCNNVulkanHostProgramSupport",
+      "libLLVM",
+      "libMLIR"};
+    for (const std::string& argument : link) {
+      for (std::string_view forbidden : kForbiddenLinkInputs) {
+        if (argument.contains(forbidden)) {
+          return fail(std::format(
+            "Vulkan model link inputs contain a compiler runtime: {}",
+            argument));
+        }
+      }
+    }
     if (int status = ::run(link)) {
       return status;
     }
@@ -3944,6 +3946,36 @@ int CompileSession::linkAndAudit() {
                                                     model_name + "_vk_destroy"};
     if (symbols(*text) != expected_exports) {
       return fail("Vulkan model library exports differ from the lifecycle ABI");
+    }
+    // Structural audit: the deployment object must not reference the generic
+    // plan executor, plan parsing, or compiler namespaces through undefined
+    // symbols.  Archive members are localized by --exclude-libs/strip, so any
+    // surviving reference to these names means generic runtime code leaked
+    // into the model link.
+    capture_path = staging.path() / "vulkan-undefined.txt";
+    if (int status =
+          ::run({nm_path, "-D", "--undefined-only", library.string()},
+                capture_path)) {
+      return status;
+    }
+    text = read_text(capture_path);
+    if (!text) {
+      return fail(text.error());
+    }
+    const auto referencesCompilerCode = [](const std::string& symbol) {
+      return symbol.contains("llvm") || symbol.contains("mlir") ||
+             symbol.contains("ExecutionPlan") ||
+             symbol.contains("HostProgram") ||
+             symbol.contains("VulkanRuntimeContext");
+    };
+    const std::set<std::string> undefined_symbols = symbols(*text);
+    for (const std::string& symbol : undefined_symbols) {
+      if (referencesCompilerCode(symbol)) {
+        return fail(
+          std::format("Vulkan model library references compiler or generic "
+                      "plan symbols: {}",
+                      symbol));
+      }
     }
     capture_path = staging.path() / "vulkan-dynamic-table.txt";
     if (int status =
@@ -3986,18 +4018,27 @@ int CompileSession::linkAndAudit() {
                                                "libc++abi.so.1",
                                                "libunwind.so.1",
                                                "libatomic.so.1"};
-    const std::string llvm_major(
-      ncnn_compile::vulkan_host_config::kLLVMVersionMajor);
-    const auto isLLVMRuntime = [&llvm_major](const std::string& name) {
-      const std::string shared_name = "libLLVM.so." + llvm_major;
-      const std::string versioned_name = "libLLVM-" + llvm_major + ".so.";
-      return name == shared_name || name.starts_with(shared_name + ".") ||
-             name.starts_with(versioned_name);
+    // Dynamic-layer audit, VA5: the deployment boundary no longer follows the
+    // compiler's own LLVM build mode.  Shared or statically linked LLVM in the
+    // compiler never justifies a model-side libLLVM/libclang/libMLIR entry.
+    // libclang_rt.* are compiler-provided sanitizer instrumentation runtimes:
+    // they stay legal only through the configured sanitizer classification.
+    const auto isCompilerRuntime = [](const std::string& dependency) {
+      if (dependency.starts_with("libclang_rt.")) {
+        return false;
+      }
+      return dependency.starts_with("libLLVM") ||
+             dependency.starts_with("libclang") ||
+             dependency.starts_with("libMLIR");
     };
-    for (std::string_view dependency :
-         ncnn_compile::vulkan_host_config::kStaticLLVMNeededLibraries) {
-      allowed_libraries.emplace(dependency);
+    for (const std::string& dependency : needed_libraries) {
+      if (isCompilerRuntime(dependency)) {
+        return fail(std::format(
+          "Vulkan model library must not depend on the compiler runtime: {}",
+          dependency));
+      }
     }
+    std::set<std::string> sanitizer_dependencies;
     for (std::string_view runtime :
          ncnn_compile::vulkan_host_config::kSanitizerRuntimeLibraries) {
       if (!fs::is_regular_file(runtime)) {
@@ -4013,21 +4054,14 @@ int CompileSession::linkAndAudit() {
           "Vulkan model library is missing configured sanitizer runtime {}",
           dependency));
       }
-      allowed_libraries.insert(configured_dependency);
+      sanitizer_dependencies.insert(configured_dependency);
     }
-    if (!needed_libraries.contains("libvulkan.so.1") ||
-        (ncnn_compile::vulkan_host_config::kUsesSharedLLVM &&
-         !std::ranges::any_of(needed_libraries, isLLVMRuntime))) {
-      return fail(
-        ncnn_compile::vulkan_host_config::kUsesSharedLLVM
-          ? "Vulkan model library is missing its loader or configured "
-            "LLVM runtime dependency"
-          : "Vulkan model library is missing its loader dependency");
+    if (!needed_libraries.contains("libvulkan.so.1")) {
+      return fail("Vulkan model library is missing its loader dependency");
     }
     for (const std::string& dependency : needed_libraries) {
       if (!allowed_libraries.contains(dependency) &&
-          !(ncnn_compile::vulkan_host_config::kUsesSharedLLVM &&
-            isLLVMRuntime(dependency))) {
+          !sanitizer_dependencies.contains(dependency)) {
         return fail(std::format(
           "Vulkan model library has an unexpected dependency: {}", dependency));
       }
@@ -4036,10 +4070,16 @@ int CompileSession::linkAndAudit() {
     if (!manifest_json) {
       return fail(manifest_json.error());
     }
-    std::vector<std::string> dependency_list(needed_libraries.begin(),
-                                             needed_libraries.end());
+    std::vector<std::string> dependency_list;
+    for (const std::string& dependency : needed_libraries) {
+      if (!sanitizer_dependencies.contains(dependency)) {
+        dependency_list.push_back(dependency);
+      }
+    }
+    std::vector<std::string> sanitizer_list(sanitizer_dependencies.begin(),
+                                            sanitizer_dependencies.end());
     auto updated_manifest = ncnn_compile::updateVulkanManifestDependencies(
-      *manifest_json, std::move(dependency_list));
+      *manifest_json, std::move(dependency_list), std::move(sanitizer_list));
     if (!updated_manifest) {
       return fail(updated_manifest.error());
     }
@@ -4494,7 +4534,6 @@ int CompileSession::verifyExecution() {
       library_path += path;
     };
     appendLibraryPath(ncnn_compile::vulkan_host_config::kSanitizerRuntimeDir);
-    appendLibraryPath(vulkan_llvm_library_dir.string());
     const char* inherited_path = std::getenv("LD_LIBRARY_PATH");
     if (inherited_path != nullptr) {
       appendLibraryPath(inherited_path);
@@ -4561,6 +4600,23 @@ int CompileSession::verifyExecution() {
       llvm::errs()
         << "ncnn-compile: error: ABI verification harness compilation failed\n";
       return status;
+    }
+    // The harness links the same shared sanitizer runtimes as the model when
+    // the caller configured instrumentation; give its loader the configured
+    // runtime directory before the inherited search path.
+    if (!ncnn_compile::vulkan_host_config::kSanitizerRuntimeDir.empty()) {
+      std::string sanitizer_library_path(
+        ncnn_compile::vulkan_host_config::kSanitizerRuntimeDir);
+      const char* harness_inherited = std::getenv("LD_LIBRARY_PATH");
+      if (harness_inherited != nullptr && *harness_inherited != '\0') {
+        sanitizer_library_path += ':';
+        sanitizer_library_path += harness_inherited;
+      }
+      if (::setenv("LD_LIBRARY_PATH",
+                   sanitizer_library_path.c_str(),
+                   /*overwrite=*/1) != 0) {
+        return fail("cannot set LD_LIBRARY_PATH for ABI verification harness");
+      }
     }
     if (int status = ::run({harness.string()})) {
       llvm::errs() << "ncnn-compile: error: ABI execution verification failed "

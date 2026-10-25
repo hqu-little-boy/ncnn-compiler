@@ -935,6 +935,9 @@ class Gate:
             if (self.args.legacy_baseline_stage and
                     self.args.stage_id in {"VA0", "VA1"}):
                 audit_command.append("--require-va0-stage")
+            # The strict --require-va5-deployment composite runs after both
+            # profiles complete and their archives exist; running it inside
+            # the gate would demand the archive before it is written.
             subprocess.run(audit_command, check=True)
             if self.args.archive:
                 archive = self.stage.parent / f"{self.stage.name}.evidence.tar.gz"
@@ -962,7 +965,9 @@ class Gate:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=PROFILES, required=True)
-    parser.add_argument("--stage-id", choices=("VA0", "VA1", "VA2", "VA3", "VA4"), default="VA0")
+    parser.add_argument("--stage-id",
+                        choices=("VA0", "VA1", "VA2", "VA3", "VA4", "VA5"),
+                        default="VA0")
     parser.add_argument("--source-dir", type=Path,
                         default=Path(__file__).resolve().parents[2])
     parser.add_argument("--build-root", type=Path, default=Path("/tmp"))

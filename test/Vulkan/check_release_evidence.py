@@ -22,6 +22,7 @@ import model_dependency_evidence as dependency_evidence
 import device_helper_evidence as device_helper_audit
 import lifecycle_evidence as lifecycle_audit
 import fixedrun_evidence as fixedrun_evidence
+import run_va5_deployment as va5_deployment
 
 
 SCHEMA_VERSION = 1
@@ -990,12 +991,12 @@ def audit_stage_gate(stage_dir: Path, *, source_root: Path | None = None,
                  build_dir=stage_build)
     if not isinstance(state.get("git_revision"), str) or not state["git_revision"]:
         _finding(findings, "git-revision-missing", "baseline git_revision is missing")
-    if (not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4"} or
+    if (not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5"} or
             state.get("host_execution_role") != "legacy-product" or
             state.get("host_aot_candidate") is not False):
         _finding(findings, "gate-execution-role",
                  "qualification stages retain the legacy product role and cannot claim host AOT release eligibility")
-    if isinstance(stage_id, str) and stage_id in {"VA2", "VA3", "VA4"} and profile not in {"release", "sanitize"}:
+    if isinstance(stage_id, str) and stage_id in {"VA2", "VA3", "VA4", "VA5"} and profile not in {"release", "sanitize"}:
         _finding(findings, f"{stage_id.lower()}-profile-invalid",
                  f"{stage_id} qualification accepts only Release and matching static SAN stages",
                  profile=profile)
@@ -2361,12 +2362,15 @@ def _verify_raw_tensor_record(stage: Path, base: Path, record: object,
 def _audit_current_host_contract(manifest: object, label: str,
                                   findings: list[dict]) -> None:
     if (not isinstance(manifest, dict) or
-            manifest.get("host_implementation") != "generic-plan-runtime" or
+            manifest.get("host_implementation") != "model-fixed-run" or
             type(manifest.get("host_codegen_version")) is not int or
-            manifest["host_codegen_version"] != 1 or
-            manifest.get("execution_plan_usage") != "embedded-runtime-required"):
+            manifest["host_codegen_version"] != 2 or
+            manifest.get("host_source_codegen_version") !=
+            "ncnn-vulkan-fixed-run-codegen/v1" or
+            manifest.get("execution_plan_usage") != "build-evidence-only"):
         _finding(findings, "host-implementation-contract",
-                 f"{label} must identify the actual generic plan runtime/codegen v1, not host AOT")
+                 f"{label} must identify the actual model-fixed-run/codegen v2 "
+                 "contract with a build-evidence-only plan")
 
 
 def _check_product_artifact_set(stage: Path, base: Path, fixture: dict,
@@ -4336,6 +4340,33 @@ VA4_STEP_TESTS = {
 }
 
 
+VA5_DEVICE_DEPLOYMENT_TESTS = frozenset({
+    "vulkan-va5-deployment-nvidia",
+    "vulkan-va5-deployment-llvmpipe",
+})
+
+VA5_STEP_TESTS = {
+    # General product/offline tests are already required for every profile;
+    # the VA5 IDs carry only the deployment-specific additions.
+    "VA5.1": frozenset({
+        "vulkan-va5-deployment-tests",
+    }),
+    "VA5.2": frozenset({
+        "vulkan-va5-deployment-tests",
+    }),
+    "VA5.3": frozenset({
+        "vulkan-va5-deployment-no-device",
+        *VA5_DEVICE_DEPLOYMENT_TESTS,
+    }),
+    "VA5.4": frozenset({
+        "vulkan-va5-deployment-tests",
+        "vulkan-va5-deployment-no-device",
+    }),
+}
+
+VA5_REQUIRED_TESTS = frozenset().union(*VA5_STEP_TESTS.values())
+
+
 VA1_STEP_TESTS = {
     "VA1.1": frozenset({
         "VulkanHostProgramTest.RejectsReferencesLifetimesAndBindings",
@@ -4397,13 +4428,25 @@ def _required_tests(profile: str, stage_id: str = "VA0") -> set[str]:
         tests.update(_va3_codegen_tests())
         tests.update(VA4_FIXEDRUN_TESTS)
         tests.update(_va4_codegen_tests())
+    elif stage_id == "VA5":
+        tests.update(VA1_REQUIRED_TESTS)
+        tests.update(VA2_REQUIRED_TESTS)
+        tests.update(VA3_REQUIRED_TESTS)
+        tests.update(_va3_codegen_tests())
+        tests.update(VA4_FIXEDRUN_TESTS)
+        tests.update(_va4_codegen_tests())
+        tests.update(VA5_REQUIRED_TESTS)
+        # Deployment scenarios register per configured ICD; only require the
+        # ones this profile can actually run.
+        tests.difference_update(VA5_DEVICE_DEPLOYMENT_TESTS)
+        tests.update(f"vulkan-va5-deployment-{device}" for device in devices)
     return tests
 
 
 def _check_required_tests(gate: dict, findings: list[dict]) -> None:
     names = set(gate.get("ctest", {}).get("test_names", []))
     stage_id = gate["stage_id"] if "stage_id" in gate else "VA0"
-    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4"}:
+    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5"}:
         _finding(findings, "gate-execution-role",
                  "required-test scope has an invalid or missing stage_id",
                  stage_id=stage_id)
@@ -4487,6 +4530,10 @@ def _make_id_catalog() -> dict[str, dict]:
     for identifier, tests in VA4_STEP_TESTS.items():
         add(identifier, "fixedrun_fixture", sorted(tests), "va4",
             "model-specific-fixed-commands-and-recomputed-numerics")
+    for identifier, tests in VA5_STEP_TESTS.items():
+        add(identifier, "paired_relu_and_conv_relu_published",
+            sorted(tests), "va5",
+            "published-deployment-link-audit-and-clean-loader-execution")
     return catalog
 
 
@@ -4572,13 +4619,13 @@ def _va0_migration_coverage(gate: dict) -> dict:
     va4_tests = VA4_FIXEDRUN_TESTS | _va4_codegen_tests()
     actual_names = sorted(set(gate.get("ctest", {}).get("test_names", [])) -
                           set(VA2_REQUIRED_TESTS) - set(VA3_REQUIRED_TESTS) -
-                          va4_tests -
+                          va4_tests - set(VA5_REQUIRED_TESTS) -
                           {name for name in gate.get("ctest", {}).get("test_names", [])
                            if name.startswith(VA3_CODEGEN_TEST_PREFIXES)})
     id_rows = {}
     related_by_test: dict[str, list[str]] = {}
     for identifier, spec in ID_CATALOG.items():
-        if spec["evidence_family"] in {"va2", "va3", "va4"}:
+        if spec["evidence_family"] in {"va2", "va3", "va4", "va5"}:
             continue
         id_rows[identifier] = {
             "legacy_tests": sorted(set(spec["tests"])),
@@ -4605,7 +4652,7 @@ def _va0_migration_coverage(gate: dict) -> dict:
     profile = gate.get("profile", "")
     legacy_test_rows = [row for identifier, row in id_rows.items()
                         if ID_CATALOG[identifier]["evidence_family"] not in
-                        {"va1", "va2", "va3", "va4"}]
+                        {"va1", "va2", "va3", "va4", "va5"}]
     applicable = set().union(*(_applicable_tests(row["legacy_tests"], profile)
                                for row in legacy_test_rows)) if legacy_test_rows else set()
     missing = sorted(applicable - set(actual_names))
@@ -6064,6 +6111,206 @@ def _audit_va4_fixedrun(stage: Path, gate: dict, refs: list[dict],
                 "raw_artifacts": [], "host_aot_release_eligible": False}
 
 
+VA5_DEPLOYMENT_EVIDENCE_PATHS = {
+    "release": ("test/Vulkan/evidence/va5/nvidia/deployment-evidence.json",
+                "test/Vulkan/evidence/va5/llvmpipe/deployment-evidence.json",
+                "test/Vulkan/evidence/va5/no-device/deployment-evidence.json"),
+    "sanitize": ("test/Vulkan/evidence/va5/nvidia/deployment-evidence.json",
+                 "test/Vulkan/evidence/va5/llvmpipe/deployment-evidence.json",
+                 "test/Vulkan/evidence/va5/no-device/deployment-evidence.json"),
+    "offline": ("test/Vulkan/evidence/va5/no-device/deployment-evidence.json",),
+    "software": ("test/Vulkan/evidence/va5/llvmpipe/deployment-evidence.json",
+                 "test/Vulkan/evidence/va5/no-device/deployment-evidence.json"),
+    "hardware": ("test/Vulkan/evidence/va5/nvidia/deployment-evidence.json",
+                 "test/Vulkan/evidence/va5/no-device/deployment-evidence.json"),
+}
+
+
+def _audit_va5_deployment_evidence_document(document: dict, expected_profile: str,
+                                            scenario_profile: str,
+                                            findings: list[dict],
+                                            label: str) -> bool:
+    """scenario_profile is "device" or "no-device"; the document's own
+    profile field must match it and selects the acceptance branch."""
+    if (not isinstance(document, dict) or
+            document.get("schema_version") != 1 or
+            document.get("kind") != va5_deployment.EVIDENCE_KIND or
+            document.get("profile") != expected_profile):
+        _finding(findings, "va5-deployment-evidence-invalid",
+                 f"{label} deployment evidence schema/profile is invalid")
+        return False
+    if document.get("host_contract") != va5_deployment.HOST_CONTRACT:
+        _finding(findings, "va5-deployment-evidence-invalid",
+                 f"{label} deployment evidence pins an unexpected host contract")
+        return False
+    scenarios = document.get("scenarios")
+    if not isinstance(scenarios, dict) or \
+            set(scenarios) != set(va5_deployment.FIXTURES):
+        _finding(findings, "va5-deployment-evidence-invalid",
+                 f"{label} deployment evidence scenario inventory is invalid")
+        return False
+    valid = True
+    for fixture, scenario in scenarios.items():
+        if not isinstance(scenario, dict):
+            _finding(findings, "va5-deployment-scenario-invalid",
+                     f"{label} {fixture} deployment scenario is malformed")
+            valid = False
+            continue
+        if scenario.get("status") == "not-applicable-offline":
+            if expected_profile != "no-device":
+                _finding(findings, "va5-deployment-scenario-invalid",
+                         f"{label} {fixture} is unexpectedly skipped on a device profile")
+                valid = False
+            continue
+        if scenario.get("status") != "passed":
+            _finding(findings, "va5-deployment-scenario-failed",
+                     f"{label} {fixture} deployment scenario did not pass")
+            valid = False
+            continue
+        deployment = scenario.get("deployment")
+        deployed = (deployment.get("deployed")
+                    if isinstance(deployment, dict) else None)
+        if (not isinstance(deployed, list) or
+                sorted(item.get("file", "") for item in deployed) !=
+                sorted((f"{scenario.get('model')}_vulkan.h",
+                        f"lib{scenario.get('model')}_vulkan.so"))):
+            _finding(findings, "va5-deployment-directory-invalid",
+                     f"{label} {fixture} deployment directory is not the minimal "
+                     "header+DSO pair")
+            valid = False
+        loader = scenario.get("loader", {})
+        environment = loader.get("environment", {})
+        scrubbed = str(environment.get("scrubbed_LD_LIBRARY_PATH", ""))
+        if scrubbed:
+            segments = [segment for segment in scrubbed.split(":") if segment]
+            leaked = [segment for segment in segments
+                      if any(marker.lower() in segment.lower()
+                             for marker in
+                             va5_deployment.FORBIDDEN_LIBRARY_PATH_MARKERS)]
+            if leaked:
+                _finding(findings, "va5-deployment-environment-leaked",
+                         f"{label} {fixture} loader environment kept build/LLVM "
+                         "search paths", segments=leaked)
+                valid = False
+        if scenario_profile == "no-device":
+            if (loader.get("gpu_numeric") is not False or
+                    scenario.get("loader", {}).get("no_device_create_status")
+                    not in (2, 5)):
+                _finding(findings, "va5-deployment-no-device-invalid",
+                         f"{label} {fixture} no-device create failure is not "
+                         "explicitly recorded")
+                valid = False
+        else:
+            if loader.get("gpu_numeric") is not True:
+                _finding(findings, "va5-deployment-numeric-missing",
+                         f"{label} {fixture} device deployment lacks numeric "
+                         "execution")
+                valid = False
+            reproducibility = scenario.get("reproducibility", {})
+            if reproducibility.get("mode") != "byte-identical" or \
+                    not reproducibility.get("artifacts"):
+                _finding(findings, "va5-deployment-reproducibility-invalid",
+                         f"{label} {fixture} artifact reproducibility is not "
+                         "byte-identical")
+                valid = False
+            protection = scenario.get("failed_compile_preserves_outputs", {})
+            preserved = protection.get("preserved_sha256s")
+            published = scenario.get("published")
+            if (not isinstance(preserved, dict) or not preserved or
+                    preserved != published):
+                _finding(findings, "va5-deployment-protection-invalid",
+                         f"{label} {fixture} failed compile did not demonstrably "
+                         "preserve the published artifacts")
+                valid = False
+    return valid
+
+
+def _audit_va5_deployment(stage: Path, gate: dict, refs: list[dict],
+                          findings: list[dict]) -> dict:
+    if gate.get("stage_id") != "VA5":
+        return {"status": "not-applicable", "stage_id": gate.get("stage_id"),
+                "role": "none", "host_aot_release_eligible": False}
+    ctest = gate.get("ctest", {})
+    names = ctest.get("test_names", []) if isinstance(ctest, dict) else []
+    skipped = ctest.get("skipped", []) if isinstance(ctest, dict) else []
+    failed = ctest.get("failed", []) if isinstance(ctest, dict) else []
+    missing_required = sorted(VA5_REQUIRED_TESTS - set(names))
+    if missing_required:
+        _finding(findings, "va5-required-ctest-missing",
+                 "VA5 stage lacks required deployment/link-audit tests",
+                 tests=missing_required)
+    not_passed = sorted((VA5_REQUIRED_TESTS & set(skipped)) |
+                        (VA5_REQUIRED_TESTS & set(failed)))
+    if not_passed:
+        _finding(findings, "va5-required-ctest-not-passed",
+                 "VA5 required deployment tests were skipped or failed",
+                 tests=not_passed)
+    profile = gate.get("profile")
+    paths = VA5_DEPLOYMENT_EVIDENCE_PATHS.get(profile, ())
+    if not paths:
+        _finding(findings, "va5-deployment-evidence-missing",
+                 f"VA5 profile {profile!r} has no deployment evidence mapping")
+        return {"status": "blocked", "stage_id": "VA5", "role": "deployment",
+                "host_aot_release_eligible": False}
+    documents_ok = True
+    for relative in paths:
+        path = stage / relative
+        expected_profile = "no-device" if "no-device" in relative else "device"
+        if not path.is_file():
+            _finding(findings, "va5-deployment-evidence-missing",
+                     f"VA5 deployment evidence is missing: {relative}")
+            documents_ok = False
+            continue
+        try:
+            document = load_json(path)
+            refs.append({"path": relative, "sha256": sha256_file(path),
+                         "role": f"VA5 deployment evidence ({expected_profile})"})
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            _finding(findings, "va5-deployment-evidence-invalid",
+                     f"VA5 deployment evidence is unreadable: {relative}: {error}")
+            documents_ok = False
+            continue
+        documents_ok = _audit_va5_deployment_evidence_document(
+            document, expected_profile, expected_profile, findings,
+            relative) and documents_ok
+    # Dynamic/static audit replay: the product dependency evidence captured by
+    # the paired-ReLU product run must record the forbidden-LLVM absence claim.
+    dependency_root = stage / "test/Native/vulkan-product-cli/link-evidence"
+    dependency_path = dependency_root / "model-dependency-evidence.json"
+    if dependency_path.is_file():
+        try:
+            model_evidence = load_json(dependency_path)
+            llvm = model_evidence.get("llvm", {})
+            if llvm.get("mode") != "forbidden":
+                _finding(findings, "va5-dependency-mode-invalid",
+                         "product dependency evidence did not use the "
+                         "forbidden-LLVM audit mode")
+                documents_ok = False
+            if llvm.get("legacy_blockers"):
+                _finding(findings, "va5-dependency-llvm-present",
+                         "product link/runtime closure observed compiler "
+                         "artifacts", blockers=llvm.get("legacy_blockers"))
+                documents_ok = False
+            refs.append({"path": dependency_path.relative_to(stage).as_posix(),
+                         "sha256": sha256_file(dependency_path),
+                         "role": "VA5 product dependency evidence"})
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            _finding(findings, "va5-dependency-evidence-invalid",
+                     f"product dependency evidence is unreadable: {error}")
+            documents_ok = False
+    else:
+        _finding(findings, "va5-dependency-evidence-missing",
+                 "VA5 product dependency evidence file is missing")
+        documents_ok = False
+    if documents_ok and not missing_required and not not_passed:
+        return {"status": "verified", "stage_id": "VA5", "role": "deployment",
+                "deployment_evidence": [str(path) for path in paths],
+                "host_aot_release_eligible": False}
+    return {"status": "blocked", "stage_id": "VA5", "role": "deployment",
+            "deployment_evidence": [str(path) for path in paths],
+            "host_aot_release_eligible": False}
+
+
 def audit_stage_evidence(gate: dict) -> dict:
     """Adapt this fresh stage's existing V0–V5 and offline schemas."""
     stage = Path(gate["stage"]).resolve()
@@ -6090,6 +6337,10 @@ def audit_stage_evidence(gate: dict) -> dict:
     families["va2_helper"] = _audit_va2_helper(stage, gate, refs, findings)
     families["va3_lifecycle"] = _audit_va3_lifecycle(stage, gate, refs, findings)
     families["va4_fixedrun"] = _audit_va4_fixedrun(stage, gate, refs, findings)
+    va5_findings = []
+    families["va5_deployment"] = _audit_va5_deployment(
+        stage, gate, refs, va5_findings)
+    findings.extend(va5_findings)
     compact = {}
     for name, data in families.items():
         if name == "cpu_baseline":
@@ -6182,6 +6433,14 @@ def audit_stage_evidence(gate: dict) -> dict:
                 "host_aot_release_eligible": False,
                 "raw_artifacts": data.get("raw_artifacts", []),
                 "claim_scope": data.get("claim_scope"),
+            }
+        elif name == "va5_deployment":
+            compact[name] = {
+                "status": data.get("status"),
+                "stage_id": data.get("stage_id"),
+                "role": data.get("role"),
+                "deployment_evidence": data.get("deployment_evidence", []),
+                "host_aot_release_eligible": False,
             }
     gate_state = gate.get("state", {})
     for label, key in (("gate-state", None), ("CMakeCache", "cmake_cache"),
@@ -6774,6 +7033,79 @@ def _va4_id_row(identifier: str, spec: dict,
             "source_fingerprints": sorted(fingerprints)}
 
 
+def _va5_id_row(identifier: str, spec: dict,
+                stage_audits: list[dict]) -> dict:
+    target_profiles = ("release", "sanitize")
+    stages = [stage for stage in stage_audits
+              if stage.get("stage_id") == "VA5" and
+              stage.get("profile") in target_profiles]
+    tests = set(spec["tests"])
+    profile_rows = []
+    selected_refs = {}
+    profile_valid = {}
+    executed = set()
+    for profile in target_profiles:
+        matches = [stage for stage in stages if stage.get("profile") == profile]
+        if len(matches) != 1:
+            profile_valid[profile] = False
+            profile_rows.append({"profile": profile,
+                                 "status": "missing" if not matches else "duplicate",
+                                 "stages": [stage.get("stage") for stage in matches]})
+            continue
+        stage = matches[0]
+        ctest = stage.get("ctest", {})
+        names = set(ctest.get("test_names", []))
+        skipped = set(ctest.get("skipped", []))
+        failed = set(ctest.get("failed", []))
+        passed_tests = names - skipped - failed
+        executed.update(passed_tests)
+        family = stage.get("families", {}).get("va5_deployment", {})
+        missing = sorted(tests - names)
+        not_passed = sorted(tests & (skipped | failed))
+        valid = (stage.get("scope_passed") is True and
+                 family.get("status") == "verified" and not missing and
+                 not not_passed and
+                 stage.get("archive_integrity", {}).get("status") == "verified")
+        profile_valid[profile] = valid
+        profile_rows.append({"profile": profile, "stage": stage.get("stage"),
+                             "source_fingerprint": stage.get("source_fingerprint"),
+                             "status": "passed" if valid else "blocked",
+                             "tests_executed": sorted(passed_tests & tests),
+                             "tests_missing": missing,
+                             "tests_not_passed": not_passed,
+                             "deployment_evidence": family.get("deployment_evidence", [])})
+        for ref in stage.get("raw_artifacts", []):
+            path = str(ref.get("path", ""))
+            if path.startswith("test/Vulkan/evidence/va5/") or \
+                    path == "test/Native/vulkan-product-cli/link-evidence/model-dependency-evidence.json":
+                key = (stage.get("stage"), path)
+                selected_refs[key] = {"stage": stage.get("stage"),
+                                      **{field: ref[field] for field in
+                                         ("path", "sha256", "role") if field in ref}}
+    fingerprints = {stage.get("source_fingerprint") for stage in stages
+                    if isinstance(stage.get("source_fingerprint"), str)}
+    missing_tests = sorted(tests - executed)
+    passed = (all(profile_valid.get(profile) is True for profile in target_profiles) and
+              len(fingerprints) == 1)
+    return {"cpu_positive": {"fixture": spec["cpu_fixture"],
+                             "fresh_cpu_baseline": []},
+            "related_tests": sorted(tests),
+            "tests_executed": sorted(tests & executed),
+            "tests_missing_from_supplied_stages": missing_tests,
+            "tests_applicable_to_supplied_profiles": sorted(tests),
+            "tests_missing_for_supplied_profile_scopes": missing_tests,
+            "profiles": profile_rows,
+            "evidence_family": "va5-published-deployment",
+            "evidence_profiles": list(target_profiles),
+            "gpu_numerical_claim": spec["gpu_numeric"],
+            "raw_artifacts": list(selected_refs.values()),
+            "status": "passed" if passed else "blocked",
+            "release_status": "not_eligible",
+            "release_eligibility_scope": "published product deployment; full support matrix migration (VA6) and final profiles (VA7) remain incomplete",
+            "host_aot_release_eligible": False,
+            "source_fingerprints": sorted(fingerprints)}
+
+
 def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
                    all_refs: list[dict]) -> dict:
     legacy_audits = [stage for stage in stage_audits
@@ -6797,6 +7129,9 @@ def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
             continue
         if family == "va4":
             indexed[identifier] = _va4_id_row(identifier, spec, stage_audits)
+            continue
+        if family == "va5":
+            indexed[identifier] = _va5_id_row(identifier, spec, stage_audits)
             continue
         if family == "va0":
             indexed[identifier] = _va0_id_row(identifier, spec, legacy_audits)
@@ -7030,7 +7365,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                  require_va1_planner: bool = False,
                  require_va2_helper: bool = False,
                  require_va3_lifecycle: bool = False,
-                 require_va4_fixedrun: bool = False) -> dict:
+                 require_va4_fixedrun: bool = False,
+                 require_va5_deployment: bool = False) -> dict:
     gates = []
     for stage_dir in stage_dirs:
         gate = audit_stage_gate(stage_dir, verify_fingerprint=verify_fingerprint)
@@ -7042,7 +7378,7 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
             stage["stage_id"] = "VA0"
         stage_id = stage.get("stage_id")
         required_archive_artifacts = []
-        if isinstance(stage_id, str) and stage_id in {"VA1", "VA2", "VA3", "VA4"}:
+        if isinstance(stage_id, str) and stage_id in {"VA1", "VA2", "VA3", "VA4", "VA5"}:
             deduplicated = {}
             for ref in stage.get("raw_artifacts", []):
                 relative = str(ref.get("path", ""))
@@ -7056,7 +7392,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                      (require_va1_planner and stage_id == "VA1") or
                      (require_va2_helper and stage_id == "VA2") or
                      (require_va3_lifecycle and stage_id == "VA3") or
-                     (require_va4_fixedrun and stage_id == "VA4"),
+                     (require_va4_fixedrun and stage_id == "VA4") or
+                     (require_va5_deployment and stage_id == "VA5"),
             required_artifacts=required_archive_artifacts)
         gates.append(stage)
     global_findings = [{"stage": stage.get("stage"),
@@ -7065,11 +7402,11 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                        stage.get("archive_integrity", {}).get("findings", [])]
     invalid_stage_ids = [stage for stage in gates
                          if not isinstance(stage.get("stage_id"), str) or
-                         stage.get("stage_id") not in {"VA0", "VA1", "VA2", "VA3", "VA4"}]
+                         stage.get("stage_id") not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5"}]
     invalid_stage_id_findings = []
     for stage in invalid_stage_ids:
         finding = {"code": "stage-id-invalid",
-                   "message": "stage_id must be VA0 through VA4 when explicitly supplied",
+                   "message": "stage_id must be VA0 through VA5 when explicitly supplied",
                    "stage": stage.get("stage"),
                    "stage_id": stage.get("stage_id")}
         global_findings.append(finding)
@@ -7091,7 +7428,7 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
     for stage in gates:
         stage_id = stage.get("stage_id")
         fingerprint = stage.get("source_fingerprint")
-        if (isinstance(stage_id, str) and stage_id in {"VA0", "VA1", "VA2", "VA3", "VA4"} and
+        if (isinstance(stage_id, str) and stage_id in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5"} and
                 isinstance(fingerprint, str) and SHA256_RE.fullmatch(fingerprint)):
             grouped_fingerprints.setdefault(stage_id, set()).add(fingerprint)
     for stage_id, fingerprints in grouped_fingerprints.items():
@@ -7107,6 +7444,7 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
     va2_gates = [stage for stage in gates if stage.get("stage_id") == "VA2"]
     va3_gates = [stage for stage in gates if stage.get("stage_id") == "VA3"]
     va4_gates = [stage for stage in gates if stage.get("stage_id") == "VA4"]
+    va5_gates = [stage for stage in gates if stage.get("stage_id") == "VA5"]
     required_profiles = {"release", "sanitize", "offline", "software"}
     supplied_profiles = {stage.get("profile") for stage in va0_gates
                          if isinstance(stage.get("profile"), str)}
@@ -7373,6 +7711,49 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
     if require_va4_fixedrun and not va4_fixedrun_eligible:
         _finding(global_findings, "va4-fixedrun-eligibility-required",
                  "--require-va4-fixedrun needs final same-source Release and static SAN VA4.1-VA4.4 evidence, independent legacy comparison, and verified archives")
+
+    va5_required_profiles = {"release", "sanitize"}
+    va5_missing_profiles = sorted(va5_required_profiles -
+                                  {stage.get("profile") for stage in va5_gates})
+    va5_fingerprints = grouped_fingerprints.get("VA5", set())
+    va5_invalid_stages = [stage.get("stage") for stage in va5_gates
+                          if not stage.get("scope_passed") or
+                          stage.get("archive_integrity", {}).get("status") != "verified" or
+                          stage.get("families", {}).get("va5_deployment", {}).get("status") != "verified"]
+    va5_ids = {identifier: row for identifier, row in id_index.items()
+               if identifier.startswith("VA5.")}
+    va5_incomplete_ids = sorted(identifier for identifier, row in va5_ids.items()
+                                if row.get("status") != "passed")
+    va5_duplicate_profiles = any(
+        sum(stage.get("profile") == profile for stage in va5_gates) != 1
+        for profile in va5_required_profiles)
+    va5_deployment_eligible = (
+        not va5_missing_profiles and not va5_invalid_stages and
+        not va5_duplicate_profiles and len(va5_fingerprints) == 1 and
+        not va5_incomplete_ids)
+    va5_deployment_blockers = []
+    if va5_missing_profiles:
+        va5_deployment_blockers.append({"code": "va5-required-profiles-missing",
+                                        "profiles": va5_missing_profiles})
+    if va5_invalid_stages:
+        va5_deployment_blockers.append({"code": "va5-stage-incomplete",
+                                        "stages": va5_invalid_stages})
+    if va5_duplicate_profiles:
+        va5_deployment_blockers.append({"code": "va5-profile-duplicate",
+                                        "profiles": sorted(
+                                            profile for profile in va5_required_profiles
+                                            if sum(stage.get("profile") == profile
+                                                   for stage in va5_gates) != 1)})
+    if len(va5_fingerprints) != 1:
+        va5_deployment_blockers.append({"code": "va5-source-fingerprint-mismatch",
+                                        "fingerprints": sorted(va5_fingerprints)})
+    if va5_incomplete_ids:
+        va5_deployment_blockers.append({"code": "va5-id-index-incomplete",
+                                        "ids": va5_incomplete_ids})
+    if require_va5_deployment and not va5_deployment_eligible:
+        _finding(global_findings, "va5-deployment-eligibility-required",
+                 "--require-va5-deployment needs final same-source Release and "
+                 "static SAN VA5.1-VA5.4 deployment evidence and verified archives")
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": REPORT_KIND,
@@ -7389,6 +7770,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                                    if len(va3_fingerprints) == 1 else None),
         "va4_source_fingerprint": (next(iter(va4_fingerprints))
                                    if len(va4_fingerprints) == 1 else None),
+        "va5_source_fingerprint": (next(iter(va5_fingerprints))
+                                   if len(va5_fingerprints) == 1 else None),
         "source_fingerprints_by_stage_id": {
             key: sorted(value) for key, value in grouped_fingerprints.items()},
         "profiles_required_for_release": sorted(required_profiles),
@@ -7401,6 +7784,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
         "va3_profiles_missing": va3_missing_profiles,
         "va4_profiles_required": sorted(va4_required_profiles),
         "va4_profiles_missing": va4_missing_profiles,
+        "va5_profiles_required": sorted(va5_required_profiles),
+        "va5_profiles_missing": va5_missing_profiles,
         "release_eligible": release_eligible,
         "legacy_vulkan_release_eligible": release_eligible,
         "va0_baseline_eligible": va0_baseline_eligible,
@@ -7448,8 +7833,18 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
              "evidence": stage.get("families", {}).get("va4_fixedrun", {})}
             for stage in va4_gates],
         "va4_fixedrun_blockers": va4_fixedrun_blockers,
+        "va5_deployment_eligible": va5_deployment_eligible,
+        "va5_deployment_required": require_va5_deployment,
+        "va5_deployment_stages": [
+            {"stage": stage.get("stage"), "profile": stage.get("profile"),
+             "source_fingerprint": stage.get("source_fingerprint"),
+             "scope_passed": stage.get("scope_passed"),
+             "archive_status": stage.get("archive_integrity", {}).get("status"),
+             "evidence": stage.get("families", {}).get("va5_deployment", {})}
+            for stage in va5_gates],
+        "va5_deployment_blockers": va5_deployment_blockers,
         "host_aot_release_eligible": False,
-        "baseline_scope": "VA0 legacy baseline, VA1 planner, VA2 helper, and VA3 private lifecycle candidate; none claims a deployable model run",
+        "baseline_scope": "VA0 legacy baseline, VA1 planner, VA2 helper, VA3 private lifecycle candidate, VA4 fixed-run prototype, and VA5 published deployment; VA6/VA7 claims remain open",
         "host_aot_blockers": ([] if va1_planner_eligible else
                                ["VA1 planner evidence incomplete"]) +
                               ([] if va2_helper_eligible else
@@ -7460,8 +7855,9 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                                ["VA4 fixed-run is a private small-graph prototype, not a switched product"]) +
                               ([] if va4_fixedrun_eligible else
                                ["VA4 fixed-run/synchronization evidence incomplete"]) +
-                              ["VA5 link/clean-publish not implemented",
-                               "VA6 full matrix/faults not implemented",
+                              ([] if va5_deployment_eligible else
+                               ["VA5 link/clean-publish evidence incomplete"]) +
+                              ["VA6 full matrix/faults not implemented",
                                "VA7 profiles/inventory not implemented"],
         "release_decision": {
             "decision": "release-eligible-opt-in" if release_eligible else "no-go-or-incomplete",
@@ -7500,6 +7896,8 @@ def parse_args(argv=None):
                         help="require final same-source Release and static SAN private VA3.1-VA3.4 lifecycle evidence and verified archives")
     parser.add_argument("--require-va4-fixedrun", action="store_true",
                         help="require final same-source Release and static SAN VA4.1-VA4.4 fixed-run evidence and verified archives")
+    parser.add_argument("--require-va5-deployment", action="store_true",
+                        help="require final same-source Release and static SAN VA5.1-VA5.5 deployment evidence and verified archives")
     return parser.parse_args(argv)
 
 
@@ -7512,7 +7910,8 @@ def main(argv=None) -> int:
             require_va1_planner=args.require_va1_planner,
             require_va2_helper=args.require_va2_helper,
             require_va3_lifecycle=args.require_va3_lifecycle,
-            require_va4_fixedrun=args.require_va4_fixedrun)
+            require_va4_fixedrun=args.require_va4_fixedrun,
+            require_va5_deployment=args.require_va5_deployment)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         report = {"schema_version": SCHEMA_VERSION, "kind": REPORT_KIND,
                   "generated_at": datetime.now(timezone.utc).isoformat(),

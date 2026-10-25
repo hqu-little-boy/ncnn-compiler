@@ -310,9 +310,10 @@ only an individual test or audit.
 `makeVulkanLifecycleSource` remains the VA3 lifecycle-only fixture API: its
 valid `run` returns `API_ERROR`, does not write outputs, and its historical
 `candidate_execution="not_run"` evidence is unchanged. The separate
-compiler-only `makeVulkanHostSource` API emits a private fixed-run implementation
-from the verified package `run_operations`; it is not selected by the public CLI
-and does not change the product manifest's `generic-plan-runtime` identity.
+compiler-only `makeVulkanHostSource` API emits the fixed-run implementation
+from the verified package `run_operations`; since VA5 the public CLI selects
+it for published products, which switched the product manifest to the
+`model-fixed-run` contract.
 
 With product support and testing enabled, `ncnn-vulkan-fixedrun-capture` is a
 separate, non-installed test tool. It reuses the real `.param/.bin → Vulkan
@@ -441,6 +442,66 @@ VA0 frozen-baseline qualification; it does not change `--require-release`,
 small-graph fixed-run prototype. `host_aot_release_eligible` remains false until
 the separate product-link/dependency, full support-matrix, and product-switch
 requirements are completed.
+
+### Published deployment, dependency audits and VA5 qualification
+
+Since VA5 the public `ncnn-compile --backend=vulkan` product publishes the
+fixed-run host source generated from the verified package: `create`/`run`/
+`destroy` never parse an execution plan or call a generic executor, and the
+deployment link line contains only the generated host object, the
+`NCNNVulkanDeviceHelper` archive, and platform/Vulkan libraries. The compiler
+keeps `NCNNVulkanPlanSupport`/`NCNNVulkanHostProgramSupport` for its own
+packaging and keeps `NCNNVulkanRuntime` for the historical/test executor only;
+neither enters a model link. Publication fails closed on any runtime/plan/LLVM
+link input, any `libLLVM`/`libclang`/`libMLIR` `DT_NEEDED` entry, any undefined
+reference to `llvm`/`mlir`-namespace, `ExecutionPlan`, `HostProgram` or
+`VulkanRuntimeContext` symbols, any RPATH/RUNPATH, and any deviation from the
+three-symbol export allowlist. The manifest pins
+`host_implementation="model-fixed-run"`, `host_codegen_version=2`,
+`host_source_codegen_version="ncnn-vulkan-fixed-run-codegen/v1"`,
+`execution_plan_usage="build-evidence-only"` and a derived
+`host_codegen_identity`; instrumented profiles record their sanitizer runtimes
+in a separate `sanitizer_dependencies` classification that never extends the
+Release dependency allowlist.
+
+`vulkan-va5-deployment-no-device` and the per-ICD `vulkan-va5-deployment-*`
+CTests compile the ReLU and weighted Conv→ReLU products through the real CLI,
+copy only the `.so` plus public header into an isolated deployment directory,
+and run a dl-only C ABI loader under an allowlisted environment: the inherited
+`LD_LIBRARY_PATH` is dropped (only the configured sanitizer runtime directory
+survives, and the dropped segments are recorded), no build/LLVM/project path is
+provided, and the loader links against the deployment directory alone. Device
+profiles require CPU-vs-Vulkan numeric agreement; the no-device profile
+requires successful load plus an explicit `UNSUPPORTED_DEVICE`/`API_ERROR`
+create failure with bounded diagnostics and `destroy(NULL)` success. The
+evidence also proves same-input byte-identical republication of every artifact
+and that a later failed compile leaves the previously published bytes intact.
+The evidence self-tests (`vulkan-va5-deployment-tests`) stay registered with
+product-only configurations.
+
+VA5 qualification uses the same fresh Release plus matching static ASan+UBSan
+gates and requires the executed VA5.1–VA5.4 inventory plus hash-revalidated
+archives:
+
+```sh
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA5 \
+  --profile release --build-root /tmp --jobs 4 --tidy-jobs 4 --archive
+python3 compiler/test/Vulkan/run_gate.py --stage-id VA5 \
+  --profile sanitize --build-root /tmp --jobs 1 --tidy-jobs 4 --archive \
+  --sanitizer-install /path/to/static-asan-llvm/install \
+  --lit /path/to/llvm-source/llvm/utils/lit/lit.py \
+  --openmp-dir /path/to/libomp-only \
+  --toolchain-identity /path/to/toolchain-identity.json
+python3 compiler/test/Vulkan/check_release_evidence.py \
+  --stage /tmp/current-va5-release-stage \
+  --stage /tmp/current-va5-sanitize-stage \
+  --require-va5-deployment --output /tmp/va5-deployment-evidence.json
+```
+
+`va5_deployment_eligible` requires both same-source complete profiles and
+verified deployment evidence for every mapped profile/ICD pair; it does not
+make `host_aot_release_eligible` true because the full support-matrix migration
+(VA6) and the final four-profile product switch (VA7) remain separate stages.
 
 The `hardware` profile selects only NVIDIA; `release` selects both ICDs. The
 `sanitize` profile also selects both and requires a matching static PIC

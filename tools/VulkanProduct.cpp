@@ -36,8 +36,12 @@ using ncnn_mlir::vulkan::VulkanModelShader;
 using ncnn_mlir::vulkan::VulkanModelWeight;
 
 constexpr std::array<unsigned char, 4> kSpirvMagic = {0x03, 0x02, 0x23, 0x07};
-constexpr std::string_view kHostImplementation = "generic-plan-runtime";
-constexpr std::int64_t kHostCodegenVersion = 1;
+// VA5 contract: the published model links only the generated fixed-run host
+// object, the minimal device helper, and platform/Vulkan libraries.  The
+// integer codegen version moves to 2 together with the host implementation
+// flip; the string domain in the header pins the fixed-run source generator.
+constexpr std::string_view kHostImplementation = "model-fixed-run";
+constexpr std::int64_t kHostCodegenVersion = 2;
 
 std::string sha256Hex(std::string_view bytes) {
   llvm::SHA256 hash;
@@ -66,6 +70,20 @@ void appendIdentityField(std::string& output,
   output.append(tag);
   appendU64(output, value.size());
   output.append(value);
+}
+
+// The fixed-run generated-source identity is a pure function of the verified
+// host program identity and the codegen domain, so packaging can pin it in the
+// manifest/build identity without generating the deployment source itself.
+std::string hostSourceCodegenIdentity(std::string_view host_program_identity) {
+  std::string identity;
+  appendIdentityField(
+    identity, "domain", "ncnn-vulkan-host-source-identity/v1");
+  appendIdentityField(identity, "execution-mode", "fixed-run");
+  appendIdentityField(
+    identity, "codegen-version", kVulkanHostSourceCodegenVersion);
+  appendIdentityField(identity, "host-program", host_program_identity);
+  return sha256Hex(identity);
 }
 
 std::string semanticPlanSHA256(VulkanExecutionPlan plan) {
@@ -860,6 +878,7 @@ std::string makeManifest(const VulkanExecutionPlan& plan,
                          std::string_view param_sha256,
                          std::string_view bin_sha256,
                          std::string_view host_program_identity,
+                         std::string_view host_codegen_identity,
                          llvm::json::Value host_program) {
   llvm::json::Array inputs;
   llvm::json::Array outputs;
@@ -890,10 +909,16 @@ std::string makeManifest(const VulkanExecutionPlan& plan,
   manifest["backend"] = "vulkan";
   manifest["host_implementation"] = std::string(kHostImplementation);
   manifest["host_codegen_version"] = kHostCodegenVersion;
+  manifest["host_source_codegen_version"] =
+    std::string(kVulkanHostSourceCodegenVersion);
+  manifest["host_codegen_identity"] = std::string(host_codegen_identity);
   manifest["host_program"] = std::move(host_program);
   manifest["host_program_identity"] = std::string(host_program_identity);
   manifest["host_program_usage"] = "compiler-only-diagnostic";
-  manifest["execution_plan_usage"] = "embedded-runtime-required";
+  // The deployment no longer parses this plan; the sidecar stays as build
+  // evidence only.  The final dependency list is rewritten after the strict
+  // link/audit step.
+  manifest["execution_plan_usage"] = "build-evidence-only";
   manifest["abi_version"] = static_cast<std::int64_t>(NCNN_VK_ABI_VERSION);
   manifest["model"] = std::string(model_name);
   manifest["host_triple"] = plan.host_triple;
@@ -909,8 +934,7 @@ std::string makeManifest(const VulkanExecutionPlan& plan,
   manifest["inputs"] = std::move(inputs);
   manifest["outputs"] = std::move(outputs);
   manifest["kernels"] = std::move(kernels);
-  manifest["dependencies"] =
-    llvm::json::Array{"libLLVM.so.21.1", "libvulkan.so.1"};
+  manifest["dependencies"] = llvm::json::Array{"libvulkan.so.1"};
   return llvm::formatv("{0:2}\n", llvm::json::Value(std::move(manifest))).str();
 }
 
@@ -924,6 +948,7 @@ std::string makeGeneralManifest(const VulkanExecutionPlan& plan,
                                 std::span<const std::string> shader_hashes,
                                 std::span<const VulkanModelWeight> weights,
                                 std::string_view host_program_identity,
+                                std::string_view host_codegen_identity,
                                 llvm::json::Value host_program) {
   llvm::json::Array inputs;
   llvm::json::Array outputs;
@@ -993,10 +1018,16 @@ std::string makeGeneralManifest(const VulkanExecutionPlan& plan,
   manifest["backend"] = "vulkan";
   manifest["host_implementation"] = std::string(kHostImplementation);
   manifest["host_codegen_version"] = kHostCodegenVersion;
+  manifest["host_source_codegen_version"] =
+    std::string(kVulkanHostSourceCodegenVersion);
+  manifest["host_codegen_identity"] = std::string(host_codegen_identity);
   manifest["host_program"] = std::move(host_program);
   manifest["host_program_identity"] = std::string(host_program_identity);
   manifest["host_program_usage"] = "compiler-only-diagnostic";
-  manifest["execution_plan_usage"] = "embedded-runtime-required";
+  // The deployment no longer parses this plan; the sidecar stays as build
+  // evidence only.  The final dependency list is rewritten after the strict
+  // link/audit step.
+  manifest["execution_plan_usage"] = "build-evidence-only";
   manifest["abi_version"] = static_cast<std::int64_t>(NCNN_VK_ABI_VERSION);
   manifest["model"] = std::string(model_name);
   manifest["host_triple"] = plan.host_triple;
@@ -1016,8 +1047,7 @@ std::string makeGeneralManifest(const VulkanExecutionPlan& plan,
   manifest["inputs"] = std::move(inputs);
   manifest["outputs"] = std::move(outputs);
   manifest["kernels"] = std::move(kernels);
-  manifest["dependencies"] =
-    llvm::json::Array{"libLLVM.so.21.1", "libvulkan.so.1"};
+  manifest["dependencies"] = llvm::json::Array{"libvulkan.so.1"};
   return llvm::formatv("{0:2}\n", llvm::json::Value(std::move(manifest))).str();
 }
 
@@ -1334,6 +1364,13 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
   appendIdentityField(identity_input,
                       "host_codegen_version",
                       std::to_string(kHostCodegenVersion));
+  appendIdentityField(identity_input,
+                      "host_source_codegen_version",
+                      std::string(kVulkanHostSourceCodegenVersion));
+  const std::string host_codegen_identity =
+    hostSourceCodegenIdentity(host_program->identity);
+  appendIdentityField(
+    identity_input, "host_codegen_identity", host_codegen_identity);
   appendIdentityField(
     identity_input, "host_program_identity", host_program->identity);
   appendIdentityField(
@@ -1393,6 +1430,7 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
                         shader_hashes,
                         ordered_weights,
                         host_program->identity,
+                        host_codegen_identity,
                         std::move(*host_program_value));
   const std::string first_binary_symbol = ordered_shaders.front().binary_symbol;
   const std::string first_shader_hash = shader_hashes.front();
@@ -1522,6 +1560,13 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
   appendIdentityField(identity_input,
                       "host_codegen_version",
                       std::to_string(kHostCodegenVersion));
+  appendIdentityField(identity_input,
+                      "host_source_codegen_version",
+                      std::string(kVulkanHostSourceCodegenVersion));
+  const std::string host_codegen_identity =
+    hostSourceCodegenIdentity(host_program->identity);
+  appendIdentityField(
+    identity_input, "host_codegen_identity", host_codegen_identity);
   appendIdentityField(
     identity_input, "host_program_identity", host_program->identity);
   appendIdentityField(
@@ -1567,6 +1612,7 @@ std::expected<VulkanModelPackage, std::string> makeVulkanModelPackage(
                                             param_sha256,
                                             bin_sha256,
                                             host_program->identity,
+                                            host_codegen_identity,
                                             std::move(*host_program_value));
   return VulkanModelPackage{.plan = std::move(*final_plan),
                             .host_program = std::move(*host_program),
@@ -1678,15 +1724,8 @@ std::expected<VulkanHostSource, std::string> makeVulkanHostSource(
   if (!generated) {
     return std::unexpected(generated.error());
   }
-  std::string identity;
-  appendIdentityField(
-    identity, "domain", "ncnn-vulkan-host-source-identity/v1");
-  appendIdentityField(identity, "execution-mode", "fixed-run");
-  appendIdentityField(
-    identity, "codegen-version", kVulkanHostSourceCodegenVersion);
-  appendIdentityField(
-    identity, "host-program", generated->host_program_identity);
-  const std::string codegen_identity = sha256Hex(identity);
+  const std::string codegen_identity =
+    hostSourceCodegenIdentity(generated->host_program_identity);
   generated->source.insert(
     0,
     std::format("// Fixed-run codegen: {}\n// Host program: {}\n"
@@ -1703,7 +1742,9 @@ std::expected<VulkanHostSource, std::string> makeVulkanHostSource(
 }
 
 std::expected<std::string, std::string> updateVulkanManifestDependencies(
-  std::string_view manifest_json, std::vector<std::string> dependencies) {
+  std::string_view manifest_json,
+  std::vector<std::string> dependencies,
+  std::vector<std::string> sanitizer_dependencies) {
   auto parsed = llvm::json::parse(
     llvm::StringRef(manifest_json.data(), manifest_json.size()));
   if (!parsed) {
@@ -1718,14 +1759,56 @@ std::expected<std::string, std::string> updateVulkanManifestDependencies(
   if (!kind || *kind != mlir::ncnn::contract::kVulkanModelManifestKind) {
     return std::unexpected("generated Vulkan manifest has an unexpected kind");
   }
-  std::ranges::sort(dependencies);
-  const auto unique = std::ranges::unique(dependencies);
-  dependencies.erase(unique.begin(), unique.end());
+  const auto normalize = [](std::vector<std::string>& list) {
+    std::ranges::sort(list);
+    const auto unique = std::ranges::unique(list);
+    list.erase(unique.begin(), unique.end());
+  };
+  normalize(dependencies);
+  normalize(sanitizer_dependencies);
+  // The deployment boundary is independent of the compiler's own LLVM build
+  // mode: no model artifact may record an LLVM/Clang shared object, and the
+  // sanitizer classification is kept strictly separate from the platform
+  // dependency list.
+  const auto isCompilerLibrary = [](std::string_view name) {
+    // libclang_rt.* archives are compiler-provided runtime instrumentation
+    // (asan/ubsan), not compiler code: they belong to the sanitizer
+    // classification, never the platform dependency list.
+    if (name.starts_with("libclang_rt.")) {
+      return false;
+    }
+    return name.starts_with("libLLVM") || name.starts_with("libclang") ||
+           name.starts_with("libMLIR") || name.starts_with("libmlir");
+  };
+  for (const std::string& dependency : dependencies) {
+    if (isCompilerLibrary(dependency)) {
+      return std::unexpected(
+        std::format("Vulkan model library must not depend on the compiler "
+                    "runtime: {}",
+                    dependency));
+    }
+  }
+  for (const std::string& dependency : sanitizer_dependencies) {
+    if (isCompilerLibrary(dependency)) {
+      return std::unexpected(std::format(
+        "sanitizer dependency is not a platform library: {}", dependency));
+    }
+    if (std::ranges::contains(dependencies, dependency)) {
+      return std::unexpected(std::format(
+        "sanitizer dependency {} is duplicated in the platform dependency list",
+        dependency));
+    }
+  }
   llvm::json::Array dependency_array;
   for (std::string& dependency : dependencies) {
     dependency_array.push_back(std::move(dependency));
   }
+  llvm::json::Array sanitizer_array;
+  for (std::string& dependency : sanitizer_dependencies) {
+    sanitizer_array.push_back(std::move(dependency));
+  }
   (*object)["dependencies"] = std::move(dependency_array);
+  (*object)["sanitizer_dependencies"] = std::move(sanitizer_array);
   return llvm::formatv("{0:2}\n", std::move(*parsed)).str();
 }
 

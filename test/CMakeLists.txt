@@ -267,12 +267,9 @@ if(NCNN_ENABLE_VULKAN_PRODUCT AND NCNN_ENABLE_VULKAN_V0_TESTS)
         --bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/empty.bin
         --unsupported-param ${CMAKE_CURRENT_SOURCE_DIR}/Numerical/fixtures/convolution.param
         --unsupported-bin ${CMAKE_CURRENT_BINARY_DIR}/Numerical/fixtures/convolution.bin)
-    if(NCNN_VULKAN_USES_SHARED_LLVM)
-        list(APPEND _ncnn_vulkan_product_test_args --llvm-shared)
-    endif()
-    foreach(_dependency IN LISTS
-            NCNN_VULKAN_STATIC_LLVM_NEEDED_LIBRARIES
-            NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
+    # VA5: no LLVM dependency is acceptable in the model DSO regardless of the
+    # compiler's own LLVM linkage; only sanitizer SONAMEs extend the allowlist.
+    foreach(_dependency IN LISTS NCNN_VULKAN_SANITIZER_NEEDED_LIBRARIES)
         list(APPEND _ncnn_vulkan_product_test_args
             --allowed-dependency=${_dependency})
     endforeach()
