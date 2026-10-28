@@ -150,10 +150,12 @@ class GateTests(unittest.TestCase):
         planner = run_gate.parse_args(["--profile", "release", "--stage-id", "VA1"])
         lifecycle = run_gate.parse_args(["--profile", "release", "--stage-id", "VA3"])
         fixed_run = run_gate.parse_args(["--profile", "release", "--stage-id", "VA4"])
+        full_matrix = run_gate.parse_args(["--profile", "release", "--stage-id", "VA6"])
         self.assertEqual("VA0", default.stage_id)
         self.assertEqual("VA1", planner.stage_id)
         self.assertEqual("VA3", lifecycle.stage_id)
         self.assertEqual("VA4", fixed_run.stage_id)
+        self.assertEqual("VA6", full_matrix.stage_id)
 
     def test_va4_allows_unqualified_technical_run_and_binds_optional_legacy_root(self):
         args = run_gate.parse_args(["--profile", "release", "--stage-id", "VA4"])
@@ -278,6 +280,35 @@ class GateTests(unittest.TestCase):
             gate_budget_evidence.verify_budget_evidence(
                 record_path, "ncnn_model_compile_budget_pp_ocrv5_server_rec",
                 450, source_hash)
+
+    def test_budget_evidence_accepts_cmake_wrapped_hard_budget_message(self):
+        fixture = "pp_ocrv5_server_det_static"
+        record_path = self.root / "wrapped-budget.json"
+        log_path = self.root / "wrapped-build.log"
+        source_hash = "c" * 64
+        log_path.write_text(
+            "CMake Error at support/timed_compile.cmake:46 (message):\n"
+            f"  fixture {fixture} 编译耗时 309s 超过硬预算\n"
+            "  300s——编译爆炸回归，禁止放行（ncnn-performance-parity-plan.md\n"
+            "  P2 门禁硬化）\n",
+            encoding="utf-8")
+        record = {
+            "schema_version": 1,
+            "kind": "ncnn.sanitizer_budget_failure",
+            "source_fingerprint": source_hash,
+            "profile": "sanitize",
+            "fixture": fixture,
+            "previous_budget_seconds": 300,
+            "requested_budget_seconds": 450,
+            "elapsed_seconds": 309,
+            "log_file": log_path.name,
+            "log_sha256": hashlib.sha256(log_path.read_bytes()).hexdigest(),
+        }
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        accepted = gate_budget_evidence.verify_budget_evidence(
+            record_path, "ncnn_model_compile_budget_pp_ocrv5_server_det_static",
+            450, source_hash)
+        self.assertEqual(accepted["record"]["elapsed_seconds"], 309)
 
     def test_report_scan_distinguishes_flags_from_diagnostics(self):
         log = self.root / "build.log"

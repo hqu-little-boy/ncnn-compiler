@@ -43,8 +43,12 @@ def verify_budget_evidence(path, key, requested_seconds, source_fingerprint):
     if sha256(raw_log) != record.get("log_sha256"):
         raise ValueError("sanitizer budget raw log hash does not match its record")
     text = raw_log.read_text(encoding="utf-8", errors="replace")
+    # CMake wraps FATAL_ERROR messages at a fixed column with a two-space
+    # continuation, which can split "超过硬预算 300s" across lines in the raw
+    # build log.  Accept both the unwrapped and the wrapped display form; the
+    # elapsed seconds must still match the record exactly.
     match = re.search(
-        rf"fixture {re.escape(fixture)} 编译耗时 (\d+)s 超过硬预算 300s", text)
+        rf"fixture {re.escape(fixture)} 编译耗时 (\d+)s 超过硬预算\s+300s", text)
     if match is None or int(match.group(1)) != record["elapsed_seconds"]:
         raise ValueError("raw log does not prove the reported hard-budget failure")
     return {"record": record, "record_sha256": sha256(path),

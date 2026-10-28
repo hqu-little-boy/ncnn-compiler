@@ -614,11 +614,12 @@ class GateEnvelopeTests(unittest.TestCase):
         cache_path.write_text(cache_path.read_text() +
                               f"ncnn_model_compile_budget_{fixture}:STRING={requested}\n")
         self.state["cmake_cache"]["sha256"] = audit.sha256_file(cache_path)
+        # Mirror the real run_gate snapshot shape: the record/log references
+        # carry only path+hash; the copied record file itself binds elapsed.
         self.state["sanitizer_budget_evidence"] = [{
             "fixture": fixture,
             "record": {"path": str(record_path.relative_to(self.stage)),
-                       "sha256": audit.sha256_file(record_path),
-                       "elapsed_seconds": elapsed},
+                       "sha256": audit.sha256_file(record_path)},
             "log": {"path": str(log_path.relative_to(self.stage)),
                     "sha256": audit.sha256_file(log_path)},
             "requested_budget_seconds": requested,

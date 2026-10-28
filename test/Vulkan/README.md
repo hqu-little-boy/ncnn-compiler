@@ -503,6 +503,58 @@ verified deployment evidence for every mapped profile/ICD pair; it does not
 make `host_aot_release_eligible` true because the full support-matrix migration
 (VA6) and the final four-profile product switch (VA7) remain separate stages.
 
+### VA6 full support matrix and robustness migration
+
+VA6 migrates the remaining coverage onto the published product path:
+
+- `vulkan-va6-product-matrix` (offline) drives the public CLI over the frozen
+  support-matrix rows. Sixteen negative fixtures — broadcast Add, invalid
+  Concat axis/non-axis extents, out-of-subset MaxPool kernel/stride/padding,
+  non-global and adaptive AveragePool, Conv2D 5x5/7x7 (the ResNet18 first-layer
+  probe)/stride-3/dilation-2/padding-2, dynamic input extents, a
+  size-changing Reshape, and an unsupported Sigmoid — must each fail closed
+  with a frozen diagnostic substring and publish nothing. Eight neighboring
+  positive controls compile through the same CLI and publish the fixed-run
+  artifacts whose manifest pins the VA5+ host contract. Positive-form numeric
+  execution stays with the v5 device suites.
+- `vulkan-va6-host-faults` (offline) captures the actual
+  `vulkan_model_wrapper.cpp` the CLI generates for the weighted multi-output
+  `va6_faults` fixture (one (2,1,1) input, two (2,1,1) outputs, two embedded
+  weight resources; four dispatches and three buffer copies per run), proves
+  its codegen identity matches the published manifest, that a repeat compile
+  reproduces the wrapper bytes, and that the published DSO references no
+  compiler/plan symbols; then it compiles that wrapper against the fake
+  Vulkan test double with `NCNN_VULKAN_LIFECYCLE_TEST` and runs the fault
+  chain: argument failures, input flush/submit/fence-wait/second-output
+  invalidate failures (atomic outputs, poison, full object release, healthy
+  context isolation), command-buffer begin/end propagation, second-output
+  mapping failure, post-readback validation failure, once-per-weight-resource
+  upload with no re-upload on run, and barrier-contended same-context
+  serialization.
+- `vulkan-va6-cross-icd` (requires both configured ICDs) compiles the ReLU and
+  weighted Conv→ReLU products exactly once, deploys only the `.so` plus
+  header, and runs the same DSO bytes under each ICD with an allowlisted
+  environment: `vulkaninfo` device/driver identity, `NCNN_VK_DEVICE_AUTO` and
+  explicit ordinal-0 create/run/destroy against the CPU output (≤1e-6), an
+  invalid ordinal failing with `UNSUPPORTED_DEVICE` and no published output,
+  and a no-ICD environment failing create explicitly (status 2/5) with
+  `destroy(NULL)` success. The DSO hash is re-verified after every run.
+- `vulkan-va6-evidence-tests` covers the pure evidence-tooling logic.
+
+`run_gate.py --stage-id VA6` restricts to Release plus matching static SAN;
+the strict composite requires the executed VA6.1–VA6.4 inventory, the three
+evidence documents, and hash-revalidated archives:
+
+```sh
+python3 compiler/test/Vulkan/check_release_evidence.py \
+  --stage /tmp/current-va6-release-stage \
+  --stage /tmp/current-va6-sanitize-stage \
+  --require-va6-matrix --output /tmp/va6-matrix-evidence.json
+```
+
+`va6_matrix_eligible` still leaves `host_aot_release_eligible` false: the
+final four-profile product switch (VA7) remains a separate stage.
+
 The `hardware` profile selects only NVIDIA; `release` selects both ICDs. The
 `sanitize` profile also selects both and requires a matching static PIC
 ASan+UBSan LLVM/MLIR installation, its actual Vulkan runner test tools and lit,

@@ -256,9 +256,7 @@ def _audit_sanitizer_budget_evidence(stage: Path, state: dict,
         log_path = _verify_hash_record(stage, proof.get("log"),
                                        f"SAN raw timed_compile log {fixture}", findings)
         elapsed = proof.get("elapsed_seconds")
-        proof_record = proof.get("record")
-        copied_record_elapsed = proof_record.get("elapsed_seconds") if isinstance(proof_record, dict) else None
-        if not isinstance(elapsed, int) or elapsed <= 300 or elapsed != copied_record_elapsed:
+        if not isinstance(elapsed, int) or elapsed <= 300:
             _finding(findings, "budget-evidence-elapsed", "exception lacks a measured compile failure over the 300 second initial limit",
                      fixture=fixture, elapsed=elapsed)
         if record_path:
@@ -279,7 +277,11 @@ def _audit_sanitizer_budget_evidence(stage: Path, state: dict,
                     if sha256_file(log_path) != record.get("log_sha256"):
                         _finding(findings, "budget-evidence-log-mismatch", f"SAN budget record raw log hash differs: {fixture}")
                     text = log_path.read_text(encoding="utf-8", errors="replace")
-                    pattern = rf"fixture {re.escape(fixture)} 编译耗时 (\d+)s 超过硬预算 300s"
+                    # CMake wraps FATAL_ERROR messages at a fixed column with
+                    # a two-space continuation, which can split "超过硬预算
+                    # 300s" across lines in the raw build log.  Accept both
+                    # display forms; the elapsed seconds must still match.
+                    pattern = rf"fixture {re.escape(fixture)} 编译耗时 (\d+)s 超过硬预算\s+300s"
                     match = re.search(pattern, text)
                     if match is None or int(match.group(1)) != elapsed:
                         _finding(findings, "budget-evidence-failure-cause", f"SAN raw log does not prove the original 300-second budget failure: {fixture}")
@@ -991,12 +993,12 @@ def audit_stage_gate(stage_dir: Path, *, source_root: Path | None = None,
                  build_dir=stage_build)
     if not isinstance(state.get("git_revision"), str) or not state["git_revision"]:
         _finding(findings, "git-revision-missing", "baseline git_revision is missing")
-    if (not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5"} or
+    if (not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5", "VA6"} or
             state.get("host_execution_role") != "legacy-product" or
             state.get("host_aot_candidate") is not False):
         _finding(findings, "gate-execution-role",
                  "qualification stages retain the legacy product role and cannot claim host AOT release eligibility")
-    if isinstance(stage_id, str) and stage_id in {"VA2", "VA3", "VA4", "VA5"} and profile not in {"release", "sanitize"}:
+    if isinstance(stage_id, str) and stage_id in {"VA2", "VA3", "VA4", "VA5", "VA6"} and profile not in {"release", "sanitize"}:
         _finding(findings, f"{stage_id.lower()}-profile-invalid",
                  f"{stage_id} qualification accepts only Release and matching static SAN stages",
                  profile=profile)
@@ -4367,6 +4369,36 @@ VA5_STEP_TESTS = {
 VA5_REQUIRED_TESTS = frozenset().union(*VA5_STEP_TESTS.values())
 
 
+VA6_DEVICE_CROSS_ICD_TESTS = frozenset({
+    "vulkan-va6-cross-icd",
+})
+
+VA6_STEP_TESTS = {
+    # The matrix runs every existing product support row through the public
+    # CLI; the fault chain executes the CLI-generated wrapper; the cross-ICD
+    # scenario proves one fixed DSO on both ICDs plus explicit no-device
+    # failure.  The existing v5 device suites stay required as the numeric
+    # evidence for the positive matrix rows.
+    "VA6.1": frozenset({
+        "vulkan-va6-product-matrix",
+        "vulkan-v5-multiop-nvidia", "vulkan-v5-multiop-llvmpipe",
+        "vulkan-v5-pooling-softmax-nvidia", "vulkan-v5-pooling-softmax-llvmpipe",
+        "vulkan-v5-squeezenet-nvidia", "vulkan-v5-squeezenet-llvmpipe",
+    }),
+    "VA6.2": frozenset({
+        "vulkan-va6-host-faults",
+    }),
+    "VA6.3": frozenset({
+        *VA6_DEVICE_CROSS_ICD_TESTS,
+    }),
+    "VA6.4": frozenset({
+        "vulkan-va6-evidence-tests",
+    }),
+}
+
+VA6_REQUIRED_TESTS = frozenset().union(*VA6_STEP_TESTS.values())
+
+
 VA1_STEP_TESTS = {
     "VA1.1": frozenset({
         "VulkanHostProgramTest.RejectsReferencesLifetimesAndBindings",
@@ -4440,13 +4472,29 @@ def _required_tests(profile: str, stage_id: str = "VA0") -> set[str]:
         # ones this profile can actually run.
         tests.difference_update(VA5_DEVICE_DEPLOYMENT_TESTS)
         tests.update(f"vulkan-va5-deployment-{device}" for device in devices)
+    elif stage_id == "VA6":
+        tests.update(VA1_REQUIRED_TESTS)
+        tests.update(VA2_REQUIRED_TESTS)
+        tests.update(VA3_REQUIRED_TESTS)
+        tests.update(_va3_codegen_tests())
+        tests.update(VA4_FIXEDRUN_TESTS)
+        tests.update(_va4_codegen_tests())
+        tests.update(VA5_REQUIRED_TESTS)
+        tests.difference_update(VA5_DEVICE_DEPLOYMENT_TESTS)
+        tests.update(f"vulkan-va5-deployment-{device}" for device in devices)
+        tests.update(VA6_REQUIRED_TESTS)
+        # The cross-ICD scenario needs both configured ICDs; single-device
+        # profiles keep the matrix/faults/evidence coverage without it.
+        tests.difference_update(VA6_DEVICE_CROSS_ICD_TESTS)
+        if set(devices) == {"nvidia", "llvmpipe"}:
+            tests.update(VA6_DEVICE_CROSS_ICD_TESTS)
     return tests
 
 
 def _check_required_tests(gate: dict, findings: list[dict]) -> None:
     names = set(gate.get("ctest", {}).get("test_names", []))
     stage_id = gate["stage_id"] if "stage_id" in gate else "VA0"
-    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5"}:
+    if not isinstance(stage_id, str) or stage_id not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5", "VA6"}:
         _finding(findings, "gate-execution-role",
                  "required-test scope has an invalid or missing stage_id",
                  stage_id=stage_id)
@@ -4534,6 +4582,18 @@ def _make_id_catalog() -> dict[str, dict]:
         add(identifier, "paired_relu_and_conv_relu_published",
             sorted(tests), "va5",
             "published-deployment-link-audit-and-clean-loader-execution")
+    add("VA6.1", "product_support_matrix_rows",
+        sorted(VA6_STEP_TESTS["VA6.1"]), "va6",
+        "negative-rows-fail-closed-positive-rows-published-and-v5-numeric")
+    add("VA6.2", "va6_faults_multi_output_wrapper",
+        sorted(VA6_STEP_TESTS["VA6.2"]), "va6",
+        "cli-generated-wrapper-fault-chain-on-fake-vulkan")
+    add("VA6.3", "paired_relu_and_conv_relu_same_dso",
+        sorted(VA6_STEP_TESTS["VA6.3"]), "va6",
+        "one-dso-bytes-two-icds-plus-explicit-no-device-failure")
+    add("VA6.4", "va6_evidence_tooling",
+        sorted(VA6_STEP_TESTS["VA6.4"]), "va6",
+        "registration-and-evidence-tooling-self-check")
     return catalog
 
 
@@ -4625,7 +4685,7 @@ def _va0_migration_coverage(gate: dict) -> dict:
     id_rows = {}
     related_by_test: dict[str, list[str]] = {}
     for identifier, spec in ID_CATALOG.items():
-        if spec["evidence_family"] in {"va2", "va3", "va4", "va5"}:
+        if spec["evidence_family"] in {"va2", "va3", "va4", "va5", "va6"}:
             continue
         id_rows[identifier] = {
             "legacy_tests": sorted(set(spec["tests"])),
@@ -4652,7 +4712,7 @@ def _va0_migration_coverage(gate: dict) -> dict:
     profile = gate.get("profile", "")
     legacy_test_rows = [row for identifier, row in id_rows.items()
                         if ID_CATALOG[identifier]["evidence_family"] not in
-                        {"va1", "va2", "va3", "va4", "va5"}]
+                        {"va1", "va2", "va3", "va4", "va5", "va6"}]
     applicable = set().union(*(_applicable_tests(row["legacy_tests"], profile)
                                for row in legacy_test_rows)) if legacy_test_rows else set()
     missing = sorted(applicable - set(actual_names))
@@ -6311,6 +6371,235 @@ def _audit_va5_deployment(stage: Path, gate: dict, refs: list[dict],
             "host_aot_release_eligible": False}
 
 
+VA6_EVIDENCE_PATHS = {
+    "release": ("test/Vulkan/evidence/va6/matrix/product-matrix-evidence.json",
+                "test/Vulkan/evidence/va6/faults/host-faults-evidence.json",
+                "test/Vulkan/evidence/va6/cross-icd/cross-icd-evidence.json"),
+    "sanitize": ("test/Vulkan/evidence/va6/matrix/product-matrix-evidence.json",
+                 "test/Vulkan/evidence/va6/faults/host-faults-evidence.json",
+                 "test/Vulkan/evidence/va6/cross-icd/cross-icd-evidence.json"),
+}
+
+
+def _audit_va6_matrix_evidence_document(document: dict, kind: str,
+                                        findings: list[dict],
+                                        label: str) -> bool:
+    if (not isinstance(document, dict) or
+            document.get("schema_version") != 1 or
+            document.get("kind") != kind):
+        _finding(findings, "va6-evidence-invalid",
+                 f"{label} evidence schema/kind is invalid")
+        return False
+    return True
+
+
+def _audit_va6_matrix(stage: Path, gate: dict, refs: list[dict],
+                      findings: list[dict]) -> dict:
+    if gate.get("stage_id") != "VA6":
+        return {"status": "not-applicable", "stage_id": gate.get("stage_id"),
+                "role": "none", "host_aot_release_eligible": False}
+    ctest = gate.get("ctest", {})
+    names = ctest.get("test_names", []) if isinstance(ctest, dict) else []
+    skipped = ctest.get("skipped", []) if isinstance(ctest, dict) else []
+    failed = ctest.get("failed", []) if isinstance(ctest, dict) else []
+    profile = gate.get("profile")
+    devices = _devices_for_profile(profile)
+    required = set(VA6_REQUIRED_TESTS)
+    if set(devices) != {"nvidia", "llvmpipe"}:
+        required -= VA6_DEVICE_CROSS_ICD_TESTS
+    missing_required = sorted(required - set(names))
+    if missing_required:
+        _finding(findings, "va6-required-ctest-missing",
+                 "VA6 stage lacks required matrix/faults/cross-ICD tests",
+                 tests=missing_required)
+    not_passed = sorted((required & set(skipped)) | (required & set(failed)))
+    if not_passed:
+        _finding(findings, "va6-required-ctest-not-passed",
+                 "VA6 required tests were skipped or failed", tests=not_passed)
+    paths = VA6_EVIDENCE_PATHS.get(profile, ())
+    if not paths:
+        _finding(findings, "va6-evidence-missing",
+                 f"VA6 profile {profile!r} has no evidence mapping")
+        return {"status": "blocked", "stage_id": "VA6", "role": "matrix",
+                "host_aot_release_eligible": False}
+    documents_ok = True
+    matrix_document = None
+    faults_document = None
+    cross_icd_document = None
+    for relative in paths:
+        path = stage / relative
+        if not path.is_file():
+            _finding(findings, "va6-evidence-missing",
+                     f"VA6 evidence is missing: {relative}")
+            documents_ok = False
+            continue
+        try:
+            document = load_json(path)
+            refs.append({"path": relative, "sha256": sha256_file(path),
+                         "role": "VA6 matrix evidence"})
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            _finding(findings, "va6-evidence-invalid",
+                     f"VA6 evidence is unreadable: {relative}: {error}")
+            documents_ok = False
+            continue
+        if "product-matrix" in relative:
+            if not _audit_va6_matrix_evidence_document(
+                    document,
+                    "ncnn.vulkan_va6_product_matrix_evidence",
+                    findings, relative):
+                documents_ok = False
+                continue
+            cases = document.get("cases")
+            negatives = document.get("negative_cases")
+            positives = document.get("positive_controls")
+            if (not isinstance(cases, dict) or not negatives or not positives
+                    or set(cases) != set(negatives) | set(positives)):
+                _finding(findings, "va6-evidence-invalid",
+                         f"{relative} case inventory is invalid")
+                documents_ok = False
+                continue
+            if document.get("host_contract") != {
+                    "host_implementation": "model-fixed-run",
+                    "host_codegen_version": 2,
+                    "host_source_codegen_version":
+                        "ncnn-vulkan-fixed-run-codegen/v1",
+                    "execution_plan_usage": "build-evidence-only"}:
+                _finding(findings, "va6-evidence-invalid",
+                         f"{relative} pins an unexpected host contract")
+                documents_ok = False
+                continue
+            for name in negatives:
+                case = cases.get(name)
+                if (not isinstance(case, dict) or case.get("kind") != "negative"
+                        or case.get("returncode") == 0 or
+                        not case.get("published") == []):
+                    _finding(findings, "va6-negative-case-invalid",
+                             f"{relative} negative case {name} did not "
+                             "fail closed")
+                    documents_ok = False
+            for name in positives:
+                case = cases.get(name)
+                if (not isinstance(case, dict) or case.get("kind") != "positive"
+                        or case.get("returncode") != 0 or
+                        len(case.get("published", [])) < 4 or
+                        not case.get("host_codegen_identity")):
+                    _finding(findings, "va6-positive-case-invalid",
+                             f"{relative} positive case {name} did not "
+                             "publish the fixed-run artifacts")
+                    documents_ok = False
+            matrix_document = document
+        elif "host-faults" in relative:
+            if not _audit_va6_matrix_evidence_document(
+                    document, "ncnn.vulkan_va6_host_faults_evidence",
+                    findings, relative):
+                documents_ok = False
+                continue
+            if (document.get("model") != "va6_faults" or
+                    document.get("fault_test", {}).get("returncode") != 0 or
+                    "passed" not in str(
+                        document.get("fault_test", {}).get("stdout", "")) or
+                    not document.get("wrapper", {}).get("wrapper_sha256") or
+                    not document.get("host_codegen_identity") or
+                    document.get("run_dispatches") != 4 or
+                    document.get("run_copies") != 3 or
+                    document.get("product_dependency_audit", {})
+                    .get("forbidden_absent") is not True):
+                _finding(findings, "va6-faults-evidence-invalid",
+                         f"{relative} fault-chain evidence is incomplete or "
+                         "the fault binary did not pass")
+                documents_ok = False
+            faults_document = document
+        elif "cross-icd" in relative:
+            if not _audit_va6_matrix_evidence_document(
+                    document, "ncnn.vulkan_va6_cross_icd_evidence",
+                    findings, relative):
+                documents_ok = False
+                continue
+            scenarios = document.get("scenarios")
+            icds = document.get("icds")
+            if (not isinstance(scenarios, dict) or
+                    set(scenarios) != {"relu", "conv_relu"} or
+                    not isinstance(icds, list) or len(icds) < 2 or
+                    len({icd.get("name") for icd in icds}) != len(icds)):
+                _finding(findings, "va6-evidence-invalid",
+                         f"{relative} cross-ICD scenario/ICD inventory is "
+                         "invalid")
+                documents_ok = False
+                continue
+            for fixture, scenario in scenarios.items():
+                devices_seen = set()
+                device_runs = scenario.get("devices")
+                if not isinstance(device_runs, dict) or len(device_runs) < 2:
+                    _finding(findings, "va6-cross-icd-invalid",
+                             f"{relative} {fixture} did not run on two ICDs")
+                    documents_ok = False
+                    continue
+                for icd_name, run in device_runs.items():
+                    device = run.get("device", {})
+                    devices_seen.add(str(device.get("device_name")))
+                    for branch in ("auto", "explicit_ordinal_0"):
+                        branch_record = run.get(branch, {})
+                        if (int(branch_record.get("result", {})
+                                .get("run_status", -1)) != 0 or
+                                branch_record.get("numeric") is None):
+                            _finding(findings, "va6-cross-icd-invalid",
+                                     f"{relative} {fixture}/{icd_name} "
+                                     f"{branch} run did not succeed")
+                            documents_ok = False
+                    invalid = run.get("invalid_ordinal", {}).get("result", {})
+                    if (int(invalid.get("create_status", -1)) != 2 or
+                            invalid.get("context_null") is not True):
+                        _finding(findings, "va6-cross-icd-invalid",
+                                 f"{relative} {fixture}/{icd_name} invalid "
+                                 "ordinal did not fail with UNSUPPORTED_DEVICE")
+                        documents_ok = False
+                if len(devices_seen) < 2:
+                    _finding(findings, "va6-cross-icd-invalid",
+                             f"{relative} {fixture} ran on fewer than two "
+                             "distinct physical devices")
+                    documents_ok = False
+                no_icd = scenario.get("no_icd", {}).get("result", {})
+                if (int(no_icd.get("create_status", -1)) not in (2, 5) or
+                        no_icd.get("context_null") is not True or
+                        int(no_icd.get("destroy_null_status", -1)) != 0):
+                    _finding(findings, "va6-cross-icd-invalid",
+                             f"{relative} {fixture} no-ICD create failure is "
+                             "not explicit")
+                    documents_ok = False
+            cross_icd_document = document
+    if (matrix_document is not None and faults_document is not None and
+            cross_icd_document is not None):
+        # The codegen identity is derived per model from its own host
+        # program, so documents pin different values by construction.  The
+        # checkable invariants are: every published positive maps its model
+        # to one well-formed identity (one-to-one), and the faults evidence
+        # pins a well-formed identity for its own fixture.
+        published = {
+            case.get("model"): case.get("host_codegen_identity")
+            for case in matrix_document.get("cases", {}).values()
+            if case.get("kind") == "positive"}
+        identity_pattern = re.compile(r"^[0-9a-f]{64}$")
+        if (len(set(published.values())) != len(published) or
+                any(not isinstance(value, str) or
+                    not identity_pattern.fullmatch(value)
+                    for value in published.values()) or
+                not isinstance(faults_document.get("host_codegen_identity"),
+                               str) or
+                not identity_pattern.fullmatch(
+                    faults_document["host_codegen_identity"])):
+            _finding(findings, "va6-identity-mismatch",
+                     "VA6 evidence does not pin well-formed per-model "
+                     "codegen identities")
+            documents_ok = False
+    if documents_ok and not missing_required and not not_passed:
+        return {"status": "verified", "stage_id": "VA6", "role": "matrix",
+                "evidence": [str(path) for path in paths],
+                "host_aot_release_eligible": False}
+    return {"status": "blocked", "stage_id": "VA6", "role": "matrix",
+            "evidence": [str(path) for path in paths],
+            "host_aot_release_eligible": False}
+
+
 def audit_stage_evidence(gate: dict) -> dict:
     """Adapt this fresh stage's existing V0–V5 and offline schemas."""
     stage = Path(gate["stage"]).resolve()
@@ -6341,6 +6630,9 @@ def audit_stage_evidence(gate: dict) -> dict:
     families["va5_deployment"] = _audit_va5_deployment(
         stage, gate, refs, va5_findings)
     findings.extend(va5_findings)
+    va6_findings = []
+    families["va6_matrix"] = _audit_va6_matrix(stage, gate, refs, va6_findings)
+    findings.extend(va6_findings)
     compact = {}
     for name, data in families.items():
         if name == "cpu_baseline":
@@ -6440,6 +6732,14 @@ def audit_stage_evidence(gate: dict) -> dict:
                 "stage_id": data.get("stage_id"),
                 "role": data.get("role"),
                 "deployment_evidence": data.get("deployment_evidence", []),
+                "host_aot_release_eligible": False,
+            }
+        elif name == "va6_matrix":
+            compact[name] = {
+                "status": data.get("status"),
+                "stage_id": data.get("stage_id"),
+                "role": data.get("role"),
+                "evidence": data.get("evidence", []),
                 "host_aot_release_eligible": False,
             }
     gate_state = gate.get("state", {})
@@ -7106,6 +7406,78 @@ def _va5_id_row(identifier: str, spec: dict,
             "source_fingerprints": sorted(fingerprints)}
 
 
+def _va6_id_row(identifier: str, spec: dict,
+                stage_audits: list[dict]) -> dict:
+    target_profiles = ("release", "sanitize")
+    stages = [stage for stage in stage_audits
+              if stage.get("stage_id") == "VA6" and
+              stage.get("profile") in target_profiles]
+    tests = set(spec["tests"])
+    profile_rows = []
+    selected_refs = {}
+    profile_valid = {}
+    executed = set()
+    for profile in target_profiles:
+        matches = [stage for stage in stages if stage.get("profile") == profile]
+        if len(matches) != 1:
+            profile_valid[profile] = False
+            profile_rows.append({"profile": profile,
+                                 "status": "missing" if not matches else "duplicate",
+                                 "stages": [stage.get("stage") for stage in matches]})
+            continue
+        stage = matches[0]
+        ctest = stage.get("ctest", {})
+        names = set(ctest.get("test_names", []))
+        skipped = set(ctest.get("skipped", []))
+        failed = set(ctest.get("failed", []))
+        passed_tests = names - skipped - failed
+        executed.update(passed_tests)
+        family = stage.get("families", {}).get("va6_matrix", {})
+        missing = sorted(tests - names)
+        not_passed = sorted(tests & (skipped | failed))
+        valid = (stage.get("scope_passed") is True and
+                 family.get("status") == "verified" and not missing and
+                 not not_passed and
+                 stage.get("archive_integrity", {}).get("status") == "verified")
+        profile_valid[profile] = valid
+        profile_rows.append({"profile": profile, "stage": stage.get("stage"),
+                             "source_fingerprint": stage.get("source_fingerprint"),
+                             "status": "passed" if valid else "blocked",
+                             "tests_executed": sorted(passed_tests & tests),
+                             "tests_missing": missing,
+                             "tests_not_passed": not_passed,
+                             "matrix_evidence": family.get("evidence", [])})
+        for ref in stage.get("raw_artifacts", []):
+            path = str(ref.get("path", ""))
+            if path.startswith("test/Vulkan/evidence/va6/"):
+                key = (stage.get("stage"), path)
+                selected_refs[key] = {"stage": stage.get("stage"),
+                                      **{field: ref[field] for field in
+                                         ("path", "sha256", "role") if field in ref}}
+    fingerprints = {stage.get("source_fingerprint") for stage in stages
+                    if isinstance(stage.get("source_fingerprint"), str)}
+    missing_tests = sorted(tests - executed)
+    passed = (all(profile_valid.get(profile) is True for profile in target_profiles) and
+              len(fingerprints) == 1)
+    return {"cpu_positive": {"fixture": spec["cpu_fixture"],
+                             "fresh_cpu_baseline": []},
+            "related_tests": sorted(tests),
+            "tests_executed": sorted(tests & executed),
+            "tests_missing_from_supplied_stages": missing_tests,
+            "tests_applicable_to_supplied_profiles": sorted(tests),
+            "tests_missing_for_supplied_profile_scopes": missing_tests,
+            "profiles": profile_rows,
+            "evidence_family": "va6-full-matrix",
+            "evidence_profiles": list(target_profiles),
+            "gpu_numerical_claim": spec["gpu_numeric"],
+            "raw_artifacts": list(selected_refs.values()),
+            "status": "passed" if passed else "blocked",
+            "release_status": "not_eligible",
+            "release_eligibility_scope": "full support matrix and robustness migration complete; final profiles (VA7) remain incomplete",
+            "host_aot_release_eligible": False,
+            "source_fingerprints": sorted(fingerprints)}
+
+
 def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
                    all_refs: list[dict]) -> dict:
     legacy_audits = [stage for stage in stage_audits
@@ -7132,6 +7504,9 @@ def _make_id_index(stage_audits: list[dict], *, release_eligible: bool,
             continue
         if family == "va5":
             indexed[identifier] = _va5_id_row(identifier, spec, stage_audits)
+            continue
+        if family == "va6":
+            indexed[identifier] = _va6_id_row(identifier, spec, stage_audits)
             continue
         if family == "va0":
             indexed[identifier] = _va0_id_row(identifier, spec, legacy_audits)
@@ -7366,7 +7741,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                  require_va2_helper: bool = False,
                  require_va3_lifecycle: bool = False,
                  require_va4_fixedrun: bool = False,
-                 require_va5_deployment: bool = False) -> dict:
+                 require_va5_deployment: bool = False,
+                 require_va6_matrix: bool = False) -> dict:
     gates = []
     for stage_dir in stage_dirs:
         gate = audit_stage_gate(stage_dir, verify_fingerprint=verify_fingerprint)
@@ -7393,7 +7769,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                      (require_va2_helper and stage_id == "VA2") or
                      (require_va3_lifecycle and stage_id == "VA3") or
                      (require_va4_fixedrun and stage_id == "VA4") or
-                     (require_va5_deployment and stage_id == "VA5"),
+                     (require_va5_deployment and stage_id == "VA5") or
+                     (require_va6_matrix and stage_id == "VA6"),
             required_artifacts=required_archive_artifacts)
         gates.append(stage)
     global_findings = [{"stage": stage.get("stage"),
@@ -7402,11 +7779,11 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                        stage.get("archive_integrity", {}).get("findings", [])]
     invalid_stage_ids = [stage for stage in gates
                          if not isinstance(stage.get("stage_id"), str) or
-                         stage.get("stage_id") not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5"}]
+                         stage.get("stage_id") not in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5", "VA6"}]
     invalid_stage_id_findings = []
     for stage in invalid_stage_ids:
         finding = {"code": "stage-id-invalid",
-                   "message": "stage_id must be VA0 through VA5 when explicitly supplied",
+                   "message": "stage_id must be VA0 through VA6 when explicitly supplied",
                    "stage": stage.get("stage"),
                    "stage_id": stage.get("stage_id")}
         global_findings.append(finding)
@@ -7428,7 +7805,7 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
     for stage in gates:
         stage_id = stage.get("stage_id")
         fingerprint = stage.get("source_fingerprint")
-        if (isinstance(stage_id, str) and stage_id in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5"} and
+        if (isinstance(stage_id, str) and stage_id in {"VA0", "VA1", "VA2", "VA3", "VA4", "VA5", "VA6"} and
                 isinstance(fingerprint, str) and SHA256_RE.fullmatch(fingerprint)):
             grouped_fingerprints.setdefault(stage_id, set()).add(fingerprint)
     for stage_id, fingerprints in grouped_fingerprints.items():
@@ -7445,6 +7822,7 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
     va3_gates = [stage for stage in gates if stage.get("stage_id") == "VA3"]
     va4_gates = [stage for stage in gates if stage.get("stage_id") == "VA4"]
     va5_gates = [stage for stage in gates if stage.get("stage_id") == "VA5"]
+    va6_gates = [stage for stage in gates if stage.get("stage_id") == "VA6"]
     required_profiles = {"release", "sanitize", "offline", "software"}
     supplied_profiles = {stage.get("profile") for stage in va0_gates
                          if isinstance(stage.get("profile"), str)}
@@ -7754,6 +8132,50 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
         _finding(global_findings, "va5-deployment-eligibility-required",
                  "--require-va5-deployment needs final same-source Release and "
                  "static SAN VA5.1-VA5.4 deployment evidence and verified archives")
+
+    va6_required_profiles = {"release", "sanitize"}
+    va6_missing_profiles = sorted(va6_required_profiles -
+                                  {stage.get("profile") for stage in va6_gates})
+    va6_fingerprints = grouped_fingerprints.get("VA6", set())
+    va6_invalid_stages = [stage.get("stage") for stage in va6_gates
+                          if not stage.get("scope_passed") or
+                          stage.get("archive_integrity", {}).get("status") != "verified" or
+                          stage.get("families", {}).get("va6_matrix", {}).get("status") != "verified"]
+    va6_ids = {identifier: row for identifier, row in id_index.items()
+               if identifier.startswith("VA6.")}
+    va6_incomplete_ids = sorted(identifier for identifier, row in va6_ids.items()
+                                if row.get("status") != "passed")
+    va6_duplicate_profiles = any(
+        sum(stage.get("profile") == profile for stage in va6_gates) != 1
+        for profile in va6_required_profiles)
+    va6_matrix_eligible = (
+        not va6_missing_profiles and not va6_invalid_stages and
+        not va6_duplicate_profiles and len(va6_fingerprints) == 1 and
+        not va6_incomplete_ids)
+    va6_matrix_blockers = []
+    if va6_missing_profiles:
+        va6_matrix_blockers.append({"code": "va6-required-profiles-missing",
+                                    "profiles": va6_missing_profiles})
+    if va6_invalid_stages:
+        va6_matrix_blockers.append({"code": "va6-stage-incomplete",
+                                    "stages": va6_invalid_stages})
+    if va6_duplicate_profiles:
+        va6_matrix_blockers.append({"code": "va6-profile-duplicate",
+                                    "profiles": sorted(
+                                        profile for profile in va6_required_profiles
+                                        if sum(stage.get("profile") == profile
+                                               for stage in va6_gates) != 1)})
+    if len(va6_fingerprints) != 1:
+        va6_matrix_blockers.append({"code": "va6-source-fingerprint-mismatch",
+                                    "fingerprints": sorted(va6_fingerprints)})
+    if va6_incomplete_ids:
+        va6_matrix_blockers.append({"code": "va6-id-index-incomplete",
+                                    "ids": va6_incomplete_ids})
+    if require_va6_matrix and not va6_matrix_eligible:
+        _finding(global_findings, "va6-matrix-eligibility-required",
+                 "--require-va6-matrix needs final same-source Release and "
+                 "static SAN VA6.1-VA6.4 matrix/faults/cross-ICD evidence and "
+                 "verified archives")
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": REPORT_KIND,
@@ -7772,6 +8194,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
                                    if len(va4_fingerprints) == 1 else None),
         "va5_source_fingerprint": (next(iter(va5_fingerprints))
                                    if len(va5_fingerprints) == 1 else None),
+        "va6_source_fingerprint": (next(iter(va6_fingerprints))
+                                   if len(va6_fingerprints) == 1 else None),
         "source_fingerprints_by_stage_id": {
             key: sorted(value) for key, value in grouped_fingerprints.items()},
         "profiles_required_for_release": sorted(required_profiles),
@@ -7786,6 +8210,8 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
         "va4_profiles_missing": va4_missing_profiles,
         "va5_profiles_required": sorted(va5_required_profiles),
         "va5_profiles_missing": va5_missing_profiles,
+        "va6_profiles_required": sorted(va6_required_profiles),
+        "va6_profiles_missing": va6_missing_profiles,
         "release_eligible": release_eligible,
         "legacy_vulkan_release_eligible": release_eligible,
         "va0_baseline_eligible": va0_baseline_eligible,
@@ -7843,8 +8269,18 @@ def build_report(stage_dirs: list[Path], *, require_release: bool = False,
              "evidence": stage.get("families", {}).get("va5_deployment", {})}
             for stage in va5_gates],
         "va5_deployment_blockers": va5_deployment_blockers,
+        "va6_matrix_eligible": va6_matrix_eligible,
+        "va6_matrix_required": require_va6_matrix,
+        "va6_matrix_stages": [
+            {"stage": stage.get("stage"), "profile": stage.get("profile"),
+             "source_fingerprint": stage.get("source_fingerprint"),
+             "scope_passed": stage.get("scope_passed"),
+             "archive_status": stage.get("archive_integrity", {}).get("status"),
+             "evidence": stage.get("families", {}).get("va6_matrix", {})}
+            for stage in va6_gates],
+        "va6_matrix_blockers": va6_matrix_blockers,
         "host_aot_release_eligible": False,
-        "baseline_scope": "VA0 legacy baseline, VA1 planner, VA2 helper, VA3 private lifecycle candidate, VA4 fixed-run prototype, and VA5 published deployment; VA6/VA7 claims remain open",
+        "baseline_scope": "VA0 legacy baseline, VA1 planner, VA2 helper, VA3 private lifecycle candidate, VA4 fixed-run prototype, VA5 published deployment, and VA6 full support matrix/robustness migration; VA7 final profiles remain open",
         "host_aot_blockers": ([] if va1_planner_eligible else
                                ["VA1 planner evidence incomplete"]) +
                               ([] if va2_helper_eligible else
@@ -7897,7 +8333,9 @@ def parse_args(argv=None):
     parser.add_argument("--require-va4-fixedrun", action="store_true",
                         help="require final same-source Release and static SAN VA4.1-VA4.4 fixed-run evidence and verified archives")
     parser.add_argument("--require-va5-deployment", action="store_true",
-                        help="require final same-source Release and static SAN VA5.1-VA5.5 deployment evidence and verified archives")
+                        help="require final same-source VA5 release and SAN stages")
+    parser.add_argument("--require-va6-matrix", action="store_true",
+                        help="require final same-source Release and static SAN VA6.1-VA6.4 matrix/faults/cross-ICD evidence and verified archives")
     return parser.parse_args(argv)
 
 
@@ -7911,7 +8349,8 @@ def main(argv=None) -> int:
             require_va2_helper=args.require_va2_helper,
             require_va3_lifecycle=args.require_va3_lifecycle,
             require_va4_fixedrun=args.require_va4_fixedrun,
-            require_va5_deployment=args.require_va5_deployment)
+            require_va5_deployment=args.require_va5_deployment,
+            require_va6_matrix=args.require_va6_matrix)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         report = {"schema_version": SCHEMA_VERSION, "kind": REPORT_KIND,
                   "generated_at": datetime.now(timezone.utc).isoformat(),

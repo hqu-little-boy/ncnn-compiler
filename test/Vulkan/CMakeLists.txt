@@ -360,6 +360,79 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
         LABELS "vulkan;unit;offline;integration;lifecycle;c-abi;no-device"
         RUN_SERIAL TRUE
         TIMEOUT 120)
+
+    # ── VA6: full support matrix and robustness migration.  The product
+    # matrix drives the public CLI over negative/positive support rows; the
+    # host-faults test executes the CLI-generated wrapper against the fake
+    # Vulkan test double; both run without a device. ──
+    set(VA6_MATRIX_ARGS
+        --compiler $<TARGET_FILE:ncnn-compile>
+        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/va6/matrix-work
+        --output ${CMAKE_CURRENT_BINARY_DIR}/evidence/va6/matrix/product-matrix-evidence.json)
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND VA6_MATRIX_ARGS --llvm-lib-dir ${LLVM_LIBRARY_DIR})
+    endif()
+    if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+        list(APPEND VA6_MATRIX_ARGS
+            --sanitizer-runtime-dir ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+    endif()
+    add_test(NAME vulkan-va6-product-matrix
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_va6_product_matrix.py
+            ${VA6_MATRIX_ARGS})
+    set_tests_properties(vulkan-va6-product-matrix PROPERTIES
+        LABELS "vulkan;integration;offline;cli;va6;matrix"
+        RUN_SERIAL TRUE
+        TIMEOUT 900)
+    if(_ncnn_fixedrun_capture_publish_library_dirs)
+        set_tests_properties(vulkan-va6-product-matrix PROPERTIES
+            ENVIRONMENT
+                "LD_LIBRARY_PATH=${_ncnn_fixedrun_capture_publish_library_path}")
+    endif()
+
+    set(VA6_FAULTS_ARGS
+        --compiler $<TARGET_FILE:ncnn-compile>
+        --host-cxx ${CMAKE_CXX_COMPILER}
+        --nm ${LLVM_NM}
+        --param ${CMAKE_CURRENT_SOURCE_DIR}/va6_faults.param
+        --conv-bin ${VA5_CONV_BIN}
+        --fault-test-source ${CMAKE_CURRENT_SOURCE_DIR}/native/va6_product_fault_test.cpp
+        --fake-vulkan-source ${CMAKE_CURRENT_SOURCE_DIR}/native/fakeVulkan/fake_vulkan.cpp
+        --helper-archive $<TARGET_FILE:NCNNVulkanDeviceHelper>
+        --native-dir ${CMAKE_CURRENT_SOURCE_DIR}/native
+        --project-include ${PROJECT_SOURCE_DIR}/include
+        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/va6/faults-work
+        --output ${CMAKE_CURRENT_BINARY_DIR}/evidence/va6/faults/host-faults-evidence.json)
+    foreach(_va6_cxx_arg IN LISTS NCNN_VULKAN_HOST_SANITIZER_ARGS)
+        list(APPEND VA6_FAULTS_ARGS --cxx-arg=${_va6_cxx_arg})
+    endforeach()
+    if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+        list(APPEND VA6_FAULTS_ARGS
+            --sanitizer-runtime-dir ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+    endif()
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND VA6_FAULTS_ARGS --llvm-lib-dir ${LLVM_LIBRARY_DIR})
+    endif()
+    add_test(NAME vulkan-va6-host-faults
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_va6_host_faults.py
+            ${VA6_FAULTS_ARGS})
+    set_tests_properties(vulkan-va6-host-faults PROPERTIES
+        LABELS "vulkan;integration;offline;va6;faults;fixedrun"
+        RUN_SERIAL TRUE
+        TIMEOUT 900)
+    if(_ncnn_fixedrun_capture_publish_library_dirs)
+        set_tests_properties(vulkan-va6-host-faults PROPERTIES
+            ENVIRONMENT
+                "LD_LIBRARY_PATH=${_ncnn_fixedrun_capture_publish_library_path}")
+    endif()
+
+    add_test(NAME vulkan-va6-evidence-tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_va6_evidence.py)
+    set_tests_properties(vulkan-va6-evidence-tests PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;va6;evidence"
+        TIMEOUT 120)
 endif()
 
 if(NCNN_ENABLE_VULKAN_V0_TESTS)
@@ -511,6 +584,45 @@ if(NCNN_ENABLE_VULKAN_V0_TESTS)
         endfunction()
         ncnn_add_va5_deployment_device_test(nvidia ${V0_NVIDIA_ICD})
         ncnn_add_va5_deployment_device_test(llvmpipe ${V0_LLVMPIPE_ICD})
+
+        # VA6.3: one fixed candidate DSO per fixture runs under every
+        # configured ICD plus the no-ICD environment; the scenario needs at
+        # least two ICDs, so register only when both devices are enabled.
+        if("nvidia" IN_LIST NCNN_VULKAN_TEST_DEVICES AND
+           "llvmpipe" IN_LIST NCNN_VULKAN_TEST_DEVICES)
+            set(VA6_CROSS_ICD_ARGS
+                --compiler $<TARGET_FILE:ncnn-compile>
+                --host-cxx ${CMAKE_CXX_COMPILER}
+                --loader-source ${CMAKE_CURRENT_SOURCE_DIR}/native/va6_cross_icd_loader.cpp
+                --vulkan-include-dir ${PROJECT_SOURCE_DIR}/include
+                --vulkaninfo ${VULKANINFO}
+                --icd nvidia=${V0_NVIDIA_ICD}:NVIDIA
+                --icd llvmpipe=${V0_LLVMPIPE_ICD}:llvmpipe
+                --param ${CMAKE_CURRENT_SOURCE_DIR}/relu.param
+                --conv-param ${CMAKE_CURRENT_SOURCE_DIR}/fixedrun_conv_relu.param
+                --empty-bin ${NCNN_VULKAN_FIXEDRUN_ROOT}/empty.bin
+                --conv-bin ${VA5_CONV_BIN}
+                --work-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/va6/cross-icd-work
+                --output ${CMAKE_CURRENT_BINARY_DIR}/evidence/va6/cross-icd/cross-icd-evidence.json)
+            foreach(_va6_cxx_arg IN LISTS NCNN_VULKAN_HOST_SANITIZER_ARGS)
+                list(APPEND VA6_CROSS_ICD_ARGS --cxx-arg=${_va6_cxx_arg})
+            endforeach()
+            if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+                list(APPEND VA6_CROSS_ICD_ARGS
+                    --sanitizer-runtime-dir ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+            endif()
+            if(NCNN_VULKAN_USES_SHARED_LLVM)
+                list(APPEND VA6_CROSS_ICD_ARGS --llvm-lib-dir ${LLVM_LIBRARY_DIR})
+            endif()
+            add_test(NAME vulkan-va6-cross-icd
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/run_va6_cross_icd.py
+                    ${VA6_CROSS_ICD_ARGS})
+            set_tests_properties(vulkan-va6-cross-icd PROPERTIES
+                LABELS "vulkan;device;integration;va6;cross-icd"
+                RUN_SERIAL TRUE
+                TIMEOUT 900)
+        endif()
     endif()
 
 add_executable(vulkan_add_runner vulkan_add_runner.cpp)
