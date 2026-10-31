@@ -967,7 +967,7 @@ def parse_args(argv=None):
     parser.add_argument("--profile", choices=PROFILES, required=True)
     parser.add_argument("--stage-id",
                         choices=("VA0", "VA1", "VA2", "VA3", "VA4", "VA5",
-                                 "VA6"),
+                                 "VA6", "VA7"),
                         default="VA0")
     parser.add_argument("--source-dir", type=Path,
                         default=Path(__file__).resolve().parents[2])

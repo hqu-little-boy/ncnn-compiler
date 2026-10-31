@@ -433,6 +433,45 @@ if(NCNN_ENABLE_VULKAN_PRODUCT)
     set_tests_properties(vulkan-va6-evidence-tests PROPERTIES
         LABELS "vulkan;unit;offline;tooling;va6;evidence"
         TIMEOUT 120)
+
+    # ── VA7: product entry convergence and final evidence tooling.  The
+    # entry runner drives the public CLI only (CPU default, fixed-run
+    # backend, opt-out rejection, structural audit of the published DSO)
+    # and runs without a device; published-model numerics stay with the v5
+    # device suites and the VA6 cross-ICD scenario. ──
+    set(VA7_ENTRY_ARGS
+        --compiler $<TARGET_FILE:ncnn-compile>
+        --work-dir ${CMAKE_CURRENT_BINARY_DIR}/evidence/va7/product-entry-work
+        --output ${CMAKE_CURRENT_BINARY_DIR}/evidence/va7/product-entry/product-entry-evidence.json
+        --nm ${LLVM_NM}
+        --readelf ${LLVM_READELF})
+    if(NCNN_VULKAN_USES_SHARED_LLVM)
+        list(APPEND VA7_ENTRY_ARGS --llvm-lib-dir ${LLVM_LIBRARY_DIR})
+    endif()
+    if(NCNN_VULKAN_SANITIZER_RUNTIME_DIR)
+        list(APPEND VA7_ENTRY_ARGS
+            --sanitizer-runtime-dir ${NCNN_VULKAN_SANITIZER_RUNTIME_DIR})
+    endif()
+    add_test(NAME vulkan-va7-product-entry
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_va7_product_entry.py
+            ${VA7_ENTRY_ARGS})
+    set_tests_properties(vulkan-va7-product-entry PROPERTIES
+        LABELS "vulkan;integration;offline;cli;va7;entry"
+        RUN_SERIAL TRUE
+        TIMEOUT 900)
+    if(_ncnn_fixedrun_capture_publish_library_dirs)
+        set_tests_properties(vulkan-va7-product-entry PROPERTIES
+            ENVIRONMENT
+                "LD_LIBRARY_PATH=${_ncnn_fixedrun_capture_publish_library_path}")
+    endif()
+
+    add_test(NAME vulkan-va7-evidence-tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_va7_evidence.py)
+    set_tests_properties(vulkan-va7-evidence-tests PROPERTIES
+        LABELS "vulkan;unit;offline;tooling;va7;evidence"
+        TIMEOUT 120)
 endif()
 
 if(NCNN_ENABLE_VULKAN_V0_TESTS)

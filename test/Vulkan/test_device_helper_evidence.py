@@ -139,6 +139,19 @@ class DeviceHelperEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(audit.EvidenceError, "Release or sanitize"):
             audit._read_stage_identity(self.stage)
 
+    def test_va7_technical_identity_accepts_all_four_final_profiles(self) -> None:
+        for profile in ("release", "sanitize", "offline", "software"):
+            with self.subTest(profile=profile):
+                self.write_stage_state(stage_id="VA7", profile=profile)
+                state, actual_profile, fingerprint, bound = \
+                    audit._read_stage_identity(self.stage)
+                self.assertTrue(bound)
+                self.assertEqual("VA7", state["stage_id"])
+                self.assertEqual(profile, actual_profile)
+                self.assertEqual("a" * 64, fingerprint)
+                with self.assertRaisesRegex(audit.EvidenceError, "bound VA2"):
+                    audit._require_va2_matrix_stage(state, actual_profile, bound)
+
         self.write_stage_state(stage_id="VA2")
         state, profile, _, bound = audit._read_stage_identity(self.stage)
         audit._require_va2_matrix_stage(state, profile, bound)

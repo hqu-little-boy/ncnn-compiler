@@ -151,11 +151,13 @@ class GateTests(unittest.TestCase):
         lifecycle = run_gate.parse_args(["--profile", "release", "--stage-id", "VA3"])
         fixed_run = run_gate.parse_args(["--profile", "release", "--stage-id", "VA4"])
         full_matrix = run_gate.parse_args(["--profile", "release", "--stage-id", "VA6"])
+        final = run_gate.parse_args(["--profile", "software", "--stage-id", "VA7"])
         self.assertEqual("VA0", default.stage_id)
         self.assertEqual("VA1", planner.stage_id)
         self.assertEqual("VA3", lifecycle.stage_id)
         self.assertEqual("VA4", fixed_run.stage_id)
         self.assertEqual("VA6", full_matrix.stage_id)
+        self.assertEqual("VA7", final.stage_id)
 
     def test_va4_allows_unqualified_technical_run_and_binds_optional_legacy_root(self):
         args = run_gate.parse_args(["--profile", "release", "--stage-id", "VA4"])

@@ -289,6 +289,15 @@ shared/static LLVM 构建模式无关；instrumented 构建的 sanitizer runtime
 数据嵌入 DSO，不读取诊断 `.plan.json` sidecar，不依赖编译临时目录或旁置 `.spv`、权重文件。
 软件 ICD 自身使用的 LLVM 属于驱动实现，应与模型侧（已为无）的编译器依赖分开审计。
 
+自 VA7 起上述入口收敛由 `vulkan-va7-product-entry`（offline product-only CTest）以公开 CLI
+逐项复核：默认（无 `--backend`）仍只发布 CPU AOT 的 `lib<model>.so`/`<model>.h` 且无任何
+Vulkan 产物；`--backend=vulkan` 发布的四件套 manifest 钉住 model-fixed-run 契约与
+`host_codegen_identity`；不存在 generic-runtime 用户模式或静默回退——非法 backend 值
+（如 `generic`/`generic-runtime`）与未文档化开关（如 `--generic-runtime`）一律 fail closed，
+伪造 `NCNN_VULKAN_GENERIC_RUNTIME=1` 环境既不改变 Vulkan 契约也不改变 CPU 默认；发布 DSO 的
+未定义符号与 `DT_NEEDED` 独立复查均无 compiler/plan 引用（退役的 `NCNNVulkanRuntime`/plan
+源码从产品链接图不可达，仅保留为历史/测试 target）。
+
 Vulkan 模式不接受 CPU 专用的线程、SIMD/target-ISA、INT8、tuning、动态输入 shape、CPU 中间
 阶段、debug-info、CPU profile、定制 clang/linker 和 undefined-symbol expectation 参数；
 `--precision` 只允许默认 `auto` 或显式 `f32`。

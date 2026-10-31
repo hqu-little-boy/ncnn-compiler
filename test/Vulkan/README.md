@@ -555,7 +555,51 @@ python3 compiler/test/Vulkan/check_release_evidence.py \
 `va6_matrix_eligible` still leaves `host_aot_release_eligible` false: the
 final four-profile product switch (VA7) remains a separate stage.
 
+### VA7 product entry convergence and the final four-profile switch
+
+VA7 closes the host-AOT plan with entry-convergence evidence and all four
+fresh profiles:
+
+- `vulkan-va7-product-entry` (offline) drives the public CLI only: the
+  default backend publishes exactly the CPU AOT `lib<model>.so`/`<model>.h`
+  pair and no Vulkan artifact; `--backend=vulkan` publishes the fixed-run
+  artifact set whose manifest pins the VA5+ host contract and a well-formed
+  `host_codegen_identity`; invalid backend values and undocumented opt-out
+  flags fail closed with frozen diagnostics and publish nothing; a forged
+  `NCNN_VULKAN_GENERIC_RUNTIME=1` environment changes neither the published
+  contract nor the CPU default; and the published DSO is re-scanned with
+  `nm -D --undefined-only`/`readelf -d` for compiler/plan references, which
+  must stay absent.
+- `vulkan-va7-evidence-tests` covers the 32-ID VA catalog closure
+  (VA0.1–VA7.4), the profile-scoped required inventories, the entry-evidence
+  audit, and the core regression: a synthetic gate inventory that omits a
+  product-only unit test must be rejected (`required-ctest-missing`), and a
+  composite carrying that omission cannot reach
+  `va7_final_eligible=true`.
+
+`run_gate.py --stage-id VA7` accepts all four profiles; the strict composite
+requires the same-source release, sanitize, offline, and software stages with
+verified archives and the executed VA7.1–VA7.4 inventory:
+
+```sh
+python3 compiler/test/Vulkan/check_release_evidence.py \
+  --stage /tmp/current-va7-release-stage \
+  --stage /tmp/current-va7-sanitize-stage \
+  --stage /tmp/current-va7-offline-stage \
+  --stage /tmp/current-va7-software-stage \
+  --require-va7-final --output /tmp/va7-final-evidence.json
+```
+
+When `va7_final_eligible` is true the report records
+`host_aot_release_eligible=true` with the limited-scope opt-in decision
+(existing static FP32 support matrix on the actually tested ICDs/devices;
+default backend still CPU); otherwise the decision stays
+`no-go-or-incomplete`.
+
 The `hardware` profile selects only NVIDIA; `release` selects both ICDs. The
+`offline` profile disables device tests entirely and still requires the full
+product-only/historical unit inventory; the `software` profile selects only
+llvmpipe. The
 `sanitize` profile also selects both and requires a matching static PIC
 ASan+UBSan LLVM/MLIR installation, its actual Vulkan runner test tools and lit,
 and a leak-clean isolated OpenMP runtime:
